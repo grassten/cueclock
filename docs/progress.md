@@ -8,7 +8,7 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
 
 | # | Step | Status |
 |---|---|---|
-| 1 | Camera bring-up + `record` CLI + test corpus | **Blocked on hardware** (camera arriving 2026-07-27 afternoon) |
+| 1 | Camera bring-up + `record` CLI + test corpus | **Bring-up + `record` CLI DONE 2026-07-27**; §2.3 corpus recording is next (Steven at the table) |
 | 2 | Scaffold: package/tooling/CI ✅ · clock state machine · server/API/overlay | **In progress** — camera-free |
 | 3 | Calibration tooling (ChArUco + homography) | Not started (code can be written pre-camera; only capture needs hardware) |
 | 4 | Detection core offline vs. corpus | Not started — event logic (§4.2) is pure and can be built pre-camera against synthetic tracks |
@@ -53,6 +53,19 @@ the camera bracket, print a ChArUco board for §4.3 calibration.
    labeling clips by scenario name.
 6. Then (or while camera ships stay pending): calibration tooling, step 3.
 
+## Post-install recalibration (current mount is a DRY RUN)
+
+The rig will be disturbed when the proper cable track and the wall TV are installed.
+After that work, redo (fast now that the workflow exists — ~15 min):
+
+1. Re-peak focus via the live-view SHARP metric; re-lock lens screws if anything moved.
+2. Re-verify WB against white paper (lighting unchanged ⇒ ratios should hold).
+3. Re-save UserSet1 if anything changed.
+4. **Don't invest in §4.3 homography/intrinsics calibration until after final
+   install** — it's void the moment the camera moves or refocuses.
+5. Re-judge display tone mapping on the actual TV through OBS (Mac-monitor tuning
+   is provisional).
+
 ## Decisions made during build (append-only)
 
 - **2026-07-27** Ruleset values ported verbatim from old `config.yaml`; all three
@@ -79,7 +92,68 @@ the camera bracket, print a ChArUco board for §4.3 calibration.
   rulesets. Not modeled (YAGNI until asked): Ultimate Pool doubles (15 s
   extension shared per team), any per-shot base-time variation.
 
+- **2026-07-27** Live-view display pipeline (display-only; raw linear data untouched
+  for detection/recording), evolved over three iterations with Steven judging live:
+  **CCM → luminance tone curve → saturation → clarity.** The CCM (3×3, in
+  `scripts/live_view.py`) was fitted using the ball set + felt as color references —
+  luminance-normalized chroma least squares, rows constrained to sum to 1 (neutrals
+  immutable), tempered to 85% — because the bare sensor renders red→orange,
+  orange→yellow (channel overlap; per-channel gamma made it worse). Tone curve on
+  luminance only (per-channel curves bend hue); defaults black 0.04 / white 0.94 /
+  γ2.2 / contrast 1.15 / saturation 1.10 / clarity 0.22, `,` `.` `;` `'` hotkeys.
+  The same pipeline shape should seed the §video-output-pipeline display path
+  (GPU-side) when it lands.
+- **2026-07-27 (camera day)** Bring-up findings, all empirical:
+  - **pylon Suite install unnecessary** — pypylon 26.7 wheel enumerated + streamed the
+    camera standalone (doc §3 assumption superseded; suite kept as fallback reference).
+  - **Debayer constant resolved: `cv2.COLOR_BayerBG2BGR`** for GenICam `BayerRG8`
+    (OpenCV names the pattern from the opposite corner). Doc §5's `COLOR_BayerRG2BGR`
+    guess was wrong — white wall rendered blue, blue cushion rendered yellow. Also
+    recorded in CLAUDE.md; use BG everywhere.
+  - **156.25 fps, not 160**, with zero incomplete frames: that's the camera's default
+    `DeviceLinkThroughputLimit` (360 MB/s), not a host-controller ceiling. Raise/disable
+    the limit if 160 ever matters; 156 is fine for v1.
+  - Doc §6 WB step corrected: balance on a neutral white target laid on the cloth,
+    never the bare cloth (grey-world auto-WB would neutralize the blue).
+
+- **2026-07-27** Live-view aesthetics ROLLED BACK per Steven: the CCM + clarity pass
+  amplified felt chroma noise ~3× (static previews hid the temporal dancing; live it
+  looked worse). Live view is now a plain diagnostic (luminance tone map + mild
+  saturation, SHARP ROI outlined on screen). The fitted CCM is banked here for the
+  future OBS/GPU display path, where it should be applied WITH denoise:
+  `[[2.4454, -1.256, -0.1894], [-0.1135, 1.4985, -0.385], [-0.109, -1.2503, 2.3593]]`
+  (BGR order, 85%-tempered, rows sum to 1; from ball-set + felt references).
+  Also verified focus empirically: ball edges 1–4 px 20–80% rise, rail diamonds 2 px,
+  carpet 3–10 px at low contrast — table-level objects are the sharpest in the scene;
+  "carpet looks sharper" was texture-density illusion. Focus needs no change for CV.
+
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-27 (checkpoint 7 — `record` CLI):** `capture/` landed (`camera.py` pypylon
+  wrapper re-asserting production settings, WB ratios left to the camera's UserSet1;
+  `clip.py` ClipWriter/ClipReader — raw BayerRG8 `frames.raw` + `timestamps.npy`
+  seconds-from-first + `meta.json`, interruption-safe, memory-mapped replay) plus
+  `cli.py` (`record` implemented with disk-space guard + drop detection via timestamp
+  gaps; `run`/`calibrate` stubs). 37 tests green, mypy --strict clean (pypylon override
+  added). Live smoke test: 783 frames / 5.01 s = 156.2 fps, every gap exactly 6.40 ms,
+  zero drops; replay round-trip verified, smoke clip deleted. Record the corpus with:
+  `PYTHONPATH=src uv run python -m cueclock.cli record --label <scenario> --seconds 10`
+  (~360 MB/s of disk — keep clips 8–12 s; 62 GB free ⇒ budget ~14 clips of 10 s with
+  headroom). Also this session: live-view fps readout split into camera vs. view rate
+  (view redraw ~40–50 fps on the monitor confused Steven; camera rate is the truth).
+
+- **2026-07-27 (checkpoint 6 — camera bring-up complete):** camera mounted above table
+  (hung inside the perimeter LED frame), focused via live-view SHARP metric
+  (`scripts/live_view.py` grew focus-assist: Laplacian-variance readout + peak hold +
+  exposure hotkeys), settings locked and **persisted to UserSet1 as power-on default,
+  verified across `DeviceReset`**. 30 s soak: 156.2 fps, 0 incomplete frames. Full
+  production state + two new hardware quirks (factory `BalanceWhiteAuto=Continuous` +
+  `Daylight6500K` preset; gain/balance-ratio half-strength scale) recorded in
+  `basler-camera-setup.md` §6. Light budget reality: perimeter LED ≈8× below the doc's
+  assumption → iris 1 stop down + gain ≈×2 instead of f/4–5.6. Framing verified: full
+  table + cushions with margin, long axis on the wide dimension. WB balanced against
+  white paper (R=127/G=130/B=127 post). Next: `capture/` + `record` CLI, then the §2.3
+  test corpus.
 
 - **2026-07-27 (checkpoint 5, docs only):** `docs/audio-mic-setup.md` written —
   mic uses (voice "extension" v1; click corroborator backlog), why it's not

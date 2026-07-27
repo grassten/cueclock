@@ -57,7 +57,8 @@ Key design commitments (rationale + sources in the docs — don't relitigate cas
 - pylon Camera Software Suite must be installed system-wide for pypylon to work
   (arm64-native, but **pylon Viewer GUI doesn't exist on Apple Silicon** — verification
   goes through the pypylon live-view script in `docs/basler-camera-setup.md` §5).
-- Camera's 8-bit Bayer format is **BayerRG8**; watch the OpenCV↔GenICam Bayer-constant
-  naming mismatch (sanity-check against the blue cloth).
+- Camera's 8-bit Bayer format is **BayerRG8**; the OpenCV↔GenICam naming mismatch is
+  **resolved**: decode with `cv2.COLOR_BayerBG2BGR` (verified against the blue cloth
+  2026-07-27 — see `docs/basler-camera-setup.md` §5).
 - iPhone Continuity Camera remains a wireless side-angle source, owned by OBS directly.
 - Stream Deck hits the HTTP API; keep the `/api/*` contract from `docs/cv-app-rewrite.md` §2.1.

@@ -25,7 +25,7 @@ The camera is bus-powered (~3.6 W) — no power supply to look for.
 
 ## 3. Install software
 
-1. **pylon Camera Software Suite for macOS** — download the current release (26.x line) from [baslerweb.com → Downloads → Software](https://www.baslerweb.com/en/downloads/software/). The current suite runs **natively on Apple Silicon**. Install the `.dmg`; if Gatekeeper blocks it, allow it under System Settings → Privacy & Security.
+1. **pylon Camera Software Suite for macOS** — **turned out to be unnecessary (2026-07-27 bring-up):** the pypylon 26.7 wheel enumerated and streamed the camera with no system pylon install present, so the wheel bundles enough of the runtime on macOS arm64. Kept for reference in case a future pypylon version regresses: download the current release (26.x line) from [baslerweb.com → Downloads → Software](https://www.baslerweb.com/en/downloads/software/); it runs natively on Apple Silicon. If Gatekeeper blocks the `.dmg`, allow it under System Settings → Privacy & Security.
 
    ⚠️ **Important macOS caveat:** per Basler's ["Running pylon on Apple Silicon"](https://docs.baslerweb.com/knowledge/running-pylon-on-apple-silicon) (updated July 2026), the pylon **GUI tools — pylon Viewer included — are not available on Apple Silicon**. The SDK/runtime is native arm64, but the "open pylon Viewer → live image in minutes" flow from the build sheet does not exist on this Mac. Basler's suggested workaround is installing old pylon 6.2 (x86_64) under Rosetta 2, but that risks conflicting with the current arm64 framework install. **Recommendation: skip the Viewer entirely and use the pypylon live-view script below** — we need pypylon anyway, and it proves the exact stack production will use.
 2. **pypylon** — current version 26.7 (July 2026) ships native `macosx_14_0_arm64` wheels on PyPI (`cp39-abi3`, Python 3.9–3.14). The wheel does **not** bundle the pylon runtime — the pylon suite from step 1 must be installed first. Install pypylon + opencv-python + numpy into whatever environment the new project uses (see the rewrite doc; for a quick one-off: `uvx --with pypylon --with opencv-python python live_view.py` or a throwaway venv).
@@ -70,7 +70,7 @@ while cam.IsGrabbing():
     grab = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
     if grab.GrabSucceeded():
         bayer = grab.Array                              # 1200x1920 uint8
-        bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerRG2BGR)
+        bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR)   # see color note below
         frames += 1
         if frames % 32 == 0:
             fps = frames / (time.monotonic() - t0)
@@ -89,7 +89,8 @@ cv2.destroyAllWindows()
 Notes:
 
 - The camera's 8-bit Bayer format is **`BayerRG8`** (RGGB pattern — [Basler pixel-format docs](https://docs.baslerweb.com/pixel-format)).
-- **Color sanity check:** OpenCV's Bayer constant naming doesn't follow GenICam's, and the off-by-one-row/column conventions bite everyone. Point the camera at something with known color (the blue cloth). If blue renders orange/red, swap the constant (`COLOR_BayerBG2BGR` ↔ `COLOR_BayerRG2BGR`) until it's right, then record the correct constant in the new project's config. This is a one-time determination.
+- **Color sanity check — RESOLVED 2026-07-27:** OpenCV's Bayer constant naming doesn't follow GenICam's — the two conventions name the pattern from opposite corners. Verified empirically against the blue cloth: GenICam **`BayerRG8` decodes with OpenCV `COLOR_BayerBG2BGR`** (the doc's original `COLOR_BayerRG2BGR` guess swapped R↔B: white walls rendered blue, the blue cushion rendered yellow). This is settled; use `COLOR_BayerBG2BGR` everywhere.
+- **Expect grey-ish color before §6:** until white balance is set (gains ship at 1.0) and with linear sensor output shown ungamma'd on an sRGB display, the blue cloth looks desaturated grey — that's normal, not a fault. The live-view script applies a display-only gamma lift.
 - `cv2.imshow` at 160 fps will likely display slower than the grab rate — that's fine; the printed fps measures the *grab* loop. If display drags it down, show every 4th frame.
 - The window appears on whatever display the script runs from — that's your "see it on this monitor" verification.
 
@@ -97,10 +98,10 @@ Notes:
 
 Once the image looks right (do the final pass at final mounting height, under the table light, at match brightness — define that as the canonical lighting state):
 
-1. **Aperture:** f/4–5.6 (the Kowa is sharpest there; the table light has lumens to spare). Compensate with `ExposureTime` (up to ~6000 µs at 160 fps; global shutter keeps it clean). Then tighten the iris locking screw.
+1. **Aperture:** f/4–5.6 (the Kowa is sharpest there; the table light has lumens to spare). **The LM4NCL iris ring is unmarked** — just O (open, f/1.4) to C (closed), so set it by brightness ratio: with exposure temporarily lowered so nothing clips, note the cloth brightness at O, then close the iris until the reading drops to **1/8–1/16 of that** (3–4 stops = f/4–5.6). The live-view script's `[`/`]` exposure hotkeys and `cloth` readout are built for this. Compensate with `ExposureTime` (up to ~6000 µs at 160 fps; global shutter keeps it clean). Then tighten the iris locking screw.
 2. **Focus:** on the cloth at final height. Tighten the focus locking screw.
-3. **White balance:** aim at the cloth, run `BalanceWhiteAuto = "Once"`, then confirm it reads `"Off"`. Judge the result on the *debayered* view.
-4. **No auto-anything:** `ExposureAuto = Off`, `GainAuto = Off`, `BalanceWhiteAuto = Off` after the once-shot.
+3. **White balance:** lay a **neutral white/grey target** (plain printer paper works) on the cloth so it fills the auto-function ROI, run `BalanceWhiteAuto = "Once"`, then confirm it reads `"Off"`. Do **not** balance on the bare cloth — the algorithm neutralizes what it sees, which would turn the blue cloth grey. Judge the result on the *debayered* view.
+4. **No auto-anything:** `ExposureAuto = Off`, `GainAuto = Off`, `BalanceWhiteAuto = Off` after the once-shot. ⚠️ **Factory defaults are not neutral:** the camera ships with `BalanceWhiteAuto = "Continuous"` (grey-world auto-WB re-deciding colors every frame — it actively neutralizes the blue cloth) and `BslLightSourcePreset = "Daylight6500K"`. Set **both** to `"Off"` before doing any manual color work, or your ratio writes get silently overwritten.
 5. **Persist:** save to a user set and make it the power-on default so settings survive power cycles:
 
    ```python
@@ -108,6 +109,23 @@ Once the image looks right (do the final pass at final mounting height, under th
    cam.UserSetSave.Execute()
    cam.UserSetDefault.Value = "UserSet1"
    ```
+
+### Locked-in production state (2026-07-27, saved to UserSet1 = power-on default)
+
+| Setting | Value | Note |
+|---|---|---|
+| PixelFormat | BayerRG8 | decode with `cv2.COLOR_BayerBG2BGR` (§5) |
+| ExposureTime | 6000 µs | at the ceiling; light budget is tight (below) |
+| Gain | 12.0 | ⚠️ applies as ≈×2, not ×4 — see quirk below |
+| AcquisitionFrameRate | 160 → 156.2 actual | capped by default `DeviceLinkThroughputLimit` (360 MB/s); fine |
+| BalanceWhiteAuto / BslLightSourcePreset | Off / Off | factory defaults were Continuous / Daylight6500K |
+| BalanceRatio R/G/B | 2.005 / 1.0 / 1.893 | measured against white paper on the cloth |
+| Iris | ~1 stop down from wide open | **not** the textbook f/4–5.6 — the perimeter LED light meters ~8× below the doc's assumption (cloth ≈130 at 6000 µs/gain 0 wide open), so we trade one stop of optics + ×2 gain instead. Table plane ⇒ DOF is a non-issue. |
+
+**Firmware quirk (measured):** `Gain` and `BalanceRatio` both apply at ~half strength in
+log domain — gain "12 dB" yields ×2 signal; a balance ratio of 2.005 applies ≈×1.42
+(√). Never trust the units; set by measurement (the WB iteration loop converges in one
+correction step).
 
 ## 7. Verification checklist
 
