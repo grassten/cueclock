@@ -11,10 +11,13 @@ dist/
 # macOS
 .DS_Store
 
-# Local-only assets
+# Local-only assets. Clips live in clips.nosync (the .nosync suffix excludes
+# them from iCloud Drive sync — Desktop is synced on this Mac, and iCloud
+# retry-looped forever trying to upload 47 GB of corpus); tests/clips is a
+# tracked symlink so every code/doc path keeps working.
 models/
-tests/clips/*
-!tests/clips/README.md
+tests/clips.nosync/*
+!tests/clips.nosync/README.md
 .env
 
 # Mount-specific calibration artifacts (refit after every camera move)

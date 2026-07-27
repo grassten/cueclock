@@ -8,7 +8,7 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
 
 | # | Step | Status |
 |---|---|---|
-| 1 | Camera bring-up + `record` CLI + test corpus | **Bring-up + `record` CLI DONE 2026-07-27**; §2.3 corpus recording is next (Steven at the table) |
+| 1 | Camera bring-up + `record` CLI + test corpus | **DONE 2026-07-27** — bring-up, `record`, and the full §2.3 corpus (17 clips / 47 GB, integrity-verified; see checkpoint 10) |
 | 2 | Scaffold: package/tooling/CI ✅ · clock state machine · server/API/overlay | **In progress** — camera-free |
 | 3 | Calibration tooling (ChArUco + homography) | Not started (code can be written pre-camera; only capture needs hardware) |
 | 4 | Detection core offline vs. corpus | Not started — event logic (§4.2) is pure and can be built pre-camera against synthetic tracks |
@@ -58,7 +58,12 @@ the camera bracket, print a ChArUco board for §4.3 calibration.
 The rig will be disturbed when the proper cable track and the wall TV are installed.
 After that work, redo (fast now that the workflow exists — ~15 min):
 
-1. Re-peak focus via the live-view SHARP metric; re-lock lens screws if anything moved.
+1. **Level the camera (bubble level on the body) before locking screws** — the dry-run
+   mount tilts ~1° (right/top of frame closer: +2.8% / +1.25% keystone, measured from
+   the empty_table clip 2026-07-27), plus ~0.3° roll and ~3–4 cm off-center. Only the
+   tilt is worth fixing physically; re-measure after install (ask Claude — boundary-line
+   fit on a fresh empty-table clip).
+2. Re-peak focus via the live-view SHARP metric; re-lock lens screws if anything moved.
 2. Re-verify WB against white paper (lighting unchanged ⇒ ratios should hold).
 3. Re-save UserSet1 if anything changed.
 4. Re-run `cueclock fit-undistort` on a fresh empty-table clip (rewrites the
@@ -167,6 +172,32 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   adds the gate scoped to the ball's own pixels.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-27 (checkpoint 10 — corpus complete + two infrastructure fixes):**
+  - **Corpus recorded and verified**: 17 clips (16 scenarios + `empty_table`), 47 GB.
+    Every clip's `frames.raw` size matches its `meta.json` frame count; 16/17 have a
+    flawless 6.40 ms cadence (max gap = nominal frame period, zero drops). `tip_bump`
+    has two drop gaps (544 ms at t=6.23 s, 77 ms at t=7.55 s — cause below); its first
+    6.2 s are clean. Whether the bump moment fell inside a gap gets answered for free
+    by the detection core; **re-record `tip_bump` only if it did.**
+  - **iCloud Drive was strangling the machine.** Desktop is iCloud-synced, so the
+    corpus queued for upload — and the account has ~20 GB quota left, so every 2.88 GB
+    `frames.raw` upload died with "Quota exceeded" and retried forever (`brctl status`
+    showed the loop). That I/O churn caused the `tip_bump` drops, the silently-killed
+    `uv run` invocations, and a 4-minute pytest run (normally ~10 s). Fix: clips moved
+    to `tests/clips.nosync/` (iCloud skips `.nosync` names) with `tests/clips` as a
+    tracked symlink — all code/doc paths unchanged. Worth considering: move the repo
+    off `~/Desktop` entirely (out of iCloud's domain) — Steven's call, path references
+    everywhere would need updating.
+  - **Syphon restarts now self-heal in OBS** (the "randomly stopped seeing my Syphon
+    client" bug): OBS re-binds a server whose app+name match on *every* announce it
+    hears (verified in obs-studio `mac-syphon` source), and announces are otherwise
+    one-shot — so `SyphonOutput.publish()` re-broadcasts every 2 s (framework's own
+    `broadcastServerAnnounce`; verified with a live directory-watcher experiment:
+    graceful Ctrl-C/SIGTERM posts a clean retire, `kill -9` leaves a stale entry that
+    gets pruned ~6 s after the next Syphon process starts). CLI now maps SIGTERM →
+    KeyboardInterrupt so `kill <pid>` also closes clips and retires servers cleanly.
+    44 tests green, mypy --strict clean.
 
 - **2026-07-27 (checkpoint 9 — OBS eyes-on: channel order fixed, `live` added):**
   First real OBS render (replayed `break_shot`): geometry/undistort perfect, but
