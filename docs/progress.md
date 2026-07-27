@@ -33,7 +33,8 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
    `BallState` input contract is likewise provisional until the tracker lands.
 5. ⬜ `cli.py` skeleton (`cueclock run` wiring clock + server; `record`/`calibrate` stubs).
 6. ⬜ `audio/` — Vosk extension listener port (needs mic + model download to verify; port
-   last).
+   last). **Plan written: `docs/audio-mic-setup.md`** — covers uses, mic-agnosticism,
+   the Studio-Display-mic-now → discrete-USB-mic-later path, and the bring-up checklist.
 
 Non-code prep Steven can do without the camera: install the pylon Camera Software Suite
 system-wide (required before pypylon works — `basler-camera-setup.md` §3), mount/level
@@ -67,6 +68,9 @@ the camera bracket, print a ChArUco board for §4.3 calibration.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-27 (checkpoint 5, docs only):** `docs/audio-mic-setup.md` written —
+  mic uses (voice "extension" v1; click corroborator backlog), why it's not
+  mic-specific, hardware swap path, bring-up + false-positive-soak checklist.
 - **2026-07-27 (checkpoint 4):** `vision/events.py` landed — `EventEngine`
   (per-ball table-mm track states in → `ShotTaken`/`BallsSettled`/`Scratch` out),
   pure and cadence-agnostic. 11 synthetic-track tests encode the §2.3 lessons

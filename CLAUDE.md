@@ -25,6 +25,7 @@ checkpoint commit).
 | `docs/cv-app-rewrite.md` | Architecture, detection design, event logic, engineering standards, build order, resolved decisions |
 | `docs/basler-camera-setup.md` | Camera assembly, pylon/pypylon install, bring-up, production settings |
 | `docs/video-output-pipeline.md` | Display path: debayer → undistort → Syphon → OBS → TV |
+| `docs/audio-mic-setup.md` | Mic plan: voice "extension" (v1), click corroborator (backlog), device swap path |
 | `docs/*.pdf` | Hardware build sheet + original project spec (background) |
 
 Key design commitments (rationale + sources in the docs — don't relitigate casually):
