@@ -8,13 +8,16 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Steven Asten" }]
 dependencies = [
+    "fastapi>=0.140.6",
     "numpy",
     "opencv-python",
     "pypylon",
+    "uvicorn>=0.51.0",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "mypy",
     "pre-commit",
     "pytest",

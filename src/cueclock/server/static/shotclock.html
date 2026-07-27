@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shot Clock</title>
+    <style>
+        body {
+            background-color: transparent;
+            margin: 0;
+            padding: 0;
+        }
+
+        .clock-square {
+            width: 200px;
+            height: 200px;
+            background-color: black;
+            border: 4px solid white;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Arial', sans-serif;
+            box-sizing: border-box;
+            transition: opacity 120ms ease, border-color 120ms ease, background-color 120ms ease;
+        }
+
+        .clock-square.motion {
+            opacity: 0.45;
+        }
+
+        .clock-square.grace {
+            border-color: #ff5050;
+        }
+
+        .clock-square.expired {
+            background-color: #5a0000;
+            border-color: #ff2020;
+            animation: flash 0.6s steps(2, start) infinite;
+        }
+
+        @keyframes flash {
+            to { background-color: #000; }
+        }
+
+        .time-number {
+            color: white;
+            font-size: 90px;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .time-number.urgent {
+            color: #ff7070;
+        }
+
+        .clock-icon {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 30px;
+            height: 30px;
+            fill: white;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="clock-square" id="clock">
+        <svg class="clock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z"/>
+        </svg>
+        <div class="time-number" id="timer-text">30</div>
+    </div>
+
+    <script>
+        const clockEl = document.getElementById('clock');
+        const timerText = document.getElementById('timer-text');
+
+        // ---------------- Audio cues (Web Audio API) ----------------
+        let audioCtx = null;
+        function ensureAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            return audioCtx;
+        }
+        // A single soft bell tone with exponential decay.
+        function playTone(freq, duration, gainPeak, wave = 'sine', startAt = 0) {
+            const ctx = ensureAudio();
+            const now = ctx.currentTime + startAt;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = wave;
+            osc.frequency.value = freq;
+            // Gentle attack → exponential decay for a chime feel.
+            gain.gain.setValueAtTime(0.0001, now);
+            gain.gain.exponentialRampToValueAtTime(gainPeak, now + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+            osc.connect(gain).connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + duration + 0.05);
+        }
+        function cueTen()  { playTone(659.25, 0.9, 0.18, 'sine'); }         // E5 — soft
+        function cueFive() { playTone(880.00, 0.9, 0.26, 'triangle'); }     // A5 — brighter
+        function cueExpired() {
+            // Two-note resonant cadence: low then high.
+            playTone(392.00, 0.6, 0.30, 'sine', 0.00);   // G4
+            playTone(587.33, 1.1, 0.32, 'triangle', 0.35); // D5
+        }
+
+        // Unlock audio on any user gesture (browsers require this).
+        window.addEventListener('click', ensureAudio, { once: true });
+        window.addEventListener('keydown', ensureAudio, { once: true });
+
+        // ---------------- WebSocket to server ----------------
+        function render(state) {
+            timerText.innerText = state.display ?? state.time ?? 30;
+            clockEl.classList.toggle('motion',  state.state === 'MOTION');
+            clockEl.classList.toggle('grace',   state.state === 'GRACE');
+            clockEl.classList.toggle('expired', state.state === 'EXPIRED');
+            timerText.classList.toggle('urgent', (state.time ?? 99) <= 5 && state.state !== 'IDLE');
+
+            if (state.cue === 'ten')     cueTen();
+            if (state.cue === 'five')    cueFive();
+            if (state.cue === 'expired') cueExpired();
+        }
+
+        function connect() {
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const ws = new WebSocket(`${proto}://${location.host}/ws`);
+            ws.onmessage = (ev) => {
+                try { render(JSON.parse(ev.data)); } catch (e) {}
+            };
+            ws.onclose = () => setTimeout(connect, 500);
+            ws.onerror = () => ws.close();
+        }
+        connect();
+    </script>
+</body>
+</html>
