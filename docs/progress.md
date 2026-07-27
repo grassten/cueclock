@@ -27,8 +27,10 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
    `PYTHONPATH=src uv run python -m cueclock.server` (PYTHONPATH needed — see the
    .pth gotcha below); OBS browser source → `http://localhost:8000/shotclock`
    (200×200, "Control audio via OBS"), control panel → `/control`.
-4. ⬜ `vision/events.py` — pure §4.2 event logic (strike conjunction, settle hysteresis,
-   scratch latch) + synthetic-track unit tests.
+4. ✅ `vision/events.py` — pure §4.2 event logic (strike conjunction, settle hysteresis,
+   scratch latch) + synthetic-track unit tests. **Thresholds are §4.2's
+   research-backed defaults, provisional until tuned on the recorded corpus**; the
+   `BallState` input contract is likewise provisional until the tracker lands.
 5. ⬜ `cli.py` skeleton (`cueclock run` wiring clock + server; `record`/`calibrate` stubs).
 6. ⬜ `audio/` — Vosk extension listener port (needs mic + model download to verify; port
    last).
@@ -65,6 +67,13 @@ the camera bracket, print a ChArUco board for §4.3 calibration.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-27 (checkpoint 4):** `vision/events.py` landed — `EventEngine`
+  (per-ball table-mm track states in → `ShotTaken`/`BallsSettled`/`Scratch` out),
+  pure and cadence-agnostic. 11 synthetic-track tests encode the §2.3 lessons
+  (ball-in-hand drag, no-dwell nudge, single-frame spike, incoherent trajectory,
+  pocket-edge creep, settle hysteresis, scratch latched during motion, object-ball
+  pocketing, mid-table track loss). 33 tests total, all green. Not wired to the
+  clock/server yet — integration happens with the tracker (step 5).
 - **2026-07-27 (checkpoint 3):** `server/` landed — `Hub` (owns wall-clock time +
   WS clients + 10 Hz tick loop), FastAPI app factory with the §2.1 API contract,
   overlay + control pages ported from the old app (only change: extension button
