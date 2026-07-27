@@ -31,6 +31,7 @@ packages = ["src/cueclock"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["docs"]  # prose + illustrative snippets, not maintained code
 
 [tool.ruff.lint]
 select = [
