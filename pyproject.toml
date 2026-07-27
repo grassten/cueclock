@@ -53,6 +53,10 @@ select = [
 strict = true
 files = ["src"]
 
+[[tool.mypy.overrides]]
+module = ["pypylon.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Import from src/ directly: this Mac's pyenv-based venvs don't process .pth
