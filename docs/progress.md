@@ -13,7 +13,7 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
 | 3 | Calibration tooling (ChArUco + homography) | Not started (code can be written pre-camera; only capture needs hardware) |
 | 4 | Detection core offline vs. corpus | Not started — event logic (§4.2) is pure and can be built pre-camera against synthetic tracks |
 | 5 | Live integration | Blocked on hardware |
-| 6 | Display path → OBS | Blocked on hardware |
+| 6 | Display path → OBS | **Code DONE + verified headless 2026-07-27** (Syphon publish, rails-fit undistort, `replay` CLI, OBS LUTs); remaining: eyes-on OBS/TV setup |
 | 7 | Backlog items | Not started (by demand only) |
 
 ## Camera-free work queue (this is the order)
@@ -61,10 +61,12 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 1. Re-peak focus via the live-view SHARP metric; re-lock lens screws if anything moved.
 2. Re-verify WB against white paper (lighting unchanged ⇒ ratios should hold).
 3. Re-save UserSet1 if anything changed.
-4. **Don't invest in §4.3 homography/intrinsics calibration until after final
+4. Re-run `cueclock fit-undistort` on a fresh empty-table clip (rewrites the
+   gitignored `config/display_undistort.json`) and re-set the OBS crop.
+5. **Don't invest in §4.3 homography/intrinsics calibration until after final
    install** — it's void the moment the camera moves or refocuses.
-5. Re-judge display tone mapping on the actual TV through OBS (Mac-monitor tuning
-   is provisional).
+6. Re-judge the grade (Apply LUT amount / Color Correction) on the actual TV through
+   OBS (Mac-monitor tuning is provisional).
 
 ## Decisions made during build (append-only)
 
@@ -127,7 +129,55 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   carpet 3–10 px at low contrast — table-level objects are the sharpest in the scene;
   "carpet looks sharper" was texture-density illusion. Focus needs no change for CV.
 
+- **2026-07-27** Corpus checklist adapted to two facts: (1) **Steven's table has a
+  ball return** — `scratch_retrieve` (drop-pocket "reach into the pocket") is not a
+  real scenario; replaced by `rack_balls` (gather from return + rack — same
+  hands-and-balls-over-table provoker class) and `scratch_replace` extended to the
+  full scratch → fetch-from-return → place sequence. Scratch *detection* is
+  unaffected (track lost near pocket zone, §4.2). (2) Added optional
+  `charuco_sweep` clip so the corpus banks intrinsics data at its own focus state —
+  insurance against the post-install refocus voiding §4.3 calibration for the
+  already-recorded clips. Corpus itself survives a camera move regardless: it's
+  self-contained (own `empty_table` reference, homography recoverable from rail
+  corners), so **recording proceeds now, not after final cable-track install**.
+  Also renamed `draw_spin` → `spin_in_place` with a concrete recipe: the
+  persistent spinning-while-settled state is side spin (vertical axis — back/top
+  spin at rest would move the ball); the old "draw" wording conflated that with
+  the draw shot's brief pause-then-snap-back, now a bonus take testing settle dwell.
+
+- **2026-07-27** Spin-in-place counts as motion (Steven's catch, verified against
+  published rules): a shot ends only when all balls have "stopped moving **and
+  spinning**" — [WPA def. 8.2](https://www.poolbilliards.co/rules/wpa-rules-of-play/definitions/);
+  [International Rules 6j/6k](https://www.epra.uk/rules/) ("complete when all balls
+  have come to rest"; clock "will commence once all balls come to rest"); WNT
+  inherits WPA wording via "Standard Rules and Regulations". So §4.2's
+  centroid-velocity settle alone is NOT rules-correct for this case — `spin_in_place`
+  corpus ground truth is settle-at-spin-stop, and settle needs a per-ball
+  appearance-churn gate on stationary balls (noted in §4.2; build with the tracker,
+  detection-core step). The old app's never-settle-while-anything-churns behavior was
+  accidentally rules-correct here — the rewrite keeps the per-ball architecture and
+  adds the gate scoped to the ball's own pixels.
+
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-27 (checkpoint 8 — display path to OBS, camera-free):** `display/` landed:
+  `pipeline.py` (debayer EA → precomputed-remap undistort with **square pixels forced**
+  — alpha=0's anisotropic matrix would render balls ~14% elliptical → BGRA),
+  `syphon_out.py` (SyphonOutput; **must pump NSRunLoop while publishing or the server
+  is invisible to all clients** — syphon-python 0.1.1 lessons in
+  `video-output-pipeline.md` §3), `undistort_fit.py` (**display undistort fitted from
+  the table's own rails, no printed target**: cloth-boundary extraction → Brown k1/k2
+  grid search → 0.86 px residual on this mount; k1=−0.31 k2=0.09,
+  `config/display_undistort.json`, gitignored — refit after every camera move).
+  CLI grew `replay` (clip → Syphon at 30 fps, looping; `--test-pattern` = labeled RGB
+  bars for the channel-order eyes-on check in OBS) and `fit-undistort`. OBS starter
+  grades generated: `assets/obs/cueclock-tone.cube` (the dialed-in live-view look) and
+  `cueclock-tone-ccm.cube` (adds banked CCM; noisier — temper with Apply LUT's amount
+  slider at the TV). syphon-python darwin-gated in pyproject so CI stays green on Linux.
+  Verified headless end-to-end: replay of a synthetic clip → Syphon directory discovery
+  → external client received 1920×1200 BGRA with blue-dominant cloth. 44 tests green,
+  mypy --strict clean. Remaining for step 6: eyes-on OBS check + filters/crop/scenes at
+  the TV (waiting on corpus clips + Steven at OBS).
 
 - **2026-07-27 (checkpoint 7 — `record` CLI):** `capture/` landed (`camera.py` pypylon
   wrapper re-asserting production settings, WB ratios left to the camera's UserSet1;

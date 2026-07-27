@@ -16,3 +16,6 @@ models/
 tests/clips/*
 !tests/clips/README.md
 .env
+
+# Mount-specific calibration artifacts (refit after every camera move)
+config/

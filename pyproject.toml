@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "opencv-python",
     "pypylon",
+    "syphon-python>=0.1.1; sys_platform == 'darwin'",
     "uvicorn>=0.51.0",
 ]
 
@@ -54,7 +55,7 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["pypylon.*"]
+module = ["pypylon.*", "syphon.*", "Foundation", "objc"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

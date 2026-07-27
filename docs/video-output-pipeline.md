@@ -18,8 +18,8 @@ So the CV app owns the camera and **republishes processed frames locally** for O
 ```
 CV app grab thread (BayerRG8 @ 160 fps)
   └─ display branch @ 30–60 fps (every ~3rd–5th frame):
-       debayer (COLOR_BayerRG2BGR_EA, 0.22 ms)
-       → cv2.remap undistort (precomputed map, alpha=0 crop, ~2 ms)
+       debayer (COLOR_BayerBG2BGR_EA, 0.22 ms)   ← *BG* constant, resolved naming mismatch
+       → cv2.remap undistort (precomputed map, ~2 ms)
        → optional grade in Python (later; start with OBS filters — §4)
        → Syphon publish (Metal texture)
   ⇒ OBS "Syphon Client" source
@@ -28,16 +28,33 @@ CV app grab thread (BayerRG8 @ 160 fps)
        → Fullscreen Projector on the TV's HDMI display
 ```
 
+**Status 2026-07-27: implemented and verified headless** (server + external client
+round-trip; OBS-side visual check pending). Code: `src/cueclock/display/`
+(pipeline + Syphon wrapper), CLI `replay` and `fit-undistort`. Camera-free dev
+harness — replays a recorded clip to OBS:
+
+```
+PYTHONPATH=src uv run python -m cueclock.cli replay --clip tests/clips/break_shot
+PYTHONPATH=src uv run python -m cueclock.cli replay --test-pattern   # labeled RGB bars
+```
+
 Notes:
 - **Quality debayer belongs here, not in the detection path**: edge-aware (`_EA`) at 0.22 ms/frame is effectively free at display rate and visibly better than bilinear on color edges; VNG is both slower than the frame budget allows and *not* better in OpenCV's implementation — don't use it.
-- **Full-frame undistortion runs only here** (detection uses `undistortPoints` on coordinates instead — see `cv-app-rewrite.md` §4). `alpha=0` auto-crops the curved borders → straight rails on the TV.
+- **Full-frame undistortion runs only here** (detection uses `undistortPoints` on coordinates instead — see `cv-app-rewrite.md` §4).
+- **Undistort coefficients come from the table's own rails** (`cueclock fit-undistort`): the cloth/cushion boundary is straight in reality, so fitting Brown k1/k2 to straighten it needs no printed target — 0.86 px residual on the 2026-07-27 mount, `config/display_undistort.json` (gitignored, refit after every camera move). Display-grade only; ChArUco intrinsics (§4.3 of the rewrite doc) still happen after the final install for detection.
+- **Square pixels are forced in the remap** (`alpha=0`'s optimal matrix is anisotropic — it would render balls ~14% elliptical). Cost: black pincushion bands top/bottom in the carpet region, which the OBS table crop removes anyway.
 - 30 fps display is fine to start (TV content is a mostly-static table); 60 if the M2 shrugs, which measurements suggest it will (~2.5 ms/frame total on the display branch).
+- **Crop to the table in OBS** (source Transform → Crop), not in Python: it's a taste call made at the TV, and the framing changes when the camera remounts after the cable-track/TV install.
 
 ## 3. The republish route: Syphon (recommended), pyvirtualcam (fallback)
 
 **Syphon** is macOS's purpose-built GPU frame-sharing framework (the Mac equivalent of Spout), and OBS ships a built-in **Syphon Client** source on macOS.
 
 - Python side: [`syphon-python`](https://github.com/cansik/syphon-python) (cansik) wraps Syphon via PyObjC with a **Metal** backend (macOS 11+): create `SyphonMetalServer`, `copy_image_to_mtl_texture(frame, texture)`, `publish_frame_texture(texture)`. Zero-copy on the GPU side; the only real cost is the numpy→texture upload of a 1920×1200 BGRA frame, trivial at 60 fps.
+- **Integration facts learned 2026-07-27 (syphon-python 0.1.1**, wrapped in `src/cueclock/display/syphon_out.py`):
+  - **The server process must pump its NSRunLoop** while publishing — servers answer directory-retrieve broadcasts on their runloop. Publish without pumping and the stream is invisible to every client, OBS included. `SyphonOutput.publish()` pumps, doubling as the frame-pacing sleep.
+  - Python-side *clients* of an icon-less (headless Python) server crash on a library bug (`KeyError: SyphonServerDescriptionIconKey` in `SyphonServerDirectory.servers`); enumerate the ObjC directory directly with `.get()` as a workaround. OBS's native client is unaffected.
+  - Texture helpers live in `syphon.utils.raw` (not `utils.raster` as older docs said); numpy frames go in **BGRA** byte order and land correctly (the BGRA-vs-RGBA question is settled semantically; `replay --test-pattern` shows labeled bars for a final eyes-on-OBS check).
 - **Version caveat (the one thing to check before updating OBS):** Syphon Client worked through OBS **31.x**, then **broke in OBS 32.0.x** (blank/transparent source — [obs-studio #12684](https://github.com/obsproject/obs-studio/issues/12684), fix in [PR #12688](https://github.com/obsproject/obs-studio/pull/12688)). Install OBS 31.x, or verify the fix has shipped in whatever 32.x point release is current before upgrading. Pin the OBS version once the rig works; it's production equipment now.
 
 **Fallback — pyvirtualcam** ([letmaik/pyvirtualcam](https://github.com/letmaik/pyvirtualcam), 0.15.0, Jan 2026): publishes to the **OBS Virtual Camera** device (requires OBS 30+ on modern macOS; one-time ritual of starting/stopping the virtual camera in OBS; macOS may require enabling the camera extension under Login Items & Extensions). Known fragility: pyvirtualcam has historically lagged OBS's macOS camera-extension changes ([#111](https://github.com/letmaik/pyvirtualcam/issues/111)), and OBS provides a single camera instance — you can't also use OBS's own virtual camera output for anything else. Works, but it's the brittle path; use only if Syphon misbehaves.
@@ -50,6 +67,7 @@ Target (from the project spec): "clean broadcast overhead" — televised-snooker
 
 **Where to grade — recommendation: OBS first, bake into Python later.**
 - **Phase 1 (dialing in):** apply OBS filters on the Syphon source — **Color Correction** (gamma, contrast, saturation) and/or **Apply LUT** with a 3D LUT (.cube). Everything is live-adjustable on sliders while you look at the actual TV — the right feedback loop for taste decisions. GPU-side, negligible cost.
+- **Starter LUTs exist** (`scripts/make_obs_lut.py` → `assets/obs/`): `cueclock-tone.cube` is the exact live-view grade that was dialed in at the table (luminance tone map + saturation, hue-preserving); `cueclock-tone-ccm.cube` adds the measured ball-set CCM — richer separation but ~3× chroma-noise amplification, which is why it was rolled back from the live view. Load either in Apply LUT and use the **amount slider** to temper at the TV; if the CCM one shimmers on the cloth, drop to the tone-only file (denoise-then-CCM in Python is the eventual fix, backlog).
 - **Phase 2 (optional):** once the look is settled, bake it into the Python display branch as a LUT applied via `cv2.LUT`/numpy (or keep it in OBS forever — there's no correctness reason to move it; moving it only matters if you want the graded look in recordings made outside OBS).
 - Define the **canonical lighting state** (table light setting, room lights) and always shoot matches in it — the grade and the white balance are only valid for that state.
 - Judge color only after the debayer choice is final (EA), since debayer quality affects edge color fringing that a grade can't fix.
@@ -73,6 +91,7 @@ Rough budget for the live TV picture: camera exposure+readout+transfer ~10 ms �
 ## 7. Open questions
 
 - ~~OBS version~~ — **resolved 2026-07-27: this Mac runs OBS 32.1.1, which includes the Syphon fix** (PR #12688 merged Oct 2025 into the 32.0 milestone). No downgrade needed; still pin the version once the rig is dialed in.
+- ~~Python→OBS route works?~~ — **resolved 2026-07-27: Syphon route implemented and verified headless** (publish → directory discovery → external client receives frames). Remaining: eyes-on check in OBS itself (`replay --test-pattern`, then a clip), then filters/crop/scenes at the TV.
 - 1080p-crop vs 1200p-letterbox canvas — decide looking at the actual TV.
 - Whether the side-angle iPhone stays wireless Continuity Camera (occasional flakiness, ~200 ms extra latency) or becomes wired — worth revisiting only if it annoys during real sessions.
 

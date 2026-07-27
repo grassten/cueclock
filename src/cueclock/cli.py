@@ -1,6 +1,7 @@
 """cueclock command-line interface.
 
-Implemented: `record` (build order §7 step 1). Stubs: `run`, `calibrate`.
+Implemented: `record` (build order §7 step 1), `replay` + `fit-undistort`
+(display path, §7 step 6). Stubs: `run`, `calibrate`.
 
 Run via:  PYTHONPATH=src uv run python -m cueclock.cli record --label soft_shot
 """
@@ -10,10 +11,19 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
+import cv2
 import numpy as np
+import numpy.typing as npt
 
 from cueclock.capture.clip import ClipReader, ClipWriter
+from cueclock.display.pipeline import (
+    DEFAULT_UNDISTORT_PATH,
+    DisplayPipeline,
+    UndistortParams,
+    build_undistort_maps,
+)
 
 BYTES_PER_FRAME = 1920 * 1200
 NOMINAL_FPS = 156.25
@@ -87,6 +97,114 @@ def _cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_undistort_or_none(args: argparse.Namespace) -> UndistortParams | None:
+    if args.no_undistort:
+        return None
+    path = Path(args.undistort)
+    if not path.exists():
+        if args.undistort != str(DEFAULT_UNDISTORT_PATH):
+            print(f"undistort params not found: {path}", file=sys.stderr)
+            sys.exit(1)
+        print("no undistort params (run `fit-undistort` first) — publishing distorted")
+        return None
+    params = UndistortParams.load(path)
+    print(f"undistorting with {path} (fit residual {params.fit_residual_px:.2f} px)")
+    return params
+
+
+def _test_pattern_bgra() -> npt.NDArray[np.uint8]:
+    """Labeled color bars: proves channel order end-to-end in OBS."""
+    bgr = np.zeros((1200, 1920, 3), dtype=np.uint8)
+    bars = [
+        ("RED", (0, 0, 255)),
+        ("GREEN", (0, 255, 0)),
+        ("BLUE", (255, 0, 0)),
+        ("WHITE", (255, 255, 255)),
+    ]
+    for i, (label, color) in enumerate(bars):
+        x = i * 480
+        bgr[:, x : x + 480] = color
+        cv2.putText(bgr, label, (x + 90, 620), cv2.FONT_HERSHEY_SIMPLEX, 2.6, (0, 0, 0), 8)
+    return np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA), dtype=np.uint8)
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    from cueclock.display.syphon_out import SyphonOutput
+
+    if args.test_pattern:
+        pattern = _test_pattern_bgra()
+        print(f"publishing test pattern as Syphon server {args.name!r} — Ctrl-C to stop")
+        with SyphonOutput(args.name) as out:
+            try:
+                while True:
+                    out.publish(pattern, pump_seconds=1 / 30)
+            except KeyboardInterrupt:
+                return 0
+
+    if not args.clip:
+        print("--clip is required unless --test-pattern is given", file=sys.stderr)
+        return 1
+    reader = ClipReader(Path(args.clip))
+    if len(reader) < 2:
+        print(f"clip {args.clip} has {len(reader)} frames — nothing to replay", file=sys.stderr)
+        return 1
+    params = _load_undistort_or_none(args)
+    pipeline = DisplayPipeline(params)
+    # subsample the ~156 fps clip down to display rate by timestamp
+    period = 1.0 / args.fps
+    grid = np.arange(0.0, float(reader.timestamps[-1]), period)
+    indices = np.minimum(np.searchsorted(reader.timestamps, grid), len(reader) - 1)
+    print(
+        f"replaying {args.clip} ({len(reader)} frames) as Syphon server {args.name!r} "
+        f"at {args.fps:.0f} fps, {'looping' if not args.once else 'once'} — Ctrl-C to stop"
+    )
+    with SyphonOutput(args.name) as out:
+        try:
+            while True:
+                for i in indices:
+                    out.publish(pipeline.to_bgra(reader.frame(int(i))), pump_seconds=period)
+                if args.once:
+                    return 0
+        except KeyboardInterrupt:
+            return 0
+
+
+def _cmd_fit_undistort(args: argparse.Namespace) -> int:
+    from cueclock.display.undistort_fit import fit_from_frame
+
+    src = Path(args.frame)
+    bgr: npt.NDArray[np.uint8]
+    if src.is_dir():
+        reader = ClipReader(src)
+        if len(reader) == 0:
+            print(f"clip {src} is empty", file=sys.stderr)
+            return 1
+        bayer = reader.frame(len(reader) // 2)
+        bgr = cast(npt.NDArray[np.uint8], cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR_EA))
+    else:
+        arr = np.load(src)
+        if arr.ndim == 2:
+            bgr = cast(npt.NDArray[np.uint8], cv2.cvtColor(arr, cv2.COLOR_BayerBG2BGR_EA))
+        else:
+            bgr = cast(npt.NDArray[np.uint8], np.clip(arr, 0, 255).astype(np.uint8))
+
+    params = fit_from_frame(bgr)
+    k1, k2 = params.dist[0], params.dist[1]
+    print(f"fit: k1={k1:.4f} k2={k2:.4f} residual {params.fit_residual_px:.2f} px")
+    if params.fit_residual_px > 2.0:
+        print("WARNING: residual > 2 px — check the frame (balls on cushions? glare?)")
+    out_path = Path(args.out)
+    params.save(out_path)
+    map1, map2 = build_undistort_maps(params)
+    preview = cv2.remap(bgr, map1, map2, cv2.INTER_LINEAR)
+    # brighten linear data so the preview is judgeable by eye
+    lut = (255.0 * (np.linspace(0.0, 1.0, 256) ** (1 / 2.2))).astype(np.uint8)
+    preview_path = out_path.with_name("undistort_preview.png")
+    cv2.imwrite(str(preview_path), cv2.LUT(preview, lut))
+    print(f"wrote {out_path} and {preview_path} — check the preview: rails straight?")
+    return 0
+
+
 def _cmd_stub(name: str) -> int:
     print(f"`{name}` is not implemented yet (build order: docs/cv-app-rewrite.md §7)")
     return 2
@@ -101,12 +219,37 @@ def main(argv: list[str] | None = None) -> int:
     p_record.add_argument("--seconds", type=float, default=10.0, help="duration (default 10)")
     p_record.add_argument("--out", default="tests/clips", help="output root (default tests/clips)")
 
+    p_replay = sub.add_parser("replay", help="publish a clip (or test pattern) to OBS via Syphon")
+    p_replay.add_argument("--clip", help="clip directory to replay")
+    p_replay.add_argument("--fps", type=float, default=30.0, help="display rate (default 30)")
+    p_replay.add_argument("--name", default="cueclock", help="Syphon server name")
+    p_replay.add_argument("--once", action="store_true", help="play once instead of looping")
+    p_replay.add_argument("--test-pattern", action="store_true", help="labeled RGB bars instead")
+    p_replay.add_argument(
+        "--undistort",
+        default=str(DEFAULT_UNDISTORT_PATH),
+        help="undistort params JSON (default config/display_undistort.json)",
+    )
+    p_replay.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
+
+    p_fit = sub.add_parser("fit-undistort", help="fit display undistort from the table's rails")
+    p_fit.add_argument("frame", help="clip directory (middle frame) or .npy frame")
+    p_fit.add_argument(
+        "--out",
+        default=str(DEFAULT_UNDISTORT_PATH),
+        help="output JSON (default config/display_undistort.json)",
+    )
+
     sub.add_parser("run", help="clock + vision + server (not yet)")
     sub.add_parser("calibrate", help="ChArUco + homography calibration (not yet)")
 
     args = parser.parse_args(argv)
     if args.command == "record":
         return _cmd_record(args)
+    if args.command == "replay":
+        return _cmd_replay(args)
+    if args.command == "fit-undistort":
+        return _cmd_fit_undistort(args)
     return _cmd_stub(args.command)
 
 
