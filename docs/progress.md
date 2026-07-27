@@ -46,7 +46,30 @@ the camera bracket, print a ChArUco board for §4.3 calibration.
   clock handling for it; §2.1 defines none). It stays a vision event for overlay/stats
   wiring when events land.
 
+- **2026-07-27** Rulesets validated against published rules (supersedes the
+  "verbatim port" bullet above). Corrections vs. the old config: Ultimate Pool
+  singles extension is **15 s, not 30 s** (one per player per frame; sources:
+  [Ultimate Pool Masters format](https://www.ultimatepoolgroup.com/article/68),
+  [Professional Cup format](https://www.ultimatepoolgroup.com/article/2021-ultimate-pool-professional-cup-or-format-and-broadcast-details),
+  AZBilliards Ultimate Pool USA event threads). `ultimate_9ball` was the old
+  app's invented name; its values match the real
+  [WNT rules](https://worldnineballtour.com//wp-content/uploads/World-Nineball-Tour-Event-Rules-1.pdf)
+  (30 s clock, one 30 s extension per rack), so the canonical ruleset is now
+  `wnt_9ball` with `ultimate_9ball`/`matchroom_9ball` as aliases
+  (`ALIASES`/`get_ruleset()` in `clock/rulesets.py`). Kept to 3 canonical
+  rulesets. Not modeled (YAGNI until asked): Ultimate Pool doubles (15 s
+  extension shared per team), any per-shot base-time variation.
+
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-27 (checkpoint 2):** rulesets validated + corrected (15 s Ultimate Pool
+  extension; `wnt_9ball` + aliases). Queue item 2 (`clock/`) done. Next: `server/`.
+- **2026-07-27 (checkpoint 1):** `clock/` landed — pure `ShotClock` (injected time),
+  `Ruleset` registry, 16 unit tests green, mypy --strict clean. Environment gotcha
+  found today: **this Mac's venvs don't process `.pth` files**, so uv's editable
+  install of `cueclock` is never importable. Tests now use pytest `pythonpath =
+  ["src"]` (install-independent). If a future entry point (`cueclock` CLI) hits
+  `ModuleNotFoundError`, `uv sync --no-editable` is the workaround; root cause in
+  the local pyenv 3.12.12 site setup, still undiagnosed.
 - **2026-07-27 (checkpoint 0):** progress doc created; old-app reference files fetched.
   Next: clock port + tests.

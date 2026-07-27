@@ -1,6 +1,6 @@
 """Shot-clock state machine — behavior locked to docs/cv-app-rewrite.md §2.1."""
 
-from cueclock.clock import RULESETS, Ruleset, ShotClock, State
+from cueclock.clock import RULESETS, Ruleset, ShotClock, State, get_ruleset
 
 
 def make_clock(name: str = "ultimate_pool_8ball") -> ShotClock:
@@ -76,7 +76,7 @@ def test_extension_accepted_only_in_running_and_grace() -> None:
     clock.tick(now=2.0)
     snap = clock.snapshot()
     assert snap.extensions_used == 1
-    assert snap.time == 59  # 30 - 1 + 30
+    assert snap.time == 44  # 30 - 1 + 15
 
 
 def test_extension_limit_per_frame() -> None:
@@ -95,15 +95,15 @@ def test_extension_in_grace_resumes_running() -> None:
     assert clock.state is State.GRACE
     assert clock.extension()
     assert clock.state is State.RUNNING
-    assert clock.remaining == 30
+    assert clock.remaining == 15
 
 
 def test_extension_rearms_urgency_cues() -> None:
     clock = make_clock()
     clock.start(now=0.0)
     assert clock.tick(now=20.5).cue == "ten"
-    clock.extension()  # 9.5 + 30 = 39.5 s
-    assert clock.tick(now=50.0).cue == "ten"  # re-crossed 10, refires
+    clock.extension()  # 9.5 + 15 = 24.5 s
+    assert clock.tick(now=35.0).cue == "ten"  # re-crossed 10, refires
 
 
 def test_shot_during_grace_freezes_then_settle_restarts() -> None:
@@ -121,11 +121,11 @@ def test_shot_during_grace_freezes_then_settle_restarts() -> None:
 def test_settle_resets_extensions_and_cues() -> None:
     clock = make_clock()
     clock.start(now=0.0)
-    clock.extension()
-    clock.tick(now=50.5)  # fires "ten"
+    clock.extension()  # 30 + 15 = 45 s
+    clock.tick(now=35.5)  # fires "ten"
     clock.shot_taken()
-    clock.balls_settled(now=51.0)
-    snap = clock.tick(now=71.5)  # crosses 10 again on the fresh countdown
+    clock.balls_settled(now=36.0)
+    snap = clock.tick(now=56.5)  # crosses 10 again on the fresh countdown
     assert snap.extensions_used == 0
     assert snap.cue == "ten"
 
@@ -155,12 +155,22 @@ def test_reset_and_set_ruleset() -> None:
     assert clock.snapshot().ruleset == "ultimate_pool_8ball_final10"
 
 
-def test_rulesets_verbatim_values() -> None:
+def test_rulesets_validated_values() -> None:
     assert set(RULESETS) == {
         "ultimate_pool_8ball",
         "ultimate_pool_8ball_final10",
-        "ultimate_9ball",
+        "wnt_9ball",
     }
     default = RULESETS["ultimate_pool_8ball"]
-    assert default == Ruleset("ultimate_pool_8ball", 30, 30, 1, 2.0, 2.0)
-    assert RULESETS["ultimate_pool_8ball_final10"].base_seconds == 15
+    assert default == Ruleset("ultimate_pool_8ball", 30, 15, 1, 2.0, 2.0)
+    assert RULESETS["ultimate_pool_8ball_final10"] == Ruleset(
+        "ultimate_pool_8ball_final10", 15, 15, 1, 2.0, 2.0
+    )
+    assert RULESETS["wnt_9ball"] == Ruleset("wnt_9ball", 30, 30, 1, 2.0, 2.0)
+
+
+def test_ruleset_aliases_resolve() -> None:
+    # The old app's identifier keeps working (Stream Deck compatibility).
+    assert get_ruleset("ultimate_9ball") is RULESETS["wnt_9ball"]
+    assert get_ruleset("matchroom_9ball") is RULESETS["wnt_9ball"]
+    assert get_ruleset("ultimate_pool_8ball") is RULESETS["ultimate_pool_8ball"]
