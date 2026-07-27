@@ -40,6 +40,19 @@ Non-code prep Steven can do without the camera: install the pylon Camera Softwar
 system-wide (required before pypylon works — `basler-camera-setup.md` §3), mount/level
 the camera bracket, print a ChArUco board for §4.3 calibration.
 
+## Camera-day runbook (next session, in order)
+
+1. Before unboxing: install pylon Suite system-wide (`basler-camera-setup.md` §3);
+   `uv sync` already has pypylon.
+2. Mount + focus + lock lens screws **before** anything else — calibration is void
+   if refocused later (`cv-app-rewrite.md` §4.3 order-of-operations).
+3. Bring-up via the pypylon live-view script (`basler-camera-setup.md` §5 — no
+   pylon Viewer GUI on Apple Silicon). Sanity-check BayerRG8 vs. the blue cloth.
+4. Build `capture/` + a minimal `record` CLI (build order §7 step 1).
+5. Record the §2.3 test-corpus shopping list into `tests/clips/` (gitignored),
+   labeling clips by scenario name.
+6. Then (or while camera ships stay pending): calibration tooling, step 3.
+
 ## Decisions made during build (append-only)
 
 - **2026-07-27** Ruleset values ported verbatim from old `config.yaml`; all three
