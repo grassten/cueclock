@@ -6,7 +6,7 @@ provokers matter as much as the real shots.
 
 ## Pre-flight
 
-- [ ] Table light on at normal match brightness (the canonical lighting state)
+- [ ] Table light on (it's on/off only — on IS the canonical lighting state)
 - [ ] **Live view closed** — only one program can hold the camera
 - [ ] Full ball set, cue, chalk at the table
 - [ ] ~50 GB free on disk (each 8–10 s clip is ~3–3.6 GB; the CLI refuses to

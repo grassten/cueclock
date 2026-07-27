@@ -96,7 +96,7 @@ Notes:
 
 ## 6. Lock in production settings
 
-Once the image looks right (do the final pass at final mounting height, under the table light, at match brightness — define that as the canonical lighting state):
+Once the image looks right (do the final pass at final mounting height, under the table light — it's on/off only, so "on" is the canonical lighting state, trivially reproducible):
 
 1. **Aperture:** f/4–5.6 (the Kowa is sharpest there; the table light has lumens to spare). **The LM4NCL iris ring is unmarked** — just O (open, f/1.4) to C (closed), so set it by brightness ratio: with exposure temporarily lowered so nothing clips, note the cloth brightness at O, then close the iris until the reading drops to **1/8–1/16 of that** (3–4 stops = f/4–5.6). The live-view script's `[`/`]` exposure hotkeys and `cloth` readout are built for this. Compensate with `ExposureTime` (up to ~6000 µs at 160 fps; global shutter keeps it clean). Then tighten the iris locking screw.
 2. **Focus:** on the cloth at final height. Tighten the focus locking screw.
