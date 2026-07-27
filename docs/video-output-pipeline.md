@@ -1,0 +1,85 @@
+# Video Output — Basler → Python → OBS → TV
+
+**Scope:** how the raw Basler frames become a good-looking broadcast feed on the wall TV. Everything is local to the Mac mini M2 (HDMI straight to the TV) — no network transport anywhere in this pipeline.
+
+---
+
+## 1. The constraint that shapes everything
+
+OBS cannot use the Basler directly, for two independent reasons:
+
+1. The camera is a **USB3 Vision device**, not a UVC webcam — it only speaks through the pylon SDK. It never appears in OBS's video-capture device list.
+2. Even if it could, one process gets exclusive use, and the Python CV app must own the camera for detection.
+
+So the CV app owns the camera and **republishes processed frames locally** for OBS to consume. This is a GPU texture handoff, not streaming.
+
+## 2. Pipeline
+
+```
+CV app grab thread (BayerRG8 @ 160 fps)
+  └─ display branch @ 30–60 fps (every ~3rd–5th frame):
+       debayer (COLOR_BayerRG2BGR_EA, 0.22 ms)
+       → cv2.remap undistort (precomputed map, alpha=0 crop, ~2 ms)
+       → optional grade in Python (later; start with OBS filters — §4)
+       → Syphon publish (Metal texture)
+  ⇒ OBS "Syphon Client" source
+       → scenes (overhead / overhead + iPhone side cam / replay)
+       → shot-clock browser source overlay (transparent, localhost server)
+       → Fullscreen Projector on the TV's HDMI display
+```
+
+Notes:
+- **Quality debayer belongs here, not in the detection path**: edge-aware (`_EA`) at 0.22 ms/frame is effectively free at display rate and visibly better than bilinear on color edges; VNG is both slower than the frame budget allows and *not* better in OpenCV's implementation — don't use it.
+- **Full-frame undistortion runs only here** (detection uses `undistortPoints` on coordinates instead — see `cv-app-rewrite.md` §4). `alpha=0` auto-crops the curved borders → straight rails on the TV.
+- 30 fps display is fine to start (TV content is a mostly-static table); 60 if the M2 shrugs, which measurements suggest it will (~2.5 ms/frame total on the display branch).
+
+## 3. The republish route: Syphon (recommended), pyvirtualcam (fallback)
+
+**Syphon** is macOS's purpose-built GPU frame-sharing framework (the Mac equivalent of Spout), and OBS ships a built-in **Syphon Client** source on macOS.
+
+- Python side: [`syphon-python`](https://github.com/cansik/syphon-python) (cansik) wraps Syphon via PyObjC with a **Metal** backend (macOS 11+): create `SyphonMetalServer`, `copy_image_to_mtl_texture(frame, texture)`, `publish_frame_texture(texture)`. Zero-copy on the GPU side; the only real cost is the numpy→texture upload of a 1920×1200 BGRA frame, trivial at 60 fps.
+- **Version caveat (the one thing to check before updating OBS):** Syphon Client worked through OBS **31.x**, then **broke in OBS 32.0.x** (blank/transparent source — [obs-studio #12684](https://github.com/obsproject/obs-studio/issues/12684), fix in [PR #12688](https://github.com/obsproject/obs-studio/pull/12688)). Install OBS 31.x, or verify the fix has shipped in whatever 32.x point release is current before upgrading. Pin the OBS version once the rig works; it's production equipment now.
+
+**Fallback — pyvirtualcam** ([letmaik/pyvirtualcam](https://github.com/letmaik/pyvirtualcam), 0.15.0, Jan 2026): publishes to the **OBS Virtual Camera** device (requires OBS 30+ on modern macOS; one-time ritual of starting/stopping the virtual camera in OBS; macOS may require enabling the camera extension under Login Items & Extensions). Known fragility: pyvirtualcam has historically lagged OBS's macOS camera-extension changes ([#111](https://github.com/letmaik/pyvirtualcam/issues/111)), and OBS provides a single camera instance — you can't also use OBS's own virtual camera output for anything else. Works, but it's the brittle path; use only if Syphon misbehaves.
+
+**Rejected for this setup:** NDI/DistroAV and RTSP/MJPEG servers — network-transport machinery with encode/decode latency and CPU cost, solving a problem (crossing machines) this one-machine setup doesn't have.
+
+## 4. Dialing in the look
+
+Target (from the project spec): "clean broadcast overhead" — televised-snooker character, not iPhone computational-photography punch. The locked camera does most of it (no exposure pumping, no WB drift, global shutter); the rest is a one-time grade.
+
+**Where to grade — recommendation: OBS first, bake into Python later.**
+- **Phase 1 (dialing in):** apply OBS filters on the Syphon source — **Color Correction** (gamma, contrast, saturation) and/or **Apply LUT** with a 3D LUT (.cube). Everything is live-adjustable on sliders while you look at the actual TV — the right feedback loop for taste decisions. GPU-side, negligible cost.
+- **Phase 2 (optional):** once the look is settled, bake it into the Python display branch as a LUT applied via `cv2.LUT`/numpy (or keep it in OBS forever — there's no correctness reason to move it; moving it only matters if you want the graded look in recordings made outside OBS).
+- Define the **canonical lighting state** (table light setting, room lights) and always shoot matches in it — the grade and the white balance are only valid for that state.
+- Judge color only after the debayer choice is final (EA), since debayer quality affects edge color fringing that a grade can't fix.
+
+**OBS color settings gotchas** (worth setting deliberately rather than by default):
+- Syphon delivers BGRA (full-range RGB). In OBS Settings → Advanced, the canvas color format default (NV12) forces an RGB→YUV conversion of the whole canvas; for an HDMI-to-TV rig, setting color format **P010/NV12 vs BGRA** mainly matters if banding appears in the cloth gradient — if it does, try BGRA canvas. Keep color range consistent end-to-end (Full in OBS + Full/PC range on the TV input, or Limited both sides) — a mismatch shows as crushed blacks or washed grays on the blue cloth.
+- Canvas: **1920×1080**. The camera delivers 1200-tall, but the TV is 16:9; letting OBS scale/crop the Syphon source into a 1080p canvas beats a 1200p canvas the TV would letterbox anyway. The table spans ~75% of frame width, so there's vertical margin to crop without losing the rails. (Alternative if you want every pixel: 1920×1200 canvas, TV letterboxes. Taste call, decide at the TV.)
+
+## 5. OBS scene & output setup
+
+- **Sources:** Syphon Client (overhead), iPhone Continuity Camera (side angle — OBS can own it since the Python app doesn't touch it), Browser source `http://localhost:8000/shotclock` (transparent 200×200 overlay; enable **"Control audio via OBS"** so the chimes reach the TV speakers over HDMI).
+- **Scenes** (per the project spec): full overhead / overhead + side-angle split / replay. Stream Deck's OBS plugin switches scenes; the same Stream Deck keeps hitting the shot-clock HTTP API directly for start/pause/reset/extension.
+- **Output to TV:** right-click the program → **Fullscreen Projector** on the TV display. System Settings: prevent display sleep while OBS runs; add OBS to Login Items with the projector restored (OBS remembers projector state via "Save projectors on exit" in General settings).
+- **TV settings:** Game Mode ON for the Mac's HDMI input, motion smoothing OFF (both from the spec — matters for latency and for not "enhancing" the feed).
+- **Replays:** OBS's own Replay Buffer can capture the *display-rate* feed for casual instant replays now. The real 160 fps slow-mo replay (5.3× at 30 fps playback) comes later from the CV app's raw ring buffer — that's an app feature, not an OBS one (`cv-app-rewrite.md` §7 backlog).
+
+## 6. Latency expectations
+
+Rough budget for the live TV picture: camera exposure+readout+transfer ~10 ms → display-branch processing ~3 ms → Syphon handoff ≤1 frame → OBS compositing ~1–2 frames at 60 Hz → TV in Game Mode ~10–20 ms. Total: **on the order of 100 ms, well under the "few hundred ms is fine" bar** the spec sets for stats/replay use. The detection path is unaffected by any of this — it never leaves the Python process.
+
+## 7. Open questions
+
+- ~~OBS version~~ — **resolved 2026-07-27: this Mac runs OBS 32.1.1, which includes the Syphon fix** (PR #12688 merged Oct 2025 into the 32.0 milestone). No downgrade needed; still pin the version once the rig is dialed in.
+- 1080p-crop vs 1200p-letterbox canvas — decide looking at the actual TV.
+- Whether the side-angle iPhone stays wireless Continuity Camera (occasional flakiness, ~200 ms extra latency) or becomes wired — worth revisiting only if it annoys during real sessions.
+
+## Sources
+
+- [syphon-python](https://github.com/cansik/syphon-python) — Metal Syphon server from Python, macOS 11+
+- [OBS Syphon regression in 32.0.x #12684](https://github.com/obsproject/obs-studio/issues/12684) / [fix PR #12688](https://github.com/obsproject/obs-studio/pull/12688)
+- [pyvirtualcam](https://github.com/letmaik/pyvirtualcam) — 0.15.0; macOS = OBS Virtual Camera backend; OBS 30+ required; [detection issue #111](https://github.com/letmaik/pyvirtualcam/issues/111)
+- Debayer/remap timings: local M2 measurements in `cv-app-rewrite.md` §6 research appendix
+- `research/pool-shot-clock-project-spec.pdf` §5 (pipeline, Syphon/exclusive-camera note, scenes, Game Mode, latency bar)

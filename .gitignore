@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Local-only assets
+models/
+tests/clips/*
+!tests/clips/README.md
+.env
