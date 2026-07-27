@@ -13,8 +13,10 @@ they're in `docs/cv-app-rewrite.md` §2.3 and must not be re-learned the hard wa
 
 ## Current status
 
-**Pre-hardware scaffold (July 2026).** Camera is in transit. Repo structure, tooling, and
-design docs exist; no application code yet. Build order: `docs/cv-app-rewrite.md` §7.
+**Pre-hardware build (July 2026).** Camera is in transit. Repo structure, tooling, and
+design docs exist; camera-free modules are landing now. Build order: `docs/cv-app-rewrite.md`
+§7; live execution status: **`docs/progress.md`** (check it first, update it at every
+checkpoint commit).
 
 ## Plan of record — docs/
 
