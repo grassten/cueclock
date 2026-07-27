@@ -12,6 +12,13 @@ Two integration facts learned the hard way (2026-07-27, syphon-python 0.1.1):
   sleep.
 - Python-side *clients* of headless Python servers hit a syphon-python bug
   (KeyError on the missing icon key). OBS's native client is unaffected.
+- The announce distributed notification is one-shot at server creation; if a
+  long-lived directory (OBS runs one for its whole lifetime) misses it, this
+  server stays invisible until the next system-wide announce-request round.
+  OBS also re-binds a server whose app name + server name match on *every*
+  announce it hears. `publish()` therefore re-broadcasts the announce every
+  couple of seconds — restarting a publisher then reattaches in OBS within
+  ~2 s, no trip to the source properties needed.
 """
 
 import time
@@ -28,7 +35,13 @@ class SyphonOutput:
     2026-07-27; BGRA renders red/blue swapped despite the BGRA8 texture tag).
     """
 
-    def __init__(self, name: str = "cueclock", width: int = 1920, height: int = 1200) -> None:
+    def __init__(
+        self,
+        name: str = "cueclock",
+        width: int = 1920,
+        height: int = 1200,
+        reannounce_seconds: float = 2.0,
+    ) -> None:
         import syphon
         from Foundation import NSDate, NSDefaultRunLoopMode, NSRunLoop
         from syphon.utils.raw import create_mtl_texture
@@ -39,6 +52,8 @@ class SyphonOutput:
         self._server: Any = syphon.SyphonMetalServer(name)
         self._texture: Any = create_mtl_texture(self._server.device, width, height)
         self._size = (height, width)
+        self._reannounce_seconds = reannounce_seconds
+        self._last_announce = time.monotonic()
 
     def publish(self, rgba: npt.NDArray[np.uint8], pump_seconds: float = 0.001) -> None:
         """Publish one frame; pumps the runloop for `pump_seconds` after.
@@ -54,6 +69,14 @@ class SyphonOutput:
             rgba = np.ascontiguousarray(rgba)
         copy_image_to_mtl_texture(rgba, self._texture)
         self._server.publish_frame_texture(self._texture)
+        if (
+            self._reannounce_seconds > 0
+            and time.monotonic() - self._last_announce >= self._reannounce_seconds
+        ):
+            # private framework selector on SyphonServerBase; verified present
+            # in the syphon-python 0.1.1 bundled framework
+            self._server.context.broadcastServerAnnounce()
+            self._last_announce = time.monotonic()
         self._run_loop.runMode_beforeDate_(
             self._mode, self._nsdate.dateWithTimeIntervalSinceNow_(pump_seconds)
         )

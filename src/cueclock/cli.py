@@ -8,9 +8,11 @@ Run via:  PYTHONPATH=src uv run python -m cueclock.cli record --label soft_shot
 
 import argparse
 import shutil
+import signal
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import FrameType
 from typing import cast
 
 import cv2
@@ -243,7 +245,14 @@ def _cmd_stub(name: str) -> int:
     return 2
 
 
+def _sigterm_to_interrupt(signum: int, frame: FrameType | None) -> None:
+    raise KeyboardInterrupt
+
+
 def main(argv: list[str] | None = None) -> int:
+    # `kill <pid>` unwinds like Ctrl-C: clips close cleanly, Syphon servers
+    # post their retire notification instead of leaving a stale entry.
+    signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
     parser = argparse.ArgumentParser(prog="cueclock")
     sub = parser.add_subparsers(dest="command", required=True)
 
