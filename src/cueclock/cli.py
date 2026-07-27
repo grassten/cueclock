@@ -1,7 +1,7 @@
 """cueclock command-line interface.
 
-Implemented: `record` (build order §7 step 1), `replay` + `fit-undistort`
-(display path, §7 step 6). Stubs: `run`, `calibrate`.
+Implemented: `record` (build order §7 step 1), `replay` + `live` +
+`fit-undistort` (display path, §7 step 6). Stubs: `run`, `calibrate`.
 
 Run via:  PYTHONPATH=src uv run python -m cueclock.cli record --label soft_shot
 """
@@ -112,7 +112,7 @@ def _load_undistort_or_none(args: argparse.Namespace) -> UndistortParams | None:
     return params
 
 
-def _test_pattern_bgra() -> npt.NDArray[np.uint8]:
+def _test_pattern_rgba() -> npt.NDArray[np.uint8]:
     """Labeled color bars: proves channel order end-to-end in OBS."""
     bgr = np.zeros((1200, 1920, 3), dtype=np.uint8)
     bars = [
@@ -125,14 +125,14 @@ def _test_pattern_bgra() -> npt.NDArray[np.uint8]:
         x = i * 480
         bgr[:, x : x + 480] = color
         cv2.putText(bgr, label, (x + 90, 620), cv2.FONT_HERSHEY_SIMPLEX, 2.6, (0, 0, 0), 8)
-    return np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA), dtype=np.uint8)
+    return np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA), dtype=np.uint8)
 
 
 def _cmd_replay(args: argparse.Namespace) -> int:
     from cueclock.display.syphon_out import SyphonOutput
 
     if args.test_pattern:
-        pattern = _test_pattern_bgra()
+        pattern = _test_pattern_rgba()
         print(f"publishing test pattern as Syphon server {args.name!r} — Ctrl-C to stop")
         with SyphonOutput(args.name) as out:
             try:
@@ -162,11 +162,44 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         try:
             while True:
                 for i in indices:
-                    out.publish(pipeline.to_bgra(reader.frame(int(i))), pump_seconds=period)
+                    out.publish(pipeline.to_rgba(reader.frame(int(i))), pump_seconds=period)
                 if args.once:
                     return 0
         except KeyboardInterrupt:
             return 0
+
+
+def _cmd_live(args: argparse.Namespace) -> int:
+    """Camera -> display pipeline -> Syphon at display rate (no recording).
+
+    Exclusive: can't run while `record` (or anything else) holds the camera.
+    """
+    from pypylon import pylon
+
+    from cueclock.capture.camera import open_camera
+    from cueclock.display.syphon_out import SyphonOutput
+
+    params = _load_undistort_or_none(args)
+    pipeline = DisplayPipeline(params)
+    period = 1.0 / args.fps
+    with open_camera() as cam:
+        # LatestImageOnly: display always shows the freshest frame; the camera
+        # free-runs at 156 fps and we sample it at display rate.
+        cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+        print(f"live -> Syphon server {args.name!r} at ~{args.fps:.0f} fps — Ctrl-C to stop")
+        try:
+            with SyphonOutput(args.name) as out:
+                while True:
+                    grab = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+                    try:
+                        if grab.GrabSucceeded():
+                            out.publish(pipeline.to_rgba(grab.Array), pump_seconds=period)
+                    finally:
+                        grab.Release()
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            cam.StopGrabbing()
 
 
 def _cmd_fit_undistort(args: argparse.Namespace) -> int:
@@ -232,6 +265,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_replay.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
 
+    p_live = sub.add_parser("live", help="live camera feed to OBS via Syphon (no recording)")
+    p_live.add_argument("--fps", type=float, default=30.0, help="display rate (default 30)")
+    p_live.add_argument("--name", default="cueclock", help="Syphon server name")
+    p_live.add_argument(
+        "--undistort",
+        default=str(DEFAULT_UNDISTORT_PATH),
+        help="undistort params JSON (default config/display_undistort.json)",
+    )
+    p_live.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
+
     p_fit = sub.add_parser("fit-undistort", help="fit display undistort from the table's rails")
     p_fit.add_argument("frame", help="clip directory (middle frame) or .npy frame")
     p_fit.add_argument(
@@ -248,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_record(args)
     if args.command == "replay":
         return _cmd_replay(args)
+    if args.command == "live":
+        return _cmd_live(args)
     if args.command == "fit-undistort":
         return _cmd_fit_undistort(args)
     return _cmd_stub(args.command)

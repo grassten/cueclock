@@ -22,7 +22,11 @@ import numpy.typing as npt
 
 
 class SyphonOutput:
-    """Publishes BGRA frames as a named Syphon server for OBS's Syphon Client."""
+    """Publishes RGBA frames as a named Syphon server for OBS's Syphon Client.
+
+    Byte order is RGBA end-to-end as OBS sees it (confirmed eyes-on
+    2026-07-27; BGRA renders red/blue swapped despite the BGRA8 texture tag).
+    """
 
     def __init__(self, name: str = "cueclock", width: int = 1920, height: int = 1200) -> None:
         import syphon
@@ -36,7 +40,7 @@ class SyphonOutput:
         self._texture: Any = create_mtl_texture(self._server.device, width, height)
         self._size = (height, width)
 
-    def publish(self, bgra: npt.NDArray[np.uint8], pump_seconds: float = 0.001) -> None:
+    def publish(self, rgba: npt.NDArray[np.uint8], pump_seconds: float = 0.001) -> None:
         """Publish one frame; pumps the runloop for `pump_seconds` after.
 
         Callers pacing a fixed display rate should pass their per-frame time
@@ -44,11 +48,11 @@ class SyphonOutput:
         """
         from syphon.utils.numpy import copy_image_to_mtl_texture
 
-        if bgra.shape != (*self._size, 4) or bgra.dtype != np.uint8:
-            raise ValueError(f"expected {self._size} BGRA uint8, got {bgra.dtype} {bgra.shape}")
-        if not bgra.flags["C_CONTIGUOUS"]:
-            bgra = np.ascontiguousarray(bgra)
-        copy_image_to_mtl_texture(bgra, self._texture)
+        if rgba.shape != (*self._size, 4) or rgba.dtype != np.uint8:
+            raise ValueError(f"expected {self._size} RGBA uint8, got {rgba.dtype} {rgba.shape}")
+        if not rgba.flags["C_CONTIGUOUS"]:
+            rgba = np.ascontiguousarray(rgba)
+        copy_image_to_mtl_texture(rgba, self._texture)
         self._server.publish_frame_texture(self._texture)
         self._run_loop.runMode_beforeDate_(
             self._mode, self._nsdate.dateWithTimeIntervalSinceNow_(pump_seconds)

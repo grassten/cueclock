@@ -15,9 +15,9 @@ from cueclock.display.undistort_fit import (
 )
 
 
-def test_pipeline_bayer_to_bgra_shape() -> None:
+def test_pipeline_bayer_to_rgba_shape() -> None:
     bayer = np.random.default_rng(3).integers(0, 256, size=(120, 192), dtype=np.uint8)
-    out = DisplayPipeline().to_bgra(bayer)
+    out = DisplayPipeline().to_rgba(bayer)
     assert out.shape == (120, 192, 4)
     assert out.dtype == np.uint8
     assert (out[:, :, 3] == 255).all()
@@ -51,8 +51,8 @@ def test_zero_distortion_is_identity() -> None:
         fit_residual_px=0.0,
     )
     bayer = np.random.default_rng(5).integers(0, 256, size=(120, 192), dtype=np.uint8)
-    plain = DisplayPipeline().to_bgra(bayer)
-    undistorted = DisplayPipeline(params).to_bgra(bayer)
+    plain = DisplayPipeline().to_rgba(bayer)
+    undistorted = DisplayPipeline(params).to_rgba(bayer)
     np.testing.assert_array_equal(plain, undistorted)
 
 

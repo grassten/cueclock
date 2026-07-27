@@ -79,6 +79,14 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 - **2026-07-27** `scratch` does not touch the clock state machine in v1 (old app had no
   clock handling for it; §2.1 defines none). It stays a vision event for overlay/stats
   wiring when events land.
+- **2026-07-27** **No game-state (rules) awareness in v1** — settled while writing the
+  corpus checklist. A legal ball-in-hand shaft nudge and a foul shaft/tip bump are the
+  same physical motion; only game state (is ball-in-hand live? whose visit?) separates
+  their correct clock outcomes, and vision cannot see that state. v1 treats both
+  identically: no shot detected, clock keeps running, the human calls the foul and hits
+  reset (Stream Deck / API). If match-grade foul handling is ever wanted, the state must
+  come from manual input (e.g. a "foul → ball in hand" button on the §2.1 API), not
+  detection — backlog.
 
 - **2026-07-27** Rulesets validated against published rules (supersedes the
   "verbatim port" bullet above). Corrections vs. the old config: Ultimate Pool
@@ -159,6 +167,15 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   adds the gate scoped to the ball's own pixels.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-27 (checkpoint 9 — OBS eyes-on: channel order fixed, `live` added):**
+  First real OBS render (replayed `break_shot`): geometry/undistort perfect, but
+  **red↔blue swapped** — Syphon frames land in OBS in **RGBA byte order**, not the
+  BGRA checkpoint 8 assumed (the headless client's "swap" was the truth, not an
+  artifact). Pipeline now emits RGBA (`to_rgba`). Also added `cueclock live` —
+  camera → display pipeline → Syphon at ~30 fps (LatestImageOnly; exclusive with
+  `record`) — the interim table-on-TV feed until `cueclock run` exists. Remaining
+  for the look: Apply LUT (`assets/obs/cueclock-tone.cube`) + crop, both OBS-side.
 
 - **2026-07-27 (checkpoint 8 — display path to OBS, camera-free):** `display/` landed:
   `pipeline.py` (debayer EA → precomputed-remap undistort with **square pixels forced**

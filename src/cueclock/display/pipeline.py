@@ -76,16 +76,21 @@ def build_undistort_maps(
 
 
 class DisplayPipeline:
-    """(1200, 1920) BayerRG8 in -> (1200, 1920, 4) BGRA out."""
+    """(1200, 1920) BayerRG8 in -> (1200, 1920, 4) RGBA out for Syphon.
+
+    RGBA, not BGRA: the bytes handed to syphon-python land in OBS in RGBA
+    order — feeding BGRA rendered the blue cloth tan (confirmed eyes-on in
+    OBS 2026-07-27).
+    """
 
     def __init__(self, undistort: UndistortParams | None = None) -> None:
         self._maps = build_undistort_maps(undistort) if undistort else None
 
-    def to_bgra(self, bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+    def to_rgba(self, bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         # GenICam "BayerRG8" needs OpenCV's *BG* constant (opposite-corner
         # naming conventions — docs/basler-camera-setup.md §5). _EA = edge-aware:
         # visibly cleaner color edges than bilinear, ~0.22 ms, fine at display rate.
         bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR_EA)
         if self._maps is not None:
             bgr = cv2.remap(bgr, self._maps[0], self._maps[1], cv2.INTER_LINEAR)
-        return cast(npt.NDArray[np.uint8], cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA))
+        return cast(npt.NDArray[np.uint8], cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA))

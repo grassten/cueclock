@@ -36,7 +36,11 @@ harness — replays a recorded clip to OBS:
 ```
 PYTHONPATH=src uv run python -m cueclock.cli replay --clip tests/clips/break_shot
 PYTHONPATH=src uv run python -m cueclock.cli replay --test-pattern   # labeled RGB bars
+PYTHONPATH=src uv run python -m cueclock.cli live                    # camera feed (exclusive)
 ```
+
+`live` is the interim way to see the table on the TV before `cueclock run`
+exists; it holds the camera exclusively, so stop it before `record`.
 
 Notes:
 - **Quality debayer belongs here, not in the detection path**: edge-aware (`_EA`) at 0.22 ms/frame is effectively free at display rate and visibly better than bilinear on color edges; VNG is both slower than the frame budget allows and *not* better in OpenCV's implementation — don't use it.
@@ -54,7 +58,7 @@ Notes:
 - **Integration facts learned 2026-07-27 (syphon-python 0.1.1**, wrapped in `src/cueclock/display/syphon_out.py`):
   - **The server process must pump its NSRunLoop** while publishing — servers answer directory-retrieve broadcasts on their runloop. Publish without pumping and the stream is invisible to every client, OBS included. `SyphonOutput.publish()` pumps, doubling as the frame-pacing sleep.
   - Python-side *clients* of an icon-less (headless Python) server crash on a library bug (`KeyError: SyphonServerDescriptionIconKey` in `SyphonServerDirectory.servers`); enumerate the ObjC directory directly with `.get()` as a workaround. OBS's native client is unaffected.
-  - Texture helpers live in `syphon.utils.raw` (not `utils.raster` as older docs said); numpy frames go in **BGRA** byte order and land correctly (the BGRA-vs-RGBA question is settled semantically; `replay --test-pattern` shows labeled bars for a final eyes-on-OBS check).
+  - Texture helpers live in `syphon.utils.raw` (not `utils.raster` as older docs said); numpy frames go in **RGBA byte order** — confirmed eyes-on in OBS 2026-07-27 after BGRA rendered the blue cloth tan (the Metal texture's BGRA8 format tag does not dictate how the raw byte copy is interpreted downstream). `replay --test-pattern` shows labeled RGB bars whenever this needs re-proving.
 - **Version caveat (the one thing to check before updating OBS):** Syphon Client worked through OBS **31.x**, then **broke in OBS 32.0.x** (blank/transparent source — [obs-studio #12684](https://github.com/obsproject/obs-studio/issues/12684), fix in [PR #12688](https://github.com/obsproject/obs-studio/pull/12688)). Install OBS 31.x, or verify the fix has shipped in whatever 32.x point release is current before upgrading. Pin the OBS version once the rig works; it's production equipment now.
 
 **Fallback — pyvirtualcam** ([letmaik/pyvirtualcam](https://github.com/letmaik/pyvirtualcam), 0.15.0, Jan 2026): publishes to the **OBS Virtual Camera** device (requires OBS 30+ on modern macOS; one-time ritual of starting/stopping the virtual camera in OBS; macOS may require enabling the camera extension under Login Items & Extensions). Known fragility: pyvirtualcam has historically lagged OBS's macOS camera-extension changes ([#111](https://github.com/letmaik/pyvirtualcam/issues/111)), and OBS provides a single camera instance — you can't also use OBS's own virtual camera output for anything else. Works, but it's the brittle path; use only if Syphon misbehaves.
