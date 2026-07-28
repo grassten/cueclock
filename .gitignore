@@ -1,10 +1,10 @@
 # Python
 __pycache__/
 *.py[cod]
-# The venv really lives in .venv.nosync (iCloud-excluded, same reason as
-# tests/clips.nosync — iCloud stamped UF_HIDDEN on .pth files, which
-# CPython >=3.11 silently skips, breaking the editable install); .venv is a
-# local symlink to it. No trailing slash: the pattern must match the symlink.
+# The venv really lives in .venv.nosync (iCloud-excluded — iCloud stamps
+# UF_HIDDEN on Desktop files, and CPython >=3.11 silently skips hidden .pth
+# files, breaking the editable install); .venv is a local symlink to it.
+# No trailing slash: the pattern must match the symlink.
 .venv
 .venv.nosync/
 .pytest_cache/
@@ -16,13 +16,12 @@ dist/
 # macOS
 .DS_Store
 
-# Local-only assets. Clips live in clips.nosync (the .nosync suffix excludes
-# them from iCloud Drive sync — Desktop is synced on this Mac, and iCloud
-# retry-looped forever trying to upload 47 GB of corpus); tests/clips is a
-# tracked symlink so every code/doc path keeps working.
+# Local-only assets. The clip corpus lives on an external drive (Steven's:
+# /Volumes/T7/pool_room_clips); tests/clips is a local symlink to it so every
+# code/doc path keeps working — see tests/README.md. No trailing slash: the
+# pattern must match the symlink. Clips are never published.
 models/
-tests/clips.nosync/*
-!tests/clips.nosync/README.md
+tests/clips
 .env
 
 # Mount-specific calibration artifacts (refit after every camera move)

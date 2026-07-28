@@ -49,9 +49,10 @@ Key design commitments (rationale + sources in the docs — don't relitigate cas
 - **ruff** lints and formats; **mypy --strict** on `src/`; **pytest** for tests.
   All three run in CI and (except mypy) in pre-commit — `uv run pre-commit install` once.
 - Clip-based tests **skip** when `tests/clips/` fixtures are absent (clips are local-only,
-  gitignored, never published). Unit tests must always run everywhere. The real directory
-  is `tests/clips.nosync` (iCloud-sync-excluded; Desktop is synced on this Mac) with
-  `tests/clips` as a tracked symlink — always use the symlink path in code and docs.
+  gitignored, never published). Unit tests must always run everywhere. The corpus lives
+  at `/Volumes/T7/pool_room_clips/` (4 TB external SSD, ExFAT) with `tests/clips` as a
+  local gitignored symlink — always use the symlink path in code and docs. T7 unmounted
+  ⇒ symlink dangles ⇒ corpus tests skip; mount it before recording or corpus runs.
 - Principles Steven has named explicitly: **KISS, YAGNI, DRY.** This repo will be
   open-sourced — write for a stranger reading it. v1 scope is clock + events + overlay +
   API; replay export, break speed, stats, and 16-ball identity are backlog until asked for.

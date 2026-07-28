@@ -12,7 +12,7 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
 | 2 | Scaffold: package/tooling/CI ✅ · clock state machine · server/API/overlay | **In progress** — camera-free |
 | 3 | Calibration tooling (ChArUco + homography) | **Corpus-grade DONE 2026-07-27**: rails-fit homography (`cueclock calibrate`, 0.89 px residual). ChArUco intrinsics still pending → post-install (§4.3) |
 | 4 | Detection core offline vs. corpus | **Landed + first real-clip success 2026-07-27** (checkpoints 10–11): detect/track/events pipeline, `analyze` CLI, corpus scoreboard in `tests/corpus/`. Tuning across all 17 clips in progress |
-| 5 | Live integration | **Wired 2026-07-27** (checkpoint 14): `cueclock run` — camera + vision drive the clock/server/display in one process. First at-table session pending |
+| 5 | Live integration | **DONE 2026-07-27** (checkpoint 14): `cueclock run` — camera + vision drive the clock/server/display in one process. First at-table session 2026-07-27 evening: working, Steven judges it already better than the old app. Accuracy beta ongoing (edge cases → corpus via accuracy-ideas §8) |
 | 6 | Display path → OBS | **Code DONE + verified headless 2026-07-27** (Syphon publish, rails-fit undistort, `replay` CLI, OBS LUTs); remaining: eyes-on OBS/TV setup |
 | 7 | Backlog items | Not started (by demand only) |
 
@@ -171,6 +171,16 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   detection-core step). The old app's never-settle-while-anything-churns behavior was
   accidentally rules-correct here — the rewrite keeps the per-ball architecture and
   adds the gate scoped to the ball's own pixels.
+
+- **2026-07-28** Clip corpus relocated to `/Volumes/T7/pool_room_clips/` (4 TB
+  Samsung T7, ExFAT over USB): the internal disk was down to ~14 GB free and corpus
+  expansion (accuracy-ideas §7) needs room. `tests/clips` is now a **local gitignored
+  symlink** (same pattern as `.venv`) instead of a tracked one — no machine-specific
+  absolute path lands in the open-source repo. `tests/clips.nosync/` deleted after a
+  checksum-verified copy; its README became `tests/README.md`. T7 unmounted ⇒ corpus
+  tests skip cleanly (dangling symlink) and `record` fails fast. NOTE: `record` now
+  writes through the symlink to ExFAT-over-USB — smoke-test sustained ~360 MB/s write
+  (watch the drop detector) before the next real corpus recording session.
 
 ## Checkpoint log (append-only, newest first)
 
