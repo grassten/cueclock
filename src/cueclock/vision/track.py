@@ -41,6 +41,8 @@ class Observation:
     x_mm: float
     y_mm: float
     whiteness: float
+    churn: float | None = None  # appearance churn inside the ball's own disk
+    # (detect.ball_churn); None when the caller has no previous frame yet
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,9 @@ class TrackConfig:
     beta: float = 0.05  # alpha-beta velocity gain (~20-frame smoothing at 78 Hz)
     two_point_init_mms: float = 120.0  # birth step above this seeds velocity directly
     whiteness_ema: float = 0.05  # slow: one merged-blob sample must not tank the cue's score
+    churn_ema: float = 0.3  # fast (~3-frame time constant): single-frame churn
+    # dips during spin must not flap the settle gate, but the spin-stop
+    # transition has to come through within ~0.1 s
     whiteness_freeze_mms: float = 500.0  # motion blur corrupts color samples: don't
     # update whiteness while the ball moves fast (a flying cue must keep its flag)
     cue_min_whiteness: float = 0.3
@@ -75,6 +80,7 @@ class _Track:
     hits: int = 1
     whiteness: float = 0.0
     raw_speed: float = 0.0
+    churn: float | None = None  # EMA of observed appearance churn
     last_obs: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0))  # t, x, y
 
     def predict(self, t: float) -> tuple[float, float]:
@@ -161,6 +167,7 @@ class BallTracker:
                 raw_speed_mms=tr.raw_speed,
                 is_cue=tr.track_id == self._cue_id,
                 observed=tr.last_obs[0] == t,
+                churn=tr.churn if tr.last_obs[0] == t else None,
             )
             for tr in confirmed
         ]
@@ -190,6 +197,11 @@ class BallTracker:
         track.hits += 1
         if track.raw_speed < cfg.whiteness_freeze_mms:
             track.whiteness += cfg.whiteness_ema * (obs.whiteness - track.whiteness)
+        if obs.churn is not None:
+            if track.churn is None:
+                track.churn = obs.churn
+            else:
+                track.churn += cfg.churn_ema * (obs.churn - track.churn)
         track.last_obs = (t, obs.x_mm, obs.y_mm)
 
     def _resolve_cue(self, t: float, confirmed: list[_Track]) -> None:

@@ -184,6 +184,24 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-28 (checkpoint 16 — settle-at-spin-stop churn gate: the §4.2 rules
+  caveat is implemented):** BallsSettled now waits for visible spin to stop
+  (WPA def. 8.2, Steven's 2026-07-27 rules catch). Evidence first: measured
+  per-frame appearance churn (mean |Δgray| in a 16 px disk inside the ball)
+  on `spin_in_place` — still-ball noise floor 1.2–1.5 gray levels dead flat
+  for 8 s (max 1.66), the stationary spinning cue 2.6–6.5 decaying smoothly
+  to the floor at t≈7.0 s, exactly the visible spin stop. Clean separation ⇒
+  gate built: pipeline computes per-detection churn vs. the previous gray
+  frame (`detect.ball_churn`), tracker EMA-smooths it (churn_ema 0.3) and
+  reports it only for observed balls, `_is_still` treats a churning
+  stationary ball like creep (threshold 2.0, `spin_churn_max`; recalibrate
+  if the detect stride ever changes). Result: `spin_in_place` settles at
+  **7.31 s** (was 6.48 s, mid-spin), graded by a corpus timing test
+  (settle ≥ 7.0 s) + a synthetic unit test; settle count now pinned. The
+  old app's accidental rules-correctness is now deliberate, scoped to the
+  ball's own pixels — hands/shadows elsewhere still can't block settle.
+  70 unit + 18 corpus tests green, mypy --strict clean. Camera-free.
+
 - **2026-07-28 (checkpoint 15 — spin_in_place false Scratch fixed: corpus 17/17):**
   The checkpoint-12 xfail is gone. Root cause, traced on real frames: a dying
   track's final position includes up to a coast-budget (0.25 s) of

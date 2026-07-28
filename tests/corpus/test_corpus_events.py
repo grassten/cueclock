@@ -42,7 +42,7 @@ EXPECTED: dict[str, tuple[int | None, int | None, int | None]] = {
     "ball_in_hand_nudge": (0, 0, None),
     "shaft_adjust": (0, 0, None),
     "tip_bump": (0, 0, None),
-    "spin_in_place": (1, 0, None),
+    "spin_in_place": (1, 0, 1),
     "slow_creep": (1, 0, 1),
     "walk_around_settle": (None, 0, None),
     "rack_balls": (0, 0, None),
@@ -100,3 +100,20 @@ def test_corpus_clip(name: str, reference_frames: list[np.ndarray]) -> None:
         assert scratches == exp_scratches, summary
     if min_settles is not None:
         assert settles >= min_settles, summary
+
+
+def test_spin_in_place_settle_waits_for_spin_stop(
+    reference_frames: list[np.ndarray],
+) -> None:
+    """WPA def. 8.2: the shot ends when the ball stops moving AND spinning.
+
+    Ground truth measured from the clip's own pixels (2026-07-28): the cue's
+    appearance churn reaches the still-ball noise floor — visible spin stop —
+    at t≈7.0 s. Without the churn gate, settle fired at 6.48 s, mid-spin.
+    """
+    if not (CLIPS / "spin_in_place").exists():
+        pytest.skip("clip spin_in_place not recorded")
+    events = _run_clip("spin_in_place", reference_frames)
+    settles = [e.t for e in events if isinstance(e, BallsSettled)]
+    assert settles, "spin_in_place must settle before the clip ends"
+    assert settles[-1] >= 7.0, f"settled at {settles[-1]:.2f}s — before spin stopped"

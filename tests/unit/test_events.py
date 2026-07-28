@@ -23,6 +23,7 @@ class Sim:
         self.t = 0.0
         self.balls: dict[int, list[float]] = {}  # id -> [x, y, vx, vy]
         self.occluded: set[int] = set()
+        self.churn: dict[int, float] = {}
 
     def place(self, ball_id: int, x: float, y: float) -> None:
         self.balls[ball_id] = [x, y, 0.0, 0.0]
@@ -30,11 +31,16 @@ class Sim:
     def remove(self, ball_id: int) -> None:
         del self.balls[ball_id]
         self.occluded.discard(ball_id)
+        self.churn.pop(ball_id, None)
 
     def occlude(self, ball_id: int) -> None:
         """Ball still reported but no longer observed: the tracker coasts it
         along its last velocity (position keeps integrating), observed=False."""
         self.occluded.add(ball_id)
+
+    def set_churn(self, ball_id: int, value: float) -> None:
+        """Appearance churn inside the ball's own disk (spin shows here)."""
+        self.churn[ball_id] = value
 
     def velocity(self, ball_id: int, vx: float, vy: float) -> None:
         self.balls[ball_id][2:] = [vx, vy]
@@ -55,6 +61,7 @@ class Sim:
                         hypot(ball[2], ball[3]),
                         is_cue=ball_id == CUE,
                         observed=ball_id not in self.occluded,
+                        churn=self.churn.get(ball_id),
                     )
                 )
             events += self.engine.update(self.t, states)
@@ -168,6 +175,21 @@ def test_settle_hysteresis_no_refire() -> None:
     sim.run(0.2)
     sim.velocity(OBJ, 0.0, 0.0)
     assert sim.run(1.5) == []
+
+
+def test_settle_waits_for_spin_stop() -> None:
+    # WPA def. 8.2 (rules caveat in §4.2): a shot ends only when all balls
+    # have stopped moving AND spinning. A position-stationary ball whose own
+    # pixels keep churning is still spinning and must hold settle.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 500.0, 0.0)
+    sim.run(0.5)
+    sim.velocity(CUE, 0.0, 0.0)
+    sim.set_churn(CUE, 5.0)  # stopped dead, spinning in place
+    assert sim.run(1.5) == []  # would have settled without the churn gate
+    sim.set_churn(CUE, 1.3)  # spin stops: churn back at the sensor-noise floor
+    assert types(sim.run(1.0)) == [BallsSettled]
 
 
 def test_scratch_latched_during_motion() -> None:

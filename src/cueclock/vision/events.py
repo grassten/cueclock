@@ -41,6 +41,9 @@ class BallState:
     raw_speed_mms: float | None = None  # one-step speed (impulse-grade); None → speed_mms
     observed: bool = True  # False while the tracker is coasting this ball
     # through an occlusion — the position is then an extrapolation, not evidence
+    churn: float | None = None  # smoothed appearance churn inside the ball's
+    # own disk (spin shows here; a still ball shows only sensor noise);
+    # None when unobserved or no sample yet
 
 
 @dataclass(frozen=True)
@@ -82,6 +85,14 @@ class EventConfig:
     # the real corpus reaches ~4 mm over 0.5 s; 5 mm still catches sustained
     # 10 mm/s pocket creep)
     settle_creep_window_s: float = 0.5
+    # Settle-at-spin-stop (§4.2 rules caveat, WPA def. 8.2: a shot ends only
+    # when balls stop moving AND spinning): a position-stationary ball whose
+    # own pixels keep churning is still spinning — not settled. Threshold in
+    # detector gray levels, measured on spin_in_place at the 78 Hz detect
+    # cadence: still-ball noise floor 1.2-1.5 (max 1.66), spinning cue
+    # 2.6-6.5 decaying to the floor exactly at visible spin stop. 2.0 splits
+    # the gap; recalibrate if the detect stride ever changes.
+    spin_churn_max: float = 2.0
 
     # Strike = conjunction: stationary dwell + velocity impulse + coherent trajectory
     pre_strike_dwell_s: float = 0.4
@@ -319,11 +330,14 @@ class EventEngine:
         return positions[-1][0] - positions[0][0] >= 0.8 * self._cfg.settle_creep_window_s
 
     def _is_still(self, balls: list[BallState]) -> bool:
-        """All balls position-stable over the creep window.
+        """All balls position-stable over the creep window, none spinning.
 
         Position-based on purpose (see EventConfig): catches pocket-edge
-        creep, immune both to spin-in-place and to the velocity-estimate
-        artifacts that blob merges cause on real footage.
+        creep, immune to the velocity-estimate artifacts that blob merges
+        cause on real footage. Spin-in-place is the one motion position
+        cannot see, and the rules require waiting for it (WPA def. 8.2) —
+        the appearance-churn gate covers it, scoped to the ball's own
+        pixels so hands/shadows elsewhere stay invisible to settle.
 
         Tracks younger than the creep window are not judged: they cannot
         show a meaningful window yet, and the short-lived jittery phantoms
@@ -337,6 +351,8 @@ class EventEngine:
                 continue
             if self._displacement_over(ball, cfg.settle_creep_window_s) > cfg.settle_creep_mm:
                 return False
+            if ball.churn is not None and ball.churn > cfg.spin_churn_max:
+                return False  # stationary but still spinning
         return True
 
     # ---------- scratch helpers ----------

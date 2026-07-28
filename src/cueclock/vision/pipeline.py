@@ -17,7 +17,13 @@ import numpy.typing as npt
 
 from cueclock.display.undistort_fit import cloth_mask
 from cueclock.vision.calibration import TableCalibration
-from cueclock.vision.detect import DetectConfig, build_reference, detect_balls
+from cueclock.vision.detect import (
+    DetectConfig,
+    ball_churn,
+    bayer_to_gray,
+    build_reference,
+    detect_balls,
+)
 from cueclock.vision.events import BallState, Event, EventConfig, EventEngine
 from cueclock.vision.track import BallTracker, Observation, TrackConfig
 
@@ -50,20 +56,32 @@ class VisionPipeline:
         self._detect_cfg = detect_config or DetectConfig()
         self._tracker = BallTracker(track_config)
         self._engine = EventEngine(event_config)
+        self._prev_gray: npt.NDArray[np.uint8] | None = None
         self.last_balls: list[BallState] = []  # diagnostics for analyze/scoreboard
 
     def process(self, t: float, bayer: npt.NDArray[np.uint8]) -> list[Event]:
         detections = detect_balls(
             bayer, self._reference, self._detect_cfg, self._mask, self._reference_bayer
         )
+        gray = bayer_to_gray(bayer)
         observations: list[Observation] = []
         if detections:
             px = np.array([[d.cx, d.cy] for d in detections], dtype=np.float64)
             mm = self._calibration.to_table_mm(px)
             observations = [
-                Observation(x_mm=float(p[0]), y_mm=float(p[1]), whiteness=d.whiteness)
+                Observation(
+                    x_mm=float(p[0]),
+                    y_mm=float(p[1]),
+                    whiteness=d.whiteness,
+                    churn=None
+                    if self._prev_gray is None
+                    else ball_churn(
+                        gray, self._prev_gray, d.cx, d.cy, self._detect_cfg.churn_radius_px
+                    ),
+                )
                 for p, d in zip(mm, detections, strict=True)
             ]
+        self._prev_gray = gray
         balls = self._tracker.update(t, observations)
         self.last_balls = balls
         return self._engine.update(t, balls)

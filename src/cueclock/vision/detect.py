@@ -56,6 +56,10 @@ class DetectConfig:
     shadow_ratio_lo: float = 0.65
     shadow_ratio_hi: float = 0.95
     shadow_chroma_max: float = 0.15
+    # Appearance-churn sample (settle-at-spin-stop gate, §4.2 rules caveat):
+    # disk radius safely inside the ~21 px ball radius, so centroid jitter
+    # never lets cloth pixels into the sample.
+    churn_radius_px: int = 16
 
 
 def bayer_to_gray(bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -117,6 +121,31 @@ def _is_shadow(
         return False
     chroma_diff = sum(abs(c / cur - rc / ref) for c, rc in zip(rgb, ref_rgb, strict=True))
     return chroma_diff <= cfg.shadow_chroma_max
+
+
+def ball_churn(
+    gray: npt.NDArray[np.uint8],
+    prev_gray: npt.NDArray[np.uint8],
+    cx: float,
+    cy: float,
+    radius: int,
+) -> float:
+    """Mean |gray - prev_gray| inside a disk at (cx, cy) — appearance churn.
+
+    A stationary-but-spinning ball keeps changing its own pixels (the marking
+    rotates) while its centroid holds still; a truly still ball shows only
+    sensor noise. Measured on the spin_in_place corpus clip at 78 Hz:
+    still-ball floor 1.2-1.5 gray levels (max 1.66), spinning cue 2.6-6.5,
+    reaching the floor exactly when the spin visibly stops.
+    """
+    h, w = gray.shape
+    x, y = round(cx), round(cy)
+    if x - radius < 0 or y - radius < 0 or x + radius >= w or y + radius >= h:
+        return 0.0  # partially off-frame: no honest sample
+    window = (slice(y - radius, y + radius + 1), slice(x - radius, x + radius + 1))
+    diff = np.abs(gray[window].astype(np.float32) - prev_gray[window].astype(np.float32))
+    ys, xs = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    return float(diff[(xs * xs + ys * ys) <= radius * radius].mean())
 
 
 def detect_balls(
