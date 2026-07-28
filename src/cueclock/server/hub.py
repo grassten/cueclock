@@ -72,3 +72,13 @@ class Hub:
         self.clock.set_ruleset(ruleset)
         await self.broadcast(self.clock.snapshot())
         return True
+
+    # ---------- vision events (dispatched from the `cueclock run` camera thread) ----------
+
+    async def shot_taken(self) -> None:
+        self.clock.shot_taken()
+        await self.broadcast(self.clock.snapshot())
+
+    async def balls_settled(self) -> None:
+        self.clock.balls_settled(time.monotonic())
+        await self.broadcast(self.clock.snapshot())

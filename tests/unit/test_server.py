@@ -1,8 +1,12 @@
 """HTTP/WS surface — the Stream Deck contract from docs/cv-app-rewrite.md §2.1."""
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
+from cueclock.clock import State
 from cueclock.server import create_app
+from cueclock.server.hub import Hub
 
 
 def make_client() -> TestClient:
@@ -63,3 +67,15 @@ def test_html_pages_served() -> None:
     with make_client() as client:
         assert "clock-square" in client.get("/shotclock").text
         assert "Shot Clock Control" in client.get("/control").text
+
+
+def test_vision_events_drive_clock() -> None:
+    """The `cueclock run` wiring: settle (re)starts the countdown, a shot freezes it."""
+    hub = Hub()
+    asyncio.run(hub.balls_settled())  # session's first shot settles → clock starts
+    assert hub.clock.state is State.RUNNING
+    asyncio.run(hub.shot_taken())
+    assert hub.clock.state is State.MOTION
+    asyncio.run(hub.balls_settled())
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.remaining == float(hub.clock.ruleset.base_seconds)

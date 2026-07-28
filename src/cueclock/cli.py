@@ -1,16 +1,19 @@
 """cueclock command-line interface.
 
-Implemented: `record` (build order §7 step 1), `replay` + `live` +
-`fit-undistort` (display path, §7 step 6), `calibrate` (rails homography,
-corpus-grade §7 step 3 — ChArUco replaces it post-install). Stub: `run`.
+`run` is the product: the automated shot clock (§7 step 5) — camera + vision
+drive the clock, with the overlay server and the Syphon table feed in the same
+process. The rest are bring-up and tuning tools: `record` (§7 step 1),
+`replay` + `live` + `fit-undistort` (display path, §7 step 6), `calibrate`
+(rails homography, corpus-grade §7 step 3), `analyze` (detection offline).
 
-Run via:  PYTHONPATH=src uv run python -m cueclock.cli record --label soft_shot
+Run via:  uv run python -m cueclock.cli run --rectify
 """
 
 import argparse
 import shutil
 import signal
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
@@ -321,13 +324,159 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_stub(name: str) -> int:
-    print(f"`{name}` is not implemented yet (build order: docs/cv-app-rewrite.md §7)")
-    return 2
+def _cmd_run(args: argparse.Namespace) -> int:
+    """The automated shot clock: camera + vision + clock/server + display feed.
+
+    One process owns everything. Camera and Syphon stay on the main thread
+    (the runloop must be pumped here — see syphon_out.py); uvicorn serves the
+    overlay/API from a background thread; vision events cross into its asyncio
+    loop via run_coroutine_threadsafe. Exclusive with `record`/`live`, and it
+    replaces a standalone `cueclock.server` — stop that first or the port bind
+    fails.
+    """
+    import asyncio
+    import threading
+    from concurrent.futures import Future
+
+    import uvicorn
+    from pypylon import pylon
+
+    from cueclock.capture.camera import open_camera
+    from cueclock.display.syphon_out import SyphonOutput
+    from cueclock.server.app import create_app
+    from cueclock.server.hub import Hub
+    from cueclock.vision.calibration import TableCalibration
+    from cueclock.vision.events import BallsSettled, ShotTaken
+    from cueclock.vision.pipeline import VisionPipeline
+
+    cal_path = Path(args.calibration)
+    if not cal_path.exists():
+        print(f"calibration not found: {cal_path} — run `calibrate` first", file=sys.stderr)
+        return 1
+    ref_path = Path(args.reference)
+    if not ref_path.is_dir():
+        print(f"reference clip not found: {ref_path}", file=sys.stderr)
+        return 1
+    calibration = TableCalibration.load(cal_path)
+    ref_reader = ClipReader(ref_path)
+    ref_indices = np.linspace(0, len(ref_reader) - 1, num=min(15, len(ref_reader)), dtype=int)
+    vision = VisionPipeline(calibration, [ref_reader.frame(int(i)) for i in ref_indices])
+    display = _build_display_pipeline(args)
+
+    app = create_app()
+    hub = cast(Hub, app.state.hub)
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+    )
+    server_thread = threading.Thread(target=server.run, name="cueclock-server", daemon=True)
+    server_thread.start()
+    while not server.started and server_thread.is_alive():
+        time.sleep(0.05)
+    if not server_thread.is_alive():
+        print(
+            f"server failed to start on {args.host}:{args.port} — port in use? "
+            "(stop any standalone `python -m cueclock.server` first)",
+            file=sys.stderr,
+        )
+        return 1
+    loop = cast("asyncio.AbstractEventLoop", app.state.loop)
+
+    def _surface(future: "Future[None]") -> None:
+        exc = future.exception()
+        if exc is not None:
+            print(f"clock dispatch failed: {exc!r}", file=sys.stderr)
+
+    def dispatch(event: object, t: float) -> None:
+        print(f"{t:8.3f}s  {type(event).__name__}")
+        coro = None
+        if isinstance(event, ShotTaken):
+            coro = hub.shot_taken()
+        elif isinstance(event, BallsSettled):
+            coro = hub.balls_settled()
+        # Scratch: logged only — no clock action in v1 (docs/progress.md decision)
+        if coro is not None:
+            asyncio.run_coroutine_threadsafe(coro, loop).add_done_callback(_surface)
+
+    print(
+        f"run -> overlay http://{args.host}:{args.port}/shotclock | control /control | "
+        f"detect ~{NOMINAL_FPS / args.stride:.0f} Hz | display ~{args.fps:.0f} fps "
+        f"Syphon {args.name!r}\n"
+        "clock starts when your first shot settles — Ctrl-C to stop"
+    )
+    display_period = 1.0 / args.fps
+    try:
+        with open_camera() as cam:
+            # LatestImageOnly: if a detect cycle runs long, the camera hands us
+            # the freshest frame instead of building a queue. The event engine
+            # is cadence-agnostic, so skipped frames only cost samples.
+            cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+            try:
+                with SyphonOutput(args.name, *display.out_size) as out:
+                    t0_ns: int | None = None
+                    frame_i = 0
+                    next_display = 0.0
+                    next_status = 5.0
+                    while True:
+                        grab = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
+                        try:
+                            if not grab.GrabSucceeded():
+                                continue
+                            ts_ns = int(grab.GetTimeStamp())
+                            if t0_ns is None:
+                                t0_ns = ts_ns
+                            t = (ts_ns - t0_ns) / 1e9
+                            frame = grab.Array
+                            if frame_i % args.stride == 0:
+                                for event in vision.process(t, frame):
+                                    dispatch(event, t)
+                            frame_i += 1
+                            if t >= next_display:
+                                next_display = t + display_period
+                                out.publish(display.to_rgba(frame), pump_seconds=0.001)
+                            if args.verbose and t >= next_status:
+                                next_status = t + 1.0
+                                cue = next((b for b in vision.last_balls if b.is_cue), None)
+                                cue_txt = (
+                                    f"cue @({cue.x_mm:6.0f},{cue.y_mm:5.0f}) "
+                                    f"v={cue.speed_mms:6.0f} mm/s"
+                                    if cue is not None
+                                    else "no cue"
+                                )
+                                print(
+                                    f"{t:8.3f}s  [{len(vision.last_balls):2d} balls] "
+                                    f"{cue_txt} | clock {hub.clock.state.value}"
+                                )
+                        finally:
+                            grab.Release()
+            finally:
+                cam.StopGrabbing()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.should_exit = True
+        server_thread.join(timeout=5)
+    return 0
 
 
 def _sigterm_to_interrupt(signum: int, frame: FrameType | None) -> None:
     raise KeyboardInterrupt
+
+
+def _add_display_args(p: argparse.ArgumentParser) -> None:
+    """Args consumed by `_build_display_pipeline` — shared by replay/live/run."""
+    p.add_argument("--fps", type=float, default=30.0, help="display rate (default 30)")
+    p.add_argument("--name", default="cueclock", help="Syphon server name")
+    p.add_argument(
+        "--undistort",
+        default=str(DEFAULT_UNDISTORT_PATH),
+        help="undistort params JSON (default config/display_undistort.json)",
+    )
+    p.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
+    p.add_argument(
+        "--rectify",
+        action="store_true",
+        help="render the table axis-aligned via config/table_calibration.json",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -344,36 +493,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_replay = sub.add_parser("replay", help="publish a clip (or test pattern) to OBS via Syphon")
     p_replay.add_argument("--clip", help="clip directory to replay")
-    p_replay.add_argument("--fps", type=float, default=30.0, help="display rate (default 30)")
-    p_replay.add_argument("--name", default="cueclock", help="Syphon server name")
     p_replay.add_argument("--once", action="store_true", help="play once instead of looping")
     p_replay.add_argument("--test-pattern", action="store_true", help="labeled RGB bars instead")
-    p_replay.add_argument(
-        "--undistort",
-        default=str(DEFAULT_UNDISTORT_PATH),
-        help="undistort params JSON (default config/display_undistort.json)",
-    )
-    p_replay.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
-    p_replay.add_argument(
-        "--rectify",
-        action="store_true",
-        help="render the table axis-aligned via config/table_calibration.json",
-    )
+    _add_display_args(p_replay)
 
     p_live = sub.add_parser("live", help="live camera feed to OBS via Syphon (no recording)")
-    p_live.add_argument("--fps", type=float, default=30.0, help="display rate (default 30)")
-    p_live.add_argument("--name", default="cueclock", help="Syphon server name")
-    p_live.add_argument(
-        "--undistort",
-        default=str(DEFAULT_UNDISTORT_PATH),
-        help="undistort params JSON (default config/display_undistort.json)",
-    )
-    p_live.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
-    p_live.add_argument(
-        "--rectify",
-        action="store_true",
-        help="render the table axis-aligned via config/table_calibration.json",
-    )
+    _add_display_args(p_live)
 
     p_fit = sub.add_parser("fit-undistort", help="fit display undistort from the table's rails")
     p_fit.add_argument("frame", help="clip directory (middle frame) or .npy frame")
@@ -413,7 +538,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_an.add_argument("--verbose", action="store_true", help="per-second track status lines")
 
-    sub.add_parser("run", help="clock + vision + server (not yet)")
+    p_run = sub.add_parser(
+        "run", help="automated shot clock: camera + vision drive the clock/server + display"
+    )
+    p_run.add_argument("--host", default="127.0.0.1", help="server bind address")
+    p_run.add_argument("--port", type=int, default=8000, help="server port (default 8000)")
+    p_run.add_argument(
+        "--reference",
+        default="tests/clips/empty_table",
+        help="empty-table clip for the background reference",
+    )
+    p_run.add_argument(
+        "--calibration",
+        default="config/table_calibration.json",
+        help="table calibration JSON (default config/table_calibration.json)",
+    )
+    p_run.add_argument(
+        "--stride", type=int, default=2, help="detect every Nth frame (default 2 ≈ 78 Hz)"
+    )
+    p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
+    _add_display_args(p_run)
 
     args = parser.parse_args(argv)
     if args.command == "record":
@@ -428,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_calibrate(args)
     if args.command == "analyze":
         return _cmd_analyze(args)
-    return _cmd_stub(args.command)
+    return _cmd_run(args)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
 | 2 | Scaffold: package/tooling/CI ✅ · clock state machine · server/API/overlay | **In progress** — camera-free |
 | 3 | Calibration tooling (ChArUco + homography) | **Corpus-grade DONE 2026-07-27**: rails-fit homography (`cueclock calibrate`, 0.89 px residual). ChArUco intrinsics still pending → post-install (§4.3) |
 | 4 | Detection core offline vs. corpus | **Landed + first real-clip success 2026-07-27** (checkpoints 10–11): detect/track/events pipeline, `analyze` CLI, corpus scoreboard in `tests/corpus/`. Tuning across all 17 clips in progress |
-| 5 | Live integration | Blocked on hardware |
+| 5 | Live integration | **Wired 2026-07-27** (checkpoint 14): `cueclock run` — camera + vision drive the clock/server/display in one process. First at-table session pending |
 | 6 | Display path → OBS | **Code DONE + verified headless 2026-07-27** (Syphon publish, rails-fit undistort, `replay` CLI, OBS LUTs); remaining: eyes-on OBS/TV setup |
 | 7 | Backlog items | Not started (by demand only) |
 
@@ -24,14 +24,15 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
    time, no `time.monotonic()` calls inside) + unit tests.
 3. ✅ `server/` — FastAPI app + WS hub + `shotclock.html` overlay + `control.html`,
    Stream Deck API contract per §2.1. Run it with
-   `PYTHONPATH=src uv run python -m cueclock.server` (PYTHONPATH needed — see the
-   .pth gotcha below); OBS browser source → `http://localhost:8000/shotclock`
+   `uv run python -m cueclock.server` (the old `PYTHONPATH=src` prefix is obsolete —
+   the .pth gotcha is root-caused and fixed, checkpoint 13); OBS browser source →
+   `http://localhost:8000/shotclock`
    (200×200, "Control audio via OBS"), control panel → `/control`.
 4. ✅ `vision/events.py` — pure §4.2 event logic (strike conjunction, settle hysteresis,
    scratch latch) + synthetic-track unit tests. **Thresholds are §4.2's
    research-backed defaults, provisional until tuned on the recorded corpus**; the
    `BallState` input contract is likewise provisional until the tracker lands.
-5. ⬜ `cli.py` skeleton (`cueclock run` wiring clock + server; `record`/`calibrate` stubs).
+5. ✅ `cli.py` — every subcommand implemented; `cueclock run` wired (checkpoint 14).
 6. ⬜ `audio/` — Vosk extension listener port (needs mic + model download to verify; port
    last). **Plan written: `docs/audio-mic-setup.md`** — covers uses, mic-agnosticism,
    the Studio-Display-mic-now → discrete-USB-mic-later path, and the bring-up checklist.
@@ -172,6 +173,49 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   adds the gate scoped to the ball's own pixels.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-27 (checkpoint 14 — §7 step 5: `cueclock run` wired, the automated
+  shot clock exists):** One process owns camera + vision + clock + server +
+  Syphon display. Shape: camera/Syphon on the main thread
+  (GrabStrategy_LatestImageOnly — a slow detect cycle skips frames instead of
+  queueing; the event engine is cadence-agnostic), uvicorn on a background
+  thread (log_level warning so events own the terminal), vision events crossing
+  into the server's asyncio loop via `run_coroutine_threadsafe`
+  (`app.state.loop`, stashed in lifespan). Event→clock policy: ShotTaken →
+  freeze (MOTION), BallsSettled → fresh full countdown (RUNNING), Scratch →
+  logged only (v1 decision above). Bootstrap: EventEngine starts not-moving, so
+  launching over a still table leaves the clock IDLE until the first shot
+  settles — no operator action needed to begin practice. Hub grew
+  `shot_taken`/`balls_settled`; display args deduped into `_add_display_args`.
+  Verified camera-free (the camera was mid-practice-session): 68 unit tests +
+  mypy --strict green; the server-thread/dispatch mechanics exercised through
+  the real HTTP API (IDLE→RUNNING→MOTION→RUNNING, clean shutdown); the exact
+  run cadence (stride-2 detect + rectified 30 fps display) timed on real corpus
+  frames at **1.38× realtime** with ShotTaken firing on `soft_shot` — measured
+  while `live` + two servers shared the machine, so headroom is conservative.
+  NOTE: `run` replaces both a standalone `cueclock.server` (same port) and
+  `live` (camera is exclusive) — stop those first. Next: first at-table run,
+  then accuracy tuning (the §4 threshold work continues on live evidence + the
+  `spin_in_place` false-scratch fix).
+
+- **2026-07-27 (checkpoint 13 — checkpoint-1 .pth mystery solved, venv out of iCloud):**
+  Root cause of "this Mac's venvs don't process `.pth` files": **iCloud Drive stamps
+  the macOS `UF_HIDDEN` flag on files it manages under `~/Desktop` — including inside
+  `.venv` — and CPython ≥3.11 silently skips hidden `.pth` files** (`ls -lO` showed
+  `hidden` on every `.pth`; `python -v` prints "Skipping hidden .pth file"). That's why
+  the editable install of cueclock was never importable, and why it failed
+  *intermittently*: a fresh `uv run` re-sync rewrites the `.pth` (works until iCloud
+  re-stamps it minutes later). iCloud had also left a conflict copy
+  (`_editable_impl_cueclock 2.pth`) and evicted `_virtualenv.pth` to dataless. Fix:
+  same pattern as the clips — venv rebuilt at `.venv.nosync/` with `.venv` as a local
+  gitignored symlink. Consequences: `PYTHONPATH=src` is no longer needed anywhere
+  (older recipes in docs still carry it; harmless), `uv sync --no-editable` workaround
+  retired, and the checkpoint-1 note is superseded. The `PYTHONPATH=src` habit for
+  concurrent `.venv/bin/python3` runs still works but is now optional. The faithful
+  rebuild also surfaced an undeclared runtime dep: bare `uvicorn` ships no WebSocket
+  protocol, so `/ws` 404'd under the real server (starlette's TestClient speaks WS
+  in-process, which is why all 22 server tests passed anyway) — `websockets` is now
+  a declared dependency, live-verified with a real client (state frame received).
 
 - **2026-07-27 (checkpoint 11 — detection core vs. real footage + rectified display):**
   The whole §4.1 chain landed camera-free in one evening (`vision/calibration.py`,

@@ -23,6 +23,9 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # Stashed for `cueclock run`: vision events born on the camera thread
+        # are dispatched into this loop via run_coroutine_threadsafe.
+        app.state.loop = asyncio.get_running_loop()
         tick_task = asyncio.create_task(hub.tick_loop())
         try:
             yield
