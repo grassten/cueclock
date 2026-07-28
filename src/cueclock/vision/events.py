@@ -81,8 +81,11 @@ class EventConfig:
     # Strike = conjunction: stationary dwell + velocity impulse + coherent trajectory
     pre_strike_dwell_s: float = 0.4
     strike_impulse_mms: float = 250.0
-    strike_confirm_window_s: float = 0.15
-    strike_confirm_displacement_mm: float = 30.0
+    # Confirm = real travel: a shaft adjustment can leave the ball at shot-like
+    # speed but it stops within ~4 cm (measured on the corpus); any deliberate
+    # shot covers 60 mm quickly (even the softest, 450 mm/s, in 0.13 s).
+    strike_confirm_window_s: float = 0.25
+    strike_confirm_displacement_mm: float = 60.0
     strike_axis_dot_min: float = 0.7
     # The impact itself disrupts the cue's own track (the stick merges with the
     # ball's blob), so the impulse often arrives on a *reborn* track shortly
@@ -91,10 +94,23 @@ class EventConfig:
     strike_handoff_gap_s: float = 0.35  # max unstill gap between rest and impulse
     strike_handoff_radius_mm: float = 250.0  # max impulse distance from the rest spot
     cue_id_debounce_frames: int = 2  # ignore 1-frame cue-flag excursions in strike logic
+    # Carom guard: an impulse into a dwelled cue only counts as a strike if the
+    # table was settled shortly before it. A strike's cause (the final stroke)
+    # precedes contact by tens of ms — and routinely trips the motion state
+    # itself — while a carom's cause (the original shot) precedes the kiss by
+    # the balls' travel time, well beyond this window.
+    strike_settled_guard_s: float = 0.4
+    # Impulse shape (§2.3 lesson 6): a strike steps from rest to full speed in
+    # 1-2 frames; a shaft/hand push ramps up over many. The cue must have
+    # been reported still this recently for the impulse to count.
+    strike_step_max_s: float = 0.12
 
     # Scratch
     cue_lost_latch_s: float = 0.3
-    pocket_zone_radius_mm: float = 80.0
+    # 120, not 80: a sinking ball's last observations come from the pocket-jaw
+    # blob, whose centroid drifts past the table edge as the ball goes down
+    # (cue seen at 57+ mm outside the corner in the corpus scratch clip)
+    pocket_zone_radius_mm: float = 120.0
     table_length_mm: float = 1930.0
     table_width_mm: float = 965.0
 
@@ -137,6 +153,7 @@ class EventEngine:
         # handoff (see EventConfig).
         self._cue_rest: tuple[float, float, float] | None = None
         self._cue_last_still_t = 0.0
+        self._last_settled_t = 0.0
         self._cue_id_last: int | None = None
         self._cue_id_streak = 0
         self._candidate: _StrikeCandidate | None = None
@@ -191,6 +208,8 @@ class EventEngine:
                 events.append(BallsSettled(t))
         else:
             self._all_still_since = None
+        if not self._table_moving:
+            self._last_settled_t = t
 
         # ---- scratch: cue track terminated near a pocket while balls were moving ----
         if cue is not None:
@@ -217,11 +236,7 @@ class EventEngine:
     def _update_cue_rest(self, t: float, cue: BallState) -> None:
         cfg = self._cfg
         if cue.speed_mms < cfg.settle_floor_mms:
-            # While other balls are moving, restart the dwell clock every
-            # frame: an impulse right after motion elsewhere is a carom into
-            # the resting cue (same shot), not a new strike. Dwell can only
-            # accumulate once the whole table is quiet.
-            if self._cue_rest is None or self._table_moving:
+            if self._cue_rest is None:
                 self._cue_rest = (t, cue.x_mm, cue.y_mm)
             else:
                 self._cue_rest = (self._cue_rest[0], cue.x_mm, cue.y_mm)
@@ -234,6 +249,10 @@ class EventEngine:
         raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
         if raw < cfg.strike_impulse_mms or self._cue_rest is None:
             return
+        if t - self._last_settled_t > cfg.strike_settled_guard_s:
+            return  # carom guard: the table was already in motion before this
+        if t - self._cue_last_still_t > cfg.strike_step_max_s:
+            return  # ramp, not a step: shaft/hand push accelerating the ball
         rest_t0, rest_x, rest_y = self._cue_rest
         if self._cue_last_still_t - rest_t0 < cfg.pre_strike_dwell_s:
             return

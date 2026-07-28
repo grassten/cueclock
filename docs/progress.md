@@ -198,6 +198,40 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   Corpus scoreboard (`tests/corpus/test_corpus_events.py`) encodes expected events
   per scenario; first full-corpus grading run is the next step.
 
+- **2026-07-27 (checkpoint 12 — full corpus graded: 16/17 scenarios correct):**
+  Three grade→trace→fix rounds against the whole corpus
+  (`.venv/bin/pytest tests/corpus -q`, ~90 s). Final score: **16 of 17 pass**,
+  including every §2.3 hard case: `tip_bump`, `ball_in_hand_nudge`,
+  `shaft_adjust`, `practice_strokes`, `chalk_near`, `rack_balls` all correctly
+  produce **zero** ShotTaken; all four real shots fire exactly one (soft 20 ms
+  after contact); `scratch_replace` fires ShotTaken + Scratch. Round-2/3 fixes,
+  each traced to a physical mechanism on real frames:
+  - **Carom guard replaces dwell-reset** (medium/power missed): the final stroke
+    itself trips the motion state ~20 ms before contact; a strike now requires
+    the table settled as of ~0.4 s before the impulse (a carom's cause is older).
+  - **Impulse shape** (§2.3 lesson 6): impulse must arrive ≤0.12 s after the cue
+    was last still — a visible shaft/hand push ramps and is rejected.
+  - **Confirm displacement 60 mm** (shaft_adjust false positive): a shaft
+    adjustment can leave the ball at 570 mm/s but it stops within ~4 cm; any
+    deliberate shot covers 60 mm inside the 0.25 s window.
+  - **Whiteness frozen while moving fast** (cue flag jumped mid-flight): motion
+    blur mixes cloth into the color sample; the flying cue now keeps its flag.
+  - **Cue-regrab grace 1 s** (scratch_replace missed Scratch): when the flagged
+    track dies, report *no cue* instead of crowning the next-whitest ball — the
+    palest yellow measures 0.77 whiteness vs. the cue's 0.85, and scratch keys
+    on absence. Pocket zone widened to 120 mm (the sinking ball's jaw-blob
+    centroid drifts past the table edge).
+  - **Known defect (xfail, visible in the suite):** `spin_in_place` fires a
+    false Scratch — the cue occluded mid-flight near the top-middle pocket;
+    needs "lost while passing" vs. "lost while slowing into the jaw" logic.
+  **No clips need re-recording.** `tip_bump`'s drop gaps (checkpoint 10) don't
+  matter: the bump is visible in-track at ~2.7 s (cue displaced 47 mm), well
+  before the 6.2 s gap, and grades non-vacuously. Optional someday: re-record
+  medium/power/break a few seconds longer so settle can be graded too (balls
+  still roll when those clips end — settle expectations are unpinned for them).
+  Next (build order §7): the false-scratch fix, then step 5 live integration
+  (`cueclock run`: grab thread → pipeline → clock/server wiring).
+
 - **2026-07-27 (checkpoint 10 — corpus complete + two infrastructure fixes):**
   - **Corpus recorded and verified**: 17 clips (16 scenarios + `empty_table`), 47 GB.
     Every clip's `frames.raw` size matches its `meta.json` frame count; 16/17 have a

@@ -53,8 +53,13 @@ class TrackConfig:
     beta: float = 0.05  # alpha-beta velocity gain (~20-frame smoothing at 78 Hz)
     two_point_init_mms: float = 120.0  # birth step above this seeds velocity directly
     whiteness_ema: float = 0.05  # slow: one merged-blob sample must not tank the cue's score
+    whiteness_freeze_mms: float = 500.0  # motion blur corrupts color samples: don't
+    # update whiteness while the ball moves fast (a flying cue must keep its flag)
     cue_min_whiteness: float = 0.3
     cue_switch_margin: float = 0.05
+    cue_regrab_s: float = 1.0  # after the flagged track dies, report no cue this long
+    # instead of crowning the next-whitest ball — scratch detection keys on the
+    # cue being *absent*, and the palest yellow reads deceptively white
 
 
 @dataclass
@@ -83,6 +88,7 @@ class BallTracker:
         self._tracks: list[_Track] = []
         self._next_id = 0
         self._cue_id: int | None = None
+        self._cue_lost_t: float | None = None
 
     def update(self, t: float, observations: list[Observation]) -> list[BallState]:
         cfg = self._cfg
@@ -143,7 +149,7 @@ class BallTracker:
                 self._next_id += 1
 
         confirmed = [tr for tr in self._tracks if tr.hits >= cfg.birth_frames]
-        self._resolve_cue(confirmed)
+        self._resolve_cue(t, confirmed)
         return [
             BallState(
                 ball_id=tr.track_id,
@@ -179,14 +185,24 @@ class BallTracker:
                 track.vy += cfg.beta * ry / dt
         track.t = t
         track.hits += 1
-        track.whiteness += cfg.whiteness_ema * (obs.whiteness - track.whiteness)
+        if track.raw_speed < cfg.whiteness_freeze_mms:
+            track.whiteness += cfg.whiteness_ema * (obs.whiteness - track.whiteness)
         track.last_obs = (t, obs.x_mm, obs.y_mm)
 
-    def _resolve_cue(self, confirmed: list[_Track]) -> None:
+    def _resolve_cue(self, t: float, confirmed: list[_Track]) -> None:
         cfg = self._cfg
         if not confirmed:
             return  # keep the flag: the cue may reappear (ball-in-hand)
         current = next((tr for tr in confirmed if tr.track_id == self._cue_id), None)
+        if current is None and self._cue_id is not None:
+            # flag holder just vanished (pocketed / picked up): report no cue
+            # for a grace period rather than crowning the next-whitest ball
+            if self._cue_lost_t is None:
+                self._cue_lost_t = t
+            if t - self._cue_lost_t < cfg.cue_regrab_s:
+                return
+        if current is not None:
+            self._cue_lost_t = None
         challenger = max(confirmed, key=lambda tr: tr.whiteness)
         if challenger.whiteness < cfg.cue_min_whiteness:
             if current is None:
@@ -194,3 +210,4 @@ class BallTracker:
             return
         if current is None or challenger.whiteness > current.whiteness + cfg.cue_switch_margin:
             self._cue_id = challenger.track_id
+            self._cue_lost_t = None
