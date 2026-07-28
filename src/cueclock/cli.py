@@ -1,7 +1,8 @@
 """cueclock command-line interface.
 
 Implemented: `record` (build order §7 step 1), `replay` + `live` +
-`fit-undistort` (display path, §7 step 6). Stubs: `run`, `calibrate`.
+`fit-undistort` (display path, §7 step 6), `calibrate` (rails homography,
+corpus-grade §7 step 3 — ChArUco replaces it post-install). Stub: `run`.
 
 Run via:  PYTHONPATH=src uv run python -m cueclock.cli record --label soft_shot
 """
@@ -204,25 +205,24 @@ def _cmd_live(args: argparse.Namespace) -> int:
             cam.StopGrabbing()
 
 
-def _cmd_fit_undistort(args: argparse.Namespace) -> int:
-    from cueclock.display.undistort_fit import fit_from_frame
-
-    src = Path(args.frame)
-    bgr: npt.NDArray[np.uint8]
+def _load_frame_bgr(src: Path) -> npt.NDArray[np.uint8]:
+    """Middle frame of a clip directory, or a .npy frame (Bayer or BGR)."""
     if src.is_dir():
         reader = ClipReader(src)
         if len(reader) == 0:
-            print(f"clip {src} is empty", file=sys.stderr)
-            return 1
+            raise SystemExit(f"clip {src} is empty")
         bayer = reader.frame(len(reader) // 2)
-        bgr = cast(npt.NDArray[np.uint8], cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR_EA))
-    else:
-        arr = np.load(src)
-        if arr.ndim == 2:
-            bgr = cast(npt.NDArray[np.uint8], cv2.cvtColor(arr, cv2.COLOR_BayerBG2BGR_EA))
-        else:
-            bgr = cast(npt.NDArray[np.uint8], np.clip(arr, 0, 255).astype(np.uint8))
+        return cast(npt.NDArray[np.uint8], cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR_EA))
+    arr = np.load(src)
+    if arr.ndim == 2:
+        return cast(npt.NDArray[np.uint8], cv2.cvtColor(arr, cv2.COLOR_BayerBG2BGR_EA))
+    return cast(npt.NDArray[np.uint8], np.clip(arr, 0, 255).astype(np.uint8))
 
+
+def _cmd_fit_undistort(args: argparse.Namespace) -> int:
+    from cueclock.display.undistort_fit import fit_from_frame
+
+    bgr = _load_frame_bgr(Path(args.frame))
     params = fit_from_frame(bgr)
     k1, k2 = params.dist[0], params.dist[1]
     print(f"fit: k1={k1:.4f} k2={k2:.4f} residual {params.fit_residual_px:.2f} px")
@@ -237,6 +237,37 @@ def _cmd_fit_undistort(args: argparse.Namespace) -> int:
     preview_path = out_path.with_name("undistort_preview.png")
     cv2.imwrite(str(preview_path), cv2.LUT(preview, lut))
     print(f"wrote {out_path} and {preview_path} — check the preview: rails straight?")
+    return 0
+
+
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    from cueclock.vision.calibration import fit_from_frame
+
+    undistort_path = Path(args.undistort)
+    if not undistort_path.exists():
+        print(
+            f"undistort params not found: {undistort_path} — run `fit-undistort` first",
+            file=sys.stderr,
+        )
+        return 1
+    undistort = UndistortParams.load(undistort_path)
+    bgr = _load_frame_bgr(Path(args.frame))
+    calibration = fit_from_frame(bgr, undistort)
+
+    print(
+        f"line residual {calibration.line_residual_px:.2f} px "
+        f"(undistort fit residual {undistort.fit_residual_px:.2f} px)"
+    )
+    # health readout: frame center in table coords + local scale at the center
+    cx, cy = undistort.cx, undistort.cy
+    center, right = calibration.to_table_mm(np.array([[cx, cy], [cx + 100.0, cy]]))
+    scale = float(np.hypot(*(right - center))) / 100.0
+    print(f"frame center -> table ({center[0]:.0f}, {center[1]:.0f}) mm; {scale:.2f} mm/px")
+    if calibration.line_residual_px > 2.0:
+        print("WARNING: residual > 2 px — check the frame (balls on cushions? glare?)")
+    out_path = Path(args.out)
+    calibration.save(out_path)
+    print(f"wrote {out_path}")
     return 0
 
 
@@ -292,8 +323,20 @@ def main(argv: list[str] | None = None) -> int:
         help="output JSON (default config/display_undistort.json)",
     )
 
+    p_cal = sub.add_parser("calibrate", help="fit px→mm table calibration from the rails")
+    p_cal.add_argument("frame", help="empty-table clip directory (middle frame) or .npy frame")
+    p_cal.add_argument(
+        "--undistort",
+        default=str(DEFAULT_UNDISTORT_PATH),
+        help="undistort params JSON (default config/display_undistort.json)",
+    )
+    p_cal.add_argument(
+        "--out",
+        default="config/table_calibration.json",
+        help="output JSON (default config/table_calibration.json)",
+    )
+
     sub.add_parser("run", help="clock + vision + server (not yet)")
-    sub.add_parser("calibrate", help="ChArUco + homography calibration (not yet)")
 
     args = parser.parse_args(argv)
     if args.command == "record":
@@ -304,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_live(args)
     if args.command == "fit-undistort":
         return _cmd_fit_undistort(args)
+    if args.command == "calibrate":
+        return _cmd_calibrate(args)
     return _cmd_stub(args.command)
 
 

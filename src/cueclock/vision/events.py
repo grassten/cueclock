@@ -9,12 +9,16 @@ Pure module: no I/O, no clocks, no threads. The caller (tracker) feeds
 with its timestamp; cadence is whatever the caller runs at (nominally 80 Hz)
 — everything here works from timestamps, not frame counts.
 
-The input contract is provisional until the tracker lands: the tracker is
-expected to report every live track each frame (coasting through occlusions
-per §2.3 lesson 4, so a brief hand-over-ball does not look like a lost ball),
-with a Kalman-filtered speed. A ball absent from the batch is a *terminated*
-track — that is what scratch detection keys on (§2.3 lesson 3: latched during
-motion, never evaluated at settle time).
+Input contract (firmed up with the tracker, `vision/track.py`): the tracker
+reports every live track each frame (coasting through occlusions per §2.3
+lesson 4, so a brief hand-over-ball does not look like a lost ball). A ball
+absent from the batch is a *terminated* track — that is what scratch
+detection keys on (§2.3 lesson 3: latched during motion, never evaluated at
+settle time). Each ball carries two speeds: ``speed_mms`` (smoothed —
+settle-grade, low noise) and ``raw_speed_mms`` (one-step — impulse-grade,
+shows the rest→moving step the smoothed estimate lags on). Strike impulse
+reads the raw speed; everything else reads the smoothed one. Synthetic tests
+may omit ``raw_speed_mms``; it falls back to ``speed_mms``.
 """
 
 from collections import deque
@@ -29,8 +33,9 @@ class BallState:
     ball_id: int
     x_mm: float
     y_mm: float
-    speed_mms: float  # Kalman-filtered speed, mm/s
+    speed_mms: float  # smoothed speed, mm/s (settle-grade)
     is_cue: bool = False
+    raw_speed_mms: float | None = None  # one-step speed (impulse-grade); None → speed_mms
 
 
 @dataclass(frozen=True)
@@ -193,7 +198,8 @@ class EventEngine:
 
     def _maybe_open_candidate(self, t: float, cue: BallState) -> None:
         cfg = self._cfg
-        if cue.speed_mms < cfg.strike_impulse_mms:
+        raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
+        if raw < cfg.strike_impulse_mms:
             return
         # Stationary dwell must be satisfied at the moment of impulse.
         if self._cue_still_since is None or not self._cue_prev:
