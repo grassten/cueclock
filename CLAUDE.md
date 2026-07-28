@@ -41,7 +41,11 @@ Key design commitments (rationale + sources in the docs — don't relitigate cas
 ## Dev workflow
 
 - **uv only.** `uv sync`, `uv run <cmd>`, `uv add <pkg>` (`--group dev` for tooling).
-  Never bare `pip install`. (The old project's pipenv rule is dead.)
+  Never bare `pip install`. (The old project's pipenv rule is dead.) The venv really
+  lives at `.venv.nosync/` with `.venv` as a local symlink — iCloud syncs Desktop and
+  stamps `UF_HIDDEN` on files, which makes CPython ≥3.11 silently skip `.pth` files
+  and break the editable install (progress.md checkpoint 13). If the venv is ever
+  rebuilt, recreate the symlink, not a real `.venv/` directory.
 - **ruff** lints and formats; **mypy --strict** on `src/`; **pytest** for tests.
   All three run in CI and (except mypy) in pre-commit — `uv run pre-commit install` once.
 - Clip-based tests **skip** when `tests/clips/` fixtures are absent (clips are local-only,

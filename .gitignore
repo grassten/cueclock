@@ -1,7 +1,12 @@
 # Python
 __pycache__/
 *.py[cod]
-.venv/
+# The venv really lives in .venv.nosync (iCloud-excluded, same reason as
+# tests/clips.nosync — iCloud stamped UF_HIDDEN on .pth files, which
+# CPython >=3.11 silently skips, breaking the editable install); .venv is a
+# local symlink to it. No trailing slash: the pattern must match the symlink.
+.venv
+.venv.nosync/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -22,3 +27,6 @@ tests/clips.nosync/*
 
 # Mount-specific calibration artifacts (refit after every camera move)
 config/
+
+# Steven's personal scratch notes
+docs/accuracy-ideas.md

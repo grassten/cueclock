@@ -14,6 +14,7 @@ dependencies = [
     "pypylon",
     "syphon-python>=0.1.1; sys_platform == 'darwin'",
     "uvicorn>=0.51.0",
+    "websockets>=16.1.1",
 ]
 
 [dependency-groups]
