@@ -11,7 +11,7 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
 | 1 | Camera bring-up + `record` CLI + test corpus | **DONE 2026-07-27** — bring-up, `record`, and the full §2.3 corpus (17 clips / 47 GB, integrity-verified; see checkpoint 10) |
 | 2 | Scaffold: package/tooling/CI ✅ · clock state machine · server/API/overlay | **In progress** — camera-free |
 | 3 | Calibration tooling (ChArUco + homography) | **Corpus-grade DONE 2026-07-27**: rails-fit homography (`cueclock calibrate`, 0.89 px residual). ChArUco intrinsics still pending → post-install (§4.3) |
-| 4 | Detection core offline vs. corpus | **Landed + first real-clip success 2026-07-27** (checkpoints 10–11): detect/track/events pipeline, `analyze` CLI, corpus scoreboard in `tests/corpus/`. Tuning across all 17 clips in progress |
+| 4 | Detection core offline vs. corpus | **DONE — 17/17 scenarios correct 2026-07-28** (checkpoints 10–12, 15): detect/track/events pipeline, `analyze` CLI, corpus scoreboard in `tests/corpus/`. Growth continues via accuracy-ideas §7/§8 as live edge cases appear |
 | 5 | Live integration | **DONE 2026-07-27** (checkpoint 14): `cueclock run` — camera + vision drive the clock/server/display in one process. First at-table session 2026-07-27 evening: working, Steven judges it already better than the old app. Accuracy beta ongoing (edge cases → corpus via accuracy-ideas §8) |
 | 6 | Display path → OBS | **Code DONE + verified headless 2026-07-27** (Syphon publish, rails-fit undistort, `replay` CLI, OBS LUTs); remaining: eyes-on OBS/TV setup |
 | 7 | Backlog items | Not started (by demand only) |
@@ -183,6 +183,24 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   (watch the drop detector) before the next real corpus recording session.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-28 (checkpoint 15 — spin_in_place false Scratch fixed: corpus 17/17):**
+  The checkpoint-12 xfail is gone. Root cause, traced on real frames: a dying
+  track's final position includes up to a coast-budget (0.25 s) of
+  constant-velocity extrapolation — in `spin_in_place` the cue was last
+  *observed* mid-flight at (932,357), 359 mm from the top-middle pocket, but
+  the coasting phantom slid at 1310 mm/s to (967,89), died inside the 120 mm
+  pocket zone, and latched a false Scratch. A real sink is the opposite: in
+  `scratch_replace` the cue's last observation is the pocket-jaw blob itself,
+  110 mm from the corner-pocket center. So "lost while passing" vs. "lost
+  while sinking" = **where was the ball last actually seen**. Fix:
+  `BallState.observed` (False while the tracker coasts a ball through
+  occlusion) and the scratch latch now records only observed cue positions
+  (`vision/events.py`; §4.2 doc bullet updated). One new unit test encodes
+  the lesson (`test_cue_coasting_into_pocket_zone_is_not_scratch`); the
+  coast/reattach tracker test now asserts the flag both ways. 69 unit tests +
+  17/17 corpus green, mypy --strict clean. Done camera-free while the rig is
+  down for the TV install (TV arrives 2026-07-29).
 
 - **2026-07-27 (checkpoint 14 — §7 step 5: `cueclock run` wired, the automated
   shot clock exists):** One process owns camera + vision + clock + server +

@@ -22,12 +22,19 @@ class Sim:
         self.engine = EventEngine()
         self.t = 0.0
         self.balls: dict[int, list[float]] = {}  # id -> [x, y, vx, vy]
+        self.occluded: set[int] = set()
 
     def place(self, ball_id: int, x: float, y: float) -> None:
         self.balls[ball_id] = [x, y, 0.0, 0.0]
 
     def remove(self, ball_id: int) -> None:
         del self.balls[ball_id]
+        self.occluded.discard(ball_id)
+
+    def occlude(self, ball_id: int) -> None:
+        """Ball still reported but no longer observed: the tracker coasts it
+        along its last velocity (position keeps integrating), observed=False."""
+        self.occluded.add(ball_id)
 
     def velocity(self, ball_id: int, vx: float, vy: float) -> None:
         self.balls[ball_id][2:] = [vx, vy]
@@ -42,7 +49,12 @@ class Sim:
                 ball[1] += ball[3] * DT
                 states.append(
                     BallState(
-                        ball_id, ball[0], ball[1], hypot(ball[2], ball[3]), is_cue=ball_id == CUE
+                        ball_id,
+                        ball[0],
+                        ball[1],
+                        hypot(ball[2], ball[3]),
+                        is_cue=ball_id == CUE,
+                        observed=ball_id not in self.occluded,
                     )
                 )
             events += self.engine.update(self.t, states)
@@ -195,5 +207,24 @@ def test_cue_lost_mid_table_is_not_scratch() -> None:
     sim.velocity(CUE, 500.0, 0.0)
     sim.run(0.3)  # cue is mid-table, moving
     sim.remove(CUE)
+    events = sim.run(1.5)
+    assert Scratch not in map(type, events)
+
+
+def test_cue_coasting_into_pocket_zone_is_not_scratch() -> None:
+    # spin_in_place corpus lesson: a cue occluded mid-flight keeps coasting on
+    # its last velocity, and the phantom can slide into a pocket zone and die
+    # there. Scratch must key on where the cue was last *observed* (the jaw,
+    # for a real sink), never on where the extrapolation ended.
+    sim = Sim()
+    sim.place(CUE, 965.0, 600.0)
+    sim.place(OBJ, 200.0, 500.0)
+    sim.run(1.0)
+    sim.velocity(CUE, 0.0, -1300.0)  # toward the top-middle pocket at (965, 0)
+    shot = sim.run(0.2)  # last observed at y=340: far outside the 120 mm zone
+    assert types(shot) == [ShotTaken]
+    sim.occlude(CUE)
+    sim.run(0.25)  # coasting phantom crosses into the pocket zone (y≈15)
+    sim.remove(CUE)  # coast budget exhausted: track dies inside the zone
     events = sim.run(1.5)
     assert Scratch not in map(type, events)

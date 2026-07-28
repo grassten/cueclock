@@ -14,7 +14,10 @@ reports every live track each frame (coasting through occlusions per §2.3
 lesson 4, so a brief hand-over-ball does not look like a lost ball). A ball
 absent from the batch is a *terminated* track — that is what scratch
 detection keys on (§2.3 lesson 3: latched during motion, never evaluated at
-settle time). Each ball carries two speeds: ``speed_mms`` (smoothed —
+settle time). Coasted reports carry ``observed=False``: their positions are
+velocity extrapolations, and scratch reads only the last *observed* position
+(a phantom coasting into a pocket zone is not a sink — the spin_in_place
+corpus lesson). Each ball carries two speeds: ``speed_mms`` (smoothed —
 settle-grade, low noise) and ``raw_speed_mms`` (one-step — impulse-grade,
 shows the rest→moving step the smoothed estimate lags on). Strike impulse
 reads the raw speed; everything else reads the smoothed one. Synthetic tests
@@ -36,6 +39,8 @@ class BallState:
     speed_mms: float  # smoothed speed, mm/s (settle-grade)
     is_cue: bool = False
     raw_speed_mms: float | None = None  # one-step speed (impulse-grade); None → speed_mms
+    observed: bool = True  # False while the tracker is coasting this ball
+    # through an occlusion — the position is then an extrapolation, not evidence
 
 
 @dataclass(frozen=True)
@@ -212,11 +217,17 @@ class EventEngine:
             self._last_settled_t = t
 
         # ---- scratch: cue track terminated near a pocket while balls were moving ----
-        if cue is not None:
+        # Only *observed* positions count as "last seen". A sinking cue's final
+        # observations come from the pocket jaw itself, so they land inside the
+        # pocket zone; an occluded passing cue keeps coasting on its last
+        # velocity, and that phantom can slide into the zone and die there
+        # (measured on the spin_in_place corpus clip: last real observation
+        # 359 mm from the pocket, coasted death 89 mm from it).
+        if cue is not None and cue.observed:
             self._cue_last_seen = (t, cue.x_mm, cue.y_mm, cue.speed_mms)
             self._cue_lost_while_moving = False
             self._scratch_fired = False  # cue back on the table re-arms the latch
-        elif self._cue_last_seen is not None:
+        elif cue is None and self._cue_last_seen is not None:
             last_t, last_x, last_y, last_speed = self._cue_last_seen
             if not self._cue_lost_while_moving:
                 self._cue_lost_while_moving = was_moving and last_speed > cfg.settle_floor_mms

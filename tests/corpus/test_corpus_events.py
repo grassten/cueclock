@@ -72,16 +72,11 @@ def _run_clip(name: str, reference_frames: list[np.ndarray]) -> list[Event]:
     return events
 
 
-# Known defects, kept visible instead of loosening the expectation:
-KNOWN_FAILURES = {
-    "spin_in_place": pytest.mark.xfail(
-        reason="false Scratch: cue occluded mid-flight near the top-middle "
-        "pocket; the widened pocket zone + cue-regrab grace latch it. "
-        "Needs pocket-zone logic that distinguishes 'lost while passing' "
-        "from 'lost while slowing into the jaw' — next tuning session.",
-        strict=True,
-    ),
-}
+# Known defects, kept visible instead of loosening the expectation.
+# (spin_in_place's false Scratch lived here until the observed-position fix:
+# scratch now reads where the cue was last *observed*, not where the coasting
+# extrapolation died — see vision/events.py.)
+KNOWN_FAILURES: dict[str, pytest.MarkDecorator] = {}
 
 
 @pytest.mark.parametrize(

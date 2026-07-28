@@ -77,17 +77,21 @@ def test_coasts_through_occlusion_and_reattaches() -> None:
     for i in range(10):
         states = tracker.update(i * DT, [_obs(500, 500)])
     original_id = states[0].ball_id
-    # 150 ms occlusion: track must stay reported (coasting), same id
+    assert states[0].observed
+    # 150 ms occlusion: track must stay reported (coasting), same id — but
+    # flagged unobserved, so the event layer knows it's extrapolation
     t = 10 * DT
     gap_frames = int(0.15 / DT)
     for i in range(gap_frames):
         states = tracker.update(t + i * DT, [])
         assert len(states) == 1
         assert states[0].ball_id == original_id
+        assert not states[0].observed
     # reappears near where it was: same track continues
     t2 = t + gap_frames * DT
     states = tracker.update(t2, [_obs(502, 500)])
     assert [s.ball_id for s in states] == [original_id]
+    assert states[0].observed
 
 
 def test_moving_track_dies_after_coast_budget() -> None:

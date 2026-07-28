@@ -5,7 +5,9 @@ neighbor association against constant-velocity predictions (at 78-156 Hz the
 assignment is nearly unambiguous — the researched reason not to pull in a MOT
 stack), an alpha-beta filter per ball for smoothed velocity, and coasting
 through brief occlusions (§2.3 lesson 4: hands and cues cross over balls
-constantly; a track must survive ~200 ms without detections).
+constantly; a track must survive ~200 ms without detections). Coasted states
+are reported with ``observed=False`` so the event layer can tell velocity
+extrapolation from evidence.
 
 Two speeds per ball, because one cannot serve both §4.2 consumers:
 
@@ -158,6 +160,7 @@ class BallTracker:
                 speed_mms=hypot(tr.vx, tr.vy),
                 raw_speed_mms=tr.raw_speed,
                 is_cue=tr.track_id == self._cue_id,
+                observed=tr.last_obs[0] == t,
             )
             for tr in confirmed
         ]
