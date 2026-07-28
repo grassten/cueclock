@@ -45,10 +45,14 @@ class Observation:
 class TrackConfig:
     gate_mm: float = 100.0  # association gate vs. prediction (break impulse fits)
     birth_frames: int = 3  # consecutive hits before a track is reported
-    coast_s: float = 0.25  # occlusion survival (§2.3 lesson 4: ~200 ms)
+    coast_s: float = 0.25  # occlusion survival while moving (§2.3 lesson 4: ~200 ms)
+    still_coast_s: float = 3.0  # while stationary: a ball being addressed is
+    # occluded/merged with the cue stick for seconds and cannot move unseen
+    still_speed_mms: float = 40.0  # below this a coasting track counts as stationary
     alpha: float = 0.3  # alpha-beta position gain
     beta: float = 0.05  # alpha-beta velocity gain (~20-frame smoothing at 78 Hz)
-    whiteness_ema: float = 0.2
+    two_point_init_mms: float = 120.0  # birth step above this seeds velocity directly
+    whiteness_ema: float = 0.05  # slow: one merged-blob sample must not tank the cue's score
     cue_min_whiteness: float = 0.3
     cue_switch_margin: float = 0.05
 
@@ -103,13 +107,23 @@ class BallTracker:
             self._update_track(self._tracks[ti], t, observations[oi])
 
         # ---- unmatched tracks: coast, or die after the coast budget ----
+        # (stationary tracks get a much longer budget — see TrackConfig)
         survivors: list[_Track] = []
         for ti, track in enumerate(self._tracks):
-            if ti in matched_tracks or t - track.last_obs[0] <= cfg.coast_s:
+            still = hypot(track.vx, track.vy) < cfg.still_speed_mms
+            budget = cfg.still_coast_s if still else cfg.coast_s
+            if ti in matched_tracks or t - track.last_obs[0] <= budget:
                 if ti not in matched_tracks:
-                    track.x, track.y = track.predict(t)
+                    if still:
+                        # a still ball does not move unseen — freeze it, so a
+                        # residual few-mm/s velocity can't drift the phantom
+                        # around and stall settle detection
+                        track.vx = track.vy = 0.0
+                        track.raw_speed = 0.0
+                    else:
+                        track.x, track.y = track.predict(t)
+                        track.raw_speed = hypot(track.vx, track.vy)
                     track.t = t
-                    track.raw_speed = hypot(track.vx, track.vy)
                 survivors.append(track)
         self._tracks = survivors
 
@@ -144,18 +158,25 @@ class BallTracker:
 
     def _update_track(self, track: _Track, t: float, obs: Observation) -> None:
         cfg = self._cfg
-        dt = t - track.t
-        px, py = track.predict(t)
-        rx, ry = obs.x_mm - px, obs.y_mm - py
-        track.x = px + cfg.alpha * rx
-        track.y = py + cfg.alpha * ry
-        if dt > 0:
-            track.vx += cfg.beta * rx / dt
-            track.vy += cfg.beta * ry / dt
-            last_t, last_x, last_y = track.last_obs
-            obs_dt = t - last_t
-            if obs_dt > 0:
-                track.raw_speed = hypot(obs.x_mm - last_x, obs.y_mm - last_y) / obs_dt
+        last_t, last_x, last_y = track.last_obs
+        obs_dt = t - last_t
+        if obs_dt > 0:
+            track.raw_speed = hypot(obs.x_mm - last_x, obs.y_mm - last_y) / obs_dt
+        if track.hits == 1 and obs_dt > 0 and track.raw_speed > cfg.two_point_init_mms:
+            # born moving: seed velocity from the first step — alpha-beta from
+            # v=0 would take many frames to catch up to a struck ball
+            track.vx = (obs.x_mm - last_x) / obs_dt
+            track.vy = (obs.y_mm - last_y) / obs_dt
+            track.x, track.y = obs.x_mm, obs.y_mm
+        else:
+            px, py = track.predict(t)
+            rx, ry = obs.x_mm - px, obs.y_mm - py
+            track.x = px + cfg.alpha * rx
+            track.y = py + cfg.alpha * ry
+            dt = t - track.t
+            if dt > 0:
+                track.vx += cfg.beta * rx / dt
+                track.vy += cfg.beta * ry / dt
         track.t = t
         track.hits += 1
         track.whiteness += cfg.whiteness_ema * (obs.whiteness - track.whiteness)

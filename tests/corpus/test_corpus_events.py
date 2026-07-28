@@ -1,0 +1,90 @@
+"""Corpus scoreboard: the detection pipeline vs. every recorded clip.
+
+Each §2.3 scenario has expected event counts; this is the accuracy
+scoreboard build-order step 4 calls for. Local-only by construction: skips
+when the clips or the fitted calibration are absent (CI has neither).
+
+Expectations are deliberately asymmetric in strictness: scenarios that
+define the §2.3 failure modes (nudges, bumps, adjusts — must NOT read as
+shots) are asserted hard; scenarios whose incidental events are unknowable
+without frame-accurate ground truth (e.g. how many settles a racking
+session produces) only pin what matters.
+"""
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from cueclock.vision.events import BallsSettled, Event, Scratch, ShotTaken
+
+CLIPS = Path("tests/clips")
+CALIBRATION = Path("config/table_calibration.json")
+
+pytestmark = pytest.mark.skipif(
+    not (CLIPS / "empty_table").exists() or not CALIBRATION.exists(),
+    reason="corpus clips / local calibration not present",
+)
+
+# scenario -> (shots, scratches, min_settles) — None = don't assert
+EXPECTED: dict[str, tuple[int | None, int | None, int | None]] = {
+    "empty_table": (0, 0, None),
+    "static_spread": (0, 0, None),
+    "soft_shot": (1, 0, 1),
+    "medium_shot": (1, 0, 1),
+    "power_shot": (1, 0, 1),
+    "break_shot": (1, 0, 1),
+    "practice_strokes": (0, 0, None),
+    "chalk_near": (0, 0, None),
+    "ball_in_hand_place": (0, 0, None),
+    "ball_in_hand_nudge": (0, 0, None),
+    "shaft_adjust": (0, 0, None),
+    "tip_bump": (0, 0, None),
+    "spin_in_place": (1, 0, None),
+    "slow_creep": (1, 0, 1),
+    "walk_around_settle": (None, 0, None),
+    "rack_balls": (0, 0, None),
+    "scratch_replace": (1, 1, None),
+}
+
+
+@pytest.fixture(scope="module")
+def reference_frames() -> list[np.ndarray]:
+    from cueclock.capture.clip import ClipReader
+
+    reader = ClipReader(CLIPS / "empty_table")
+    indices = np.linspace(0, len(reader) - 1, num=15, dtype=int)
+    return [reader.frame(int(i)) for i in indices]
+
+
+def _run_clip(name: str, reference_frames: list[np.ndarray]) -> list[Event]:
+    from cueclock.capture.clip import ClipReader
+    from cueclock.vision.calibration import TableCalibration
+    from cueclock.vision.pipeline import VisionPipeline
+
+    pipeline = VisionPipeline(TableCalibration.load(CALIBRATION), reference_frames)
+    reader = ClipReader(CLIPS / name)
+    events: list[Event] = []
+    for i in range(0, len(reader), 2):
+        events += pipeline.process(float(reader.timestamps[i]), reader.frame(i))
+    return events
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_corpus_clip(name: str, reference_frames: list[np.ndarray]) -> None:
+    if not (CLIPS / name).exists():
+        pytest.skip(f"clip {name} not recorded")
+    events = _run_clip(name, reference_frames)
+    shots = sum(isinstance(e, ShotTaken) for e in events)
+    scratches = sum(isinstance(e, Scratch) for e in events)
+    settles = sum(isinstance(e, BallsSettled) for e in events)
+    summary = f"{name}: {[f'{type(e).__name__}@{e.t:.2f}' for e in events]}"
+    print(summary)
+
+    exp_shots, exp_scratches, min_settles = EXPECTED[name]
+    if exp_shots is not None:
+        assert shots == exp_shots, summary
+    if exp_scratches is not None:
+        assert scratches == exp_scratches, summary
+    if min_settles is not None:
+        assert settles >= min_settles, summary

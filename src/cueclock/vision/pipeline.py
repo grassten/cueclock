@@ -18,7 +18,7 @@ import numpy.typing as npt
 from cueclock.display.undistort_fit import cloth_mask
 from cueclock.vision.calibration import TableCalibration
 from cueclock.vision.detect import DetectConfig, build_reference, detect_balls
-from cueclock.vision.events import Event, EventConfig, EventEngine
+from cueclock.vision.events import BallState, Event, EventConfig, EventEngine
 from cueclock.vision.track import BallTracker, Observation, TrackConfig
 
 
@@ -45,13 +45,17 @@ class VisionPipeline:
     ) -> None:
         self._calibration = calibration
         self._reference = build_reference(reference_frames)
+        self._reference_bayer = reference_frames[0]
         self._mask = build_table_mask(reference_frames[0])
         self._detect_cfg = detect_config or DetectConfig()
         self._tracker = BallTracker(track_config)
         self._engine = EventEngine(event_config)
+        self.last_balls: list[BallState] = []  # diagnostics for analyze/scoreboard
 
     def process(self, t: float, bayer: npt.NDArray[np.uint8]) -> list[Event]:
-        detections = detect_balls(bayer, self._reference, self._detect_cfg, self._mask)
+        detections = detect_balls(
+            bayer, self._reference, self._detect_cfg, self._mask, self._reference_bayer
+        )
         observations: list[Observation] = []
         if detections:
             px = np.array([[d.cx, d.cy] for d in detections], dtype=np.float64)
@@ -61,4 +65,5 @@ class VisionPipeline:
                 for p, d in zip(mm, detections, strict=True)
             ]
         balls = self._tracker.update(t, observations)
+        self.last_balls = balls
         return self._engine.update(t, balls)

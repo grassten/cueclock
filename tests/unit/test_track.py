@@ -90,16 +90,42 @@ def test_coasts_through_occlusion_and_reattaches() -> None:
     assert [s.ball_id for s in states] == [original_id]
 
 
-def test_track_dies_after_coast_budget() -> None:
+def test_moving_track_dies_after_coast_budget() -> None:
     tracker = BallTracker(TrackConfig(coast_s=0.25))
     for i in range(10):
-        tracker.update(i * DT, [_obs(500, 500)])
-    t = 10 * DT
+        t = i * DT
+        tracker.update(t, [_obs(500 + 1000 * t, 500)])
+    t0 = 10 * DT
     dead_after = int(0.3 / DT) + 1
     states = []
     for i in range(dead_after):
-        states = tracker.update(t + i * DT, [])
+        states = tracker.update(t0 + i * DT, [])
     assert states == []  # terminated: absent from output (scratch keys on this)
+
+
+def test_still_track_survives_address_occlusion() -> None:
+    """A stationary ball merged with the cue stick for ~1 s must not die —
+    that is exactly the pre-strike address in every real shot clip."""
+    tracker = BallTracker()
+    for i in range(10):
+        states = tracker.update(i * DT, [_obs(500, 500)])
+    original_id = states[0].ball_id
+    t = 10 * DT
+    for i in range(int(1.0 / DT)):
+        states = tracker.update(t + i * DT, [])
+        assert [s.ball_id for s in states] == [original_id]
+
+
+def test_two_point_init_makes_born_moving_track_fast() -> None:
+    """A track born on an already-moving ball reads near-true speed at once."""
+    tracker = BallTracker(TrackConfig(birth_frames=3))
+    speed = 1000.0
+    states = []
+    for i in range(3):
+        t = i * DT
+        states = tracker.update(t, [_obs(200 + speed * t, 500)])
+    assert len(states) == 1
+    assert states[0].speed_mms > 0.8 * speed
 
 
 def test_cue_is_whitest_confirmed_track_with_floor() -> None:

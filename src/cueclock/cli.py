@@ -100,6 +100,22 @@ def _cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_display_pipeline(args: argparse.Namespace) -> DisplayPipeline:
+    if getattr(args, "rectify", False):
+        from cueclock.vision.calibration import DEFAULT_CALIBRATION_PATH, TableCalibration
+
+        path = DEFAULT_CALIBRATION_PATH
+        if not path.exists():
+            print(f"table calibration not found: {path} — run `calibrate` first", file=sys.stderr)
+            sys.exit(1)
+        calibration = TableCalibration.load(path)
+        pipeline = DisplayPipeline.rectified(calibration)
+        w, h = pipeline.out_size
+        print(f"rectified display from {path}: table axis-aligned, {w}x{h}")
+        return pipeline
+    return DisplayPipeline(_load_undistort_or_none(args))
+
+
 def _load_undistort_or_none(args: argparse.Namespace) -> UndistortParams | None:
     if args.no_undistort:
         return None
@@ -151,8 +167,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     if len(reader) < 2:
         print(f"clip {args.clip} has {len(reader)} frames — nothing to replay", file=sys.stderr)
         return 1
-    params = _load_undistort_or_none(args)
-    pipeline = DisplayPipeline(params)
+    pipeline = _build_display_pipeline(args)
     # subsample the ~156 fps clip down to display rate by timestamp
     period = 1.0 / args.fps
     grid = np.arange(0.0, float(reader.timestamps[-1]), period)
@@ -161,7 +176,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         f"replaying {args.clip} ({len(reader)} frames) as Syphon server {args.name!r} "
         f"at {args.fps:.0f} fps, {'looping' if not args.once else 'once'} — Ctrl-C to stop"
     )
-    with SyphonOutput(args.name) as out:
+    with SyphonOutput(args.name, *pipeline.out_size) as out:
         try:
             while True:
                 for i in indices:
@@ -182,8 +197,7 @@ def _cmd_live(args: argparse.Namespace) -> int:
     from cueclock.capture.camera import open_camera
     from cueclock.display.syphon_out import SyphonOutput
 
-    params = _load_undistort_or_none(args)
-    pipeline = DisplayPipeline(params)
+    pipeline = _build_display_pipeline(args)
     period = 1.0 / args.fps
     with open_camera() as cam:
         # LatestImageOnly: display always shows the freshest frame; the camera
@@ -191,7 +205,7 @@ def _cmd_live(args: argparse.Namespace) -> int:
         cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
         print(f"live -> Syphon server {args.name!r} at ~{args.fps:.0f} fps — Ctrl-C to stop")
         try:
-            with SyphonOutput(args.name) as out:
+            with SyphonOutput(args.name, *pipeline.out_size) as out:
                 while True:
                     grab = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
                     try:
@@ -271,6 +285,42 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    from cueclock.vision.calibration import TableCalibration
+    from cueclock.vision.pipeline import VisionPipeline
+
+    cal_path = Path(args.calibration)
+    if not cal_path.exists():
+        print(f"calibration not found: {cal_path} — run `calibrate` first", file=sys.stderr)
+        return 1
+    calibration = TableCalibration.load(cal_path)
+
+    ref_reader = ClipReader(Path(args.reference))
+    ref_indices = np.linspace(0, len(ref_reader) - 1, num=min(15, len(ref_reader)), dtype=int)
+    pipeline = VisionPipeline(calibration, [ref_reader.frame(int(i)) for i in ref_indices])
+
+    reader = ClipReader(Path(args.clip))
+    n_events = 0
+    next_status = 0.0
+    for i in range(0, len(reader), args.stride):
+        t = float(reader.timestamps[i])
+        for event in pipeline.process(t, reader.frame(i)):
+            n_events += 1
+            print(f"{t:7.3f}s  {type(event).__name__}")
+        if args.verbose and t >= next_status:
+            next_status = t + 1.0
+            cue = next((b for b in pipeline.last_balls if b.is_cue), None)
+            cue_txt = (
+                f"cue @({cue.x_mm:6.0f},{cue.y_mm:5.0f}) "
+                f"v={cue.speed_mms:6.0f}/{cue.raw_speed_mms:6.0f} mm/s"
+                if cue is not None and cue.raw_speed_mms is not None
+                else "no cue"
+            )
+            print(f"{t:7.3f}s  [{len(pipeline.last_balls):2d} balls] {cue_txt}")
+    print(f"{args.clip}: {n_events} events over {float(reader.timestamps[-1]):.2f}s")
+    return 0
+
+
 def _cmd_stub(name: str) -> int:
     print(f"`{name}` is not implemented yet (build order: docs/cv-app-rewrite.md §7)")
     return 2
@@ -304,6 +354,11 @@ def main(argv: list[str] | None = None) -> int:
         help="undistort params JSON (default config/display_undistort.json)",
     )
     p_replay.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
+    p_replay.add_argument(
+        "--rectify",
+        action="store_true",
+        help="render the table axis-aligned via config/table_calibration.json",
+    )
 
     p_live = sub.add_parser("live", help="live camera feed to OBS via Syphon (no recording)")
     p_live.add_argument("--fps", type=float, default=30.0, help="display rate (default 30)")
@@ -314,6 +369,11 @@ def main(argv: list[str] | None = None) -> int:
         help="undistort params JSON (default config/display_undistort.json)",
     )
     p_live.add_argument("--no-undistort", action="store_true", help="publish distorted frames")
+    p_live.add_argument(
+        "--rectify",
+        action="store_true",
+        help="render the table axis-aligned via config/table_calibration.json",
+    )
 
     p_fit = sub.add_parser("fit-undistort", help="fit display undistort from the table's rails")
     p_fit.add_argument("frame", help="clip directory (middle frame) or .npy frame")
@@ -336,6 +396,23 @@ def main(argv: list[str] | None = None) -> int:
         help="output JSON (default config/table_calibration.json)",
     )
 
+    p_an = sub.add_parser("analyze", help="run the detection pipeline over a clip, print events")
+    p_an.add_argument("--clip", required=True, help="clip directory to analyze")
+    p_an.add_argument(
+        "--reference",
+        default="tests/clips/empty_table",
+        help="empty-table clip for the background reference",
+    )
+    p_an.add_argument(
+        "--calibration",
+        default="config/table_calibration.json",
+        help="table calibration JSON (default config/table_calibration.json)",
+    )
+    p_an.add_argument(
+        "--stride", type=int, default=2, help="detect every Nth frame (default 2 ≈ 78 Hz)"
+    )
+    p_an.add_argument("--verbose", action="store_true", help="per-second track status lines")
+
     sub.add_parser("run", help="clock + vision + server (not yet)")
 
     args = parser.parse_args(argv)
@@ -349,6 +426,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_fit_undistort(args)
     if args.command == "calibrate":
         return _cmd_calibrate(args)
+    if args.command == "analyze":
+        return _cmd_analyze(args)
     return _cmd_stub(args.command)
 
 

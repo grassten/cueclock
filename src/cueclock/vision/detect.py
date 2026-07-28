@@ -48,6 +48,14 @@ class DetectConfig:
     min_extent_px: int = 25  # cue stick (~12 px wide) fails this
     max_extent_px: int = 170  # ~3 ball diameters of motion streak passes
     patch_radius_px: int = 10  # central-disk radius for the whiteness sample
+    # Shadow rejection (measured on the 2026-07-27 corpus): a shadow darkens
+    # the cloth multiplicatively, keeping its chroma direction — brightness
+    # ratio ~0.7-0.9 vs. the reference with near-identical normalized RGB.
+    # The black ball, the nearest neighbor in signature, measures ratio 0.61
+    # / chroma-diff 0.17 — outside on both axes.
+    shadow_ratio_lo: float = 0.65
+    shadow_ratio_hi: float = 0.95
+    shadow_chroma_max: float = 0.15
 
 
 def bayer_to_gray(bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -96,29 +104,55 @@ def _whiteness(r: float, g: float, b: float) -> float:
     return (1.0 - saturation) * (high / 255.0)
 
 
+def _is_shadow(
+    rgb: tuple[float, float, float], ref_rgb: tuple[float, float, float], cfg: DetectConfig
+) -> bool:
+    """Mildly darker than the reference with the same chroma direction."""
+    cur = sum(rgb)
+    ref = sum(ref_rgb)
+    if cur <= 0.0 or ref <= 0.0:
+        return False
+    ratio = cur / ref
+    if not (cfg.shadow_ratio_lo <= ratio <= cfg.shadow_ratio_hi):
+        return False
+    chroma_diff = sum(abs(c / cur - rc / ref) for c, rc in zip(rgb, ref_rgb, strict=True))
+    return chroma_diff <= cfg.shadow_chroma_max
+
+
 def detect_balls(
     bayer: npt.NDArray[np.uint8],
     reference_gray: npt.NDArray[np.uint8],
     config: DetectConfig | None = None,
     table_mask: npt.NDArray[np.uint8] | None = None,
+    reference_bayer: npt.NDArray[np.uint8] | None = None,
 ) -> list[Detection]:
     """Find ball-like blobs in one frame. See module docstring for the gates.
 
-    ``table_mask`` (optional, uint8 0/1) restricts detection to the cloth —
-    bodies leaning over a rail then only contribute their on-cloth part.
+    ``table_mask`` (optional, uint8 0/1) restricts detection to the cloth.
+    Any blob touching the mask's border is rejected outright: nothing that is
+    genuinely on the table can cross the table boundary, so a border-touching
+    blob is the on-table stub of something reaching in from outside (cue
+    stick, hand, arm) that the mask truncated into a deceptively ball-sized
+    piece — the §2.3 lesson-5 identity thieves.
     """
     cfg = config or DetectConfig()
     gray = bayer_to_gray(bayer)
     diff = cv2.absdiff(gray, reference_gray)
     _, binary = cv2.threshold(diff, cfg.diff_threshold, 255, cv2.THRESH_BINARY)
+    border_ids: set[int] = set()
     if table_mask is not None:
         binary = cv2.bitwise_and(binary, binary, mask=table_mask)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
 
-    n, _labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
+    if table_mask is not None:
+        ring = cv2.subtract(table_mask, cv2.erode(table_mask, np.ones((7, 7), np.uint8)))
+        border_ids = set(np.unique(labels[ring.astype(bool)]).tolist())
     detections: list[Detection] = []
     for i in range(1, n):
+        if i in border_ids:
+            continue
         area = float(stats[i, cv2.CC_STAT_AREA])
         if not (cfg.min_area_px <= area <= cfg.max_area_px):
             continue
@@ -128,6 +162,10 @@ def detect_balls(
             continue
         cx, cy = float(centroids[i, 0]), float(centroids[i, 1])
         r, g, b = _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px)
+        if reference_bayer is not None:
+            ref_rgb = _patch_rgb_means(reference_bayer, cx, cy, cfg.patch_radius_px)
+            if _is_shadow((r, g, b), ref_rgb, cfg):
+                continue
         detections.append(
             Detection(
                 cx=cx,

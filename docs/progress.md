@@ -10,8 +10,8 @@ anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks executi
 |---|---|---|
 | 1 | Camera bring-up + `record` CLI + test corpus | **DONE 2026-07-27** — bring-up, `record`, and the full §2.3 corpus (17 clips / 47 GB, integrity-verified; see checkpoint 10) |
 | 2 | Scaffold: package/tooling/CI ✅ · clock state machine · server/API/overlay | **In progress** — camera-free |
-| 3 | Calibration tooling (ChArUco + homography) | Not started (code can be written pre-camera; only capture needs hardware) |
-| 4 | Detection core offline vs. corpus | Not started — event logic (§4.2) is pure and can be built pre-camera against synthetic tracks |
+| 3 | Calibration tooling (ChArUco + homography) | **Corpus-grade DONE 2026-07-27**: rails-fit homography (`cueclock calibrate`, 0.89 px residual). ChArUco intrinsics still pending → post-install (§4.3) |
+| 4 | Detection core offline vs. corpus | **Landed + first real-clip success 2026-07-27** (checkpoints 10–11): detect/track/events pipeline, `analyze` CLI, corpus scoreboard in `tests/corpus/`. Tuning across all 17 clips in progress |
 | 5 | Live integration | Blocked on hardware |
 | 6 | Display path → OBS | **Code DONE + verified headless 2026-07-27** (Syphon publish, rails-fit undistort, `replay` CLI, OBS LUTs); remaining: eyes-on OBS/TV setup |
 | 7 | Backlog items | Not started (by demand only) |
@@ -172,6 +172,31 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   adds the gate scoped to the ball's own pixels.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-27 (checkpoint 11 — detection core vs. real footage + rectified display):**
+  The whole §4.1 chain landed camera-free in one evening (`vision/calibration.py`,
+  `detect.py`, `track.py`, `pipeline.py`, `calibrate`/`analyze` CLI) and then got
+  tuned frame-by-frame against `soft_shot` until it graded correctly: **ShotTaken
+  fires 20 ms after contact, BallsSettled after motion ends.** Every fix was a §2.3
+  lesson in modern costume; the load-bearing ones (full detail in the commit):
+  - The cue stick merging with the addressed cue ball's blob disrupts the cue's own
+    track in EVERY strike — strike detection now keeps a rest-memory that survives a
+    ~0.35 s track handoff (+ cue-flag debounce, slow whiteness EMA).
+  - Table moving/settled judged on **displacement over windows, not filtered speed**
+    (blob merges corrupt velocity estimates; position survives), with an age gate
+    that keeps short-lived junk tracks (hand sweeps, pocket-jaw rattle) out.
+  - Detector rejects mask-border-touching stubs (lesson-5 identity thieves) and
+    reference-relative shadows (measured: black ball stays outside on both axes).
+  - Still balls coast frozen for 3 s (address occlusion is seconds, not the 200 ms
+    the moving-ball budget assumes).
+  - Rails homography → `config/table_calibration.json` (0.89 px line residual,
+    1.20 mm/px at center) — corpus-grade §7 step 3; ChArUco §4.3 post-install.
+  - **Display rectification**: `live --rectify` / `replay --rectify` compose the
+    homography into the display remap — the TV shows the table perfectly
+    rectangular and axis-aligned (verified on the real empty_table frame; answers
+    "the camera looks crooked in OBS" in software, zero extra runtime cost).
+  Corpus scoreboard (`tests/corpus/test_corpus_events.py`) encodes expected events
+  per scenario; first full-corpus grading run is the next step.
 
 - **2026-07-27 (checkpoint 10 — corpus complete + two infrastructure fixes):**
   - **Corpus recorded and verified**: 17 clips (16 scenarios + `empty_table`), 47 GB.

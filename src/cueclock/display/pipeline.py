@@ -8,11 +8,14 @@ see docs/video-output-pipeline.md §4.
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import cv2
 import numpy as np
 import numpy.typing as npt
+
+if TYPE_CHECKING:
+    from cueclock.vision.calibration import TableCalibration
 
 DEFAULT_UNDISTORT_PATH = Path("config/display_undistort.json")
 
@@ -75,16 +78,78 @@ def build_undistort_maps(
     return cast(npt.NDArray[np.int16], map1), cast(npt.NDArray[np.uint16], map2)
 
 
+def build_rectified_maps(
+    calibration: "TableCalibration",
+    out_width: int = 1920,
+    margin_mm: float = 90.0,
+) -> tuple[npt.NDArray[np.int16], npt.NDArray[np.uint16], int, int]:
+    """Display maps that render the table axis-aligned and rectangular.
+
+    Composes the perspective homography (px→mm, from `cueclock calibrate`)
+    with the lens undistortion into one remap: every output pixel is a table
+    coordinate, so mount roll/tilt/off-center vanish from the TV picture
+    entirely. `margin_mm` of surround keeps the pocket openings and some rail
+    in frame. Output height follows from the table's mm aspect ratio.
+    Runtime cost is identical to the plain undistort (one cv2.remap).
+    """
+    u = calibration.undistort
+    span_x = calibration.length_mm + 2 * margin_mm
+    span_y = calibration.width_mm + 2 * margin_mm
+    out_height = round(out_width * span_y / span_x)
+    scale = out_width / span_x  # output px per table mm
+
+    us, vs = np.meshgrid(np.arange(out_width), np.arange(out_height))
+    mm_x = (us + 0.5) / scale - margin_mm
+    mm_y = (vs + 0.5) / scale - margin_mm
+    h_inv = np.linalg.inv(calibration.homography_matrix)
+    denom = h_inv[2, 0] * mm_x + h_inv[2, 1] * mm_y + h_inv[2, 2]
+    und_x = (h_inv[0, 0] * mm_x + h_inv[0, 1] * mm_y + h_inv[0, 2]) / denom
+    und_y = (h_inv[1, 0] * mm_x + h_inv[1, 1] * mm_y + h_inv[1, 2]) / denom
+
+    # forward Brown model: undistorted pixel -> distorted source pixel
+    k1, k2, p1, p2, k3 = u.dist
+    xn = (und_x - u.cx) / u.fx
+    yn = (und_y - u.cy) / u.fy
+    r2 = xn * xn + yn * yn
+    radial = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+    xd = xn * radial + 2.0 * p1 * xn * yn + p2 * (r2 + 2.0 * xn * xn)
+    yd = yn * radial + p1 * (r2 + 2.0 * yn * yn) + 2.0 * p2 * xn * yn
+    map_x = (u.fx * xd + u.cx).astype(np.float32)
+    map_y = (u.fy * yd + u.cy).astype(np.float32)
+    map1, map2 = cv2.convertMaps(map_x, map_y, cv2.CV_16SC2)
+    return (
+        cast(npt.NDArray[np.int16], map1),
+        cast(npt.NDArray[np.uint16], map2),
+        out_width,
+        out_height,
+    )
+
+
 class DisplayPipeline:
-    """(1200, 1920) BayerRG8 in -> (1200, 1920, 4) RGBA out for Syphon.
+    """BayerRG8 in -> RGBA out for Syphon.
 
     RGBA, not BGRA: the bytes handed to syphon-python land in OBS in RGBA
     order — feeding BGRA rendered the blue cloth tan (confirmed eyes-on in
     OBS 2026-07-27).
+
+    Plain construction undistorts in place (1920x1200 in and out); the
+    `rectified` constructor instead composes undistortion with the table
+    homography so the output frame IS the table, straight and centered.
     """
 
     def __init__(self, undistort: UndistortParams | None = None) -> None:
         self._maps = build_undistort_maps(undistort) if undistort else None
+        self.out_size: tuple[int, int] = (1920, 1200)  # (width, height)
+
+    @classmethod
+    def rectified(
+        cls, calibration: "TableCalibration", out_width: int = 1920, margin_mm: float = 90.0
+    ) -> "DisplayPipeline":
+        pipeline = cls(None)
+        map1, map2, width, height = build_rectified_maps(calibration, out_width, margin_mm)
+        pipeline._maps = (map1, map2)
+        pipeline.out_size = (width, height)
+        return pipeline
 
     def to_rgba(self, bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         # GenICam "BayerRG8" needs OpenCV's *BG* constant (opposite-corner

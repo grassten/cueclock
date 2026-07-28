@@ -111,13 +111,21 @@ def test_single_frame_spike_is_not_a_shot() -> None:
 
 
 def test_incoherent_trajectory_rejected() -> None:
-    # §4.2 conjunction clause 3: displacement must agree with the strike axis.
+    # §4.2 conjunction clause 3: impulse-fast frames whose displacements never
+    # cohere into real travel (a detection-jitter storm around the resting
+    # ball) must not fire. Note the handoff-tolerant engine deliberately
+    # treats *sustained coherent* motion after a glitch frame as a shot —
+    # the ball demonstrably left its dwelled rest — so incoherence here means
+    # no net travel, not merely a direction change.
     sim = rack()
     sim.run(1.0)
-    sim.velocity(CUE, 300.0, 0.0)
-    sim.run(DT)  # impulse frame opens the candidate
-    sim.velocity(CUE, -300.0, 0.0)  # association glitch: ball "runs backwards"
-    events = sim.run(1.5)
+    for _ in range(40):  # ±300 mm/s alternating: violent jitter, no net travel
+        sim.velocity(CUE, 0.0, 300.0)
+        sim.run(DT)
+        sim.velocity(CUE, 0.0, -300.0)
+        sim.run(DT)
+    sim.velocity(CUE, 0.0, 0.0)
+    events = sim.run(0.5)
     assert ShotTaken not in map(type, events)
 
 
