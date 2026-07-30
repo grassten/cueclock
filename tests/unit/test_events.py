@@ -192,6 +192,22 @@ def test_settle_waits_for_spin_stop() -> None:
     assert types(sim.run(1.0)) == [BallsSettled]
 
 
+def test_glossy_still_ball_churn_does_not_block_settle() -> None:
+    # 2026-07-29 (wall-TV day): the TV's moving image reflects off glossy
+    # balls, holding a *still* ball's churn above spin_churn_max forever —
+    # the 8-ball read a flat 2.2+ and settle never fired, so the clock never
+    # started. Churn is a spin signal only near the ball's last translation
+    # (spin_watch_s); a long-still ball's churn is lighting noise.
+    sim = rack()
+    sim.place(3, 900.0, 700.0)
+    sim.set_churn(3, 3.0)  # above the gate, and it will never decay
+    sim.run(10.5)  # outlives ball 3's spin watch window (first-sight start)
+    sim.velocity(CUE, 500.0, 0.0)
+    assert types(sim.run(0.5)) == [ShotTaken]
+    sim.velocity(CUE, 0.0, 0.0)
+    assert types(sim.run(1.2)) == [BallsSettled]
+
+
 def test_scratch_latched_during_motion() -> None:
     # §2.3 lesson 3: the cue ball vanishes into a pocket mid-motion and the
     # player replaces it before settle — scratch must already be latched.

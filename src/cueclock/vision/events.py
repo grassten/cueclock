@@ -89,10 +89,20 @@ class EventConfig:
     # when balls stop moving AND spinning): a position-stationary ball whose
     # own pixels keep churning is still spinning — not settled. Threshold in
     # detector gray levels, measured on spin_in_place at the 78 Hz detect
-    # cadence: still-ball noise floor 1.2-1.5 (max 1.66), spinning cue
-    # 2.6-6.5 decaying to the floor exactly at visible spin stop. 2.0 splits
-    # the gap; recalibrate if the detect stride ever changes.
-    spin_churn_max: float = 2.0
+    # cadence: spinning cue 2.6-6.5 decaying to the noise floor exactly at
+    # visible spin stop. The still-ball floor is lighting-dependent: 1.2-1.5
+    # on the TV-less corpus, but up to 2.34 with the wall TV on (its moving
+    # image reflects off glossy ball surfaces — the black 8-ball with a white
+    # decal read a flat 2.2, measured 2026-07-29). 2.5 clears the TV floor
+    # while spin still crosses it late enough (settle ~7.19 s vs. the 7.0 s
+    # corpus pin). Recalibrate if the detect stride ever changes.
+    spin_churn_max: float = 2.5
+    # Spin can only persist a few seconds after a ball stops translating
+    # (spin_in_place: 2.5 s), so churn may block settle only within this
+    # window of the ball's last real movement. Without it, one glossy ball
+    # reading above spin_churn_max under reflections blocks settle *forever*
+    # (the 2026-07-29 "clock never starts" failure).
+    spin_watch_s: float = 10.0
 
     # Strike = conjunction: stationary dwell + velocity impulse + coherent trajectory
     pre_strike_dwell_s: float = 0.4
@@ -176,6 +186,9 @@ class EventEngine:
         self._cue_last_seen: tuple[float, float, float, float] | None = None  # (t, x, y, speed)
         self._cue_lost_while_moving = False
         self._scratch_fired = False
+        # Per-ball last time it visibly translated (first sighting counts):
+        # bounds how long the spin-churn gate may hold settle (spin_watch_s).
+        self._last_translate: dict[int, float] = {}
 
     def update(self, t: float, balls: list[BallState]) -> list[Event]:
         events: list[Event] = []
@@ -205,7 +218,11 @@ class EventEngine:
             history.positions.append((t, ball.x_mm, ball.y_mm))
             while history.positions and history.positions[0][0] < t - cfg.settle_creep_window_s:
                 history.positions.popleft()
+            self._last_translate.setdefault(ball.ball_id, t)
+            if self._displacement_over(ball, cfg.settle_creep_window_s) > cfg.settle_creep_mm:
+                self._last_translate[ball.ball_id] = t
         self._history = {b.ball_id: self._history[b.ball_id] for b in balls}
+        self._last_translate = {b.ball_id: self._last_translate[b.ball_id] for b in balls}
 
         moved = (
             b
@@ -216,7 +233,7 @@ class EventEngine:
         if next(moved, None) is not None:
             self._table_moving = True
             self._all_still_since = None
-        elif balls and self._is_still(balls):
+        elif balls and self._is_still(t, balls):
             if self._all_still_since is None:
                 self._all_still_since = t
             if self._table_moving and t - self._all_still_since >= cfg.settle_dwell_s:
@@ -329,7 +346,7 @@ class EventEngine:
         positions = self._history[ball.ball_id].positions
         return positions[-1][0] - positions[0][0] >= 0.8 * self._cfg.settle_creep_window_s
 
-    def _is_still(self, balls: list[BallState]) -> bool:
+    def _is_still(self, t: float, balls: list[BallState]) -> bool:
         """All balls position-stable over the creep window, none spinning.
 
         Position-based on purpose (see EventConfig): catches pocket-edge
@@ -338,6 +355,11 @@ class EventEngine:
         cannot see, and the rules require waiting for it (WPA def. 8.2) —
         the appearance-churn gate covers it, scoped to the ball's own
         pixels so hands/shadows elsewhere stay invisible to settle.
+
+        The churn gate only applies within spin_watch_s of the ball's last
+        real translation: spin decays within seconds of a ball stopping,
+        while reflection/decal noise on a glossy still ball persists
+        indefinitely and must not hold settle hostage (2026-07-29, wall TV).
 
         Tracks younger than the creep window are not judged: they cannot
         show a meaningful window yet, and the short-lived jittery phantoms
@@ -351,7 +373,11 @@ class EventEngine:
                 continue
             if self._displacement_over(ball, cfg.settle_creep_window_s) > cfg.settle_creep_mm:
                 return False
-            if ball.churn is not None and ball.churn > cfg.spin_churn_max:
+            if (
+                ball.churn is not None
+                and ball.churn > cfg.spin_churn_max
+                and t - self._last_translate.get(ball.ball_id, t) <= cfg.spin_watch_s
+            ):
                 return False  # stationary but still spinning
         return True
 
