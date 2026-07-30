@@ -17,7 +17,10 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from cueclock.vision.calibration import TableCalibration
 
 import cv2
 import numpy as np
@@ -324,6 +327,34 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _warn_if_reference_stale(
+    ref_gray: npt.NDArray[np.uint8],
+    bayer: npt.NDArray[np.uint8],
+    calibration: "TableCalibration",
+) -> None:
+    """One-shot startup check: does the live scene still match the reference?
+
+    A stale reference (camera moved, lighting changed) kills detection with
+    no other symptom — the clock just never starts (2026-07-29 lesson).
+    """
+    from cueclock.vision.calibration import BOUNDARY_DRIFT_WARN, boundary_drift
+
+    live_gray = cast(npt.NDArray[np.uint8], cv2.cvtColor(bayer, cv2.COLOR_BayerBG2GRAY))
+    drift = boundary_drift(ref_gray, live_gray, calibration)
+    if drift > BOUNDARY_DRIFT_WARN:
+        print(
+            f"WARNING: table boundary drift {drift:.1f} vs the reference clip "
+            f"(same-mount noise ~2, warn >{BOUNDARY_DRIFT_WARN:.0f}).\n"
+            "  The camera or lighting changed since the reference was recorded —\n"
+            "  detection may be silently blind (no events, clock never starts).\n"
+            "  Fix: record a fresh empty-table clip, `fit-undistort` + `calibrate`\n"
+            "  against it, and relaunch with --reference <new clip>.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"reference check ok (boundary drift {drift:.1f}, noise ~2)")
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """The automated shot clock: camera + vision + clock/server + display feed.
 
@@ -341,7 +372,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     import uvicorn
     from pypylon import pylon
 
-    from cueclock.capture.camera import open_camera
+    from cueclock.capture.camera import EXPOSURE_US, GAIN, open_camera
+    from cueclock.capture.ring import FrameRing
     from cueclock.display.syphon_out import SyphonOutput
     from cueclock.server.app import create_app
     from cueclock.server.hub import Hub
@@ -360,10 +392,39 @@ def _cmd_run(args: argparse.Namespace) -> int:
     calibration = TableCalibration.load(cal_path)
     ref_reader = ClipReader(ref_path)
     ref_indices = np.linspace(0, len(ref_reader) - 1, num=min(15, len(ref_reader)), dtype=int)
-    vision = VisionPipeline(calibration, [ref_reader.frame(int(i)) for i in ref_indices])
+    ref_frames = [ref_reader.frame(int(i)) for i in ref_indices]
+    vision = VisionPipeline(calibration, ref_frames)
+    ref_gray = np.median(
+        np.stack([cv2.cvtColor(f, cv2.COLOR_BayerBG2GRAY) for f in ref_frames]), axis=0
+    ).astype(np.uint8)
     display = _build_display_pipeline(args)
 
+    ring: FrameRing | None = None
+    ring_capacity = int(args.ring_seconds * NOMINAL_FPS / args.stride)
+    camera_serial = "unknown"
+
+    def dump_ring(label: str) -> str:
+        """Write the ring to a corpus-style clip (called from the server)."""
+        if ring is None or len(ring) == 0:
+            raise RuntimeError("ring buffer is empty — no frames grabbed yet")
+        clip_dir = _unique_dir(Path("tests/clips"), label)
+        writer = ClipWriter(
+            clip_dir,
+            label=label,
+            camera_serial=camera_serial,
+            exposure_us=EXPOSURE_US,
+            gain=GAIN,
+            recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
+        for ts_ns, ring_frame in ring.snapshot():
+            writer.write(ring_frame, ts_ns)
+        writer.close()
+        print(f"ring dumped -> {clip_dir}")
+        return str(clip_dir)
+
     app = create_app()
+    if ring_capacity > 0:
+        app.state.dump = dump_ring
     hub = cast(Hub, app.state.hub)
     server = uvicorn.Server(
         uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
@@ -406,6 +467,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     display_period = 1.0 / args.fps
     try:
         with open_camera() as cam:
+            camera_serial = cam.GetDeviceInfo().GetSerialNumber()
             # LatestImageOnly: if a detect cycle runs long, the camera hands us
             # the freshest frame instead of building a queue. The event engine
             # is cadence-agnostic, so skipped frames only cost samples.
@@ -426,7 +488,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                 t0_ns = ts_ns
                             t = (ts_ns - t0_ns) / 1e9
                             frame = grab.Array
+                            if frame_i == 0:
+                                _warn_if_reference_stale(ref_gray, frame, calibration)
                             if frame_i % args.stride == 0:
+                                if ring_capacity > 0:
+                                    if ring is None:
+                                        ring = FrameRing(
+                                            ring_capacity, frame.shape[0], frame.shape[1]
+                                        )
+                                    ring.push(ts_ns, frame)
                                 for event in vision.process(t, frame):
                                     dispatch(event, t)
                             frame_i += 1
@@ -555,6 +625,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_run.add_argument(
         "--stride", type=int, default=2, help="detect every Nth frame (default 2 ≈ 78 Hz)"
+    )
+    p_run.add_argument(
+        "--ring-seconds",
+        type=float,
+        default=12.0,
+        help="in-RAM rolling buffer POST /api/dump saves as a labeled clip "
+        "(~2.2 GB at the default 12 s; 0 disables)",
     )
     p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
     _add_display_args(p_run)

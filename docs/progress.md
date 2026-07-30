@@ -184,6 +184,73 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-30 (checkpoint 18 — the "don't discover it at the table" layer):**
+  Clock confirmed working live after checkpoint 17; overnight session built the
+  instrumentation that turns silent failures into loud ones and live misses into
+  corpus evidence:
+  - **Startup reference check**: `run` measures `boundary_drift` (new, in
+    `vision/calibration.py`) between the live first frame and the reference clip
+    across a sampled ring straddling the cloth/rail boundary — the
+    highest-contrast position-locked structure, immune to balls on the cloth.
+    Measured levels: same mount ≈ 1.9 (balls or not), the 20 mm TV-install shift
+    ≈ 35; warn at > 8. A stale reference now announces itself instead of
+    presenting as "the clock never starts".
+  - **Ring buffer + dump endpoint** (stream-deck-plan build item 1):
+    `capture/ring.py` FrameRing (thread-safe, copies in/out) holds the last
+    `--ring-seconds` (12 s ≈ 2.2 GB) of detect-cadence raw frames inside `run`;
+    `POST /api/dump?label=<x>` (additive §2.1 contract) writes them through
+    ClipWriter to `tests/clips/<label>/`. Dump stalls the grab ~1 s (snapshot
+    under lock) — acceptable by design. The Stream Deck flag/save keys are now
+    one curl shell action each.
+  - **Corpus grows TV-era scenarios**: scoreboard supports per-scenario
+    references (`REFERENCES` map); `shot_debug` (1 shot / 1 scratch / ≥1 settle
+    — scratch verified frame-by-frame: the measle cue visibly sinks at 8.5 s)
+    and `empty_table_0729` are graded permanently. 20 corpus tests green.
+  - **Known bug, blocked on capture**: two live shots (t≈42 s, t≈81 s in the
+    2026-07-29 evening session) fired no ShotTaken — shared signature: cue track
+    lost > 1 s at impact (`no cue` mid-flight), reborn far from the rest spot, so
+    the launch impulse was never seen on a cue-flagged track. The settle-driven
+    reset (by design) masks it operationally. No blind threshold changes; the
+    dump key exists precisely to capture the next occurrence. Related pin:
+    events are cadence-sensitive (stride 4 adds a spurious pre-shot settle on
+    `shot_debug`) — `run` stays at stride 2, where checkpoint 14 measured 1.38×
+    realtime headroom.
+  77 unit + 20 corpus tests green, mypy --strict + ruff clean. Camera-free
+  except the two clips Steven recorded at the table.
+
+- **2026-07-29 (checkpoint 17 — TV-install fallout: recalibration + the churn gate's
+  first live lesson):** TV mounted; first live session went deaf ("no shots
+  registering"). Two independent causes, both traced on evidence:
+  1. **Camera moved ~20 mm during the install** (corners shifted 10–21 px vs. the
+     Jul-27 homography) — enough to break reference-relative segmentation. Fixed by
+     the standing recipe: fresh `empty_table_0729` reference + `fit-undistort` +
+     `calibrate` (both 0.76 px, better than Jul-27's 0.89); corpus re-graded 18/18
+     under the new calibration. **`run` must now pass
+     `--reference tests/clips/empty_table_0729`** — the default still points at the
+     stale Jul-27 clip, and a stale reference is silent death (only symptom: no events).
+  2. **Checkpoint 16's churn gate blocked settle forever under the TV.** Glossy
+     balls mirror the TV's moving image: the still 8-ball's churn read a flat
+     2.2 (TV-less floor was 1.2–1.5; cloth and rail-edge churn unchanged, so it's
+     ball-surface reflection, not vibration or global light). With settle never
+     latching, the table stayed "moving" forever — which also suppressed ShotTaken
+     via the carom guard: total event silence, though detection itself was healthy
+     (verified live via `run --verbose`, then offline on a recorded `shot_debug`
+     clip — same frames fired ShotTaken offline... until settle, which never came).
+     Fix in `vision/events.py`, both layers measured before coding: `spin_churn_max`
+     2.0 → **2.5** (spin_in_place decay crosses 2.5 at 6.69 s → settle 7.19 s, still
+     over the 7.0 s corpus pin; tonight's still-ball max was 2.34) and a new
+     **`spin_watch_s` = 10 s** — churn may only hold settle within 10 s of that
+     ball's last real translation (spin physically decays ~2.5 s after translation
+     stops; reflection noise persists forever and must not deadlock the clock).
+     `shot_debug` now grades ShotTaken 6.375 s + BallsSettled 11.918 s (the green
+     6-ball truly rolled until ~11.4 s). 71 unit + 18 corpus green, mypy --strict
+     clean. New regression test: `test_glossy_still_ball_churn_does_not_block_settle`.
+  Also tonight: control page reachable from other devices via `--host 0.0.0.0`
+  (loopback default documented in `--host` help); OBS browser source shows blank if
+  it loads before the server is up — right-click → "Refresh cache of current page".
+  Short-term punch list (Stream Deck day-one, camera leveling baseline, ChArUco
+  status) lives in `docs/todo.md`.
+
 - **2026-07-28 (checkpoint 16 — settle-at-spin-stop churn gate: the §4.2 rules
   caveat is implemented):** BallsSettled now waits for visible spin to stop
   (WPA def. 8.2, Steven's 2026-07-27 rules catch). Evidence first: measured

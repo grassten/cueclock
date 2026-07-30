@@ -114,10 +114,11 @@ Works the day the Stream Deck arrives (no new code):
 - Session start/stop macros (shell actions launching/killing `cueclock run`)
 
 Build items it creates (priority order):
-1. **Ring buffer + dump endpoint in `cueclock run`** — the ground-truth/flag/save
-   keys need it (accuracy-ideas §8; raw Bayer, last ~15 s ≈ 5.4 GB RAM at 156 fps —
-   fits the 24 GB mini, or buffer decimated/settled-gated if not; design at build
-   time). Clips land on the T7 like any corpus recording.
+1. **Ring buffer + dump endpoint in `cueclock run`** — ✅ **LANDED 2026-07-29**
+   (`capture/ring.py` + `POST /api/dump?label=<x>`): detect-cadence frames
+   (stride 2 ≈ 78 Hz), default 12 s ≈ 2.2 GB RAM, saved via ClipWriter to
+   `tests/clips/<label>/` on the T7. The flag/save keys are now one
+   `curl -X POST 'http://localhost:8000/api/dump?label=flagged'` shell action.
 2. **Ground-truth comparer** — server timestamps GT presses, aligns with emitted
    events, auto-dumps on disagreement (shadow-mode grading).
 3. **Score state + API + overlay** — score keys need server endpoints and a

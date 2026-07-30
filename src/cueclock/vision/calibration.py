@@ -131,6 +131,65 @@ class TableCalibration:
         )
 
 
+def _table_mm_to_raw_px(
+    calibration: TableCalibration, pts_mm: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    """Inverse of `to_table_mm`: mm → undistorted px (H⁻¹) → raw distorted px.
+
+    Applies the Brown radial terms only (k1/k2/k3); the v1 rail fits leave
+    the tangential coefficients at zero.
+    """
+    h_inv = np.linalg.inv(calibration.homography_matrix)
+    pts = np.asarray(pts_mm, dtype=np.float64)
+    proj = (h_inv @ np.column_stack([pts, np.ones(len(pts))]).T).T
+    und = proj[:, :2] / proj[:, 2:3]
+    u = calibration.undistort
+    k1, k2, k3 = u.dist[0], u.dist[1], u.dist[4]
+    xn = (und[:, 0] - u.cx) / u.fx
+    yn = (und[:, 1] - u.cy) / u.fy
+    r2 = xn * xn + yn * yn
+    s = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+    return np.column_stack([xn * s * u.fx + u.cx, yn * s * u.fy + u.cy])
+
+
+def boundary_drift(
+    reference_gray: npt.NDArray[np.uint8],
+    live_gray: npt.NDArray[np.uint8],
+    calibration: TableCalibration,
+) -> float:
+    """Mean |Δgray| sampled across the cloth/rail boundary ring.
+
+    A cheap "has the camera moved or the lighting changed since the
+    reference was recorded?" signal: the cloth boundary is the
+    highest-contrast position-locked structure in the scene, so a shift of
+    even a few pixels sends this soaring, while balls (which live on the
+    cloth, away from the sampled ring) barely graze it. Run at startup and
+    warn — a stale reference silently kills detection with no other symptom
+    (learned 2026-07-29, the TV-install camera shift).
+    """
+    h, w = reference_gray.shape
+    length, width = calibration.length_mm, calibration.width_mm
+    offsets = (-9.0, -6.0, -3.0, 0.0, 3.0, 6.0, 9.0)
+    stations: list[tuple[float, float]] = []
+    for frac in np.linspace(0.05, 0.95, 40):
+        for off in offsets:
+            stations.append((float(frac) * length, off))  # top edge
+            stations.append((float(frac) * length, width - off))  # bottom
+            stations.append((off, float(frac) * width))  # left
+            stations.append((length - off, float(frac) * width))  # right
+    pts = _table_mm_to_raw_px(calibration, np.array(stations))
+    xs = np.clip(np.round(pts[:, 0]).astype(np.intp), 0, w - 1)
+    ys = np.clip(np.round(pts[:, 1]).astype(np.intp), 0, h - 1)
+    diff = np.abs(reference_gray[ys, xs].astype(np.int16) - live_gray[ys, xs].astype(np.int16))
+    return float(diff.mean())
+
+
+# Empirical `boundary_drift` levels (measured 2026-07-29 on real clips):
+# same mount ≈ 1.9 (with or without balls on the cloth), the 20 mm
+# TV-install camera shift ≈ 35. Warn well above noise, far below any move.
+BOUNDARY_DRIFT_WARN = 8.0
+
+
 def table_corners_px(
     boundary: BoundaryPoints, undistort: UndistortParams
 ) -> tuple[npt.NDArray[np.float64], float]:

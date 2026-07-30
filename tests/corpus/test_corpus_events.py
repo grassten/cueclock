@@ -11,6 +11,7 @@ without frame-accurate ground truth (e.g. how many settles a racking
 session produces) only pin what matters.
 """
 
+from functools import cache
 from pathlib import Path
 
 import numpy as np
@@ -47,14 +48,29 @@ EXPECTED: dict[str, tuple[int | None, int | None, int | None]] = {
     "walk_around_settle": (None, 0, None),
     "rack_balls": (0, 0, None),
     "scratch_replace": (1, 1, None),
+    # TV-era scenarios (recorded 2026-07-29: post-TV-install camera position,
+    # wall TV on). shot_debug is the live-deafness repro: one firm shot, a
+    # real cue scratch into the top-right pocket, settle once the slow-rolling
+    # 6-ball truly stops (~11.9 s). It guards the settle path against
+    # TV-reflection churn — the glossy 8-ball reads ~2.2 the whole clip, above
+    # the old 2.0 gate that deadlocked settle live.
+    "empty_table_0729": (0, 0, None),
+    "shot_debug": (1, 1, 1),
+}
+
+# Clips pair with the empty-table reference from the same camera position:
+# post-TV-install clips use empty_table_0729, everything earlier the original.
+REFERENCES: dict[str, str] = {
+    "empty_table_0729": "empty_table_0729",
+    "shot_debug": "empty_table_0729",
 }
 
 
-@pytest.fixture(scope="module")
-def reference_frames() -> list[np.ndarray]:
+@cache
+def _reference_frames(name: str) -> list[np.ndarray]:
     from cueclock.capture.clip import ClipReader
 
-    reader = ClipReader(CLIPS / "empty_table")
+    reader = ClipReader(CLIPS / name)
     indices = np.linspace(0, len(reader) - 1, num=15, dtype=int)
     return [reader.frame(int(i)) for i in indices]
 
@@ -83,10 +99,13 @@ KNOWN_FAILURES: dict[str, pytest.MarkDecorator] = {}
     "name",
     [pytest.param(n, marks=KNOWN_FAILURES.get(n, ())) for n in sorted(EXPECTED)],
 )
-def test_corpus_clip(name: str, reference_frames: list[np.ndarray]) -> None:
+def test_corpus_clip(name: str) -> None:
     if not (CLIPS / name).exists():
         pytest.skip(f"clip {name} not recorded")
-    events = _run_clip(name, reference_frames)
+    ref_name = REFERENCES.get(name, "empty_table")
+    if not (CLIPS / ref_name).exists():
+        pytest.skip(f"reference clip {ref_name} not recorded")
+    events = _run_clip(name, _reference_frames(ref_name))
     shots = sum(isinstance(e, ShotTaken) for e in events)
     scratches = sum(isinstance(e, Scratch) for e in events)
     settles = sum(isinstance(e, BallsSettled) for e in events)
@@ -102,9 +121,7 @@ def test_corpus_clip(name: str, reference_frames: list[np.ndarray]) -> None:
         assert settles >= min_settles, summary
 
 
-def test_spin_in_place_settle_waits_for_spin_stop(
-    reference_frames: list[np.ndarray],
-) -> None:
+def test_spin_in_place_settle_waits_for_spin_stop() -> None:
     """WPA def. 8.2: the shot ends when the ball stops moving AND spinning.
 
     Ground truth measured from the clip's own pixels (2026-07-28): the cue's
@@ -113,7 +130,7 @@ def test_spin_in_place_settle_waits_for_spin_stop(
     """
     if not (CLIPS / "spin_in_place").exists():
         pytest.skip("clip spin_in_place not recorded")
-    events = _run_clip("spin_in_place", reference_frames)
+    events = _run_clip("spin_in_place", _reference_frames("empty_table"))
     settles = [e.t for e in events if isinstance(e, BallsSettled)]
     assert settles, "spin_in_place must settle before the clip ends"
     assert settles[-1] >= 7.0, f"settled at {settles[-1]:.2f}s — before spin stopped"

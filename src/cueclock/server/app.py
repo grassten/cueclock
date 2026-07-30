@@ -5,7 +5,8 @@ them (docs/cv-app-rewrite.md §2.1). Keep them stable.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -92,5 +93,29 @@ def create_app() -> FastAPI:
     @app.get("/api/state")
     async def api_state() -> dict[str, object]:
         return hub.clock.snapshot().as_dict()
+
+    @app.post("/api/dump")
+    async def api_dump(label: str = "flagged") -> JSONResponse:
+        """Save the last ~12 s of raw frames as a labeled clip.
+
+        Only live under `cueclock run` (which wires `app.state.dump` to its
+        ring buffer). This is the "that was wrong / that was interesting"
+        button: every disagreement becomes replayable corpus evidence
+        (accuracy-ideas §8).
+        """
+        dump: Callable[[str], str] | None = getattr(app.state, "dump", None)
+        if dump is None:
+            return JSONResponse(
+                {"error": "no ring buffer — /api/dump only works under `cueclock run`"},
+                status_code=503,
+            )
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "", label)[:40] or "flagged"
+        try:
+            path = await asyncio.to_thread(dump, safe)
+        except (RuntimeError, OSError) as exc:
+            return JSONResponse(
+                {"error": f"dump failed: {exc} (is the T7 mounted?)"}, status_code=503
+            )
+        return JSONResponse({"saved": path})
 
     return app
