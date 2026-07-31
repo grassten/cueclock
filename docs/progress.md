@@ -184,6 +184,29 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-31 (checkpoint 22 — telemetry session read-out: cadence EXONERATED,
+  carom guard confirmed as the sole accuracy blocker):** Steven ran the
+  instrumented session (~6.2 min, log `~/Library/Logs/cueclock-telemetry.log`).
+  - **Cadence healthy**: 156.2 grabs/s (camera full rate) at median AND p5;
+    detect avg 4.0–4.5 ms vs the 12.8 ms stride-2 budget. Only 9/371 intervals
+    below 156; worst 144.3 grabs/s for a single interval (detect max spike
+    47 ms). Every ShotTaken and every miss happened at full rate. The §2
+    remedies list is moot; item closed unused.
+  - **Miss rate quantified**: ~10 of ~21 motion episodes produced no ShotTaken
+    (10 ShotTaken / 22 BallsSettled / 1 Scratch). One shot→settle stretch
+    stalled 11.8 s with the cue at rest while the ball count inflated 4→7 —
+    hand/cue blobs holding settle, the "clock stays paused with hands in frame"
+    behavior Steven reported live. All at full cadence ⇒ the checkpoint-20
+    carom-guard mechanism explains misses, stalls, AND the live-vs-offline
+    divergence (offline cold-start resets `settled_age`, so replays pass the
+    guard that live play starves).
+  - **Reference drift warning fired** (8.1 vs noise ~2, warn > 8) — the 07-29
+    reference is stale (lighting or small camera shift). Refresh recipe is now
+    todo §2; worth doing before the guard-fix session so corpus additions are
+    recorded against a clean reference.
+  - Next session: the guard design fix (junk-track filtering / guard rework) +
+    promote `missed_strike_0731` & friends to corpus scenarios + full re-grade.
+
 - **2026-07-31 (checkpoint 21 — detect-loop telemetry, todo §2 Part 1):** the
   `run --verbose` status line now reports per-interval `grabs/s` (retrieve rate
   == processing rate under LatestImageOnly, so a deficit vs. 156.25 is the skip
