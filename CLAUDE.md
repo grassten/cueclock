@@ -26,6 +26,7 @@ checkpoint commit).
 | `docs/basler-camera-setup.md` | Camera assembly, pylon/pypylon install, bring-up, production settings |
 | `docs/video-output-pipeline.md` | Display path: debayer → undistort → Syphon → OBS → TV |
 | `docs/audio-mic-setup.md` | Mic plan: voice "extension" (v1), click corroborator (backlog), device swap path |
+| `docs/stream-deck.md` | Stream Deck control surface: no-Elgato-app decision, daemon architecture, live button map — keep in sync with layout changes |
 | `docs/*.pdf` | Hardware build sheet + original project spec (background) |
 
 Key design commitments (rationale + sources in the docs — don't relitigate casually):

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the always-on Stream Deck daemon (docs/stream-deck.md).
+     install_deck_agent.sh substitutes __REPO__/__HOME__ and installs it. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cueclock.deck</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>cueclock.cli</string>
+        <string>deck</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/cueclock-deck.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/cueclock-deck.log</string>
+</dict>
+</plist>

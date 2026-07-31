@@ -549,6 +549,12 @@ def _add_display_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _cmd_deck(args: argparse.Namespace) -> int:
+    from cueclock.deck.daemon import run_deck
+
+    return run_deck(args.server, args.brightness)
+
+
 def main(argv: list[str] | None = None) -> int:
     # `kill <pid>` unwinds like Ctrl-C: clips close cleanly, Syphon servers
     # post their retire notification instead of leaving a stale entry.
@@ -636,6 +642,14 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
     _add_display_args(p_run)
 
+    p_deck = sub.add_parser("deck", help="Stream Deck control-surface daemon (docs/stream-deck.md)")
+    p_deck.add_argument(
+        "--server", default="http://127.0.0.1:8000", help="cueclock server base URL"
+    )
+    p_deck.add_argument(
+        "--brightness", type=int, default=60, help="key backlight 0-100 (default 60)"
+    )
+
     args = parser.parse_args(argv)
     if args.command == "record":
         return _cmd_record(args)
@@ -649,6 +663,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_calibrate(args)
     if args.command == "analyze":
         return _cmd_analyze(args)
+    if args.command == "deck":
+        return _cmd_deck(args)
     return _cmd_run(args)
 
 

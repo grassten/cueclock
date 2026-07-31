@@ -1,0 +1,149 @@
+"""Deck layout / faces / client / dispatch — the pure parts.
+
+Hardware (HID) paths are exercised live like the camera; nothing here needs a
+physical Stream Deck or a running server.
+"""
+
+from __future__ import annotations
+
+from cueclock.clock.rulesets import RULESETS
+from cueclock.deck import client, faces
+from cueclock.deck.daemon import _dispatch, _face_for
+from cueclock.deck.layout import (
+    COLS,
+    LAYOUT,
+    ROWS,
+    ApiPost,
+    Key,
+    RulesetCycle,
+    next_ruleset,
+    ruleset_face,
+)
+
+# --- layout ---
+
+
+def test_layout_positions_unique_and_in_bounds() -> None:
+    positions = [(k.row, k.col) for k in LAYOUT]
+    assert len(set(positions)) == len(positions)
+    for key in LAYOUT:
+        assert 1 <= key.row <= ROWS
+        assert 1 <= key.col <= COLS
+
+
+def test_key_index_is_row_major_from_top_left() -> None:
+    probe = ApiPost("/x", "", "")
+    assert Key(1, 1, "a", "", probe).index == 0
+    assert Key(1, 5, "b", "", probe).index == 4
+    assert Key(2, 1, "c", "", probe).index == 5
+    assert Key(3, 5, "d", "", probe).index == 14
+
+
+def test_every_ruleset_has_a_short_face() -> None:
+    # Guards against adding a ruleset and forgetting the deck; raw names don't fit.
+    for name in RULESETS:
+        assert ruleset_face(name) != name[:12].upper()
+
+
+def test_next_ruleset_cycles_in_server_order_and_wraps() -> None:
+    names = list(RULESETS)
+    seen = [names[0]]
+    for _ in names:
+        seen.append(next_ruleset(seen[-1], names))
+    assert seen == [*names, names[0]]
+
+
+def test_next_ruleset_unknown_active_falls_back_to_first() -> None:
+    assert next_ruleset("garbage", ["a", "b"]) == "a"
+    assert next_ruleset("anything", []) == "anything"
+
+
+# --- faces ---
+
+
+def test_render_is_key_sized_and_draws_something() -> None:
+    img = faces.render("EXT\n+15")
+    assert img.size == (faces.SIZE, faces.SIZE)
+    assert len(img.getcolors(maxcolors=4096) or []) > 1  # not a solid tile
+
+
+def test_render_empty_is_blank() -> None:
+    assert faces.render("").getcolors() == [(faces.SIZE * faces.SIZE, faces.BG)]
+
+
+def test_flash_and_dim_variants_differ() -> None:
+    assert faces.flash_ok("X").getpixel((0, 0)) == faces.BG_OK
+    assert faces.flash_err("X").getpixel((0, 0)) == faces.BG_ERR
+    assert faces.dimmed("X").tobytes() != faces.render("X").tobytes()
+
+
+# --- client (server down: refused connection, not a hang) ---
+
+
+def test_post_when_server_down() -> None:
+    result = client.post("http://127.0.0.1:1", "/api/reset", timeout=0.3)
+    assert not result.ok
+    assert result.status == 0
+
+
+def test_get_json_when_server_down() -> None:
+    assert client.get_json("http://127.0.0.1:1", "/api/state", timeout=0.3) is None
+
+
+# --- dispatch (HTTP faked at the client module boundary) ---
+
+
+FLAG = next(k for k in LAYOUT if k.name == "flag")
+RULESET_KEY = next(k for k in LAYOUT if isinstance(k.action, RulesetCycle))
+
+
+def test_dispatch_api_ok_flashes_green(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "{}"))
+    image, changed = _dispatch(FLAG, "http://x", None)
+    assert image.getpixel((0, 0)) == faces.BG_OK
+    assert changed is None
+
+
+def test_dispatch_api_error_flashes_red(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(False, 503, "no T7"))
+    image, changed = _dispatch(FLAG, "http://x", None)
+    assert image.getpixel((0, 0)) == faces.BG_ERR
+    assert changed is None
+
+
+def test_dispatch_ruleset_cycle_posts_next_and_reports_change(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    names = list(RULESETS)
+    posted: list[str] = []
+
+    def fake_post(base: str, path: str, timeout: float = 3.0) -> client.PostResult:
+        posted.append(path)
+        return client.PostResult(True, 200, "{}")
+
+    monkeypatch.setattr(client, "active_rulesets", lambda base: (names[0], names))
+    monkeypatch.setattr(client, "post", fake_post)
+    _, changed = _dispatch(RULESET_KEY, "http://x", names[0])
+    assert posted == [f"/api/ruleset/{names[1]}"]
+    assert changed == names[1]
+
+
+def test_dispatch_ruleset_cycle_server_down(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(client, "active_rulesets", lambda base: None)
+    image, changed = _dispatch(RULESET_KEY, "http://x", None)
+    assert image.getpixel((0, 0)) == faces.BG_ERR
+    assert changed is None
+
+
+# --- face selection ---
+
+
+def test_faces_dim_when_server_down() -> None:
+    assert _face_for(FLAG, False, None).tobytes() == faces.dimmed(FLAG.face).tobytes()
+    assert _face_for(FLAG, True, None).tobytes() == faces.render(FLAG.face).tobytes()
+
+
+def test_ruleset_face_tracks_active_when_up() -> None:
+    name = next(iter(RULESETS))
+    rendered = _face_for(RULESET_KEY, True, name)
+    assert rendered.tobytes() == faces.render(ruleset_face(name)).tobytes()
+    dim = _face_for(RULESET_KEY, False, None)
+    assert dim.tobytes() == faces.dimmed(RULESET_KEY.face).tobytes()

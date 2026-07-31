@@ -184,6 +184,29 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-31 (checkpoint 19 — Stream Deck phase 1: in-repo deck daemon + four live
+  keys):** Deck arrived (MK.2); approach decided with Steven: **no Elgato app, ever**
+  (it would claim exclusive HID access) — buttons are versioned code, per the new
+  living doc `docs/stream-deck.md` (replaces `stream-deck-plan.md`, which see for
+  the model-choice history).
+  - **`deck/` package**: `layout.py` (declarative key map — the doc mirrors it),
+    `faces.py` (Pillow 72×72 text tiles; color-coded outcome flashes), `client.py`
+    (stdlib HTTP, transport errors become return values), `daemon.py` (the only
+    hardware module; StreamDeck imports function-local so tests import everywhere).
+    `cueclock deck` CLI; SIGTERM unwinds via the existing `_sigterm_to_interrupt`.
+  - **Live keys**: Reset, Extension (+15 s), Ruleset cycle (face tracks the active
+    ruleset via `/api/rulesets`), Flag (`POST /api/dump?label=flagged`). Keys dim
+    when the server is down; presses no-op. Session toggle/replay/music are
+    phases 2–3.
+  - **launchd agent** `com.cueclock.deck` (`scripts/install_deck_agent.sh`,
+    KeepAlive) installed and running. Smoke-tested live: deck opens via brew
+    hidapi with **no Input Monitoring prompt** (vendor-usage HID isn't TCC-gated).
+  - Phase-1 checklist items that turned out to already exist: dump-label
+    collisions auto-suffix (`_unique_dir`), T7-unmounted surfaces as a 503 the
+    Flag key renders as a red `NO T7`.
+  - deps: streamdeck + pillow (uv), hidapi (brew). 93 unit tests green (16 new),
+    mypy --strict (StreamDeck.* override) + ruff clean. Corpus untouched.
+
 - **2026-07-30 (checkpoint 18 — the "don't discover it at the table" layer):**
   Clock confirmed working live after checkpoint 17; overnight session built the
   instrumentation that turns silent failures into loud ones and live misses into
