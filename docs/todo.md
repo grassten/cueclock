@@ -69,7 +69,10 @@ clips replay CORRECTLY offline but misbehaved live (`live_divergence_0731a`/`b`)
 — cadence (or live-state history) is now the prime suspect for live-only misses,
 with evidence in hand.
 
-**Part 1 — implement the telemetry (~15 min, camera-free):**
+**Part 1 — implement the telemetry — ✅ LANDED 2026-07-31 (checkpoint 21).**
+The verbose status line now ends with e.g. `| 156.1 grabs/s | detect 8.9ms avg
+12.1ms max`. Remaining: Part 2 (the at-table session) + Part 3 (read-out).
+Original spec kept below for reference:
 
 - File: `src/cueclock/cli.py`, function `_cmd_run`, inside the grab loop
   (find the `--verbose` status block — search `next_status`).

@@ -184,6 +184,16 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-31 (checkpoint 21 — detect-loop telemetry, todo §2 Part 1):** the
+  `run --verbose` status line now reports per-interval `grabs/s` (retrieve rate
+  == processing rate under LatestImageOnly, so a deficit vs. 156.25 is the skip
+  count — the only visible sign of falling behind) plus `vision.process` wall
+  time avg/max. Print-only change inside `_cmd_run`'s grab loop; dispatch left
+  outside the timed section. Purpose: settle whether live cadence ever sags
+  during shots — now the prime suspect for the `live_divergence_0731a/b`
+  offline-correct/live-wrong pair (checkpoint 20). Next: Steven's instrumented
+  at-table session (todo §2 Part 2), read-out per Part 3.
+
 - **2026-07-31 (checkpoint 20 — first Flag-key triage: missed-strike ROOT CAUSE +
   deck dump-timeout fix):** Steven flagged three live incidents; gate-by-gate
   EventEngine replay of the dumps (scratchpad probes over the pure pipeline):

@@ -478,6 +478,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     frame_i = 0
                     next_display = 0.0
                     next_status = 5.0
+                    # Detect-loop telemetry: with LatestImageOnly, retrieve rate
+                    # == processing rate, so grabs/s below the camera's 156.25
+                    # means frames are being skipped — the deficit is the only
+                    # visible sign of the loop falling behind (docs/todo.md §2).
+                    grabs = 0
+                    detects = 0
+                    detect_s = 0.0
+                    detect_max_s = 0.0
+                    last_status_t = 0.0
                     while True:
                         grab = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
                         try:
@@ -487,6 +496,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             if t0_ns is None:
                                 t0_ns = ts_ns
                             t = (ts_ns - t0_ns) / 1e9
+                            grabs += 1
                             frame = grab.Array
                             if frame_i == 0:
                                 _warn_if_reference_stale(ref_gray, frame, calibration)
@@ -497,7 +507,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                             ring_capacity, frame.shape[0], frame.shape[1]
                                         )
                                     ring.push(ts_ns, frame)
-                                for event in vision.process(t, frame):
+                                t_proc = time.perf_counter()
+                                events = vision.process(t, frame)
+                                dt_proc = time.perf_counter() - t_proc
+                                detects += 1
+                                detect_s += dt_proc
+                                if dt_proc > detect_max_s:
+                                    detect_max_s = dt_proc
+                                for event in events:
                                     dispatch(event, t)
                             frame_i += 1
                             if t >= next_display:
@@ -512,10 +529,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     if cue is not None
                                     else "no cue"
                                 )
+                                elapsed = t - last_status_t
+                                last_status_t = t
+                                rate = grabs / elapsed if elapsed > 0 else 0.0
+                                avg_ms = detect_s / detects * 1e3 if detects else 0.0
                                 print(
                                     f"{t:8.3f}s  [{len(vision.last_balls):2d} balls] "
-                                    f"{cue_txt} | clock {hub.clock.state.value}"
+                                    f"{cue_txt} | clock {hub.clock.state.value} | "
+                                    f"{rate:5.1f} grabs/s | detect {avg_ms:.1f}ms avg "
+                                    f"{detect_max_s * 1e3:.1f}ms max"
                                 )
+                                grabs = 0
+                                detects = 0
+                                detect_s = 0.0
+                                detect_max_s = 0.0
                         finally:
                             grab.Release()
             finally:
