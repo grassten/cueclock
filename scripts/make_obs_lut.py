@@ -4,7 +4,7 @@ Two files land in assets/obs/:
 
   cueclock-tone.cube      — hue-preserving tone map + saturation only (safe)
   cueclock-tone-ccm.cube  — the same, preceded by the color-correction matrix
-                            measured from the ball set (docs/progress.md
+                            measured from the ball set (CHANGELOG.md
                             2026-07-27). The CCM amplifies chroma noise ~3x;
                             OBS's Apply LUT "amount" slider tempers it live.
 

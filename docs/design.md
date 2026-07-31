@@ -1,6 +1,12 @@
-# CV Application — Existing App Inventory & Greenfield Rewrite Plan
+# Design — architecture, detection design, and engineering standards
 
-**Decision (2026-07-27):** the existing codebase is scrapped entirely — including the tests and the iPhone-era test videos. This document is the bridge: it records what the old app does (so the new one re-implements the right behaviors), what the old app *learned* (so the new one doesn't re-discover known failure modes), and the research-backed design + engineering standards for the rewrite. The new project will be open-sourced.
+The plan of record for cueclock's vision core, event logic, and repo standards.
+Section numbers (§2.3, §4.2, …) are cited throughout the codebase — do not
+renumber existing sections; append new ones. (This file began life as
+`cv-app-rewrite.md`, the bridge document from the archived iPhone prototype;
+older changelog entries reference it by that name.)
+
+**Origin (2026-07-27):** the prototype codebase ([grassten/pool-room](https://github.com/grassten/pool-room)) was scrapped entirely — including the tests and the iPhone-era test videos. This document records what the old app did (so the new one re-implements the right behaviors), what the old app *learned* (so the new one doesn't re-discover known failure modes), and the research-backed design + engineering standards for the rewrite.
 
 ---
 
@@ -20,7 +26,7 @@ Old architecture: one asyncio process; vision + audio worker threads feeding a `
 |---|---|
 | `state.py` `ClockState` | `IDLE → RUNNING → MOTION (shot in progress) → RUNNING (reset to full) → GRACE (2 s after 0) → EXPIRED (flash) → auto-reset for next player`. Extension allowed in RUNNING/GRACE only; adds `extension_seconds`; re-arms urgency cues; respects `extensions_per_frame`. Edge-triggered audio cues `ten`/`five`/`expired`, fired exactly once per countdown. |
 | `Ruleset` config | `ultimate_pool_8ball` (30 s base / 1×30 s extension / 2 s grace / 2 s post-expiry), `ultimate_pool_8ball_final10` (15 s variant), `ultimate_9ball`. Values carry over verbatim. |
-| HTTP API | `POST /api/{start,pause,reset,extension}`, `POST /api/ruleset/<name>`, `GET /api/{state,rulesets}` — this is the **Stream Deck contract**; keep the URLs stable so the Stream Deck buttons keep working. Added 2026-07-29: `POST /api/dump?label=<x>` saves `cueclock run`'s in-RAM ring (last ~12 s of raw frames) as a labeled corpus clip — the "that was wrong / interesting" button (accuracy-ideas §8). |
+| HTTP API | `POST /api/{start,pause,reset,extension}`, `POST /api/ruleset/<name>`, `GET /api/{state,rulesets}` — this is the **Stream Deck contract**; keep the URLs stable so the Stream Deck buttons keep working. Added 2026-07-29: `POST /api/dump?label=<x>` saves `cueclock run`'s in-RAM ring (last ~12 s of raw frames) as a labeled corpus clip — the "that was wrong / interesting" button (BACKLOG.md idea bank §8). |
 | WebSocket `/ws` | Broadcast `{state, time, display, ruleset, extensions_used, cue}` at 10 Hz + snapshot on connect and on every event. |
 | `shotclock.html` | OBS browser source, transparent 200×200; Web Audio chimes (10 s: E5 sine; 5 s: A5 triangle; expired: G4→D5 cadence); visual states: motion dims, grace red border, expired flashing. Requires "Control audio via OBS" for stream audio. |
 | `control.html` | Buttons over the same API + live state display. |
@@ -54,7 +60,7 @@ These came from weeks of iteration on real footage. The new system must not re-l
 - Voice "extension" keyword → extension (§2.1 audio row).
 - HTTP/WS surface per §2.1 (Stream Deck compatibility).
 - OBS overlay + control panel equivalents.
-- Publish the display feed to OBS (see `video-output-pipeline.md`).
+- Publish the display feed to OBS (see `hardware.md` (video output part)).
 - Later (backlog): break-speed measurement, ball-position stream, replay export from ring buffer, match stats.
 
 **Non-functional:**
@@ -158,12 +164,12 @@ cueclock/
 
 ## 7. Build order
 
-1. **Camera bring-up** (`basler-camera-setup.md`) + a `record` CLI that dumps timestamped clips — then immediately record the §2.3 test corpus.
+1. **Camera bring-up** (`hardware.md` (camera part)) + a `record` CLI that dumps timestamped clips — then immediately record the §2.3 test corpus.
 2. **Scaffold** the repo (§5): package, tooling, pre-commit, CI, ported clock state machine + server/API/overlay (pure logic, testable day 1 without the camera).
 3. **Calibration tooling**: ChArUco intrinsics (both models, pick by RMS), homography, persisted to config.
 4. **Detection core offline**: segmentation → tracker → events against the recorded corpus; accuracy scoreboard per labeled clip in pytest.
 5. **Live integration**: grab thread + events → clock; run real practice sessions; every miss becomes a labeled clip.
-6. **Display path** → OBS (`video-output-pipeline.md`).
+6. **Display path** → OBS (`hardware.md` (video output part)).
 7. Backlog by demand: replay export, break speed, acoustic click corroborator, stats, 16-ball identity.
 
 ## 8. Decisions (resolved with Steven, 2026-07-27)
@@ -172,3 +178,87 @@ cueclock/
 - **License:** MIT. Patent note: MIT (like Apache-2.0) cannot shield the project from *third-party* patents, and this space has active ones (US10226685 automated shot clock, US8992315 tip-contact detection — see §6). Practical read: enforcement against a personal, free, non-commercial project is essentially unheard of, and 20+ similar open-source billiards-vision projects sit on public GitHub untroubled. **Start the repo private** (Steven's stated comfort); flipping public later is one click, and nothing in the scaffold changes either way.
 - **Acoustic click corroborator:** backlog. Ship per-ball tracking first; build it only if the corpus shows slow nudges still leaking through.
 - **Test clips:** not published — local gitignored fixtures, tests skip when absent (§5).
+
+## 9. Test-corpus recording checklist
+
+One session at the table (~30–40 min). These clips are the ground truth every
+detection change is graded against (§2.3) — the false-strike provokers matter
+as much as the real shots. The original 17-scenario session was recorded
+2026-07-27; the corpus has since grown TV-era scenarios (`empty_table_0729`,
+`shot_debug`) and Flag-key live captures (`missed_strike_0731`,
+`live_divergence_0731a/b`) — expectations live in
+`tests/corpus/test_corpus_events.py`.
+
+### Pre-flight
+
+- [ ] Table light on (it's on/off only — on IS the canonical lighting state)
+- [ ] **Live view / `run` closed** — only one program can hold the camera
+- [ ] Full ball set, cue, chalk at the table
+- [ ] T7 mounted (`tests/clips` symlink resolves); each 8–10 s clip is ~3–3.6 GB
+      and the CLI refuses to start if space is short
+
+### Per-clip flow (same every time)
+
+1. Set the table up for the scenario.
+2. Run (swap label + seconds from the scenario list):
+
+   ```
+   uv run python -m cueclock.cli record --label soft_shot --seconds 8
+   ```
+
+3. Start the action **~2 s after hitting Enter**; let the tail of the clip
+   capture the balls settling.
+4. When it prints `done:`, check **~156 fps** and **no WARNING** on that line.
+5. Re-runs with the same label auto-suffix (`soft_shot_2`) — delete rejects
+   from `tests/clips/` whenever. Ctrl-C stops early; the clip stays valid.
+
+### Scenarios (the original session, all recorded)
+
+References first: `empty_table` · 4 s (the segmentation reference — no balls,
+nobody near) and `static_spread` · 6 s (detector noise floor).
+
+Real shots: `soft_shot` 8 s (lag speed) · `medium_shot` 8 s (ordinary pot) ·
+`power_shot` 10 s (hard, multiple cushions) · `break_shot` 12 s (full rack).
+
+False-strike provokers (the old app's failure modes — act them out honestly):
+
+- `ball_in_hand_place` · 8 s — pick the cue ball up, place it by hand, step away
+- `ball_in_hand_nudge` · 8 s — place by hand, then fine-tune a few inches
+  **with the shaft** (the legal way), cue away, step back. Dangerous because
+  placement satisfies the stationary dwell and the shaft push adds an impulse +
+  short coherent trajectory — only the impulse's low speed separates it from a shot
+- `practice_strokes` · 8 s — address the ball, several practice strokes, never touching
+- `shaft_adjust` · 8 s — accidentally graze the cue ball with the shaft while
+  settling into aim (a foul in play, but it happens by accident and must not
+  count as the shot — foul-calling stays human; v1 detects shots, not fouls)
+- `tip_bump` · 8 s — bump the cue ball with the **tip** while feathering, so it
+  rolls an inch or two. **The hardest case in the corpus**: dwell + small
+  impulse along the cue line is nearly a real soft shot's signature (§4.2 calls
+  this the one genuinely ambiguous pair; the backlog audio click corroborator
+  exists for exactly this)
+- `chalk_near` · 8 s — chalk the cue directly above the table surface
+- `rack_balls` · 12 s — gather balls from the ball return and rack them (this
+  table's stand-in for the drop-pocket "reach in and retrieve" provoker)
+
+Scratch + settle behaviors:
+
+- `scratch_replace` · 12 s — scratch, fetch the cue ball from the ball return,
+  carry it back over the table, place it ready to play
+- `walk_around_settle` · 10 s — shoot, then walk around the table leaning over
+  it while balls are still settling
+- `slow_creep` · 10 s — a shot ending with a ball barely creeping to a stop
+  (bonus: dying right at a pocket edge)
+- `spin_in_place` · 8 s — stun shot with heavy side spin so the cue ball sits
+  spinning like a top as the spin dies. Ground truth per WPA def. 8.2: the shot
+  is NOT over until the spin stops (§4.2 rules caveat)
+
+Calibration insurance (unrecorded): `charuco_sweep` · 10 s — sweep a printed
+ChArUco board through center + edges/corners at up to ~45° tilt, banking
+lens-distortion data at the current focus (§4.3).
+
+### After
+
+- Spot-check one clip plays back (`ClipReader` frame count, or replay it to OBS
+  via `uv run python -m cueclock.cli replay --clip tests/clips/<label>`).
+- New failure captures come from the Stream Deck Flag key (`POST /api/dump`) —
+  see `hardware.md` (Stream Deck part) for the triage flow.

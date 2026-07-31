@@ -1,4 +1,4 @@
-"""HTTP/WS surface — the Stream Deck contract from docs/cv-app-rewrite.md §2.1."""
+"""HTTP/WS surface — the Stream Deck contract from docs/design.md §2.1."""
 
 import asyncio
 

@@ -1,78 +1,18 @@
-# Build progress
+# Changelog
 
-Running log of what's done, in flight, and decided along the way. Updated at every
-checkpoint commit so a fresh session (human or Claude) can pick up without re-deriving
-anything. Build order lives in `cv-app-rewrite.md` §7; this file tracks execution.
+The project's append-only history: dated **checkpoint entries** (one per
+checkpoint commit — update this file in the same commit) and dated **build
+decisions**. Not semver — cueclock is a continuously-evolving personal rig;
+dates and checkpoint numbers are the versioning. A fresh session (human or
+Claude) reads the newest entries to pick up without re-deriving anything.
 
-## Status by build-order step (§7)
-
-| # | Step | Status |
-|---|---|---|
-| 1 | Camera bring-up + `record` CLI + test corpus | **DONE 2026-07-27** — bring-up, `record`, and the full §2.3 corpus (17 clips / 47 GB, integrity-verified; see checkpoint 10) |
-| 2 | Scaffold: package/tooling/CI ✅ · clock state machine · server/API/overlay | **In progress** — camera-free |
-| 3 | Calibration tooling (ChArUco + homography) | **Corpus-grade DONE 2026-07-27**: rails-fit homography (`cueclock calibrate`, 0.89 px residual). ChArUco intrinsics still pending → post-install (§4.3) |
-| 4 | Detection core offline vs. corpus | **DONE — 17/17 scenarios correct 2026-07-28** (checkpoints 10–12, 15): detect/track/events pipeline, `analyze` CLI, corpus scoreboard in `tests/corpus/`. Growth continues via accuracy-ideas §7/§8 as live edge cases appear |
-| 5 | Live integration | **DONE 2026-07-27** (checkpoint 14): `cueclock run` — camera + vision drive the clock/server/display in one process. First at-table session 2026-07-27 evening: working, Steven judges it already better than the old app. Accuracy beta ongoing (edge cases → corpus via accuracy-ideas §8) |
-| 6 | Display path → OBS | **Code DONE + verified headless 2026-07-27** (Syphon publish, rails-fit undistort, `replay` CLI, OBS LUTs); remaining: eyes-on OBS/TV setup |
-| 7 | Backlog items | Not started (by demand only) |
-
-## Camera-free work queue (this is the order)
-
-1. ✅ Fetch old `state.py` + `config.yaml` from grassten/pool-room for verbatim port
-   (copies in session scratchpad; semantics captured in the port + its tests).
-2. ✅ `clock/` — `Ruleset` + rulesets registry + pure `ShotClock` (injected monotonic
-   time, no `time.monotonic()` calls inside) + unit tests.
-3. ✅ `server/` — FastAPI app + WS hub + `shotclock.html` overlay + `control.html`,
-   Stream Deck API contract per §2.1. Run it with
-   `uv run python -m cueclock.server` (the old `PYTHONPATH=src` prefix is obsolete —
-   the .pth gotcha is root-caused and fixed, checkpoint 13); OBS browser source →
-   `http://localhost:8000/shotclock`
-   (200×200, "Control audio via OBS"), control panel → `/control`.
-4. ✅ `vision/events.py` — pure §4.2 event logic (strike conjunction, settle hysteresis,
-   scratch latch) + synthetic-track unit tests. **Thresholds are §4.2's
-   research-backed defaults, provisional until tuned on the recorded corpus**; the
-   `BallState` input contract is likewise provisional until the tracker lands.
-5. ✅ `cli.py` — every subcommand implemented; `cueclock run` wired (checkpoint 14).
-6. ⬜ `audio/` — Vosk extension listener port (needs mic + model download to verify; port
-   last). **Plan written: `docs/audio-mic-setup.md`** — covers uses, mic-agnosticism,
-   the Studio-Display-mic-now → discrete-USB-mic-later path, and the bring-up checklist.
-
-Non-code prep Steven can do without the camera: install the pylon Camera Software Suite
-system-wide (required before pypylon works — `basler-camera-setup.md` §3), mount/level
-the camera bracket, print a ChArUco board for §4.3 calibration.
-
-## Camera-day runbook (next session, in order)
-
-1. Before unboxing: install pylon Suite system-wide (`basler-camera-setup.md` §3);
-   `uv sync` already has pypylon.
-2. Mount + focus + lock lens screws **before** anything else — calibration is void
-   if refocused later (`cv-app-rewrite.md` §4.3 order-of-operations).
-3. Bring-up via the pypylon live-view script (`basler-camera-setup.md` §5 — no
-   pylon Viewer GUI on Apple Silicon). Sanity-check BayerRG8 vs. the blue cloth.
-4. Build `capture/` + a minimal `record` CLI (build order §7 step 1).
-5. Record the §2.3 test-corpus shopping list into `tests/clips/` (gitignored),
-   labeling clips by scenario name.
-6. Then (or while camera ships stay pending): calibration tooling, step 3.
-
-## Post-install recalibration (current mount is a DRY RUN)
-
-The rig will be disturbed when the proper cable track and the wall TV are installed.
-After that work, redo (fast now that the workflow exists — ~15 min):
-
-1. **Level the camera (bubble level on the body) before locking screws** — the dry-run
-   mount tilts ~1° (right/top of frame closer: +2.8% / +1.25% keystone, measured from
-   the empty_table clip 2026-07-27), plus ~0.3° roll and ~3–4 cm off-center. Only the
-   tilt is worth fixing physically; re-measure after install (ask Claude — boundary-line
-   fit on a fresh empty-table clip).
-2. Re-peak focus via the live-view SHARP metric; re-lock lens screws if anything moved.
-2. Re-verify WB against white paper (lighting unchanged ⇒ ratios should hold).
-3. Re-save UserSet1 if anything changed.
-4. Re-run `cueclock fit-undistort` on a fresh empty-table clip (rewrites the
-   gitignored `config/display_undistort.json`) and re-set the OBS crop.
-5. **Don't invest in §4.3 homography/intrinsics calibration until after final
-   install** — it's void the moment the camera moves or refocuses.
-6. Re-judge the grade (Apply LUT amount / Color Correction) on the actual TV through
-   OBS (Mac-monitor tuning is provisional).
+Entries older than 2026-07-31 reference the original doc layout
+(`cv-app-rewrite.md`, `basler-camera-setup.md`, `progress.md`, `todo.md`,
+`accuracy-ideas.md`, …). Those files were consolidated on 2026-07-31 into
+`docs/design.md`, `docs/hardware.md`, `BACKLOG.md`, and this file; the
+originals are archived in `~/Documents/cueclock-docs-archive/`. Historical
+entries keep their original wording — the § numbers of `cv-app-rewrite.md`
+survive unchanged in `design.md`.
 
 ## Decisions made during build (append-only)
 
@@ -183,6 +123,27 @@ After that work, redo (fast now that the workflow exists — ~15 min):
   (watch the drop detector) before the next real corpus recording session.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-07-31 (checkpoint 24 — full-screen clock view + docs consolidation):**
+  - **Broadcast-style full-screen shot clock** (`shotclock.html?view=full`):
+    bare viewport-sized number, no box/icon, transparent background — for a
+    dedicated OBS scene readable from anywhere in the room (Ultimate Pool TV
+    look). The number is browser-rendered text, so a 1920×1080 browser source
+    is pixel-crisp with no raster scaling. `?audio=off` mutes a duplicate
+    source's cues (OBS keeps non-visible browser sources running — two
+    sounding scenes would chime twice). OBS scene recipe: `hardware.md` §B3.
+  - **Docs consolidated to a GitHub-standard layout** (10 markdown docs +
+    2 PDFs → 5 files): root `README.md` (rewritten — rig-live status, launch
+    commands, OBS sources), `CHANGELOG.md` (this file, from `progress.md`),
+    `BACKLOG.md` (from `todo.md` + `accuracy-ideas.md` + scattered backlog
+    sections); `docs/design.md` (from `cv-app-rewrite.md`, § numbers
+    preserved verbatim because code cites them, + the corpus recording
+    checklist as new §9) and `docs/hardware.md` (camera + video path +
+    Stream Deck living doc + mic plan + TV/recalibration, merged from five
+    docs). Every code/docstring reference updated; originals archived
+    untouched in `~/Documents/cueclock-docs-archive/`; the PDFs left the
+    repo (archive only). CLAUDE.md rewritten to match (its "camera in
+    transit" status was a week stale).
 
 - **2026-07-31 (checkpoint 23 — carom guard v2 + flicker filter + axis-seed
   floor: the accuracy blocker falls):** the guard-redesign session checkpoint 22

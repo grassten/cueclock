@@ -1,6 +1,6 @@
 """Pure shot-clock state machine.
 
-Semantics are the spec recovered from the old app (``docs/cv-app-rewrite.md``
+Semantics are the spec recovered from the old app (``docs/design.md``
 §2.1)::
 
     IDLE → RUNNING → MOTION (shot in progress) → RUNNING (reset to full)
@@ -10,7 +10,7 @@ One deliberate change from the old implementation: no internal clock. Every
 time-dependent method takes ``now`` (monotonic seconds), so the machine is
 deterministic under test and replay. The vision events ``shot_taken`` /
 ``balls_settled`` replace the old ``motion_start`` / ``motion_end`` names;
-``scratch`` intentionally does not touch the clock (see ``docs/progress.md``).
+``scratch`` intentionally does not touch the clock (see ``CHANGELOG.md``).
 """
 
 import math

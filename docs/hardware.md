@@ -1,0 +1,358 @@
+# Hardware & rig reference
+
+Everything physical and everything between the sensor and the TV: camera
+bring-up and locked settings (Part A), the video path into OBS (Part B), the
+Stream Deck control surface (Part C — a living doc: keep it in sync with
+`deck/layout.py`), the microphone plan (Part D), and the TV + post-move
+recalibration recipes (Part E). References use the form
+"`hardware.md` camera §5" — part name + section number.
+
+Machine: Mac mini M2 (Mac14,3, 24 GB, macOS 26.x) — dev and production, runs
+OBS, drives the TV over HDMI directly. Full original bring-up docs (including
+superseded planning and the hardware build-sheet PDFs) are archived outside the
+repo in `~/Documents/cueclock-docs-archive/`.
+
+---
+
+## Part A — Camera (Basler ace 2 a2A1920-160ucBAS)
+
+### A1. The kit
+
+| Item | Exact P/N | Notes |
+|---|---|---|
+| Camera | **a2A1920-160ucBAS** | 1920×1200 @ 160 fps, global shutter, color, USB3 Vision |
+| Lens | **Kowa LM4NCL** (3.5 mm f/1.4, C-mount) | wide enough to cover the table from the ceiling |
+| Tripod plate | Basler 2200000314 | ¼-20 thread axis perpendicular to the lens axis |
+| USB cable | 5 m passive USB 3.0, locking Micro-B → Type-A | straight into a Mac mini USB-A port, never a hub |
+
+Bus-powered (~3.6 W). Assembly: plate on a side face; lens hand-tight into the
+C-mount; focus/iris locking screws stay loose until final mounting height.
+
+### A2. Software install
+
+- **pypylon** (26.7+) ships native macOS arm64 wheels and — verified at
+  bring-up 2026-07-27 — enumerated and streamed the camera **without** a
+  system-wide pylon Suite install (the wheel bundles enough of the runtime).
+  If a future pypylon regresses, the pylon Camera Software Suite from
+  [baslerweb.com](https://www.baslerweb.com/en/downloads/software/) is the
+  fallback (arm64-native).
+- ⚠️ **No pylon Viewer on Apple Silicon** ([Basler docs](https://docs.baslerweb.com/knowledge/running-pylon-on-apple-silicon)):
+  the GUI tools don't exist for arm64. All verification goes through
+  `scripts/live_view.py` — which also proves the exact stack production uses.
+- **No TCC camera permission needed** — a USB3 Vision camera is not an
+  AVFoundation device; if Python can enumerate USB, it can talk to the camera.
+
+### A3. Bring-up
+
+`uv run python scripts/live_view.py` opens the camera at full rate, debayers
+for display, prints the achieved grab fps, and has hotkeys for exposure and a
+SHARP focus metric. Key facts, all verified 2026-07-27:
+
+- The 8-bit Bayer format is GenICam **`BayerRG8`**; OpenCV names Bayer
+  patterns from the opposite corner, so decode with **`cv2.COLOR_BayerBG2BGR`**
+  (verified against the blue cloth — the "obvious" `COLOR_BayerRG2BGR`
+  renders white walls blue and the blue cushion yellow). Settled; use BG
+  everywhere.
+- **156.25 fps, not 160**, with zero incomplete frames: the camera's default
+  `DeviceLinkThroughputLimit` (360 MB/s) caps it, not the host controller.
+  Fine for v1.
+- Grey-ish color before white balance is set is normal (linear sensor output,
+  gains at 1.0).
+
+### A4. Locked production settings (UserSet1 = power-on default)
+
+| Setting | Value | Note |
+|---|---|---|
+| PixelFormat | BayerRG8 | decode with `cv2.COLOR_BayerBG2BGR` (§A3) |
+| ExposureTime | 6000 µs | at the ceiling for 156 fps; light budget is tight |
+| Gain | 12.0 | ⚠️ applies as ≈×2, not ×4 — firmware quirk below |
+| AcquisitionFrameRate | 160 → 156.2 actual | throughput-limit cap; fine |
+| BalanceWhiteAuto / BslLightSourcePreset | Off / Off | ⚠️ factory defaults are Continuous / Daylight6500K — both actively fight manual color; set Off before any ratio writes |
+| BalanceRatio R/G/B | 2.005 / 1.0 / 1.893 | measured against white paper laid on the cloth (never balance on the bare cloth — grey-world AWB neutralizes the blue) |
+| Iris | ~1 stop down from wide open | the perimeter LED meters ~8× below the build sheet's assumption; one stop of optics + ×2 gain instead of f/4–5.6. Table plane ⇒ DOF is a non-issue |
+
+**Firmware quirk (measured):** `Gain` and `BalanceRatio` both apply at ~half
+strength in log domain — gain "12 dB" yields ×2 signal; a balance ratio of
+2.005 applies ≈×1.42 (√). Never trust the units; set by measurement.
+
+Persist with `UserSetSelector = "UserSet1"; UserSetSave.Execute();
+UserSetDefault = "UserSet1"` so settings survive power cycles.
+
+### A5. Troubleshooting
+
+| Symptom | Likely cause / fix |
+|---|---|
+| No camera found | Cable not fully seated; try the other USB-A port; never a hub |
+| Frame rate far below 156 | Exposure > frame period; `AcquisitionFrameRateEnable` unset; USB 2.0 negotiation — check `DeviceLinkSpeed`, reseat cable |
+| Sporadic dropped frames | Raise `MaxNumBuffer`; close USB-heavy apps; keep the Mac awake |
+| Image black | Lens cap; iris closed; µs-vs-ms exposure mix-up |
+| Colors wrong | Debayer constant — §A3 |
+
+---
+
+## Part B — Video output (camera → Python → Syphon → OBS → TV)
+
+OBS cannot use the Basler directly (USB3 Vision, not UVC; and the CV app must
+own the camera exclusively), so `cueclock run` republishes processed frames
+locally via **Syphon** — a GPU texture handoff, not streaming.
+
+### B1. Pipeline
+
+```
+grab thread (BayerRG8 @ 156 fps)
+  ├─ detection path (every 2nd frame ≈ 78 Hz, distorted pixels)
+  └─ display branch @ ~30 fps:
+       debayer (COLOR_BayerBG2BGR_EA, 0.22 ms)
+       → cv2.remap undistort (rails-fit map, ~2 ms)
+       → Syphon publish (Metal texture)
+  ⇒ OBS "Syphon Client" source → scenes → Fullscreen Projector on the TV
+```
+
+- **Quality debayer belongs here, not in detection**: edge-aware (`_EA`) is
+  effectively free at display rate; VNG is slower *and* not better in OpenCV.
+- **Full-frame undistortion runs only here** — detection undistorts
+  coordinates, not pixels (`design.md` §4.1).
+- Undistort coefficients come from the table's own rails
+  (`cueclock fit-undistort`): the cloth/cushion boundary is straight in
+  reality, so fitting Brown k1/k2 needs no printed target. Display-grade only;
+  refit after every camera move (`config/display_undistort.json`, gitignored).
+- **Square pixels are forced in the remap** (`alpha=0`'s optimal matrix is
+  anisotropic — would render balls ~14% elliptical).
+- Crop to the table in OBS (source Transform → Crop), not in Python.
+
+### B2. Syphon integration facts (learned 2026-07-27, `display/syphon_out.py`)
+
+- The publisher **must pump its NSRunLoop** while publishing or the stream is
+  invisible to every client; `SyphonOutput.publish()` pumps, doubling as the
+  frame-pacing sleep.
+- Numpy frames go in **RGBA byte order** (BGRA rendered the blue cloth tan).
+  `replay --test-pattern` shows labeled RGB bars whenever this needs re-proving.
+- **Publisher restarts self-heal**: `publish()` re-broadcasts the Syphon
+  announce every 2 s, so OBS reattaches within ~2 s of a Ctrl-C + relaunch.
+  If a source stays black: check the publisher actually started (concurrent
+  `uv run` invocations can block on uv's lock — one cueclock command at a
+  time), then reopen source properties and re-pick.
+- **OBS version caveat**: Syphon Client broke in OBS 32.0.x
+  ([#12684](https://github.com/obsproject/obs-studio/issues/12684)); this Mac
+  runs 32.1.1 which includes the fix. Pin the version — it's production
+  equipment now.
+- Fallback if Syphon ever misbehaves: pyvirtualcam → OBS Virtual Camera
+  (brittle path, historically lags OBS's camera-extension changes).
+  NDI/RTSP rejected — network machinery this one-machine setup doesn't need.
+
+### B3. OBS setup
+
+**Sources:**
+- Syphon Client — the overhead table feed.
+- iPhone Continuity Camera — wireless side angle, owned by OBS directly.
+- Browser source `http://localhost:8000/shotclock` — the corner clock overlay
+  (transparent 220×220; enable **"Control audio via OBS"** so the chimes reach
+  the TV speakers).
+
+**Scenes:**
+- *Table* (default): Syphon feed cropped to the table + corner clock overlay.
+- *Clock* (full-screen shot clock, readable from anywhere): a browser source
+  `http://localhost:8000/shotclock?view=full&audio=off` sized to the full
+  canvas (1920×1080). It renders just a huge bare number — broadcast style —
+  transparent background over the scene's black; add a color/shape source
+  behind it only if a panel color is ever wanted. `audio=off` because the
+  corner overlay already sounds the cues (OBS keeps non-visible browser
+  sources running, so two sounding sources would chime twice). The number is
+  browser-rendered text: sharpness comes free at any source size.
+- *Replay*: replay-buffer playback (Stream Deck phase 3).
+
+**Settings:**
+- Canvas 1920×1080; keep color range consistent end-to-end (Full/Full or
+  Limited/Limited — a mismatch shows as crushed blacks on the blue cloth).
+- Grade on the Syphon source with Color Correction or Apply LUT;
+  starter LUTs in `assets/obs/` (`cueclock-tone.cube` is the dialed-in table
+  grade; the `-ccm` variant is richer but amplifies chroma noise ~3×).
+  Judge the grade on the actual TV, not the Mac monitor.
+- Output: right-click program → Fullscreen Projector on the TV display;
+  General → "Save projectors on exit".
+- Replay Buffer enabled (Settings → Output, ~30 s) — Stream Deck phase 2/3
+  owns the lifecycle.
+
+Latency budget end-to-end (camera → TV in Game Mode): on the order of 100 ms —
+well under the "few hundred ms is fine" bar; the detection path never leaves
+the Python process and is unaffected.
+
+---
+
+## Part C — Stream Deck MK.2 (living doc: must match `deck/layout.py`)
+
+The physical control surface for a deliberately headless system — the Mac mini
+lives behind the TV with no keyboard in reach. **This part is the source of
+truth for the deck's current state**: update the button map here in the same
+commit as any `src/cueclock/deck/layout.py` change; the two must never
+disagree.
+
+**Status: phase 1 live (2026-07-31).** `cueclock deck` daemon runs under
+launchd (`com.cueclock.deck`) with the four API keys working; session toggle,
+replay, and music keys are phases 2–3 (see `BACKLOG.md`).
+
+### C1. Decision record
+
+- **MK.2** (15 keys) chosen 2026-07-28 over Mini/+/XL: enough keys, detachable
+  stand leaves a flat wall-mountable slab, no wasted dials.
+- **No Elgato app — in-repo controller daemon** (2026-07-31). Requirements:
+  fully headless, no manual GUI setup, Claude maintains the buttons, layout
+  versioned in the repo. The official app fails all four. The daemon drives
+  the hardware over USB HID via
+  [python-elgato-streamdeck](https://github.com/abcminiuser/python-elgato-streamdeck);
+  buttons are data in a Python module. **Never install the Elgato Stream Deck
+  app on this Mac** — it would claim exclusive HID access and starve the daemon.
+- **OBS control via obs-websocket** (built into OBS 28+); music via
+  `osascript`. TV power stays on its own remote (the CanvasTV VIDAA network
+  API is pairing-fussy).
+- **Session toggle owns `run` AND OBS** (2026-07-31): the replay buffer keeps
+  OBS continuously encoding, and active outputs hold macOS power assertions
+  that block sleep — so OBS dies with the session and relaunches into
+  presentation on start.
+
+### C2. Button map — current state
+
+Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
+
+| Pos (row,col) | Key | Action | Face | Status |
+|---|---|---|---|---|
+| 1,1 | **Session** | Toggle: start/stop `run` + OBS (hold 1 s to stop) | `OFF` / `STARTING…` / `ON` / `DEV` | planned (phase 2) |
+| 1,3 | **Ruleset** | Cycle rulesets via `POST /api/ruleset/{next}` | `8-BALL` / `FINAL 10` / `9-BALL` | **live** |
+| 1,5 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3) |
+| 2,1 | **Reset** | `POST /api/reset` (fouls, rack end, bug situations) | `RESET` | **live** |
+| 2,2 | **Extension** | `POST /api/extension` (+15 s) | `EXT +15`, flashes `+15 s` / `NO EXT` | **live** |
+| 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~12 s of frames → corpus clip on T7 (60 s timeout: the reply comes after the ~2.2 GB write) | `FLAG` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
+| 3,1 | **Play/Pause** | `osascript`: Music.app playpause | `♪` | planned (phase 3) |
+| 3,2 | **Vol −** | `osascript`: output volume −10 | `VOL −` | planned (phase 3) |
+| 3,3 | **Vol +** | `osascript`: output volume +10 | `VOL +` | planned (phase 3) |
+
+Press outcomes flash as background color (green ok / red error) for 1.2 s —
+words only, no glyphs. Keys dim while the server is down; presses no-op.
+Deliberately absent (Steven, 2026-07-31): clock start/pause — Reset covers the
+bug cases.
+
+### C3. Architecture
+
+```
+Stream Deck MK.2 ── USB HID ── cueclock deck (launchd agent, always on)
+                                   ├─ HTTP → localhost:8000/api/*   (clock, dump, ruleset)
+                                   ├─ obs-websocket → OBS           (projector, replay, quit — phase 2+)
+                                   ├─ osascript                     (Music.app, volume — phase 3)
+                                   └─ subprocess                    (owns `cueclock run` — phase 2)
+```
+
+- `src/cueclock/deck/`: `layout.py` (declarative keys), `faces.py` (Pillow
+  72×72 tiles), `client.py` (stdlib HTTP), `daemon.py` (the only hardware
+  module — StreamDeck imports are function-local so tests import everywhere).
+- Deps: `brew install hidapi`, then the `streamdeck` + `pillow` packages.
+- Always-on: launchd LaunchAgent (`com.cueclock.deck`, KeepAlive), installer
+  `scripts/install_deck_agent.sh` (idempotent — re-run after moving the repo).
+  **No TCC grant needed** (verified 2026-07-31): vendor-usage HID isn't gated
+  behind Input Monitoring.
+- Resilience: USB unplug → reconnect loop; daemon crash → launchd restarts;
+  server restart → faces recover on the next poll (2 s).
+
+### C4. The session toggle (phase 2 spec)
+
+**Start** (press while `OFF`): spawn the canonical `run` command (README) →
+poll `GET /api/state` until it answers (`STARTING…`) → launch OBS
+(`open -a OBS --args --startreplaybuffer --disable-shutdown-check`; server
+first or the overlay browser source loads blank) → verify projector +
+replay buffer via obs-websocket → hold `caffeinate -d` for the session.
+
+**Stop** (hold 1 s while `ON`): quit OBS gracefully (never `kill -9` — that
+triggers the safe-mode nag), SIGINT `run` (closes the pylon device — the
+camera stops streaming and cools), release the assertion.
+
+**`DEV`**: the API answers but the daemon didn't spawn it (a terminal
+session) — the toggle refuses to touch it.
+
+One-time OBS settings for phase 2: enable the WebSocket server (password →
+gitignored `config/obs_websocket.json`), enable the replay buffer, "Save
+projectors on exit", and remove OBS from Login Items (the toggle owns its
+lifecycle).
+
+### C5. Corpus-clip flow (Flag → triage)
+
+1. **At the table:** anything wrong or interesting → press **Flag** within
+   ~12 s. The ring buffer lands as a labeled clip on the T7.
+2. **Off the table:** Screen Sharing/SSH into the mini, open Claude Code, run
+   the triage workflow (a `/triage-clips` skill is phase 4): replay each new
+   clip through the vision core, diagnose → fix → re-grade. Each clip ends as
+   a graded corpus scenario, kept evidence, or deleted.
+
+### C6. Bring-up checks (at the table, still open)
+
+- [ ] Does a deck keypress wake the sleeping mini? If not: `pmset` never-sleep
+      (an M2 mini idles ~5 W); display sleep stays enabled regardless.
+- [ ] `pmset -g assertions` clean after session stop.
+- [ ] OBS relaunch restores projector + replay buffer, twice in a row.
+
+---
+
+## Part D — Audio / microphone (planned, not built)
+
+1. **v1 — voice "extension"** (the only planned shipped use): Vosk small-EN
+   model, grammar `["extension", "[unk]"]`, 16 kHz mono, min confidence 0.9,
+   2 s cooldown — the old app's proven listener re-implemented as-is
+   (`design.md` §2.1 audio row).
+2. **Backlog — acoustic strike-click corroborator** (`design.md` §4.2): a
+   broadband transient detector coincident within ~100 ms of the cue-ball
+   velocity impulse; resolves slow tip-nudge vs. soft shot. Build **only if**
+   live play shows nudges leaking through.
+3. Nothing else. Overlay chimes come from the browser page via OBS; OBS owns
+   the iPhone Continuity Camera and its mic — cueclock must never grab it.
+
+Design facts: keyword spotting is mic-agnostic (no calibration in the camera
+sense); pin the input device by CoreAudio *name* in config, never "system
+default". Any cheap wired USB mic works; avoid Bluetooth (latency +
+input flakiness). The `audio/` port: `sounddevice` stream → Vosk
+`KaldiRecognizer` → confidence + cooldown gate → Hub bridge; model
+`vosk-model-small-en-us-0.15` (~40 MB) into gitignored `models/`; recognizer
+logic accepts raw PCM chunks so it unit-tests from a WAV fixture.
+
+Bring-up when built: device list via `sounddevice`; 10× "extension" at playing
+distance (head down over a shot); then a full false-positive soak session
+(balls clacking, music playing, zero accepted hits) before wiring it to the
+clock.
+
+---
+
+## Part E — TV & recalibration
+
+### E1. The TV
+
+**Hisense 55S7SG CanvasTV** (2026, 55"), chosen 2026-07-28 for the one
+property that solves the room's stated #1 problem: a **true matte panel**
+(Hi-Matte) that diffuses the perimeter-LED light frame's reflection instead of
+mirroring it. An art TV is engineered to display a static image for hours
+under ambient light — exactly the scoreboard workload. OLED was ruled out on
+burn-in (hours-static scoreboard is the textbook workload); glossy
+high-brightness panels (U8QG-class) were ruled out because tilting them
+away from the LED frame points their reflection field at the lit table.
+
+Install: ECHOGEAR tilting mount (VESA 400×200), screen center ~62–66" from
+the floor, Mac mini + T7 + power strip behind the panel, cable raceway down to
+the outlet. **TV settings: Game Mode ON for the Mac's HDMI input, motion
+smoothing OFF.** TV power stays on the TV remote.
+
+### E2. After any camera bump/move (~15 min)
+
+The standing recipe — the camera moved when the TV and cable track went in,
+and it will move again someday:
+
+1. Level the camera (bubble level on the body) before locking screws;
+   re-measure tilt from a fresh empty-table clip (boundary-line fit).
+2. Re-peak focus via the live-view SHARP metric; re-lock the lens screws.
+3. Re-verify WB against white paper (lighting unchanged ⇒ ratios hold);
+   re-save UserSet1 if anything changed.
+4. Record a fresh reference + refit, all through the symlinked clips dir:
+   `uv run python -m cueclock.cli record --label empty_table_MMDD --seconds 3`
+   → `fit-undistort tests/clips/empty_table_MMDD`
+   → `calibrate tests/clips/empty_table_MMDD`.
+5. Relaunch `run` with `--reference tests/clips/empty_table_MMDD` (and update
+   the launch command in README). The startup drift check warns loudly if the
+   reference has gone stale (warn > 8 vs. same-mount noise ~2).
+6. Re-set the OBS crop; re-judge the LUT/grade on the actual TV.
+7. ChArUco intrinsics (`design.md` §4.3) only after a *final* install — void
+   the moment the camera moves or refocuses.

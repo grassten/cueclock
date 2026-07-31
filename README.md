@@ -1,32 +1,97 @@
 # cueclock
 
-Automated shot clock for Ultimate Pool (USA 8-ball) solo practice, driven by an overhead
-machine-vision camera. A Basler ace 2 (1920×1200 @ 160 fps, global shutter) watches the table;
-per-ball tracking in real table coordinates detects shots, settles, and scratches; a voice
-keyword ("extension") adds time; the clock renders as an OBS overlay on a wall TV.
+Automated shot clock for Ultimate Pool (USA 8-ball) solo practice, driven by an
+overhead machine-vision camera. A Basler ace 2 (1920×1200, global shutter,
+~156 fps) watches the table from the ceiling; classical segmentation + per-ball
+tracking in true table millimeters detects shots, settles, and scratches; the
+events drive a shot-clock state machine rendered as an OBS overlay on a wall
+TV, controlled from a Stream Deck. Everything runs on one Mac mini.
 
-**Status: pre-hardware scaffold.** The camera is in transit; no application code yet. The
-research and design docs in [`docs/`](docs/) are the plan of record — start with
-[`cv-app-rewrite.md`](docs/cv-app-rewrite.md) (architecture + build order) and
-[`basler-camera-setup.md`](docs/basler-camera-setup.md) (camera bring-up).
+## Status (July 2026): the rig is live
 
-This project supersedes an iPhone-based prototype
-([grassten/pool-room](https://github.com/grassten/pool-room), archived) that plateaued at
-~90–95% shot-detection accuracy.
+Hardware installed and calibrated; the clock runs real practice sessions.
+Detection accuracy work is ongoing — every live miss gets captured by a
+Stream Deck "Flag" key (last ~12 s of raw frames → a labeled clip) and turned
+into a graded regression scenario. Current corpus: 22 scenarios, all green.
+
+| Piece | State |
+|---|---|
+| Basler a2A1920-160ucBAS + Kowa 3.5 mm, ceiling mount | live, settings locked in UserSet1 |
+| Vision pipeline (`cueclock run`): detect → track → events → clock | live |
+| OBS: Syphon table feed + clock overlay → wall TV (Hisense 55" CanvasTV) | live |
+| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Reset / Extension / Ruleset / Flag |
+| Session toggle, instant replay, music keys | planned — `BACKLOG.md` |
+| Voice "extension" (mic) | planned — `BACKLOG.md` |
+
+## How it works
+
+```
+grab thread (BayerRG8 @ 156 fps)
+ ├─► ring buffer (last ~12 s, POST /api/dump saves it as a corpus clip)
+ ├─► detection @ 78 Hz: |frame − empty-table reference| → blobs → tracker
+ │      → undistortPoints + homography → table mm → event engine
+ │      → ShotTaken / BallsSettled / Scratch → clock state machine
+ │      → FastAPI + WebSocket → OBS browser-source overlay + Stream Deck
+ └─► display @ 30 fps: edge-aware debayer → undistort → Syphon → OBS → TV
+```
+
+Design commitments (rationale in `docs/design.md` — don't relitigate casually):
+classical segmentation against an empty-table reference, **no neural detector**;
+all thresholds in physical units; detection runs on distorted pixels (only
+coordinates get undistorted); the vision core is **pure** —
+`(frame, timestamp) in → events out`, no I/O, no clocks, no threads — so
+recorded-clip replay tests are deterministic.
+
+## Running it
+
+```bash
+# the session (camera + vision + clock + server + Syphon display):
+uv run python -m cueclock.cli run --rectify \
+    --reference tests/clips/empty_table_0729 --host 0.0.0.0
+
+# the Stream Deck daemon (normally installed as a launchd agent):
+uv run python -m cueclock.cli deck
+```
+
+- After any camera bump: record a fresh empty-table reference and point
+  `--reference` at it — recipe in `docs/hardware.md` §E2. The startup drift
+  check warns loudly if the reference has gone stale.
+- OBS browser sources: `http://localhost:8000/shotclock` (corner overlay,
+  220×220, "Control audio via OBS") and
+  `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
+  broadcast-style clock scene). Phone control page: `/control`.
+- Other subcommands: `record`, `replay`, `analyze`, `calibrate`,
+  `fit-undistort`, `live` — see `--help`.
 
 ## Development
 
 ```bash
-uv sync                      # create venv + install deps (incl. dev group)
-uv run pre-commit install    # one-time: install git hooks
-uv run pytest                # run tests
-uv run ruff check .          # lint
-uv run mypy                  # type-check
+uv sync                      # venv + deps (incl. dev group)
+uv run pre-commit install    # one-time: git hooks
+uv run pytest                # unit tests everywhere; corpus tests need the T7
+uv run ruff check . && uv run mypy
 ```
 
-- Dependencies are managed with [uv](https://docs.astral.sh/uv/) — `uv add <pkg>`, never bare pip.
-- Test clips (real table footage) are local-only and gitignored — see
-  [`tests/clips/README.md`](tests/clips/README.md). Clip-based tests skip when fixtures are absent.
+- **uv only** — `uv add <pkg>`, never bare pip.
+- Test clips are real table footage: local-only, gitignored, on an external
+  SSD behind the `tests/clips` symlink (see `tests/README.md`). Clip-based
+  tests skip cleanly when the drive is absent; unit tests always run.
+- The corpus scoreboard (`tests/corpus/`) is the accuracy ground truth —
+  every detection change is graded against all recorded scenarios.
+
+## Documentation
+
+| File | What it holds |
+|---|---|
+| `docs/design.md` | Architecture, detection design, event logic, engineering standards, corpus checklist — the plan of record (§ numbers are cited from code) |
+| `docs/hardware.md` | Camera settings & bring-up · video path to OBS/TV · Stream Deck (living button map) · mic plan · TV & recalibration recipes |
+| `BACKLOG.md` | Punch list, queued features, accuracy idea bank |
+| `CHANGELOG.md` | Dated checkpoint log + build decisions (append-only) |
+
+This project supersedes an iPhone-based prototype
+([grassten/pool-room](https://github.com/grassten/pool-room), archived) that
+plateaued at ~90–95% shot-detection accuracy; its distilled lessons are
+`docs/design.md` §2.3.
 
 ## License
 

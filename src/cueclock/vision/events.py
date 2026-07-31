@@ -1,6 +1,6 @@
 """Event logic: per-ball track states in → shot/settle/scratch events out.
 
-Implements docs/cv-app-rewrite.md §4.2. All thresholds are physical units
+Implements docs/design.md §4.2. All thresholds are physical units
 (table millimeters), sized against the measured noise floor (§4.3: velocity
 noise ~ 7-22 mm/s raw, so the 40 mm/s settle floor is >= 3 sigma clean).
 

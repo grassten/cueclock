@@ -1,6 +1,6 @@
 """Basler a2A1920-160ucBAS live view + frame-rate + focus assist.
 
-Day-1 bring-up tool (docs/basler-camera-setup.md §5): opens the camera with
+Day-1 bring-up tool (docs/hardware.md §A3): opens the camera with
 production settings, streams at max rate, debayers for display, and overlays
 grab fps, image mean brightness, and a center-ROI sharpness score with peak
 hold — turn the focus ring to maximize SHARP toward its PEAK.
@@ -23,7 +23,7 @@ from pypylon import pylon
 # LUMINANCE with all channels scaled by one factor (per-channel curves bend
 # hue), then a saturation blend. Detection and recording consume the linear
 # data untouched. Accurate color rendering (CCM etc.) belongs to the OBS/GPU
-# path — the measured matrix is banked in docs/progress.md (2026-07-27).
+# path — the measured matrix is banked in CHANGELOG.md (2026-07-27).
 BLACK, WHITE, GAMMA = 0.04, 0.94, 2.2
 DISPLAY_SIZE = (
     960,
@@ -70,7 +70,7 @@ while cam.IsGrabbing():
         bayer = grab.Array  # 1200x1920 uint8
         # GenICam "BayerRG8" (RGGB) needs OpenCV's *BG* constant — the two
         # conventions name the pattern from opposite corners. Verified against
-        # the blue cloth 2026-07-27 (docs/basler-camera-setup.md §5).
+        # the blue cloth 2026-07-27 (docs/hardware.md §A3).
         bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR)
         bgr = cv2.resize(bgr, DISPLAY_SIZE, interpolation=cv2.INTER_AREA)
         y = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)

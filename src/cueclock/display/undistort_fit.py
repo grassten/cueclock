@@ -5,7 +5,7 @@ blue-vs-black edge in the image, so it doubles as a calibration target: fit
 Brown radial coefficients (k1, k2) that make the four undistorted boundaries
 straight. On the 2026-07-27 mount this lands ~0.9 px mean residual — plenty
 for the TV picture. It is NOT detection-grade: ChArUco calibration
-(cv-app-rewrite.md §4.3) replaces it after the final camera install.
+(design.md §4.3) replaces it after the final camera install.
 
 Focal-length note: fx is fixed at the lens's nominal value (3.5 mm / 3.45 µm
 pixels ≈ 1014 px) and only k1/k2 are fitted — for pure radial undistortion a

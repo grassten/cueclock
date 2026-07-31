@@ -1,7 +1,7 @@
 """Thin pypylon wrapper: production settings + timestamped Bayer frame stream.
 
-The camera powers on with UserSet1 (saved 2026-07-27, docs/basler-camera-setup.md
-§6). apply_production_settings() re-asserts the same values defensively so a
+The camera powers on with UserSet1 (saved 2026-07-27, docs/hardware.md
+§A4). apply_production_settings() re-asserts the same values defensively so a
 recording is correct even if the camera was left in another state. White-balance
 ratios are deliberately NOT touched here — they were measured against a neutral
 target and live in the camera (UserSet1).

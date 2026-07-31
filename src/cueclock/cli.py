@@ -454,7 +454,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             coro = hub.shot_taken()
         elif isinstance(event, BallsSettled):
             coro = hub.balls_settled()
-        # Scratch: logged only — no clock action in v1 (docs/progress.md decision)
+        # Scratch: logged only — no clock action in v1 (CHANGELOG.md decision)
         if coro is not None:
             asyncio.run_coroutine_threadsafe(coro, loop).add_done_callback(_surface)
 
@@ -481,7 +481,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     # Detect-loop telemetry: with LatestImageOnly, retrieve rate
                     # == processing rate, so grabs/s below the camera's 156.25
                     # means frames are being skipped — the deficit is the only
-                    # visible sign of the loop falling behind (docs/todo.md §2).
+                    # visible sign of the loop falling behind (checkpoint 21).
                     grabs = 0
                     detects = 0
                     detect_s = 0.0
@@ -669,7 +669,9 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
     _add_display_args(p_run)
 
-    p_deck = sub.add_parser("deck", help="Stream Deck control-surface daemon (docs/stream-deck.md)")
+    p_deck = sub.add_parser(
+        "deck", help="Stream Deck control-surface daemon (docs/hardware.md Part C)"
+    )
     p_deck.add_argument(
         "--server", default="http://127.0.0.1:8000", help="cueclock server base URL"
     )

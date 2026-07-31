@@ -1,6 +1,6 @@
 """Declarative key layout — the single source of truth for what is on the deck.
 
-The button map in docs/stream-deck.md mirrors this table; change both in the
+The button map in docs/hardware.md Part C mirrors this table; change both in the
 same commit.
 """
 

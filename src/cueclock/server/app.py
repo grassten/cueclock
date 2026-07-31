@@ -1,7 +1,7 @@
 """FastAPI app: the HTTP API (Stream Deck contract), WS broadcast, HTML pages.
 
 The `/api/*` URLs are load-bearing — existing Stream Deck buttons point at
-them (docs/cv-app-rewrite.md §2.1). Keep them stable.
+them (docs/design.md §2.1). Keep them stable.
 """
 
 import asyncio
@@ -101,7 +101,7 @@ def create_app() -> FastAPI:
         Only live under `cueclock run` (which wires `app.state.dump` to its
         ring buffer). This is the "that was wrong / that was interesting"
         button: every disagreement becomes replayable corpus evidence
-        (accuracy-ideas §8).
+        (BACKLOG.md idea bank §8).
         """
         dump: Callable[[str], str] | None = getattr(app.state, "dump", None)
         if dump is None:

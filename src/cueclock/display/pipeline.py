@@ -2,7 +2,7 @@
 
 Deliberately mechanical: color grading lives in OBS (Color Correction /
 Apply LUT filters) where it is adjustable on sliders at the actual TV —
-see docs/video-output-pipeline.md §4.
+see docs/hardware.md §B3.
 """
 
 import json
@@ -153,7 +153,7 @@ class DisplayPipeline:
 
     def to_rgba(self, bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         # GenICam "BayerRG8" needs OpenCV's *BG* constant (opposite-corner
-        # naming conventions — docs/basler-camera-setup.md §5). _EA = edge-aware:
+        # naming conventions — docs/hardware.md §A3). _EA = edge-aware:
         # visibly cleaner color edges than bilinear, ~0.22 ms, fine at display rate.
         bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR_EA)
         if self._maps is not None:

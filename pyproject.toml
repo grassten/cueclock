@@ -65,7 +65,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 # Import from src/ directly: this Mac's pyenv-based venvs don't process .pth
 # files, so uv's editable install of the package is never importable. See
-# docs/progress.md (2026-07-27).
+# CHANGELOG.md (2026-07-27).
 pythonpath = ["src"]
 
 [tool.bandit]

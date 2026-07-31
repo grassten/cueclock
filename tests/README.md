@@ -20,4 +20,4 @@ design. `cueclock record` writes through the same symlink, so mount the drive
 before recording.
 
 The recording discipline and scenario shopping list live in
-`docs/corpus-recording-checklist.md` (background: `docs/cv-app-rewrite.md` §2.3).
+`docs/design.md` §9 (background: the §2.3 lessons).

@@ -1,11 +1,11 @@
 """Shot-clock rulesets.
 
-Validated against published rules on 2026-07-27 (sources in ``docs/progress.md``):
+Validated against published rules on 2026-07-27 (sources in ``CHANGELOG.md``):
 
 - **Ultimate Pool** (singles): 30 s shot clock with one 15 s extension per
   player per frame; the clock drops to 15 s late in the timed match. The
   ``final10`` variant is that late-match clock — switching to it is manual
-  for now (auto-switch is backlog, ``cv-app-rewrite.md`` §2.2).
+  for now (auto-switch is backlog, ``design.md`` §2.2).
 - **WNT** (Matchroom World Nineball Tour): 30 s shot clock with one 30 s
   extension per player per rack.
 

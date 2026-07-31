@@ -12,7 +12,7 @@ from fastapi import WebSocket
 
 from cueclock.clock import DEFAULT_RULESET, ShotClock, Snapshot, get_ruleset
 
-BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/cv-app-rewrite.md §2.1
+BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
 
 
 class Hub:

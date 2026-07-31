@@ -9,35 +9,40 @@ Runs on the Mac mini M2 that also runs OBS (HDMI straight to the TV).
 This is a **from-scratch rewrite** of an archived iPhone prototype
 ([grassten/pool-room](https://github.com/grassten/pool-room)) that plateaued at ~90–95%
 accuracy. Read the prototype's distilled lessons before touching detection logic —
-they're in `docs/cv-app-rewrite.md` §2.3 and must not be re-learned the hard way.
+they're in `docs/design.md` §2.3 and must not be re-learned the hard way.
 
 ## Current status
 
-**Pre-hardware build (July 2026).** Camera is in transit. Repo structure, tooling, and
-design docs exist; camera-free modules are landing now. Build order: `docs/cv-app-rewrite.md`
-§7; live execution status: **`docs/progress.md`** (check it first, update it at every
-checkpoint commit).
+**Rig live (July 2026).** Camera mounted + calibrated, wall TV + OBS installed, Stream
+Deck phase 1 running. Accuracy hardening is the ongoing work: live failures get Flagged
+(ring-buffer dump → labeled clip), triaged offline, and promoted to graded corpus
+scenarios. Live execution status: **`CHANGELOG.md`** (check the newest checkpoint first;
+append a checkpoint entry there in every checkpoint commit). Open work: **`BACKLOG.md`**.
 
-## Plan of record — docs/
+## Plan of record — the docs
 
-| Doc | What it settles |
+| File | What it settles |
 |---|---|
-| `docs/cv-app-rewrite.md` | Architecture, detection design, event logic, engineering standards, build order, resolved decisions |
-| `docs/basler-camera-setup.md` | Camera assembly, pylon/pypylon install, bring-up, production settings |
-| `docs/video-output-pipeline.md` | Display path: debayer → undistort → Syphon → OBS → TV |
-| `docs/audio-mic-setup.md` | Mic plan: voice "extension" (v1), click corroborator (backlog), device swap path |
-| `docs/stream-deck.md` | Stream Deck control surface: no-Elgato-app decision, daemon architecture, live button map — keep in sync with layout changes |
-| `docs/*.pdf` | Hardware build sheet + original project spec (background) |
+| `docs/design.md` | Architecture, detection design, event logic, engineering standards, build order, resolved decisions, corpus checklist. **§ numbers are cited from code — never renumber; append.** |
+| `docs/hardware.md` | Camera assembly/bring-up/locked settings (Part A) · display path debayer → undistort → Syphon → OBS → TV (Part B) · Stream Deck (Part C — **living button map: must match `deck/layout.py` in the same commit**) · mic plan (Part D) · TV + post-bump recalibration recipes (Part E) |
+| `BACKLOG.md` | Punch list, queued features, accuracy idea bank |
+| `CHANGELOG.md` | Append-only dated checkpoints + build decisions (pre-2026-07-31 entries cite the old doc layout; originals archived in `~/Documents/cueclock-docs-archive/`) |
+| `README.md` | Public-facing overview, launch commands, OBS sources — keep the launch command here current |
 
-Key design commitments (rationale + sources in the docs — don't relitigate casually):
+Key design commitments (rationale + sources in `docs/design.md` — don't relitigate casually):
 - Classical segmentation against an empty-table reference; **no neural detector** in v1.
 - Track all balls; events from **per-ball velocities in table millimeters** (homography).
 - Detection runs on **distorted** pixels; only coordinates get undistorted. Full-frame
   remap exists only on the display path.
-- Strike = conjunction (stationary dwell + velocity impulse + coherent trajectory).
-  Settle = per-ball speed floor with hysteresis. Scratch = track lost near a pocket zone.
+- Strike = conjunction (stationary dwell + velocity impulse + coherent trajectory),
+  guarded by other-ball motion within kiss range (carom guard v2, checkpoint 23).
+  Settle = per-ball displacement windows with hysteresis; junk tracks under 70%
+  observed don't judge table state. Scratch = track lost near a pocket zone, keyed
+  on last *observed* position.
 - The vision core is **pure** — `(frame, timestamp) in → events out`, no I/O, no clocks,
   no threads — so recorded-clip replay tests stay deterministic.
+- **No blind threshold tuning** — every constant is anchored to a measurement from the
+  corpus; that discipline is how the old app's plateau gets avoided.
 
 ## Dev workflow
 
@@ -45,7 +50,7 @@ Key design commitments (rationale + sources in the docs — don't relitigate cas
   Never bare `pip install`. (The old project's pipenv rule is dead.) The venv really
   lives at `.venv.nosync/` with `.venv` as a local symlink — iCloud syncs Desktop and
   stamps `UF_HIDDEN` on files, which makes CPython ≥3.11 silently skip `.pth` files
-  and break the editable install (progress.md checkpoint 13). If the venv is ever
+  and break the editable install (CHANGELOG checkpoint 13). If the venv is ever
   rebuilt, recreate the symlink, not a real `.venv/` directory.
 - **ruff** lints and formats; **mypy --strict** on `src/`; **pytest** for tests.
   All three run in CI and (except mypy) in pre-commit — `uv run pre-commit install` once.
@@ -62,11 +67,13 @@ Key design commitments (rationale + sources in the docs — don't relitigate cas
 
 - Mac mini M2 (Mac14,3, 24 GB), macOS 26.x, is both dev and production. OBS 32.1.1
   installed (includes the Syphon Client fix — the 32.0.x regression is past).
-- pylon Camera Software Suite must be installed system-wide for pypylon to work
-  (arm64-native, but **pylon Viewer GUI doesn't exist on Apple Silicon** — verification
-  goes through the pypylon live-view script in `docs/basler-camera-setup.md` §5).
+- pylon Viewer GUI doesn't exist on Apple Silicon; camera verification goes through
+  `scripts/live_view.py` (`docs/hardware.md` §A3). The pypylon wheel streams the camera
+  without a system pylon install.
 - Camera's 8-bit Bayer format is **BayerRG8**; the OpenCV↔GenICam naming mismatch is
   **resolved**: decode with `cv2.COLOR_BayerBG2BGR` (verified against the blue cloth
-  2026-07-27 — see `docs/basler-camera-setup.md` §5).
+  2026-07-27 — see `docs/hardware.md` §A3).
 - iPhone Continuity Camera remains a wireless side-angle source, owned by OBS directly.
-- Stream Deck hits the HTTP API; keep the `/api/*` contract from `docs/cv-app-rewrite.md` §2.1.
+- Stream Deck hits the HTTP API; keep the `/api/*` contract from `docs/design.md` §2.1.
+  **Never install the Elgato Stream Deck app** — it would claim exclusive HID access
+  and starve the `cueclock deck` daemon.

@@ -1,4 +1,4 @@
-"""Shot-clock state machine — behavior locked to docs/cv-app-rewrite.md §2.1."""
+"""Shot-clock state machine — behavior locked to docs/design.md §2.1."""
 
 from cueclock.clock import RULESETS, Ruleset, ShotClock, State, get_ruleset
 
