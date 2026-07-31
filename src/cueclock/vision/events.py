@@ -119,17 +119,52 @@ class EventConfig:
     # tolerates that handoff:
     strike_handoff_gap_s: float = 0.35  # max unstill gap between rest and impulse
     strike_handoff_radius_mm: float = 250.0  # max impulse distance from the rest spot
+    # The candidate's trajectory axis is seeded from the cue's displacement
+    # off its rest spot at open time. On the impulse's first frame that vector
+    # is not motion evidence: filter lag and the stick merging into the blob
+    # leave it at noise scale, pointing anywhere (missed_strike_0731: 2 mm,
+    # backwards — the axis check then killed the true strike as incoherent,
+    # and the step gate expired 8 ms before a re-open). Wait until the
+    # displacement is an honest motion vector: above the 8.5 mm largest
+    # single-window yank excursion measured on the live captures, about two
+    # impulse-floor steps at the 78 Hz detect cadence.
+    strike_dir_seed_min_mm: float = 12.0
     cue_id_debounce_frames: int = 2  # ignore 1-frame cue-flag excursions in strike logic
-    # Carom guard: an impulse into a dwelled cue only counts as a strike if the
-    # table was settled shortly before it. A strike's cause (the final stroke)
-    # precedes contact by tens of ms — and routinely trips the motion state
-    # itself — while a carom's cause (the original shot) precedes the kiss by
-    # the balls' travel time, well beyond this window.
-    strike_settled_guard_s: float = 0.4
+    # Carom guard: an impulse into a dwelled cue is only a strike if no *other*
+    # ball was both genuinely moving this recently AND within kiss range of
+    # the cue's rest spot. A carom's cause is another ball arriving to kiss
+    # the cue: its approach trips the same net-displacement criterion the
+    # table-motion state uses (moving_enter_mm over moving_window_s, observed
+    # positions only), and by physics its last such report lands next to the
+    # rest spot — centers touch at ~51 mm, plus at most a frame or two of
+    # travel and a short occlusion coast (~120 mm even at break speed). Both
+    # conditions are needed: the player's stroke gear (grip hand / stick
+    # fragments) also reads as a well-observed mover during the backswing and
+    # final stroke, but it does so from behind the bridge — measured 271 mm
+    # (medium_shot) and 340 mm (power_shot) from the rest spot. The v1 guard
+    # read table-wide settledness instead ("settled <= 0.4 s before the
+    # impulse") and player presence starved it: hand/stick junk latched
+    # table_moving with a sweep, its 5-6 mm creep blocked settle from
+    # re-stamping for seconds, and every real strike in that shadow was
+    # rejected (missed_strike_0731 — ~50% of live shots, checkpoint 22).
+    # Per-ball motion evidence is windowed and self-clearing: nothing
+    # persistent exists to starve.
+    strike_other_motion_guard_s: float = 0.4
+    carom_reach_mm: float = 200.0
     # Impulse shape (§2.3 lesson 6): a strike steps from rest to full speed in
     # 1-2 frames; a shaft/hand push ramps up over many. The cue must have
     # been reported still this recently for the impulse to count.
     strike_step_max_s: float = 0.12
+    # Flicker filter: hand/stick fragments pass the detector's geometry gates
+    # only intermittently, so their tracks are mostly coasted — measured 7-43%
+    # observed on the flagged live captures (missed_strike_0731,
+    # live_divergence_0731a) while every real ball reads 90-100%. A track
+    # below this observed fraction over the creep window is not judged for
+    # table motion or stillness: junk can neither latch table_moving (a hand
+    # sweep is not a shot settling later — that would reset the clock) nor
+    # hold settle hostage with centroid creep (the 11.8 s "clock stays paused
+    # while my hands are in frame" stall, checkpoint 22).
+    judge_obs_fraction_min: float = 0.7
 
     # Scratch
     cue_lost_latch_s: float = 0.3
@@ -163,7 +198,8 @@ class _StrikeCandidate:
 
 @dataclass
 class _BallHistory:
-    positions: deque[tuple[float, float, float]] = field(default_factory=deque)  # (t, x, y)
+    # (t, x, y, observed) — observed=False rows are coasted extrapolations
+    positions: deque[tuple[float, float, float, bool]] = field(default_factory=deque)
 
 
 class EventEngine:
@@ -179,7 +215,10 @@ class EventEngine:
         # handoff (see EventConfig).
         self._cue_rest: tuple[float, float, float] | None = None
         self._cue_last_still_t = 0.0
-        self._last_settled_t = 0.0
+        # Carom guard memory: (t, x, y) of every recent genuine observed
+        # non-cue mover, pruned to the guard window. Survives the mover's
+        # track dying at the kiss (blob merge).
+        self._recent_movers: deque[tuple[float, float, float]] = deque()
         self._cue_id_last: int | None = None
         self._cue_id_streak = 0
         self._candidate: _StrikeCandidate | None = None
@@ -215,7 +254,7 @@ class EventEngine:
         # ---- table moving / settled (per-ball displacement over windows) ----
         for ball in balls:
             history = self._history.setdefault(ball.ball_id, _BallHistory())
-            history.positions.append((t, ball.x_mm, ball.y_mm))
+            history.positions.append((t, ball.x_mm, ball.y_mm, ball.observed))
             while history.positions and history.positions[0][0] < t - cfg.settle_creep_window_s:
                 history.positions.popleft()
             self._last_translate.setdefault(ball.ball_id, t)
@@ -224,13 +263,25 @@ class EventEngine:
         self._history = {b.ball_id: self._history[b.ball_id] for b in balls}
         self._last_translate = {b.ball_id: self._last_translate[b.ball_id] for b in balls}
 
-        moved = (
+        movers = [
             b
             for b in balls
             if self._judgeable(b)
             and self._displacement_over(b, cfg.moving_window_s) > cfg.moving_enter_mm
+        ]
+        # Carom-guard evidence: non-cue balls in genuine observed motion. The
+        # stamps are read by the *next* cycles' impulses (strike logic runs
+        # first), which is exactly right — a bringer's approach precedes the
+        # kiss. The reborn-cue track of a strike handoff cannot stamp: it is
+        # too young to be judgeable before the candidate opens.
+        cue_id = None if cue is None else cue.ball_id
+        self._recent_movers.extend(
+            (t, b.x_mm, b.y_mm) for b in movers if b.observed and b.ball_id != cue_id
         )
-        if next(moved, None) is not None:
+        stale = t - cfg.strike_other_motion_guard_s
+        while self._recent_movers and self._recent_movers[0][0] < stale:
+            self._recent_movers.popleft()
+        if movers:
             self._table_moving = True
             self._all_still_since = None
         elif balls and self._is_still(t, balls):
@@ -241,8 +292,6 @@ class EventEngine:
                 events.append(BallsSettled(t))
         else:
             self._all_still_since = None
-        if not self._table_moving:
-            self._last_settled_t = t
 
         # ---- scratch: cue track terminated near a pocket while balls were moving ----
         # Only *observed* positions count as "last seen". A sinking cue's final
@@ -288,17 +337,20 @@ class EventEngine:
         raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
         if raw < cfg.strike_impulse_mms or self._cue_rest is None:
             return
-        if t - self._last_settled_t > cfg.strike_settled_guard_s:
-            return  # carom guard: the table was already in motion before this
         if t - self._cue_last_still_t > cfg.strike_step_max_s:
             return  # ramp, not a step: shaft/hand push accelerating the ball
         rest_t0, rest_x, rest_y = self._cue_rest
         if self._cue_last_still_t - rest_t0 < cfg.pre_strike_dwell_s:
             return
+        if any(
+            hypot(mx - rest_x, my - rest_y) <= cfg.carom_reach_mm
+            for _mt, mx, my in self._recent_movers
+        ):
+            return  # carom guard: a moving ball reached the rest spot — a kiss
         dx, dy = cue.x_mm - rest_x, cue.y_mm - rest_y
         norm = hypot(dx, dy)
-        if norm == 0.0 or norm > cfg.strike_handoff_radius_mm:
-            return
+        if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
+            return  # too little displacement to trust as a direction, or too far
         # Rest memory is kept until a candidate *fires*: a bogus candidate
         # (e.g. the impact yanking the old track's centroid) then fails the
         # axis check and the real impulse can still re-open from the same rest.
@@ -336,15 +388,25 @@ class EventEngine:
         return hypot(ball.x_mm - ref[1], ball.y_mm - ref[2])
 
     def _judgeable(self, ball: BallState) -> bool:
-        """Old enough to judge motion/stillness from its position history.
+        """Old and solid enough to judge motion/stillness from its history.
 
-        Real footage produces short-lived junk tracks (hand sweeping over the
-        cloth, a potted ball rattling in a pocket jaw); requiring most of a
-        creep window of history keeps them out of the table-motion state
-        entirely. Real ball motion always outlives this within a shot.
+        Two junk filters (real footage produces tracks that are not balls):
+
+        - Age: short-lived tracks (a hand sweeping over the cloth, a potted
+          ball rattling in a pocket jaw) cannot show a meaningful window yet;
+          most of a creep window of history is required. Real ball motion
+          always outlives this within a shot.
+        - Observed fraction: hand/stick fragments pass the detector's gates
+          only intermittently, so their tracks are mostly coasted (measured
+          7-43% observed vs. 90-100% for every real ball — see EventConfig).
+          A mostly-coasted track's positions are extrapolations, not
+          evidence, and must not drive the table-motion state either way.
         """
         positions = self._history[ball.ball_id].positions
-        return positions[-1][0] - positions[0][0] >= 0.8 * self._cfg.settle_creep_window_s
+        if positions[-1][0] - positions[0][0] < 0.8 * self._cfg.settle_creep_window_s:
+            return False
+        observed = sum(1 for p in positions if p[3])
+        return observed >= self._cfg.judge_obs_fraction_min * len(positions)
 
     def _is_still(self, t: float, balls: list[BallState]) -> bool:
         """All balls position-stable over the creep window, none spinning.
@@ -361,11 +423,12 @@ class EventEngine:
         while reflection/decal noise on a glossy still ball persists
         indefinitely and must not hold settle hostage (2026-07-29, wall TV).
 
-        Tracks younger than the creep window are not judged: they cannot
-        show a meaningful window yet, and the short-lived jittery phantoms
-        real footage produces (e.g. a potted ball rattling in a pocket jaw)
-        would otherwise block settle forever. A genuinely moving young ball
-        is caught by the moving-entry displacement branch instead.
+        Tracks that fail :meth:`_judgeable` (too young, or mostly-coasted
+        hand/stick flicker) are not judged: junk creep at 5-6 mm per window
+        would otherwise hold settle hostage for as long as the player leans
+        over the table — the live "clock stays paused with my hands in
+        frame" stall. A genuinely moving young ball is caught by the
+        moving-entry displacement branch as soon as it is judgeable.
         """
         cfg = self._cfg
         for ball in balls:

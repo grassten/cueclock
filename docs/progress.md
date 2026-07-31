@@ -184,6 +184,51 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-31 (checkpoint 23 — carom guard v2 + flicker filter + axis-seed
+  floor: the accuracy blocker falls):** the guard-redesign session checkpoint 22
+  called for. Three stacked defects fixed in `vision/events.py`, each constant
+  anchored to a measurement from the Flag-key captures (no blind tuning):
+  - **Carom guard v2**: rejection now requires another ball *genuinely moving*
+    (`moving_enter_mm` over `moving_window_s`, observed positions, judgeable
+    tracks) within 0.4 s of the impulse AND within 200 mm kiss range of the
+    cue's rest spot — replacing the v1 "table settled ≤ 0.4 s ago" test that
+    player presence starved. Physics anchors: a bringer fast enough to impart
+    the 250 mm/s impulse floor covers ~100 mm inside the window and its last
+    observed report lands ≤ ~120 mm from the rest spot; measured stroke-gear
+    movers (grip hand / stick fragments, 72–100% observed so no flicker filter
+    catches them) sit at 271 mm (medium_shot) and 340 mm (power_shot). Both
+    conditions proved necessary — the time-only variant re-broke those two
+    scenarios on the first re-grade.
+  - **Flicker filter**: `_judgeable` now also requires ≥ 70% observed fraction
+    over the creep window. Junk tracks measured 7–43% observed vs 90–100% for
+    every real ball (per-track autopsy of missed_strike_0731 +
+    live_divergence_0731a). Junk can no longer latch `table_moving` (the
+    id-10 track that flipped it at 1.31 s and died the same instant) nor
+    block `_is_still` (the 11.8 s live settle stall; settle on missed_strike
+    now fires at 7.71 s vs 8.24 s). A hand wave over a settled table can no
+    longer mint a BallsSettled — which `clock/state.py` turns into a free
+    30 s reset.
+  - **Axis-seed floor** (`strike_dir_seed_min_mm = 12`): only visible once the
+    guard passed — the candidate opened on the impulse's first frame with a
+    2 mm noise/merge-yank direction vector pointing *backwards*, the axis
+    check then killed the true strike as incoherent, and the step gate
+    expired 8 ms before a re-open could land. Candidates now wait for an
+    honest 12 mm displacement off the rest spot (above the 8.5 mm max
+    measured single-window yank excursion, ~2 impulse-floor steps).
+  - **Corpus**: the three Flag captures promoted to graded scenarios (1 shot,
+    0 scratch, ≥ 1 settle each — table ground truth), and the harness now
+    derives replay stride from each clip's stored fps: ring dumps hold the
+    78 fps detect-stride stream, so the fixed stride-2 had been replaying
+    them at *half* the live cadence. 22/22 scenarios green; unit suite grew
+    to 21 event-engine tests (carom kiss, stroke-gear reach, flicker
+    starvation, hand-sweep settle-mint pins).
+  - For the record: checkpoint-20's "rejected solely by the guard" was true
+    but incomplete — the old gate probe never printed the dwell/norm/confirm
+    internals, so the axis-seed defect underneath surfaced only after the
+    guard verdict flipped. The fuller probe (probe_gates2, session
+    scratchpad) prints every sub-condition of the conjunction.
+  - Awaiting live validation: play normally, Flag anything wrong.
+
 - **2026-07-31 (checkpoint 22 — telemetry session read-out: cadence EXONERATED,
   carom guard confirmed as the sole accuracy blocker):** Steven ran the
   instrumented session (~6.2 min, log `~/Library/Logs/cueclock-telemetry.log`).

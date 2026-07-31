@@ -23,7 +23,9 @@ class Sim:
         self.t = 0.0
         self.balls: dict[int, list[float]] = {}  # id -> [x, y, vx, vy]
         self.occluded: set[int] = set()
+        self.flickering: set[int] = set()
         self.churn: dict[int, float] = {}
+        self._frame = 0
 
     def place(self, ball_id: int, x: float, y: float) -> None:
         self.balls[ball_id] = [x, y, 0.0, 0.0]
@@ -31,12 +33,19 @@ class Sim:
     def remove(self, ball_id: int) -> None:
         del self.balls[ball_id]
         self.occluded.discard(ball_id)
+        self.flickering.discard(ball_id)
         self.churn.pop(ball_id, None)
 
     def occlude(self, ball_id: int) -> None:
         """Ball still reported but no longer observed: the tracker coasts it
         along its last velocity (position keeps integrating), observed=False."""
         self.occluded.add(ball_id)
+
+    def flicker(self, ball_id: int) -> None:
+        """Junk-track signature: detected only every third frame (~33%
+        observed — hand/stick fragments measure 7-43% on real footage), the
+        rest coasted. Real balls measure 90-100%."""
+        self.flickering.add(ball_id)
 
     def set_churn(self, ball_id: int, value: float) -> None:
         """Appearance churn inside the ball's own disk (spin shows here)."""
@@ -49,10 +58,14 @@ class Sim:
         events: list[Event] = []
         for _ in range(round(seconds / DT)):
             self.t += DT
+            self._frame += 1
             states = []
             for ball_id, ball in self.balls.items():
                 ball[0] += ball[2] * DT
                 ball[1] += ball[3] * DT
+                observed = ball_id not in self.occluded and (
+                    ball_id not in self.flickering or self._frame % 3 == 0
+                )
                 states.append(
                     BallState(
                         ball_id,
@@ -60,7 +73,7 @@ class Sim:
                         ball[1],
                         hypot(ball[2], ball[3]),
                         is_cue=ball_id == CUE,
-                        observed=ball_id not in self.occluded,
+                        observed=observed,
                         churn=self.churn.get(ball_id),
                     )
                 )
@@ -206,6 +219,79 @@ def test_glossy_still_ball_churn_does_not_block_settle() -> None:
     assert types(sim.run(0.5)) == [ShotTaken]
     sim.velocity(CUE, 0.0, 0.0)
     assert types(sim.run(1.2)) == [BallsSettled]
+
+
+def test_hand_flicker_near_stroke_line_does_not_starve_strike() -> None:
+    # missed_strike_0731 (checkpoint 20/22, ~50% of live shots): hand/stick
+    # fragments sweep in as a flickering track, then creep 5-6 mm per window
+    # on the stroke line while the player addresses the ball. The old
+    # table-settledness carom guard starved on this — table_moving latched by
+    # the sweep, settle blocked by the creep — and rejected the real strike.
+    sim = rack()
+    sim.run(1.0)
+    sim.place(9, 900.0, 300.0)
+    sim.flicker(9)
+    sim.velocity(9, 250.0, 0.0)  # hand sweeps in (would latch table_moving)
+    sim.run(0.4)
+    sim.velocity(9, 12.0, 0.0)  # address creep: ~6 mm per 0.5 s window
+    assert sim.run(2.0) == []  # no spurious settle cycle from the hand
+    sim.velocity(CUE, 500.0, 0.0)  # the real strike
+    assert ShotTaken in map(type, sim.run(0.5))
+
+
+def test_stroke_gear_beyond_kiss_range_does_not_reject_strike() -> None:
+    # medium_shot/power_shot regression (carom guard v2): the grip hand /
+    # stick fragments read as well-observed genuine movers during the
+    # backswing and final stroke — but from behind the bridge, 271-340 mm
+    # from the cue's rest spot (measured). Only movers within kiss range
+    # (carom_reach_mm) of the rest spot may reject the impulse.
+    sim = rack()
+    sim.run(1.0)
+    sim.place(9, 200.0, 480.0)  # stroke gear: 300 mm behind the cue ball
+    sim.run(0.6)  # judgeable, fully observed — the flicker filter won't bar it
+    sim.velocity(9, 250.0, 0.0)  # forward stroke, moving right through contact
+    sim.run(0.25)
+    sim.velocity(CUE, 500.0, 0.0)  # the strike
+    events = sim.run(0.5)
+    sim.remove(9)
+    assert ShotTaken in map(type, events)
+
+
+def test_carom_kiss_into_resting_cue_is_not_a_shot() -> None:
+    # The carom guard's reason to exist, pinned under its v2 (other-ball
+    # motion) form: an object ball rolls across the table and kisses the
+    # dwelled, resting cue ball. The cue's step impulse and coherent travel
+    # pass every other strike gate — only the bringer's own genuine motion
+    # in the preceding window says "kiss, not stroke".
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(OBJ, -600.0, 0.0)  # bringer: 1200 -> ~540, arrives at the cue
+    sim.run(1.1)
+    sim.velocity(OBJ, 0.0, 0.0)  # momentum transfer at the kiss
+    sim.velocity(CUE, -600.0, 0.0)
+    sim.run(0.4)
+    sim.velocity(CUE, 0.0, 0.0)
+    events = sim.run(1.2)
+    assert ShotTaken not in map(type, events)
+    assert BallsSettled in map(type, events)
+
+
+def test_hand_sweep_over_settled_table_is_not_a_settle_cycle() -> None:
+    # BallsSettled resets the shot clock to a fresh 30 s (clock/state.py) —
+    # a hand waved over the settled table must not mint one. Flicker junk
+    # is barred from latching table_moving in the first place.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 500.0, 0.0)
+    sim.run(0.5)
+    sim.velocity(CUE, 0.0, 0.0)
+    assert BallsSettled in map(type, sim.run(1.2))
+    sim.place(9, 800.0, 200.0)
+    sim.flicker(9)
+    sim.velocity(9, 400.0, 0.0)  # arm sweeps across the settled table
+    sim.run(0.6)
+    sim.remove(9)
+    assert sim.run(1.5) == []
 
 
 def test_scratch_latched_during_motion() -> None:

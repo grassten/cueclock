@@ -56,6 +56,15 @@ EXPECTED: dict[str, tuple[int | None, int | None, int | None]] = {
     # the old 2.0 gate that deadlocked settle live.
     "empty_table_0729": (0, 0, None),
     "shot_debug": (1, 1, 1),
+    # Flag-key live captures (2026-07-31): the carom-guard-redesign evidence.
+    # Ground truth from the table: one real strike each, no scratch, balls
+    # settle in-clip. The live session missed the first two strikes outright
+    # (v1 guard starved by hand/stick junk latching table_moving) and the
+    # third session also minted a phantom second shot. These pin the v2
+    # guard (other-ball motion), the flicker filter, and the axis-seed floor.
+    "missed_strike_0731": (1, 0, 1),
+    "live_divergence_0731a": (1, 0, 1),
+    "live_divergence_0731b": (1, 0, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -63,6 +72,9 @@ EXPECTED: dict[str, tuple[int | None, int | None, int | None]] = {
 REFERENCES: dict[str, str] = {
     "empty_table_0729": "empty_table_0729",
     "shot_debug": "empty_table_0729",
+    "missed_strike_0731": "empty_table_0729",
+    "live_divergence_0731a": "empty_table_0729",
+    "live_divergence_0731b": "empty_table_0729",
 }
 
 
@@ -82,9 +94,16 @@ def _run_clip(name: str, reference_frames: list[np.ndarray]) -> list[Event]:
 
     pipeline = VisionPipeline(TableCalibration.load(CALIBRATION), reference_frames)
     reader = ClipReader(CLIPS / name)
+    # Replay at the live detect cadence (~78 Hz): record-made clips store the
+    # full 156 fps camera stream, while ring-buffer dumps store only the
+    # detect-stride frames (78 fps) — one fixed stride would replay dumps at
+    # half the cadence the live session actually ran.
+    timestamps = reader.timestamps
+    fps = (len(reader) - 1) / float(timestamps[-1] - timestamps[0])
+    stride = max(1, round(fps / 78.0))
     events: list[Event] = []
-    for i in range(0, len(reader), 2):
-        events += pipeline.process(float(reader.timestamps[i]), reader.frame(i))
+    for i in range(0, len(reader), stride):
+        events += pipeline.process(float(timestamps[i]), reader.frame(i))
     return events
 
 

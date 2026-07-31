@@ -12,35 +12,35 @@
 > `cueclock fit-undistort` → point `--reference` at the new clip. The startup
 > drift check warns loudly if the reference has gone stale.
 
-**Open bug — ROOT CAUSE FOUND 2026-07-31 (Flag-key capture: `tests/clips/missed_strike_0731`):**
-the "clock didn't stop on my shot" failure is the **carom guard**, not track loss
-(the 07-29 theory is dead: the cue's track id stayed continuous through the whole
-captured miss). Gate-by-gate replay: impulse textbook (raw 1→282→1185 mm/s), rest
-memory + step gate green every cycle — rejected solely by `strike_settled_guard_s`
-(0.4 s), because the engine believed the table had been moving for ~2.3 s while
-all balls sat at v=0. Mechanism: the cue stick/bridge hand behind the cue ball
-during address gets confirmed as a "ball" track and creeps on the stroke line →
-`table_moving` latches → borderline 5–6 mm centroid jitter (settle_creep_mm = 5)
-keeps settle from re-stamping → guard rejects the real stroke. Corollary: right
-after a genuine settle the guard IS satisfied, so a hand blob yanking the cue
-centroid can *pass* the conjunction — the observed phantom pause-at-30.
-**Fix is a design session** (guard on other-ball motion / junk-track filtering on
-the stroke line, not table-wide settledness), then promote the evidence clips to
-corpus scenarios and re-grade — no blind threshold tuning.
-Evidence on the T7: `missed_strike_0731` (offline repro, 0 ShotTaken),
-`live_divergence_0731a`/`b` (offline CORRECT, live missed/phantomed). Keep
-flagging future incidents — the key works (and no longer false-flashes red on
-slow dumps).
-**Telemetry verdict (instrumented session, checkpoint 22): cadence EXONERATED —
-this guard mechanism is now the sole confirmed cause.** At 156.2 grabs/s
-(camera full rate) with detect avg 4.0–4.5 ms, ~10 of ~21 motion episodes
-produced no ShotTaken, and one shot→settle stretch stalled 11.8 s with the cue
-at rest while the ball count inflated 4→7 (hand/cue blobs holding settle — the
-"clock stays paused with hands in frame" behavior Steven observed). The
-live-vs-offline divergence is engine state history: offline cold-start resets
-`settled_age` so replays pass the guard; live, player presence starves it.
-Log: `~/Library/Logs/cueclock-telemetry.log`. **The guard design session is
-the accuracy blocker — nothing else is in the way.**
+**Accuracy blocker — FIXED IN CODE 2026-07-31 (checkpoint 23), awaiting live
+validation.** The "clock didn't stop on my shot" / "clock stays paused with my
+hands in frame" failures were three stacked defects in `vision/events.py`, all
+pinned by the Flag-key captures:
+
+1. **Carom guard starved by player presence** (the checkpoint-20/22 root
+   cause). Redesigned: an impulse is rejected only when another ball was
+   *genuinely moving* within 0.4 s of it AND within 200 mm kiss range of the
+   cue's rest spot. Per-ball, windowed, self-clearing — no persistent state
+   for hands to starve. (Both conditions are needed: time-only re-broke
+   medium/power_shot — the grip hand reads as a genuine mover during the
+   stroke, but from 271–340 mm away; a real kissing ball arrives ≤ ~120 mm.)
+2. **Junk tracks drove the table state.** Hand/stick fragments flicker
+   through the detector gates (7–43% observed vs 90–100% for every real
+   ball); tracks under 70% observed no longer judge table motion or
+   stillness. Settle can't stall while you lean over the table, and a hand
+   wave can't mint a BallsSettled (= a free 30 s clock reset).
+3. **Strike axis seeded from noise** (masked by #1 until the guard passed):
+   the candidate opened on the impulse's first frame with a 2 mm noise
+   direction vector pointing backwards, then killed the true strike as
+   "incoherent". Candidates now wait for 12 mm of honest displacement.
+
+Corpus: all 22 scenarios green, including the three promoted Flag captures
+(`missed_strike_0731`, `live_divergence_0731a/b`: exactly one ShotTaken + one
+BallsSettled each, matching table ground truth), with the harness now replaying
+each clip at live cadence (ring dumps store 78 fps — a fixed stride-2 had been
+grading them at half speed). **Next live session: play normally and keep
+flagging** — any remaining miss/phantom dump now gets a full per-gate verdict
+from the scratchpad probes.
 
 Working list. Long-term status still lives in `progress.md`; this file is the
 short-term punch list — delete items as they land.
