@@ -65,7 +65,12 @@ def test_websocket_snapshot_on_connect() -> None:
 
 def test_html_pages_served() -> None:
     with make_client() as client:
-        assert "clock-square" in client.get("/shotclock").text
+        page = client.get("/shotclock").text
+        assert "clock-square" in page
+        # ?view=full (broadcast-style bare number for the full-screen OBS
+        # scene) and ?audio=off both live client-side in the one page.
+        assert "body.full" in page
+        assert "audioEnabled" in page
         assert "Shot Clock Control" in client.get("/control").text
 
 
