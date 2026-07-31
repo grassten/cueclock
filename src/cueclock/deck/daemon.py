@@ -36,7 +36,7 @@ def _dispatch(key: Key, base: str, active: str | None) -> tuple[Image.Image, str
     """Run a key's action against the server; return (flash face, ruleset change|None)."""
     action = key.action
     if isinstance(action, ApiPost):
-        result = client.post(base, action.path)
+        result = client.post(base, action.path, timeout=action.timeout)
         print(
             f"{key.name}: POST {action.path} -> {result.status} {result.detail[:200]}",
             flush=True,
@@ -110,6 +110,8 @@ def _loop(deck: Any, base: str) -> None:
         if not up:
             print(f"{key.name}: ignored — server down", flush=True)
             continue
+        if isinstance(key.action, ApiPost) and key.action.pending_face is not None:
+            _set_key(deck, index, faces.render(key.action.pending_face))
         image, changed = _dispatch(key, base, active)
         if changed is not None:
             active = changed

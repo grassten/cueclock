@@ -19,6 +19,8 @@ class ApiPost:
     path: str
     ok_face: str
     err_face: str
+    timeout: float = 3.0  # raise for endpoints that work before replying (dump!)
+    pending_face: str | None = None  # shown while a slow call is in flight
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,16 @@ LAYOUT: tuple[Key, ...] = (
     Key(1, 3, "ruleset", "RULESET", RulesetCycle()),
     Key(2, 1, "reset", "RESET", ApiPost("/api/reset", "RESET", "ERROR")),
     Key(2, 2, "extension", "EXT\n+15", ApiPost("/api/extension", "+15 s", "NO EXT")),
-    Key(2, 5, "flag", "FLAG", ApiPost("/api/dump?label=flagged", "SAVED", "NO T7")),
+    # Dump writes ~2.2 GB to the T7 before responding — measured well over the
+    # 3 s default (2026-07-31: three "timed out" flashes for dumps that all
+    # succeeded). Generous timeout + a pending face instead.
+    Key(
+        2,
+        5,
+        "flag",
+        "FLAG",
+        ApiPost("/api/dump?label=flagged", "SAVED", "NO T7", timeout=60.0, pending_face="SAVING…"),
+    ),
 )
 
 RULESET_FACES: dict[str, str] = {

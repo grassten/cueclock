@@ -12,17 +12,25 @@
 > `cueclock fit-undistort` → point `--reference` at the new clip. The startup
 > drift check warns loudly if the reference has gone stale.
 
-**Open bug — needs your capture (the "clock didn't stop on my shot" one):** it's a
-real bug, and the reset-on-settle that follows is the designed safety net doing its
-job. Two shots in the 07-29 log (t≈42 s and t≈81 s) produced no ShotTaken: in both,
-the cue's track was lost at impact for >1 s (`no cue` mid-flight) and reappeared far
-away, so the strike detector never saw the launch impulse on a cue-flagged track.
-Strike logic stays untouched until there's evidence — that's how the old app
-plateaued. Instead: when a shot fails to freeze the clock, press the dump key (or
-`curl -X POST 'http://localhost:8000/api/dump?label=missed_shot'`) within ~12 s.
-One captured clip and it can be traced + fixed the same way as the settle bug.
-(Also pinned: detect cadence matters — at stride 4+ the corpus behavior shifts, so
-keep `run` at the default stride 2.)
+**Open bug — ROOT CAUSE FOUND 2026-07-31 (Flag-key capture: `tests/clips/missed_strike_0731`):**
+the "clock didn't stop on my shot" failure is the **carom guard**, not track loss
+(the 07-29 theory is dead: the cue's track id stayed continuous through the whole
+captured miss). Gate-by-gate replay: impulse textbook (raw 1→282→1185 mm/s), rest
+memory + step gate green every cycle — rejected solely by `strike_settled_guard_s`
+(0.4 s), because the engine believed the table had been moving for ~2.3 s while
+all balls sat at v=0. Mechanism: the cue stick/bridge hand behind the cue ball
+during address gets confirmed as a "ball" track and creeps on the stroke line →
+`table_moving` latches → borderline 5–6 mm centroid jitter (settle_creep_mm = 5)
+keeps settle from re-stamping → guard rejects the real stroke. Corollary: right
+after a genuine settle the guard IS satisfied, so a hand blob yanking the cue
+centroid can *pass* the conjunction — the observed phantom pause-at-30.
+**Fix is a design session** (guard on other-ball motion / junk-track filtering on
+the stroke line, not table-wide settledness), then promote the evidence clips to
+corpus scenarios and re-grade — no blind threshold tuning.
+Evidence on the T7: `missed_strike_0731` (offline repro, 0 ShotTaken),
+`live_divergence_0731a`/`b` (offline CORRECT, live missed/phantomed → cadence
+telemetry below now has direct evidence). Keep flagging future incidents — the
+key works (and no longer false-flashes red on slow dumps).
 
 Working list. Long-term status still lives in `progress.md`; this file is the
 short-term punch list — delete items as they land.
@@ -56,7 +64,10 @@ the corpus certifies. Offline grading is a metronome; live is "every 2nd frame
 (frames are silently skipped, no error). Checkpoint 14 measured 1.38× realtime
 *average*; spikes during shots were never measured. This test also feeds the
 missed-ShotTaken investigation (open bug above): if cadence dips exactly during
-shots, it goes back on the suspect list.
+shots, it goes back on the suspect list. **Upgraded 2026-07-31:** two flagged
+clips replay CORRECTLY offline but misbehaved live (`live_divergence_0731a`/`b`)
+— cadence (or live-state history) is now the prime suspect for live-only misses,
+with evidence in hand.
 
 **Part 1 — implement the telemetry (~15 min, camera-free):**
 

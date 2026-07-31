@@ -52,7 +52,7 @@ keys is a one-line layout edit.
 | 1,5 | **Replay** | obs-websocket: save replay buffer → replay scene → dwell → back | `REPLAY` | planned |
 | 2,1 | **Reset** | `POST /api/reset` (fouls, end of rack/match, bug situations) | `RESET` | **live** |
 | 2,2 | **Extension** | `POST /api/extension` (+15 s; rule exists in every ruleset) | `EXT +15`, flashes `+15 s` / `NO EXT` | **live** |
-| 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~12 s of frames → corpus clip on T7 | `FLAG`, flashes `SAVED` / `NO T7` | **live** |
+| 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~12 s of frames → corpus clip on T7 (60 s timeout: the reply comes after the ~2.2 GB write) | `FLAG` → `SAVING…` while writing, flashes `SAVED` / `NO T7` | **live** |
 | 3,1 | **Play/Pause** | `osascript`: Music.app playpause | `♪` | planned |
 | 3,2 | **Vol −** | `osascript`: output volume −10, hold to repeat | `VOL −`, flashes new level | planned |
 | 3,3 | **Vol +** | `osascript`: output volume +10, hold to repeat | `VOL +`, flashes new level | planned |

@@ -133,6 +133,14 @@ def test_dispatch_ruleset_cycle_server_down(monkeypatch) -> None:  # type: ignor
     assert changed is None
 
 
+def test_flag_dump_timeout_covers_the_t7_write() -> None:
+    # Dump replies only after writing ~2.2 GB to the T7; a short timeout makes
+    # successful saves flash red (2026-07-31 triage: three "failed" dumps, all fine).
+    assert isinstance(FLAG.action, ApiPost)
+    assert FLAG.action.timeout >= 30.0
+    assert FLAG.action.pending_face
+
+
 # --- face selection ---
 
 

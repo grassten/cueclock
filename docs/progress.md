@@ -184,6 +184,30 @@ After that work, redo (fast now that the workflow exists — ~15 min):
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-31 (checkpoint 20 — first Flag-key triage: missed-strike ROOT CAUSE +
+  deck dump-timeout fix):** Steven flagged three live incidents; gate-by-gate
+  EventEngine replay of the dumps (scratchpad probes over the pure pipeline):
+  - **`missed_strike_0731`**: shot with no ShotTaken, reproduced offline. Root
+    cause is the **carom guard** — the address-time cue-stick/bridge-hand blob
+    is confirmed as a "ball" track creeping on the stroke line behind the cue
+    ball (ids 10/12 at ~(1465,275)), latching `table_moving`; borderline 5–6 mm
+    centroid jitter (settle_creep_mm = 5) then keeps settle from re-stamping, so
+    `strike_settled_guard_s` (0.4 s) rejects a textbook impulse (raw
+    1→282→1185 mm/s; rest + step gates green every cycle). The 07-29 track-loss
+    theory is dead for this failure: the cue track id never broke.
+  - **`live_divergence_0731a`/`b`**: offline replay CORRECT (ShotTaken + settle)
+    but live missed one and phantom-paused the other at 30 — live-only factor;
+    detect-cadence telemetry (todo §2) is now the prime suspect, with evidence.
+  - Phantom corollary: a freshly settled table satisfies the guard, so a hand
+    blob yanking the cue centroid can PASS the conjunction — the guard both eats
+    real strikes and admits phantoms. Fix = design session (guard rework +
+    junk-track handling), then corpus scenarios from these clips + full
+    re-grade. No blind threshold tuning.
+  - Deck fix: the Flag key's 3 s HTTP timeout was shorter than the dump's
+    ~2.2 GB T7 write, so all three successful dumps flashed red. `ApiPost` now
+    carries a per-action timeout (60 s for dump) + a `SAVING…` pending face;
+    regression test pins it.
+
 - **2026-07-31 (checkpoint 19 — Stream Deck phase 1: in-repo deck daemon + four live
   keys):** Deck arrived (MK.2); approach decided with Steven: **no Elgato app, ever**
   (it would claim exclusive HID access) — buttons are versioned code, per the new
