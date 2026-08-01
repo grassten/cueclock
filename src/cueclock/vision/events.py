@@ -217,9 +217,12 @@ class _StrikeCandidate:
     # Newborn-origin candidates (occluded-address strike) carry extra confirm
     # gates: full observation and smooth raw speed, the measured separators
     # from a hand-carried ball. last_raw remembers the previous advance
-    # frame's raw speed for the step-ratio check.
+    # frame's raw speed for the step-ratio check. ball_id is set when no ball
+    # holds the cue flag at open time: the candidate then follows that track
+    # directly instead of the (empty) cue flag.
     newborn: bool = False
     last_raw: float | None = None
+    ball_id: int | None = None
 
 
 @dataclass
@@ -311,12 +314,39 @@ class EventEngine:
                 self._cue_id_streak += 1
             else:
                 self._cue_id_last, self._cue_id_streak = cue.ball_id, 1
-        if cue is not None and self._cue_id_streak >= cfg.cue_id_debounce_frames:
+        if self._candidate is not None and t - self._candidate.t0 > cfg.strike_confirm_window_s:
+            # Centralized expiry: a candidate whose target cannot advance
+            # (cue-follow candidate while the flag is empty, or a no-cue
+            # candidate whose track died) must not linger and block the scan.
+            self._candidate = None
+        if self._candidate is not None and self._candidate.ball_id is not None:
+            # A no-cue candidate follows its own track, not the cue flag.
+            target = next((b for b in balls if b.ball_id == self._candidate.ball_id), None)
+            if target is not None:
+                events.extend(self._advance_candidate(t, target))
+        elif cue is not None and self._cue_id_streak >= cfg.cue_id_debounce_frames:
             if self._candidate is not None:
                 events.extend(self._advance_candidate(t, cue))
             else:
                 self._maybe_open_candidate(t, cue)
             self._update_cue_rest(t, cue)
+        if self._candidate is None and (cue is None or not cue.observed):
+            # No *observed* ball holds the cue flag — the tracker lost the
+            # cue (address occlusion killed its track; the regrab grace and
+            # the whiteness floor keep the flag empty, and a fast newborn's
+            # blur-corrupted color sample cannot win it back within the
+            # newborn window), or the flag-holder is a coasting phantom (a
+            # dead cue coasts ~0.15 s after impact, long enough to age the
+            # real newborn out — the 2026-08-01 scratch-shot miss). The birth
+            # conjunction carries the identity instead: on a quiet table the
+            # only thing that can materialize at impulse speed is the ball
+            # that was just struck.
+            for ball in balls:
+                raw = ball.speed_mms if ball.raw_speed_mms is None else ball.raw_speed_mms
+                if raw >= cfg.strike_impulse_mms and ball.observed:
+                    self._maybe_open_newborn(t, ball, raw, follow_ball=True)
+                    if self._candidate is not None:
+                        break
 
         # ---- table moving / settled (per-ball displacement over windows) ----
         for ball in balls:
@@ -470,7 +500,9 @@ class EventEngine:
             t0=t, x0=rest_x, y0=rest_y, dir_x=dx / norm, dir_y=dy / norm
         )
 
-    def _maybe_open_newborn(self, t: float, cue: BallState, raw: float) -> None:
+    def _maybe_open_newborn(
+        self, t: float, cue: BallState, raw: float, follow_ball: bool = False
+    ) -> None:
         """Occluded-address strike: the cue-vote winner was just born at speed.
 
         A ball cannot teleport into existence at impulse speed. When the
@@ -488,6 +520,8 @@ class EventEngine:
         born = self._first_seen.get(cue.ball_id)
         if born is None or t - born > cfg.newborn_strike_max_age_s:
             return
+        if self._engine_t0 is None or born - self._engine_t0 <= cfg.settle_creep_window_s:
+            return  # founding track: first sight at engine start is not a birth
         if born - self._last_mover_t < cfg.pre_strike_dwell_s:
             return  # something was genuinely moving right before this birth
         birth_x, birth_y = self._birth_pos[cue.ball_id]
@@ -508,6 +542,7 @@ class EventEngine:
             dir_y=dy / norm,
             newborn=True,
             last_raw=raw,
+            ball_id=cue.ball_id if follow_ball else None,
         )
 
     def _advance_candidate(self, t: float, cue: BallState) -> list[Event]:

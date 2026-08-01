@@ -64,6 +64,11 @@ class ShotClock:
         self._grace_left = 0.0
         self._expired_for = 0.0
 
+    @property
+    def rack_shots(self) -> int:
+        """Shots counted this rack (diagnostics — the session journal)."""
+        return self._rack_shots
+
     def current_base(self) -> int:
         """Full countdown for the next shot — rack-aware.
 

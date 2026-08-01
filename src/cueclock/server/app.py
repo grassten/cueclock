@@ -19,8 +19,8 @@ from cueclock.server.hub import Hub
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_app(score_path: Path | None = None) -> FastAPI:
-    hub = Hub(score_path=score_path)  # None = score is in-memory only
+def create_app(score_path: Path | None = None, journal_path: Path | None = None) -> FastAPI:
+    hub = Hub(score_path=score_path, journal_path=journal_path)  # None = in-memory only
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:

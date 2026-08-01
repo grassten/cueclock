@@ -124,6 +124,40 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 27 — no-cue strikes + the session journal):**
+  checkpoint 26 went live mid-session and Steven's next flags (half a rack,
+  two dumps) caught its remaining gap within minutes.
+  - **No-cue strike path** (`vision/events.py`): both live misses shared one
+    mechanism — *no ball held the cue flag at strike time*. The address
+    occlusion kills the cue's track; the tracker's regrab grace (1.0 s, built
+    for scratch detection) and whiteness floor keep the flag empty; a fast
+    newborn's blur-corrupted, frozen color sample cannot win the vote back;
+    and the dead track coasts as a *flagged phantom* ~0.15 s after impact —
+    longer than the entire 0.1 s newborn window (gate-traced frame by frame
+    on `scratch_shot_0801`). Fix: when no observed ball is cue-flagged, the
+    newborn scan runs over all observed balls and the birth conjunction
+    carries the identity; candidates then follow the track id. Founding
+    tracks excluded; candidate expiry centralized. Verified: both misses now
+    detect (`no_cue_strike_0801`, `scratch_shot_0801` — the latter's scratch
+    was frame-verified real and stays detected), the ball-in-hand carry
+    (`ball_in_hand_pickup_0801`, Steven's own ground truth) does not fire,
+    `scratch_replace`'s fetch carry stays contained by the scratch disarm.
+  - **Session journal** (`server/journal.py`, Hub, `cueclock run`): a flag
+    dump only captured frames — replaying it shows what *current* code does,
+    not what the live session did, and ground truth lived in Steven's memory
+    ("i don't even remember what happened the first one"). The Hub now
+    journals every operator command, vision event (with the pipeline
+    timestamp), and clock state transition to `logs/session-*.jsonl`, and
+    every ring dump writes the recent tail as `events.jsonl` beside the
+    frames. A flagged clip now records what the engine did while the frames
+    were captured.
+  - **Corpus:** five more graded scenarios (`no_cue_strike_0801`,
+    `scratch_shot_0801`, `ball_in_hand_pickup_0801`, `triage_0801b/c`) — 29
+    scenarios, 34 corpus tests green; 135 unit tests; ruff + mypy clean.
+  - Known residuals unchanged from checkpoint 26 (stick-merge yank phantom
+    settles, pickup settles) — the detector merge flag remains the next
+    accuracy lever (BACKLOG).
+
 - **2026-08-01 (checkpoint 26 — accuracy: occluded-address strikes, phantom
   resets, self-healing shot windows):** the 2026-07-31 evening match-mode
   session surfaced three failure classes, diagnosed from six Flag-key dumps

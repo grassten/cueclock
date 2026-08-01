@@ -423,11 +423,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for ts_ns, ring_frame in ring.snapshot():
             writer.write(ring_frame, ts_ns)
         writer.close()
+        # The other half of the story: what the live engine did during (and
+        # around) these frames — events, commands, clock transitions.
+        hub.journal.dump_tail(clip_dir / "events.jsonl", seconds=args.ring_seconds + 60.0)
         print(f"ring dumped -> {clip_dir}")
         return str(clip_dir)
 
     # Scores persist across restarts (a mid-match crash must not lose the match).
-    app = create_app(score_path=Path("config/score.json"))
+    session_stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    app = create_app(
+        score_path=Path("config/score.json"),
+        journal_path=Path("logs") / f"session-{session_stamp}.jsonl",
+    )
     if ring_capacity > 0:
         app.state.dump = dump_ring
     hub = cast(Hub, app.state.hub)
@@ -489,14 +496,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     def dispatch(event: object, t: float) -> None:
         print(f"{t:8.3f}s  {type(event).__name__}")
-        coro = None
         if isinstance(event, ShotTaken):
-            coro = hub.shot_taken()
+            coro = hub.shot_taken(t)
         elif isinstance(event, BallsSettled):
-            coro = hub.balls_settled()
-        # Scratch: logged only — no clock action in v1 (CHANGELOG.md decision)
-        if coro is not None:
-            asyncio.run_coroutine_threadsafe(coro, loop).add_done_callback(_surface)
+            coro = hub.balls_settled(t)
+        else:
+            # Scratch: journaled only — no clock action in v1 (CHANGELOG.md decision)
+            coro = hub.scratch_seen(t)
+        asyncio.run_coroutine_threadsafe(coro, loop).add_done_callback(_surface)
 
     print(
         f"run -> overlay http://{args.host}:{args.port}/shotclock | control /control | "

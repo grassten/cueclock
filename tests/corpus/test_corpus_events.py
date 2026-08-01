@@ -97,6 +97,28 @@ EXPECTED: dict[
     # it). Drop to (1, 0, 1, 1) when a detector-level merge flag lands
     # (BACKLOG).
     "merge_yank_0731": (1, 0, 1, 2),
+    # 2026-08-01 00:07-00:21 live captures (new-engine session) — the no-cue
+    # strike evidence. The tracker can lose the cue outright (address
+    # occlusion kills its track; regrab grace + whiteness floor + a dead
+    # cue's ~0.15 s coasting phantom keep the flag empty through the strike):
+    # the no-cue newborn scan carries the identity by birth conjunction.
+    "no_cue_strike_0801": (1, 0, 1),
+    # scratch_shot: same no-cue miss mechanism, plus a genuine scratch
+    # (frame-verified: the cue leaves the table) — pins strike AND scratch
+    # detection on one shot.
+    "scratch_shot_0801": (1, 1, 1),
+    # ball_in_hand_pickup: Steven picking the cue ball up (his own report).
+    # The pickup drag latches motion (a roster ball genuinely moves) and the
+    # settle resets the clock — the known pickup residual, tolerated. The
+    # pinned zeros are the point: the carried ball must never mint a shot or
+    # a scratch.
+    "ball_in_hand_pickup_0801": (0, 0, None),
+    # triage_0801b/c: address merge-yank phantom settle (b) and a hand pickup
+    # near a pocket (c), each followed by a real, correctly detected shot.
+    # The extra phantom settle is tolerated (min-only) until the detector
+    # merge flag lands.
+    "triage_0801b": (1, 0, 1),
+    "triage_0801c": (1, 0, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -113,6 +135,11 @@ REFERENCES: dict[str, str] = {
     "soft_shot_0731": "empty_table_0729",
     "glove_address_0731": "empty_table_0729",
     "merge_yank_0731": "empty_table_0729",
+    "no_cue_strike_0801": "empty_table_0729",
+    "scratch_shot_0801": "empty_table_0729",
+    "ball_in_hand_pickup_0801": "empty_table_0729",
+    "triage_0801b": "empty_table_0729",
+    "triage_0801c": "empty_table_0729",
 }
 
 
