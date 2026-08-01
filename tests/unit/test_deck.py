@@ -58,6 +58,61 @@ def test_next_ruleset_unknown_active_falls_back_to_first() -> None:
     assert next_ruleset("anything", []) == "anything"
 
 
+# --- match-mode keys (contract 2026-07-31; positions are the plan of record) ---
+
+
+def test_match_keys_sit_where_the_contract_put_them() -> None:
+    spots = {k.name: (k.row, k.col) for k in LAYOUT}
+    assert spots["push"] == (1, 4)
+    assert spots["rack"] == (2, 3)
+    assert spots["restart"] == (2, 4)
+    assert spots["p1_plus"] == (3, 1)
+    assert spots["p1_minus"] == (3, 2)
+    assert spots["p2_minus"] == (3, 4)
+    assert spots["p2_plus"] == (3, 5)
+
+
+def test_match_keys_post_the_match_endpoints() -> None:
+    paths = {k.name: k.action.path for k in LAYOUT if isinstance(k.action, ApiPost)}
+    assert paths["push"] == "/api/push"
+    assert paths["rack"] == "/api/rack"
+    assert paths["restart"] == "/api/restart"
+    assert paths["p1_plus"] == "/api/score/p1/increment"
+    assert paths["p1_minus"] == "/api/score/p1/decrement"
+    assert paths["p2_minus"] == "/api/score/p2/decrement"
+    assert paths["p2_plus"] == "/api/score/p2/increment"
+
+
+def test_push_stays_static_across_rulesets() -> None:
+    # Push outs exist only in 9-ball — no per-ruleset face/flash treatment.
+    push = next(k for k in LAYOUT if k.name == "push")
+    assert push.face_for("wnt_9ball") == "PUSH"
+    assert isinstance(push.action, ApiPost)
+    assert push.action.ok_face_for("wnt_9ball") == "60 s"
+
+
+# --- ruleset-aware extension key ---
+
+
+EXT = next(k for k in LAYOUT if k.name == "extension")
+
+
+def test_extension_face_follows_the_active_ruleset() -> None:
+    # 15 s for the Ultimate Pool rulesets; 30 s for WNT (WNT Event Rules §5).
+    assert EXT.face_for("ultimate_pool_8ball") == "EXT\n+15"
+    assert EXT.face_for("ultimate_pool_8ball_final10") == "EXT\n+15"
+    assert EXT.face_for("wnt_9ball") == "EXT\n+30"
+    assert EXT.face_for(None) == EXT.face  # server down / unpolled -> static default
+    assert EXT.face_for("garbage") == EXT.face
+
+
+def test_extension_flash_matches_the_face() -> None:
+    assert isinstance(EXT.action, ApiPost)
+    assert EXT.action.ok_face_for("ultimate_pool_8ball") == "+15 s"
+    assert EXT.action.ok_face_for("wnt_9ball") == "+30 s"
+    assert EXT.action.ok_face_for(None) == EXT.action.ok_face
+
+
 # --- faces ---
 
 
@@ -155,3 +210,12 @@ def test_ruleset_face_tracks_active_when_up() -> None:
     assert rendered.tobytes() == faces.render(ruleset_face(name)).tobytes()
     dim = _face_for(RULESET_KEY, False, None)
     assert dim.tobytes() == faces.dimmed(RULESET_KEY.face).tobytes()
+
+
+def test_extension_face_and_flash_render_the_wnt_values(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    assert _face_for(EXT, True, "wnt_9ball").tobytes() == faces.render("EXT\n+30").tobytes()
+    assert _face_for(EXT, False, None).tobytes() == faces.dimmed("EXT\n+15").tobytes()
+    monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "{}"))
+    image, changed = _dispatch(EXT, "http://x", "wnt_9ball")
+    assert image.tobytes() == faces.flash_ok("+30 s").tobytes()
+    assert changed is None

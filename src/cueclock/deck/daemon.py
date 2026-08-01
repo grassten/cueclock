@@ -29,7 +29,8 @@ _BY_INDEX: dict[int, Key] = {key.index: key for key in LAYOUT}
 def _face_for(key: Key, up: bool, active: str | None) -> Image.Image:
     if isinstance(key.action, RulesetCycle) and up and active is not None:
         return faces.render(ruleset_face(active))
-    return faces.render(key.face) if up else faces.dimmed(key.face)
+    face = key.face_for(active)  # ruleset-aware keys (Extension) track the poll
+    return faces.render(face) if up else faces.dimmed(face)
 
 
 def _dispatch(key: Key, base: str, active: str | None) -> tuple[Image.Image, str | None]:
@@ -42,7 +43,7 @@ def _dispatch(key: Key, base: str, active: str | None) -> tuple[Image.Image, str
             flush=True,
         )
         if result.ok:
-            return faces.flash_ok(action.ok_face), None
+            return faces.flash_ok(action.ok_face_for(active)), None
         return faces.flash_err(action.err_face), None
     listing = client.active_rulesets(base)
     if listing is None:
@@ -115,6 +116,9 @@ def _loop(deck: Any, base: str) -> None:
         image, changed = _dispatch(key, base, active)
         if changed is not None:
             active = changed
+            # Ruleset-aware faces must follow right away — the next poll can't
+            # catch this change because `active` already moved.
+            _draw_all(deck, up, active, skip=frozenset(flashes) | {index})
         _set_key(deck, index, image)
         flashes[index] = time.monotonic() + FLASH_S
 

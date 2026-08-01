@@ -187,9 +187,11 @@ truth for the deck's current state**: update the button map here in the same
 commit as any `src/cueclock/deck/layout.py` change; the two must never
 disagree.
 
-**Status: phase 1 live (2026-07-31).** `cueclock deck` daemon runs under
-launchd (`com.cueclock.deck`) with the four API keys working; session toggle,
-replay, and music keys are phases 2–3 (see `BACKLOG.md`).
+**Status: phase 1 + match keys live (2026-07-31).** `cueclock deck` daemon runs
+under launchd (`com.cueclock.deck`) with eleven API keys working; session
+toggle and replay are phases 2–3 (see `BACKLOG.md`). The match-mode update
+(WNT 9-ball hosting) took row 3 for scoring, displacing the planned music
+keys to `BACKLOG.md`.
 
 ### C1. Decision record
 
@@ -218,26 +220,33 @@ Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
 |---|---|---|---|---|
 | 1,1 | **Session** | Toggle: start/stop `run` + OBS (hold 1 s to stop) | `OFF` / `STARTING…` / `ON` / `DEV` | planned (phase 2) |
 | 1,3 | **Ruleset** | Cycle rulesets via `POST /api/ruleset/{next}` | `8-BALL` / `FINAL 10` / `9-BALL` | **live** |
+| 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back (9-ball only, so the face stays static) | `PUSH`, flashes `60 s` / `ERROR` | **live** |
 | 1,5 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3) |
-| 2,1 | **Reset** | `POST /api/reset` (fouls, rack end, bug situations) | `RESET` | **live** |
-| 2,2 | **Extension** | `POST /api/extension` (+15 s) | `EXT +15`, flashes `+15 s` / `NO EXT` | **live** |
+| 2,1 | **Reset** | `POST /api/reset` (fouls, bug situations; does not refill extensions) | `RESET` | **live** |
+| 2,2 | **Extension** | `POST /api/extension` — face/flash follow the active ruleset (Ultimate Pool 15 s; WNT 30 s, WNT Event Rules §5) | `EXT +15` / `EXT +30`, flashes `+15 s` / `+30 s` / `NO EXT` | **live** |
+| 2,3 | **New Rack** | `POST /api/rack` — between racks: refills extensions, arms the first-shot window, clock idle | `NEW RACK`, flashes `RACKED` / `ERROR` | **live** |
+| 2,4 | **Force 30** | `POST /api/restart` — missed auto-reset recovery: clock restarts and runs immediately (rack-aware: 60 s in the first-shot window) | `FORCE 30`, flashes `GO` / `ERROR` | **live** |
 | 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~12 s of frames → corpus clip on T7 (60 s timeout: the reply comes after the ~2.2 GB write) | `FLAG` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
-| 3,1 | **Play/Pause** | `osascript`: Music.app playpause | `♪` | planned (phase 3) |
-| 3,2 | **Vol −** | `osascript`: output volume −10 | `VOL −` | planned (phase 3) |
-| 3,3 | **Vol +** | `osascript`: output volume +10 | `VOL +` | planned (phase 3) |
+| 3,1 | **P1 +** | `POST /api/score/p1/increment` | `P1 +`, flashes `+1` / `ERROR` | **live** |
+| 3,2 | **P1 −** | `POST /api/score/p1/decrement` | `P1 -`, flashes `-1` / `ERROR` | **live** |
+| 3,4 | **P2 −** | `POST /api/score/p2/decrement` | `P2 -`, flashes `-1` / `ERROR` | **live** |
+| 3,5 | **P2 +** | `POST /api/score/p2/increment` | `P2 +`, flashes `+1` / `ERROR` | **live** |
 
 Press outcomes flash as background color (green ok / red error) for 1.2 s —
-words only, no glyphs. Keys dim while the server is down; presses no-op.
+words only, no glyphs. Keys dim while the server is down; presses no-op. The
+wall-TV scoreboard is the real press feedback for the score keys; the tile
+flash is just an ack. Row 3 was reserved for the phase-3 music keys
+(play/pause, vol ±) — displaced to `BACKLOG.md` by match scoring (2026-07-31).
 Deliberately absent (Steven, 2026-07-31): clock start/pause — Reset covers the
-bug cases.
+bug cases, Force 30 the missed auto-reset.
 
 ### C3. Architecture
 
 ```
 Stream Deck MK.2 ── USB HID ── cueclock deck (launchd agent, always on)
-                                   ├─ HTTP → localhost:8000/api/*   (clock, dump, ruleset)
+                                   ├─ HTTP → localhost:8000/api/*   (clock, score, dump, ruleset)
                                    ├─ obs-websocket → OBS           (projector, replay, quit — phase 2+)
-                                   ├─ osascript                     (Music.app, volume — phase 3)
+                                   ├─ osascript                     (Music.app, volume — backlog)
                                    └─ subprocess                    (owns `cueclock run` — phase 2)
 ```
 
