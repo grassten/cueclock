@@ -196,6 +196,69 @@ EXPECTED: dict[
     # same wrong-flag configuration explains it and the same path covers
     # it). Cold truth: two clean shot -> settle pairs.
     "parked_vote_strike_0801": (2, 0, 2, 2),
+    # 2026-08-01 evening drill flags (checkpoint 33) — eight ring dumps
+    # from two sessions on the checkpoint-32 build, frame-verified against
+    # the session journal. All reference empty_table_0801.
+    # cue_grab: one real shot -> settle, then a gloved hand reaches in
+    # (merged blob at 618-1921 mm/s), grabs the resting cue and lifts it
+    # off the table. Live the grab fired a phantom rack shot through the
+    # rest-anchored path (dwell/step/axis/travel all pass on a snatch) and
+    # the 209.6 mm on-table drag beat the old 200 mm pickup ceiling,
+    # minting a phantom settle too. Pins the hand-stamp carom guard and
+    # the raised pickup travel ceiling: exactly one shot, one settle.
+    "cue_grab_0801": (1, 0, 1, 1),
+    # break_underread: a real break (frame-verified rack explosion) whose
+    # live ShotTaken read 705 mm/s — the white streaked too fast to be
+    # *observed*, and the IDLE break gate ate the rack's opening shot. A
+    # cold replay never confirms this break at all (the streak dies before
+    # the candidate can follow it): pinned as the honest gap, shots
+    # unasserted. The kinematic speed bound (unit-tested) fixes the
+    # live-shaped underread when the candidate does confirm.
+    "break_underread_0801": (None, 0, 1),
+    # lone_roller: a soft strike out of a white+brown touching pair; the
+    # white rolls to the left cushion, rebounds and rests — the ONLY mover,
+    # and its track is a newborn (not roster), so nothing could latch table
+    # motion and the settle never came: the live clock froze in MOTION at
+    # 10.43 s remaining for 33 s, absorbing the next real shot. Pins
+    # fire-latches-motion: exactly one shot AND its settle.
+    "lone_roller_0801": (1, 0, 1, 1),
+    # break_0801b: a clean 7104 mm/s break. Live, a scatter ball reborn at
+    # 906 mm/s fired a newborn ShotTaken 2.2 s into the scatter — the
+    # roster movers had died in streak churn (mover clock stale, zero-ball
+    # frames vacuously satisfied the pickup guards and unlatched the
+    # episode). Pins the latched-table guard on the birth paths: exactly
+    # one shot. Settles unpinned: the in-window settle lands in a
+    # mid-scatter detection desert (balls still rolling, cold-only,
+    # harmless post-break) — deferring it further would drop it out of the
+    # window entirely.
+    "break_0801b": (1, 0, None),
+    # pair_strikes: two real strikes 9 s apart, each launched from a rest
+    # against/near another ball. Shot 1's original track died mid-streak
+    # while its continuation was untracked for a beat — the pickup discard
+    # judged "every latcher died off-pocket under drag-scale travel" and
+    # silently unlatched the live shot, eating its settle (clock frozen
+    # 14 s, the second real strike absorbed mid-MOTION). Pins the
+    # fired-episode discard suppression: two shot -> settle pairs.
+    "pair_strikes_0801": (2, 0, 2, 2),
+    # cluster_shot: a firm shot into a 3-ball cluster, scattered and
+    # settled cleanly — cold, live and the frames all agree. Steven
+    # flagged it live; nothing wrong is visible in journal or frames
+    # (ground-truth question pending), so it pins the healthy behavior.
+    "cluster_shot_0801": (1, 0, 1, 1),
+    # pickup_snatch: PINNED KNOWN-WRONG (hand_roll precedent). A bare-hand
+    # snatch of the resting white — Steven walks the top rail carrying it,
+    # frame-verified — births a track that beats all three carried-ball
+    # gates (observed, smooth, unmerged: bare fingers from above never
+    # oversize the blob) and fires a phantom newborn shot. Silent hand
+    # motion is the acoustic-corroborator class (BACKLOG); the settles are
+    # real closures (post-snatch and post-placement quiet).
+    "pickup_snatch_0801": (1, 0, 2, 2),
+    # drill_shot: one real drill shot, fired late in a 41 s ring window —
+    # the ring's frame rate halved while the previous flag dump was
+    # writing (dump I/O starves the detect loop; see checkpoint 33). Live
+    # this shot double-fired through two paths 0.05 s apart (rest-anchored
+    # then newborn); the fire-latch closes the second path structurally.
+    "drill_shot_0801": (1, 0, None),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -227,6 +290,14 @@ REFERENCES: dict[str, str] = {
     "pickup_newborn_0801": "empty_table_0729",
     "jaw_strike_0801": "empty_table_0729",
     "parked_vote_strike_0801": "empty_table_0801",
+    "cue_grab_0801": "empty_table_0801",
+    "break_underread_0801": "empty_table_0801",
+    "lone_roller_0801": "empty_table_0801",
+    "break_0801b": "empty_table_0801",
+    "pair_strikes_0801": "empty_table_0801",
+    "cluster_shot_0801": "empty_table_0801",
+    "pickup_snatch_0801": "empty_table_0801",
+    "drill_shot_0801": "empty_table_0801",
 }
 
 

@@ -62,6 +62,55 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       withdrawn in 30), and the same exposure always existed outside the
       post-scratch window. Flag it if it ever happens live; the acoustic
       corroborator (click vs silence) is the structural fix.
+- [ ] **Silent hand motion still fires the birth paths** (checkpoint 33
+      residuals, both frame-verified 2026-08-01 evening, both acoustic-
+      corroborator cases — a stick strike clicks, a hand is silent):
+      (1) the **bare-hand snatch** — `pickup_snatch_0801`, pinned
+      known-wrong: a snatch-and-carry beats all three carried-ball gates
+      (observed, smooth, unmerged — bare fingers from above never oversize
+      the blob) and fires a phantom newborn shot; an idea-bank lever short
+      of the mic is **apparent ball size as a height cue** (a carried ball
+      nears the overhead camera: chest height ≈ 1.9× area — would also
+      merge-flag it); (2) the **white-shaft sweep** — the cue's light
+      shaft laid over the cloth during a walk-around births a clean,
+      coherent, whiteness-eligible track at ~1 m/s and fired twice live
+      (lone_roller's t=4064.9 fire; drill_shot's t=302.4 fire, which
+      counted a rack shot). Cold replays never reproduce either (live
+      vote/roster state); unit-simulate if a gate is ever attempted.
+- [ ] **Flag-dump writes starve the detect loop** (checkpoint 33 finding):
+      `drill_shot_0801`'s ring spans 41 s for 1562 frames — detection ran
+      at ~38 Hz while the previous dump was writing 3.6 GB to the T7, and
+      the live stick-sweep phantom fired inside the degraded window.
+      Candidate fixes: throttle the dump writer, lower ring seconds, or
+      accept (flags cluster at failures anyway). Measure first: timestamp
+      gaps in any dump recorded within ~15 s of a prior flag press.
+- [ ] **IDLE break gate vs real breaks/openers** (checkpoint 33): the gate
+      ate a real, frame-verified break that read 705 mm/s
+      (`break_underread_0801` — the white streaked unobservably fast; the
+      kinematic speed bound fixes the live-shaped underread when the
+      candidate confirms, but a cold replay never confirms that break at
+      all: the candidate follows the flag and the streak dies first). It
+      also ate honest ~1000 mm/s drill openers twice (flagged_7 session,
+      Restart pressed both times). Live-validate the kinematic bound on
+      the next real break; if drill openers keep annoying, the answer is
+      a deck-key workflow ("Start begins a drill rack") or a rack-context
+      discriminator — not a lower floor (placement lookalikes sit at
+      ~1000 too, and hard bowled returns at 3489-3926 — the newborn IDLE
+      gate now catches those). Also live-validate the newborn IDLE gate's
+      residual: a break struck from a fully occluded address would fire
+      newborn and be eaten.
+- [ ] **Quiet-table bowls/placements fire mid-rack** (checkpoint 33, the
+      dominant remaining phantom class — flagged_10/11/13's first fires
+      and both flagged_9/14 bowls counted rack shots live): a ball bowled
+      or firmly placed on a settled table is kinematically a clean strike
+      (newborn at speed, observed, smooth, unmerged after release) and no
+      positional gate separates it — the arm blob at release is
+      indistinguishable from the stroke blob at impact (guarding births
+      on it vetoes real occluded strikes: lone_roller replay evidence).
+      In IDLE the Hub's newborn gate now absorbs them; RUNNING-state
+      bowls still count phantom shots. Acoustic corroborator class (top
+      of the accuracy queue); idea-bank levers: apparent-size/height cue
+      for carried balls, release-point arm-blob escort analysis.
 - [ ] **Record `glove_address`** (~10 s: address with the bridge glove
       planted, slide the bridge hand deliberately, never shoot): measures
       the planted-glove-slide residual the roster rule cannot cover, and

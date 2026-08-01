@@ -29,10 +29,28 @@ BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
 # flew 5300+; `break_0801` + its corpus speed test pin the fix). Measured
 # with these semantics: breaks 5845-7361 mm/s, every ordinary shot
 # <= 2868 mm/s, placement lookalikes below 1000. 3000 is 1.9x under the
-# slowest measured break. Trade-offs (same recovery as a missed break): a
-# genuinely feather-soft break leaves the clock IDLE — Restart; drills that
-# start without a break use the Start key. Events without a speed
-# (manual/synthetic) pass.
+# slowest measured break. Checkpoint 33: the gate also ate a real break
+# whose white streaked too fast to be *observed* (705 mm/s reported on a
+# frame-verified rack explosion, `break_underread_0801`), so speed_mms now
+# additionally carries the confirm's own kinematics — note fast ordinary
+# shots therefore read higher than the pre-33 margins above (a real shot
+# passing the gate in IDLE starts the clock, which is the right failure
+# direction; placement lookalikes stay slow under both estimators).
+# Trade-offs (same recovery as a missed break): a genuinely feather-soft
+# break leaves the clock IDLE — Restart; drills that start without a break
+# use the Start key. Events without a speed (manual/synthetic) pass.
+#
+# Newborn fires are also ignored in IDLE (checkpoint 33): hard bowled
+# returns during rack setup measured 3489 and 3926 mm/s — above the speed
+# floor — and each started the rack as "shot 1" while Steven was still
+# placing balls (flagged_9/flagged_14, 19:33 and 19:51 UTC). Measured
+# discriminator: every real break in the corpus fires rest-anchored
+# (newborn=False — a break is struck from an openly addressed white:
+# break_0801, break_0801b, break_underread_0801, cluster_shot_0801's
+# session break), while a bowled ball is always a newborn track (it
+# materializes leaving a hand). Residual: a break from a fully occluded
+# address would fire newborn and be eaten — Restart recovers, same as a
+# missed break.
 IDLE_BREAK_FLOOR_MMS = 3000.0
 
 
@@ -171,10 +189,8 @@ class Hub:
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock
-        if (
-            self.clock.state is State.IDLE
-            and speed_mms is not None
-            and speed_mms < IDLE_BREAK_FLOOR_MMS
+        if self.clock.state is State.IDLE and (
+            newborn or (speed_mms is not None and speed_mms < IDLE_BREAK_FLOOR_MMS)
         ):
             # Racking / placement motion, not a break — see IDLE_BREAK_FLOOR_MMS.
             self._log("vision_shot_taken_ignored_idle", **detail)

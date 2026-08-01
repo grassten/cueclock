@@ -249,3 +249,24 @@ def test_idle_break_gate() -> None:
     assert hub.clock.state is State.RUNNING
     asyncio.run(hub.shot_taken(speed_mms=800.0))  # ordinary soft shot mid-rack
     assert hub.clock.state is State.MOTION
+
+
+def test_idle_break_gate_rejects_newborn_fires() -> None:
+    """A newborn fire never starts a rack (checkpoint 33).
+
+    Hard bowled returns during rack setup measured 3489 and 3926 mm/s —
+    above the speed floor — and each started the rack while Steven was
+    still placing balls. Every real break in the corpus fires
+    rest-anchored (newborn=False); a bowled ball is always a newborn
+    track. Mid-rack (RUNNING) newborn fires still count: the occluded-
+    address and own-rest strike paths are newborn by design.
+    """
+    hub = Hub()
+    asyncio.run(hub.shot_taken(speed_mms=3926.0, newborn=True))  # hard bowl
+    assert hub.clock.state is State.IDLE
+    asyncio.run(hub.shot_taken(speed_mms=5000.0, newborn=False))  # the break
+    assert hub.clock.state is State.MOTION
+    asyncio.run(hub.balls_settled())
+    assert hub.clock.state is State.RUNNING
+    asyncio.run(hub.shot_taken(speed_mms=1500.0, newborn=True))  # occluded strike
+    assert hub.clock.state is State.MOTION

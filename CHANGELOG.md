@@ -152,6 +152,81 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 33 — episode closure: a fire is evidence; eight
+  evening dumps triaged):** two drill sessions on the checkpoint-32 build
+  (18:30–18:55 and 19:22–19:28 UTC) produced eight flag dumps. Triage
+  lesson repeated the hard way: the first-pass replays ran `analyze` at its
+  fixed `--stride 2`, which halves the cadence on ring dumps (they already
+  store detect-stride frames) and produced *different events than the live
+  session* — every conclusion drawn at 39 Hz was wrong and had to be
+  redone at 78 Hz (`analyze` now adapts its default stride; `docs/cli.md`
+  updated). Frame verification also overturned two working hypotheses:
+  both "hand-bowl" candidates were real stick shots.
+  - **The dominant failure was missing settles, not phantom shots.** Three
+    independent holes, all closed with structural rules and no new
+    thresholds (`design.md` §4.2 checkpoint-33 bullet):
+    (1) a birth-path strike whose only mover is the fired track never
+    latched table motion — the clock froze in MOTION 33 s live
+    (`lone_roller_0801`); a ShotTaken now latches motion and admits its
+    ball to the roster. (2) The pickup discard unlatched live shots when
+    the struck ball's original track died mid-streak
+    (`pair_strikes_0801`, 14 s freeze) and when zero-ball scatter frames
+    made its guards vacuous (`break_0801b`); a fired episode is never a
+    pickup and an empty frame is never judged one. (3) Birth-evidence
+    strike paths opened mid-episode once the mover clock went stale in
+    scatter churn — a scatter rebirth at 906 mm/s fired as a "strike"
+    2.2 s into a live break; newborn/own-rest opens now require an
+    unlatched table.
+  - **Hand-grab phantom through the cue path** (`cue_grab_0801`): a gloved
+    hand grabbed the resting flag-holder — snatch = impulse, drag =
+    coherent travel, so every rest-anchored gate passed, and the 209.6 mm
+    on-table drag beat the 200 mm pickup ceiling (now 400, re-anchored) to
+    mint a phantom settle too. Merged, impulse-fast, non-roster tracks
+    (the hand blob, measured 618–1921 mm/s at 116 mm from the rest) now
+    stamp the carom guard — cue path only: the same rule on the birth
+    paths vetoed `lone_roller_0801`'s real strike (the stroke's own merged
+    blob stamps 66–72 mm from the birth spot), which is why stamps carry
+    ids and a hand flag.
+  - **IDLE gate ate a real break** (`break_underread_0801`): the white
+    streaked too fast to be *observed* and the fire reported 705 mm/s on a
+    frame-verified rack explosion. `ShotTaken.speed_mms` now also carries
+    the confirm's own kinematics (displacement ÷ confirm time) — still a
+    lower bound on true peak, but journal speeds read higher than the old
+    estimator on fast shots; re-measure before citing pre-33 margins. The
+    cold replay never confirms that break at all (candidate follows the
+    flag; the streak dies first) — pinned honest (shots unasserted),
+    BACKLOG'd with the live-validation plan.
+  - **Six more dumps arrived mid-triage (flagged_9–14, 19:33–19:55 UTC,
+    same live session)** — all instances of the classes above, plus one
+    new measured discriminator. Two hard bowled returns during rack setup
+    read 3926 and 3489 mm/s — above the IDLE break floor — and each
+    STARTED the rack as "shot 1" mid-setup. Every real break in today's
+    corpus fires rest-anchored (`newborn=False`: break_0801, break_0801b,
+    break_underread_0801, cluster_shot's session break) while a bowled
+    ball is always a newborn track (it materializes leaving a hand), so
+    **the Hub's IDLE gate now also ignores newborn fires**
+    (`test_idle_break_gate_rejects_newborn_fires`; residual: a break from
+    a fully occluded address would be eaten — Restart recovers).
+    flagged_13's two mid-MOTION re-fires die under the latch guard; the
+    quiet-table bowls that count mid-rack shots (flagged_10/11/13's
+    first) remain the acoustic residual.
+  - **Residuals, BACKLOG'd:** quiet-table bowls/placements fire the
+    newborn path mid-rack (acoustic class — a stick strike clicks, a hand
+    is silent; apparent-size/height as an idea-bank lever); bare-hand
+    snatch beats all three carried gates (`pickup_snatch_0801`, pinned
+    known-wrong); white-shaft sweep births whiteness-eligible phantom
+    tracks (fired twice live, cold-invisible); flag-dump writes halve the
+    detect cadence for ~10 s (`drill_shot_0801`'s ring spans 41 s); drill
+    openers under the IDLE floor still need the Start key.
+    `cluster_shot_0801` pins a session flag whose journal, frames, and
+    replay all read *correct* — ground-truth question for Steven.
+  - **Corpus:** eight scenarios promoted (`cue_grab_0801`,
+    `break_underread_0801`, `lone_roller_0801`, `break_0801b`,
+    `pair_strikes_0801`, `cluster_shot_0801`, `pickup_snatch_0801`,
+    `drill_shot_0801`) — 45 scenarios; 6 new unit guards (fire-latch
+    settle, fired-episode discard, scatter-gap discard, hand-grab guard,
+    hand-stamps-vs-birth-paths, kinematic speed); ruff + mypy clean.
+
 - **2026-08-01 (checkpoint 32 — own-rest strike path for a parked whiteness
   vote):** first flag of the match-day guest session (16:12 UTC, one flag in
   five shots on the dump journal). Steven's report: one missed shot. The

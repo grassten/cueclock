@@ -307,9 +307,19 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     pipeline = VisionPipeline(calibration, [ref_reader.frame(int(i)) for i in ref_indices])
 
     reader = ClipReader(Path(args.clip))
+    # Adapt the default stride to the clip's stored rate: record-made clips
+    # hold the full 156 fps stream (stride 2 → live cadence), while ring
+    # dumps hold only detect-stride frames — a fixed stride 2 silently
+    # replayed dumps at HALF the live cadence and produced different events
+    # than the session under triage (2026-08-01, checkpoint 33).
+    stride = args.stride
+    if stride is None:
+        span = float(reader.timestamps[-1] - reader.timestamps[0])
+        fps = (len(reader) - 1) / span if span > 0 else NOMINAL_FPS
+        stride = max(1, round(fps / 78.0))
     n_events = 0
     next_status = 0.0
-    for i in range(0, len(reader), args.stride):
+    for i in range(0, len(reader), stride):
         t = float(reader.timestamps[i])
         for event in pipeline.process(t, reader.frame(i)):
             n_events += 1
@@ -761,7 +771,12 @@ def main(argv: list[str] | None = None) -> int:
         help="table calibration JSON (default config/table_calibration.json)",
     )
     p_an.add_argument(
-        "--stride", type=int, default=2, help="detect every Nth frame (default 2 ≈ 78 Hz)"
+        "--stride",
+        type=int,
+        default=None,
+        help="detect every Nth frame (default: adapt to the clip's stored rate "
+        "so replay runs at the live ~78 Hz cadence — record clips store "
+        "156 fps, ring dumps store the detect stride already)",
     )
     p_an.add_argument("--verbose", action="store_true", help="per-second track status lines")
 

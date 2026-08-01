@@ -178,7 +178,7 @@ Shared display args only.
 | `--clip` | required | clip directory to analyze |
 | `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
 | `--calibration` | `config/table_calibration.json` | |
-| `--stride` | `2` | detect every Nth frame (2 ≈ 78 Hz) |
+| `--stride` | adaptive | detect every Nth frame. Default adapts to the clip's stored rate so replay always runs at the live ~78 Hz cadence: record clips store 156 fps (→ 2), **ring dumps store detect-stride frames already (→ 1)** — a fixed 2 used to replay dumps at half cadence and produce different events than the live session under triage (checkpoint 33) |
 | `--verbose` | off | per-second track status lines |
 
 ### `listen`

@@ -546,3 +546,113 @@ def test_parked_vote_hand_ramp_does_not_fire() -> None:
     sim.run(0.3)
     sim.velocity(CUE, 400.0, 0.0)  # ...accelerating to shot-like speed
     assert ShotTaken not in map(type, sim.run(0.5))
+
+
+def test_fired_lone_roller_gets_a_settle() -> None:
+    # lone_roller_0801: a birth-path strike whose only mover is the fired
+    # track itself (nothing else disturbed). The track is not roster, and a
+    # streaking ball only becomes judgeable after it stops — so the episode
+    # never latched and the settle never came (the live clock froze in
+    # MOTION for 33 s). The fire itself must latch table motion.
+    sim = rack()
+    sim.run(1.0)
+    sim.occlude(CUE)  # address occlusion: no observed ball holds the flag
+    sim.run(0.2)
+    sim.place(7, 800.0, 300.0)
+    sim.velocity(7, 900.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.4))
+    sim.velocity(7, 0.0, 0.0)
+    assert BallsSettled in map(type, sim.run(1.2))
+
+
+def test_pickup_discard_never_runs_in_a_fired_episode() -> None:
+    # pair_strikes_0801 lost its first settle this way: the struck ball's
+    # original track died mid-streak while its continuation was untracked
+    # for a beat, so "every latcher died off-pocket under hand-drag travel"
+    # held and the discard silently unlatched a live shot. Once a ShotTaken
+    # has fired, the quiet that follows IS the shot settling and the clock
+    # needs the BallsSettled.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 900.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.2))
+    sim.remove(CUE)  # terminal streak death mid-roll, continuation unseen
+    assert BallsSettled in map(type, sim.run(1.5))
+
+
+def test_scatter_gap_break_still_settles() -> None:
+    # break_0801b chain: the break fires, then every track dies in streak
+    # churn and a frame or two report zero balls — the pickup guards are
+    # vacuously true on an empty frame, and the discard unlatched the live
+    # break (a scatter rebirth then fired into the "quiet" table). A fired
+    # episode is never a pickup, and an empty frame is never judged one:
+    # the break must resolve with a real settle once balls are re-found.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 900.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.15))  # ~135 mm before the churn
+    sim.remove(CUE)
+    sim.remove(OBJ)  # whole-frame detection gap: nothing reported at all
+    sim.run(0.7)
+    sim.place(OBJ, 1200.0, 500.0)  # the gap passes; a ball is re-found still
+    assert BallsSettled in map(type, sim.run(1.5))
+
+
+def test_hand_grab_of_the_resting_cue_is_not_a_shot() -> None:
+    # cue_grab_0801: a gloved hand reaches in — a merged, impulse-fast,
+    # non-roster blob — grabs the resting flag-holder and yanks it away.
+    # Dwell, step, axis and travel all pass (a snatch is impulsive and a
+    # drag coherent), and the drag observations are not merged enough for
+    # the carried-ball gate. The hand's own approach is the evidence: a
+    # merged fast mover reaching kiss range of the rest is a bringer.
+    sim = rack()
+    sim.run(1.0)
+    sim.place(7, 700.0, 480.0)  # the hand blob sweeps toward the cue...
+    sim.merge(7)
+    sim.velocity(7, -900.0, 0.0)  # ...merged and fast, born mid-play
+    sim.run(0.15)  # ends within kiss range of the cue's rest
+    sim.velocity(7, 0.0, 0.0)
+    sim.velocity(CUE, 1200.0, 0.0)  # the grab: an impulse-fast coherent yank
+    assert ShotTaken not in map(type, sim.run(0.4))
+
+
+def test_hand_stamps_do_not_guard_the_birth_paths() -> None:
+    # lone_roller_0801's near-miss regression: the stroke's own merged
+    # stick/arm blob stamps 66-72 mm from the birth spot moments before
+    # impact — birth-evidence strikes happen exactly where the player is
+    # reaching, so hand stamps must guard only the rest-anchored cue path.
+    sim = rack()
+    sim.run(1.0)
+    sim.occlude(CUE)  # address occlusion: the flag goes quiet
+    sim.place(7, 820.0, 320.0)  # stroke blob: merged, fast, non-roster
+    sim.merge(7)
+    sim.velocity(7, 400.0, 0.0)
+    sim.run(0.1)
+    sim.remove(7)
+    sim.run(0.2)  # any candidate the blob itself opened dies (merged gate);
+    # its hand stamps are still inside the guard window when the ball births
+    sim.place(8, 800.0, 300.0)  # the struck ball emerges at speed
+    sim.velocity(8, 900.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.4))
+
+
+def test_reported_speed_carries_confirm_kinematics() -> None:
+    # break_underread_0801: the struck ball can streak too fast to be
+    # *observed*, so the fastest-observed sample alone underreads badly (a
+    # real break read 705 mm/s and the Hub's IDLE gate held the clock). The
+    # confirm's own displacement over its life is a speed the gates already
+    # proved, and no unobserved streak can dodge it.
+    engine = EventEngine()
+    t, x = 0.0, 500.0
+    for _ in range(80):  # a 1 s dwell at rest
+        t += DT
+        engine.update(t, [BallState(0, x, 500.0, 0.0, is_cue=True, raw_speed_mms=0.0)])
+    for _ in range(8):  # ~62 mm/frame ≈ 5000 mm/s, raw samples underreading
+        t += DT
+        x += 62.0
+        events = engine.update(t, [BallState(0, x, 500.0, 300.0, is_cue=True, raw_speed_mms=300.0)])
+        shots = [e for e in events if isinstance(e, ShotTaken)]
+        if shots:
+            assert shots[0].speed_mms is not None and shots[0].speed_mms >= 3000
+            return
+    raise AssertionError("strike never fired")

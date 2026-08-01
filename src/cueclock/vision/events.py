@@ -57,7 +57,10 @@ class ShotTaken:
     # what impulse speed, and via which path. The IDLE break gate reads
     # speed_mms (a break is fast; rack-gather placements are not) and the
     # session journal records all three, so a live misfire is attributable
-    # from the dump alone.
+    # from the dump alone. speed_mms is the larger of the fastest observed
+    # ball in the candidate window and the confirm's own kinematics
+    # (displacement / confirm time) — the observed sample alone underreads
+    # when the struck ball streaks unobservably fast (break_0801b).
     ball_id: int | None = None
     speed_mms: float | None = None
     newborn: bool = False
@@ -218,9 +221,12 @@ class EventConfig:
     # object ball) or a death inside a pocket zone after real travel (its
     # potted cue: 1699 mm). When every ball that latched the episode has
     # died off-pocket under this travel, the episode is a pickup: unlatch
-    # without a settle. 200 mm = 2.6x the measured drag max, far under any
-    # measured real-shot travel.
-    pickup_travel_max_mm: float = 200.0
+    # without a settle. 400 mm = 1.9x the measured drag max (41-78 mm on the
+    # original pickup captures, then 209.6 mm on cue_grab_0801's
+    # snatch-and-lift, which blew past the old 200 ceiling and minted a
+    # phantom settle), still 4.2x under the shortest measured real-shot
+    # travel (1699 mm).
+    pickup_travel_max_mm: float = 400.0
 
     # Scratch
     cue_lost_latch_s: float = 0.3
@@ -286,10 +292,22 @@ class EventEngine:
         # handoff (see EventConfig).
         self._cue_rest: tuple[float, float, float] | None = None
         self._cue_last_still_t = 0.0
-        # Carom guard memory: (t, x, y) of every recent genuine observed
-        # non-cue mover, pruned to the guard window. Survives the mover's
-        # track dying at the kiss (blob merge).
-        self._recent_movers: deque[tuple[float, float, float]] = deque()
+        # Carom guard memory: (t, x, y, ball_id, hand) of every recent
+        # genuine observed non-cue mover, pruned to the guard window.
+        # Survives the mover's track dying at the kiss (blob merge). Two
+        # sources: roster movers (hand=False, the classic bringer — read by
+        # all three strike paths), and merged, impulse-fast, non-roster
+        # tracks (hand=True): a hand/arm reaching in reads as exactly that
+        # (cue_grab_0801: the gloved hand crossed at 618-1921 mm/s, merged
+        # on every observation, 116 mm from the cue's rest, two frames
+        # before the "impulse"). Hand stamps are read by the rest-anchored
+        # cue path ONLY: the birth-evidence paths fire on balls the player
+        # is by definition reaching over (the stroke's own merged stick/arm
+        # blob stamped 66-72 mm from lone_roller_0801's birth spot and
+        # vetoed the real strike when hand stamps guarded them too). The
+        # ball_id lets an open skip stamps from its own candidate track (a
+        # struck ball must not veto itself during a handoff).
+        self._recent_movers: deque[tuple[float, float, float, int, bool]] = deque()
         self._cue_id_last: int | None = None
         self._cue_id_streak = 0
         self._candidate: _StrikeCandidate | None = None
@@ -339,6 +357,15 @@ class EventEngine:
         # free (a struck ball's newborn continuation is not roster, so it
         # never joins the mover set), and the episode can never be a pickup.
         self._episode_free_mover = False
+        # A ShotTaken fired in this episode: the pickup discard is then
+        # structurally wrong — the engine has already certified the motion
+        # as a shot, so the quiet that follows IS the shot settling, and the
+        # clock needs the BallsSettled. Without this, the struck ball's
+        # original track dying mid-streak (its continuation untracked for a
+        # beat) read as "every latcher died off-pocket" and the discard
+        # silently unlatched a live shot (pair_strikes_0801 lost its first
+        # settle that way; live, the same shape froze the clock in MOTION).
+        self._fired_this_episode = False
         # Occluded-address strike arming: one shot per rest cycle. Disarmed
         # when a newborn candidate fires (no machine-gun re-opens off the
         # same strike); re-armed by a cue-flagged ball at rest that has
@@ -497,7 +524,24 @@ class EventEngine:
         # too young to be judgeable before the candidate opens.
         cue_id = None if cue is None else cue.ball_id
         self._recent_movers.extend(
-            (t, b.x_mm, b.y_mm) for b in movers if b.observed and b.ball_id != cue_id
+            (t, b.x_mm, b.y_mm, b.ball_id, False)
+            for b in movers
+            if b.observed and b.ball_id != cue_id
+        )
+        # Hand/arm evidence (cue_grab_0801): a merged, impulse-fast,
+        # non-roster track is a hand-scale blob sweeping in — stamp it so
+        # the cue path's carom guard can refuse the grab it is about to
+        # commit. Roster movers above already cover every ball-shaped
+        # bringer.
+        self._recent_movers.extend(
+            (t, b.x_mm, b.y_mm, b.ball_id, True)
+            for b in balls
+            if b.observed
+            and b.merged
+            and b.ball_id not in self._roster
+            and b.ball_id != cue_id
+            and (b.speed_mms if b.raw_speed_mms is None else b.raw_speed_mms)
+            >= cfg.strike_impulse_mms
         )
         stale = t - cfg.strike_other_motion_guard_s
         while self._recent_movers and self._recent_movers[0][0] < stale:
@@ -505,7 +549,18 @@ class EventEngine:
         if movers:
             self._table_moving = True
             self._all_still_since = None
-        elif self._table_moving and self._episode_is_pickup(t, balls):
+        elif (
+            balls
+            and self._table_moving
+            and not self._fired_this_episode
+            and self._episode_is_pickup(t, balls)
+        ):
+            # `balls and`: mid-scatter detection gaps report zero tracks for a
+            # frame or two (every ball streaking at once), which makes every
+            # pickup guard vacuously true — the discard then unlatched a live
+            # break and a scatter rebirth fired as a newborn strike into the
+            # "quiet" table (break_0801b). A real pickup always leaves the
+            # other balls standing and detected.
             # Every ball that latched this episode has left the table far
             # from any pocket after a hand-scale drag: someone picked it up
             # (ball in hand). The quiet that follows is not a shot settling —
@@ -533,6 +588,7 @@ class EventEngine:
                 self._episode_origin.clear()
                 self._episode_last.clear()
                 self._episode_free_mover = False
+                self._fired_this_episode = False
                 events.append(BallsSettled(t))
         else:
             self._all_still_since = None
@@ -616,9 +672,10 @@ class EventEngine:
             return
         if any(
             hypot(mx - rest_x, my - rest_y) <= cfg.carom_reach_mm
-            for _mt, mx, my in self._recent_movers
+            for _mt, mx, my, mid, _hand in self._recent_movers
+            if mid != cue.ball_id
         ):
-            return  # carom guard: a moving ball reached the rest spot — a kiss
+            return  # carom guard: a mover (ball or hand) reached the rest spot
         dx, dy = cue.x_mm - rest_x, cue.y_mm - rest_y
         norm = hypot(dx, dy)
         if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
@@ -652,6 +709,16 @@ class EventEngine:
         cfg = self._cfg
         if self._newborn_disarmed_at is not None:
             return
+        if self._table_moving:
+            # A latched, unsettled episode is not a quiet table, even when
+            # the mover clock has gone stale: a break/fast shot's roster
+            # movers die in streak churn and their reborn continuations are
+            # too young to stamp, so mid-scatter the table *looks* quiet to
+            # the dwell gate — and a scatter ball reborn at 906 mm/s fired
+            # as a newborn strike 2.2 s into a live break (break_0801b).
+            # Every real birth-path strike in the corpus fires from a
+            # settled (unlatched) table.
+            return
         born = self._first_seen.get(cue.ball_id)
         if born is None or t - born > cfg.newborn_strike_max_age_s:
             return
@@ -662,9 +729,10 @@ class EventEngine:
         birth_x, birth_y = self._birth_pos[cue.ball_id]
         if any(
             hypot(mx - birth_x, my - birth_y) <= cfg.carom_reach_mm
-            for _mt, mx, my in self._recent_movers
+            for _mt, mx, my, mid, hand in self._recent_movers
+            if mid != cue.ball_id and not hand
         ):
-            return  # a mover reached the birth spot: kiss, not a strike
+            return  # a ball-mover reached the birth spot: kiss, not a strike
         dx, dy = cue.x_mm - birth_x, cue.y_mm - birth_y
         norm = hypot(dx, dy)
         if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
@@ -708,6 +776,12 @@ class EventEngine:
             return
         if self._newborn_disarmed_at is not None:
             return
+        if self._table_moving:
+            # Same latch guard as the newborn path: a mid-episode kiss from
+            # an untracked (reborn) mover must not fire off a bystander's
+            # rest. Every real own-rest strike fires from a settled table
+            # (parked_vote_strike_0801 both live cases).
+            return
         last_translate = self._last_translate.get(ball.ball_id)
         if last_translate is None or t - last_translate < cfg.pre_strike_dwell_s:
             return
@@ -720,9 +794,10 @@ class EventEngine:
         rest_x, rest_y = rest
         if any(
             hypot(mx - rest_x, my - rest_y) <= cfg.carom_reach_mm
-            for _mt, mx, my in self._recent_movers
+            for _mt, mx, my, mid, hand in self._recent_movers
+            if mid != ball.ball_id and not hand
         ):
-            return  # a mover reached the rest spot: kiss, not a strike
+            return  # a ball-mover reached the rest spot: kiss, not a strike
         dx, dy = ball.x_mm - rest_x, ball.y_mm - rest_y
         norm = hypot(dx, dy)
         if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
@@ -786,7 +861,10 @@ class EventEngine:
             # Every confirm observation is an oversized blob: the "ball" is
             # still inside a hand (pickup_newborn_0801 — a smooth, fully
             # observed carry that beat both gates above). Struck balls
-            # measure 0% merged here; see newborn_merged_frac_max.
+            # measure 0% merged here; see newborn_merged_frac_max. Newborn
+            # candidates only: a rest-anchored candidate legitimately streaks
+            # (streaks are merge-flagged too), while its dwell/step/axis
+            # gates already carry the rest-cycle evidence.
             self._candidate = None
             return []
         if candidate.newborn:
@@ -794,11 +872,36 @@ class EventEngine:
         self._candidate = None
         self._cue_rest = None
         self._axis_killed_t = None
+        # The fire certifies both the track and the motion. Admit the ball to
+        # the roster AND latch table motion directly: a strike whose only
+        # mover is the fired track (nothing else disturbed) otherwise never
+        # latches — the struck ball streaks, so it only becomes judgeable
+        # after it stops, when its displacement no longer trips the mover
+        # criterion — and the settle never comes (lone_roller_0801 froze the
+        # live clock in MOTION for 33 s; pair_strikes_0801 lost a settle the
+        # same way). If the fire was itself a phantom (nothing truly moving),
+        # stillness returns within a dwell and the settle resolves it — a
+        # reset, never a stuck clock.
+        self._roster.add(cue.ball_id)
+        self._table_moving = True
+        self._all_still_since = None
+        self._fired_this_episode = True
+        # The confirm is itself a speed measurement: the displacement the
+        # gates just verified, over the candidate's life. A break's white can
+        # streak too fast to be *observed* at all, so the fastest-observed
+        # sample alone underreads catastrophically — break_0801b read
+        # 705 mm/s on a full rack explosion and the Hub's IDLE break gate ate
+        # the real break. The kinematic bound cannot miss travel the confirm
+        # already proved.
+        dt = t - candidate.t0
+        speed = candidate.impulse_raw
+        if dt > 0:
+            speed = max(speed, displacement / dt)
         return [
             ShotTaken(
                 t,
                 ball_id=cue.ball_id,
-                speed_mms=candidate.impulse_raw,
+                speed_mms=speed,
                 newborn=candidate.newborn,
             )
         ]
