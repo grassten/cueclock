@@ -97,6 +97,11 @@ def test_push_stays_static_across_rulesets() -> None:
 EXT = next(k for k in LAYOUT if k.name == "extension")
 
 
+def test_extension_sits_top_right() -> None:
+    # The one key a player under the clock hunts for (Steven, 2026-08-01).
+    assert (EXT.row, EXT.col) == (1, 5)
+
+
 def test_extension_face_follows_the_active_ruleset() -> None:
     # 15 s for the Ultimate Pool rulesets; 30 s for WNT (WNT Event Rules §5).
     assert EXT.face_for("ultimate_pool_8ball") == "EXT\n+15"

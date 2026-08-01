@@ -77,10 +77,11 @@ LAYOUT: tuple[Key, ...] = (
     # window re-arms for a pass-back. Push outs exist only in 9-ball, so the
     # face and flash stay static — no ruleset-aware treatment.
     Key(1, 4, "push", "PUSH", ApiPost("/api/push", "60 s", "ERROR")),
-    Key(2, 1, "reset", "RESET", ApiPost("/api/reset", "RESET", "ERROR")),
+    # Top-right corner: the one key a player under the clock hunts for — it
+    # must be findable without reading faces (Steven, 2026-08-01 match day).
     Key(
-        2,
-        2,
+        1,
+        5,
         "extension",
         _EXT_FACE[DEFAULT_RULESET],
         ApiPost(
@@ -91,6 +92,7 @@ LAYOUT: tuple[Key, ...] = (
         ),
         face_by_ruleset=_EXT_FACE,
     ),
+    Key(2, 1, "reset", "RESET", ApiPost("/api/reset", "RESET", "ERROR")),
     # Match-mode keys (2026-07-31): rack-scope reset and mid-rack clock recovery.
     Key(2, 3, "rack", "NEW\nRACK", ApiPost("/api/rack", "RACKED", "ERROR")),
     Key(2, 4, "restart", "FORCE\n30", ApiPost("/api/restart", "GO", "ERROR")),

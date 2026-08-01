@@ -234,9 +234,9 @@ Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
 | 1,1 | **Session** | Toggle: start/stop `run` + OBS (hold 1 s to stop) | `OFF` / `STARTING…` / `ON` / `DEV` | planned (phase 2) |
 | 1,3 | **Ruleset** | Cycle rulesets via `POST /api/ruleset/{next}` | `8-BALL` / `FINAL 10` / `9-BALL` | **live** |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back (9-ball only, so the face stays static) | `PUSH`, flashes `60 s` / `ERROR` | **live** |
-| 1,5 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3) |
+| 1,5 | **Extension** | `POST /api/extension` — face/flash follow the active ruleset (Ultimate Pool 15 s; WNT 30 s, WNT Event Rules §5). Top-right corner so a player under the clock finds it without hunting (moved from 2,2 on 2026-08-01) | `EXT +15` / `EXT +30`, flashes `+15 s` / `+30 s` / `NO EXT` | **live** |
 | 2,1 | **Reset** | `POST /api/reset` (fouls, bug situations; does not refill extensions) | `RESET` | **live** |
-| 2,2 | **Extension** | `POST /api/extension` — face/flash follow the active ruleset (Ultimate Pool 15 s; WNT 30 s, WNT Event Rules §5) | `EXT +15` / `EXT +30`, flashes `+15 s` / `+30 s` / `NO EXT` | **live** |
+| 2,2 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3; displaced from 1,5 by Extension) |
 | 2,3 | **New Rack** | `POST /api/rack` — between racks: refills extensions, arms the first-shot window, clock idle | `NEW RACK`, flashes `RACKED` / `ERROR` | **live** |
 | 2,4 | **Force 30** | `POST /api/restart` — missed auto-reset recovery: clock restarts and runs immediately (rack-aware: 60 s in the first-shot window) | `FORCE 30`, flashes `GO` / `ERROR` | **live** |
 | 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~20 s of frames → corpus clip on T7 (60 s timeout: the reply comes after the ~3.6 GB write) | `FLAG` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
