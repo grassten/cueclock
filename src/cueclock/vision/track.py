@@ -85,6 +85,9 @@ class _Track:
     raw_speed: float = 0.0
     churn: float | None = None  # EMA of observed appearance churn
     last_obs: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0))  # t, x, y
+    last_obs_merged: bool = False  # the observation that last updated this
+    # track was an oversized (merged) blob — a moving track fed exclusively
+    # by these is inseparable from a hand/stick (the carried-ball signature)
 
     def predict(self, t: float) -> tuple[float, float]:
         dt = t - self.t
@@ -176,6 +179,7 @@ class BallTracker:
                         t=t,
                         whiteness=obs.whiteness,
                         last_obs=(t, obs.x_mm, obs.y_mm),
+                        last_obs_merged=obs.merged,
                     )
                 )
                 self._next_id += 1
@@ -191,6 +195,7 @@ class BallTracker:
                 raw_speed_mms=tr.raw_speed,
                 is_cue=tr.track_id == self._cue_id,
                 observed=tr.last_obs[0] == t,
+                merged=tr.last_obs[0] == t and tr.last_obs_merged,
                 churn=tr.churn if tr.last_obs[0] == t else None,
             )
             for tr in confirmed
@@ -227,6 +232,7 @@ class BallTracker:
             else:
                 track.churn += cfg.churn_ema * (obs.churn - track.churn)
         track.last_obs = (t, obs.x_mm, obs.y_mm)
+        track.last_obs_merged = obs.merged
 
     def _resolve_cue(self, t: float, confirmed: list[_Track]) -> None:
         cfg = self._cfg

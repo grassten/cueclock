@@ -24,19 +24,24 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 - [ ] **Live-validate match mode** during the first real match: rack flow,
       Push, Force 30, per-rack extensions, voice extension under pressure —
       Flag anything wrong.
-- [ ] **Live-validate checkpoints 26–28** (occluded-address strikes, roster
+- [ ] **Live-validate checkpoints 26–29** (occluded-address strikes, roster
       latch rule, settle-counts-the-shot, merge flag, pickup discard, IDLE
-      break gate): every 2026-07-31/08-01 live failure is corpus-pinned or
+      break gate, axis-kill re-open credit, carried-newborn merged gate):
+      every 2026-07-31/08-01 live failure is corpus-pinned or
       journal-pinned; live play judges the fixes. Every flag dump now
       carries `events.jsonl` with per-shot ball/speed/path detail.
-- [ ] **Sub-impulse touch shots are now honestly invisible** (checkpoint 28
-      finding): `soft_touch_0731`'s settle used to ride a stick-yank phantom
-      latch; with the merge flag it produces no events — a touch shot leaves
-      the clock counting (Reset recovers). No displacement latch can fix it
-      (`shaft_adjust` measures 59 mm/0.5 s while judgeable, worse than the
-      touch's 43): this is the acoustic click corroborator's job (idea bank
-      §5, `hardware.md` Part D mic), promoted from "if live play leaks
-      nudges" to the top of the accuracy queue.
+- [ ] **Two shot classes are now honestly invisible/wrong without audio**
+      (checkpoints 28–29): (a) sub-impulse touch shots — `soft_touch_0731`'s
+      settle used to ride a stick-yank phantom latch; with the merge flag it
+      produces no events, the clock keeps counting (Reset recovers). No
+      displacement latch can fix it (`shaft_adjust` measures 59 mm/0.5 s
+      while judgeable, worse than the touch's 43). (b) hand-rolled placements
+      — `hand_roll_place_0801`: bowling the cue back to a drill spot is
+      kinematically a strike (11 s rest, clean impulse, free coherent roll)
+      and fires the clock; pinned known-wrong. Both are the acoustic click
+      corroborator's job (idea bank §5, `hardware.md` Part D mic): a stick
+      strike clicks, a touch shot clicks softly, a hand roll is silent. Top
+      of the accuracy queue.
 - [ ] **Record `glove_address`** (~10 s: address with the bridge glove
       planted, slide the bridge hand deliberately, never shoot): measures
       the planted-glove-slide residual the roster rule cannot cover, and

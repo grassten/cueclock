@@ -24,6 +24,7 @@ class Sim:
         self.balls: dict[int, list[float]] = {}  # id -> [x, y, vx, vy]
         self.occluded: set[int] = set()
         self.flickering: set[int] = set()
+        self.merged_ids: set[int] = set()
         self.churn: dict[int, float] = {}
         self._frame = 0
 
@@ -34,6 +35,7 @@ class Sim:
         del self.balls[ball_id]
         self.occluded.discard(ball_id)
         self.flickering.discard(ball_id)
+        self.merged_ids.discard(ball_id)
         self.churn.pop(ball_id, None)
 
     def occlude(self, ball_id: int) -> None:
@@ -46,6 +48,11 @@ class Sim:
         observed — hand/stick fragments measure 7-43% on real footage), the
         rest coasted. Real balls measure 90-100%."""
         self.flickering.add(ball_id)
+
+    def merge(self, ball_id: int) -> None:
+        """Every observation of this ball is an oversized (merged) blob —
+        the detector's hand/stick-inseparable signature on real footage."""
+        self.merged_ids.add(ball_id)
 
     def set_churn(self, ball_id: int, value: float) -> None:
         """Appearance churn inside the ball's own disk (spin shows here)."""
@@ -74,6 +81,7 @@ class Sim:
                         hypot(ball[2], ball[3]),
                         is_cue=ball_id == CUE,
                         observed=observed,
+                        merged=observed and ball_id in self.merged_ids,
                         churn=self.churn.get(ball_id),
                     )
                 )
@@ -376,3 +384,48 @@ def test_potted_ball_track_death_still_settles() -> None:
     sim.remove(OBJ)
     sim.velocity(CUE, 0.0, 0.0)
     assert BallsSettled in map(type, sim.run(1.3))
+
+
+def test_stroke_tug_then_strike_still_fires() -> None:
+    # stroke_tug_strike_0801: the final stroke tugs the addressed cue's
+    # centroid just past the axis-seed floor for longer than the step
+    # window, opening a candidate with a garbage axis. The real impulse
+    # then fails that candidate's axis check — and the re-open credit must
+    # let it found a fresh candidate from the same rest, or the shot is
+    # silently missed (the live clip: clock never stopped, then reset).
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 0.0, 260.0)  # stroke tug: impulse-fast, wrong axis
+    sim.run(0.15)  # ~39 mm — outlives the 0.12 s step window, under 60 mm
+    sim.velocity(CUE, 2000.0, 0.0)  # the honest strike, orthogonal
+    assert ShotTaken in map(type, sim.run(0.3))
+
+
+def test_no_cue_newborn_strike_fires() -> None:
+    # Control for the carried-ball gate below, and the no-cue newborn path
+    # (no_cue_strike_0801) in synthetic form: the occluded cue's strike
+    # surfaces as a brand-new track already at impulse speed on a quiet
+    # table, cleanly detected every confirm frame.
+    sim = rack()
+    sim.run(1.0)
+    sim.occlude(CUE)  # address occlusion: no observed ball holds the flag
+    sim.run(0.2)
+    sim.place(7, 800.0, 300.0)
+    sim.velocity(7, 900.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.4))
+
+
+def test_hand_carried_newborn_is_not_a_shot() -> None:
+    # pickup_newborn_0801: picking the resting cue up births a new track
+    # from the hand+ball blob, sliding smoothly and fully observed — it
+    # beats the observation and speed-smoothness gates. But every one of
+    # its observations is merged (a ball in a hand is inseparable from the
+    # hand); real strikes measure 0% merged confirm observations.
+    sim = rack()
+    sim.run(1.0)
+    sim.occlude(CUE)
+    sim.run(0.2)
+    sim.place(7, 800.0, 300.0)
+    sim.merge(7)  # hand+ball blob every frame
+    sim.velocity(7, 900.0, 0.0)
+    assert ShotTaken not in map(type, sim.run(0.4))

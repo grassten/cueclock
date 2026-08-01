@@ -41,6 +41,10 @@ class BallState:
     raw_speed_mms: float | None = None  # one-step speed (impulse-grade); None → speed_mms
     observed: bool = True  # False while the tracker is coasting this ball
     # through an occlusion — the position is then an extrapolation, not evidence
+    merged: bool = False  # this frame's observation was an oversized (merged)
+    # blob: the ball is inseparable from a hand/stick or streaking. Meaningful
+    # only when observed; the newborn-strike confirm reads it (a hand-carried
+    # ball is merged every frame, a struck ball on open cloth almost never)
     churn: float | None = None  # smoothed appearance churn inside the ball's
     # own disk (spin shows here; a still ball shows only sensor noise);
     # None when unobserved or no sample yet
@@ -183,6 +187,16 @@ class EventConfig:
     # erratic (575 → 4140 mm/s between adjacent frames).
     newborn_confirm_obs_min: float = 0.9
     newborn_raw_step_ratio_max: float = 2.0
+    # Third carried-ball discriminator (pickup_newborn_0801): a steadier
+    # carry beats both gates above (its 8 confirm observations were fully
+    # observed with smooth speed) — but every one of them was a MERGED blob,
+    # because a ball in a hand is inseparable from the hand. A struck ball
+    # on open cloth detects clean: measured 0% merged confirm observations
+    # on every real strike in the corpus (occluded_address_0731,
+    # scratch_shot_0801, break_0801 at 7361 mm/s, five more) with one 11%
+    # outlier (no_cue_strike_0801, non-newborn). 0.5 sits 4x above the
+    # worst real strike and 2x below the measured carry (100%).
+    newborn_merged_frac_max: float = 0.5
     # Flicker filter: hand/stick fragments pass the detector's geometry gates
     # only intermittently, so their tracks are mostly coasted — measured 7-43%
     # observed on the flagged live captures (missed_strike_0731,
@@ -254,8 +268,9 @@ class _StrikeCandidate:
 
 @dataclass
 class _BallHistory:
-    # (t, x, y, observed) — observed=False rows are coasted extrapolations
-    positions: deque[tuple[float, float, float, bool]] = field(default_factory=deque)
+    # (t, x, y, observed, merged) — observed=False rows are coasted
+    # extrapolations; merged marks oversized-blob observations
+    positions: deque[tuple[float, float, float, bool, bool]] = field(default_factory=deque)
 
 
 class EventEngine:
@@ -278,6 +293,16 @@ class EventEngine:
         self._cue_id_last: int | None = None
         self._cue_id_streak = 0
         self._candidate: _StrikeCandidate | None = None
+        # Axis-kill re-open credit (stroke_tug_strike_0801): the final stroke
+        # can tug the addressed cue's centroid just past the 12 mm seed floor
+        # (measured 12.04 mm) ~0.1 s before impact, opening a candidate with
+        # a garbage axis. The axis check rightly kills it — the design intent
+        # is that "the real impulse can still re-open from the same rest" —
+        # but by then the step gate's still-stamp is stale (expired 0.01 s
+        # short on the live miss) and the re-open never happens. An axis kill
+        # is itself evidence that an impulse is in progress: it re-arms the
+        # step gate for one strike_step_max_s window.
+        self._axis_killed_t: float | None = None
         self._cue_last_seen: tuple[float, float, float, float] | None = None  # (t, x, y, speed)
         self._cue_lost_while_moving = False
         self._scratch_fired = False
@@ -402,7 +427,7 @@ class EventEngine:
         # ---- table moving / settled (per-ball displacement over windows) ----
         for ball in balls:
             history = self._history.setdefault(ball.ball_id, _BallHistory())
-            history.positions.append((t, ball.x_mm, ball.y_mm, ball.observed))
+            history.positions.append((t, ball.x_mm, ball.y_mm, ball.observed, ball.merged))
             while history.positions and history.positions[0][0] < t - cfg.settle_creep_window_s:
                 history.positions.popleft()
             self._last_translate.setdefault(ball.ball_id, t)
@@ -548,6 +573,7 @@ class EventEngine:
             self._cue_last_still_t = t
         elif self._cue_rest is not None and t - self._cue_last_still_t > cfg.strike_handoff_gap_s:
             self._cue_rest = None
+            self._axis_killed_t = None  # no rest to re-open from
 
     def _maybe_open_candidate(self, t: float, cue: BallState) -> None:
         cfg = self._cfg
@@ -557,9 +583,15 @@ class EventEngine:
         if self._cue_rest is None:
             self._maybe_open_newborn(t, cue, raw)
             return
-        if t - self._cue_last_still_t > cfg.strike_step_max_s:
+        if t - self._cue_last_still_t > cfg.strike_step_max_s and not (
+            self._axis_killed_t is not None and t - self._axis_killed_t <= cfg.strike_step_max_s
+        ):
+            # Ramp, not a step: shaft/hand push accelerating the ball. A
+            # just-axis-killed candidate is the exception — the tug that
+            # opened it already burned the still-stamp window (see
+            # _axis_killed_t) and the honest impulse arrives right behind.
             self._maybe_open_newborn(t, cue, raw)
-            return  # ramp, not a step: shaft/hand push accelerating the ball
+            return
         rest_t0, rest_x, rest_y = self._cue_rest
         if self._cue_last_still_t - rest_t0 < cfg.pre_strike_dwell_s:
             return
@@ -658,17 +690,33 @@ class EventEngine:
             return []
         axis_dot = (dx * candidate.dir_x + dy * candidate.dir_y) / displacement
         if axis_dot < cfg.strike_axis_dot_min:
-            self._candidate = None  # incoherent trajectory (e.g. detection jitter)
+            # Incoherent trajectory (detection jitter, or a pre-impact stroke
+            # tug that seeded a garbage axis). For rest-anchored candidates,
+            # leave a one-window re-open credit: the honest impulse may be
+            # arriving right now on a stale still-stamp (see _axis_killed_t).
+            if not candidate.newborn:
+                self._axis_killed_t = t
+            self._candidate = None
             return []
         if candidate.newborn and not self._observed_since(cue, candidate.t0):
             # A carried ball coasts through finger occlusions; a struck cue on
             # open cloth is observed every frame of the confirm window.
             self._candidate = None
             return []
+        if candidate.newborn and self._merged_frac_since(cue, candidate.t0) > (
+            cfg.newborn_merged_frac_max
+        ):
+            # Every confirm observation is an oversized blob: the "ball" is
+            # still inside a hand (pickup_newborn_0801 — a smooth, fully
+            # observed carry that beat both gates above). Struck balls
+            # measure 0% merged here; see newborn_merged_frac_max.
+            self._candidate = None
+            return []
         if candidate.newborn:
             self._newborn_disarmed_at = t  # one shot per rest cycle
         self._candidate = None
         self._cue_rest = None
+        self._axis_killed_t = None
         return [
             ShotTaken(
                 t,
@@ -684,6 +732,13 @@ class EventEngine:
             return False
         observed = sum(1 for p in rows if p[3])
         return observed >= self._cfg.newborn_confirm_obs_min * len(rows)
+
+    def _merged_frac_since(self, ball: BallState, t0: float) -> float:
+        """Fraction of the ball's observed rows since t0 that were merged blobs."""
+        rows = [p for p in self._history[ball.ball_id].positions if p[0] >= t0 and p[3]]
+        if not rows:
+            return 0.0
+        return sum(1 for p in rows if p[4]) / len(rows)
 
     # ---------- settle helpers ----------
 

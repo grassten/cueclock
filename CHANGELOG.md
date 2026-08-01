@@ -124,6 +124,53 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 29 — stroke-tug re-open, carried-newborn gate):**
+  the first post-28 drill session (12:31–12:40 UTC, restarted on the
+  checkpoint-28 build) produced three flags in four minutes of
+  retrieve-and-replace drill play; all three root-caused from the journal +
+  ring replays, two fixed, one pinned as an honest gap.
+  - **Axis-kill re-open credit** (`vision/events.py`, from `stroke_tug_strike_0801`
+    = flag 1): a real shot was missed live — journal shows a settle with no
+    `shot_taken` and `rack_shots` silently bumping 3→4 (the settle-counts-
+    the-shot fallback absorbing the miss). Traced frame by frame: the final
+    stroke tugged the addressed cue 12.04 mm (just past the 12 mm axis-seed
+    floor) ~0.1 s before impact and opened a candidate with a garbage axis;
+    the real impulse (raw 3293 mm/s) failed that candidate's axis check as
+    designed, but the step gate's still-stamp was 0.01 s too stale for the
+    documented re-open — the same shape as `missed_strike_0731`, returning
+    through a bigger tug. An axis kill on a rest-anchored candidate now
+    re-arms the step gate for one `strike_step_max_s` window; all other open
+    gates still apply. The clip's replay goes from 0 shots to exactly 1
+    (fires 0.04 s after the kill).
+  - **Carried-newborn merged gate** (`detect→track→events` plumbing, from
+    `pickup_newborn_0801` = flag 3): picking the resting cue up births a new
+    track from the hand+ball blob — the old track's merge-hold eats the blob
+    until it slides beyond the 100 mm association gate, and the remainder is
+    a newborn at speed on a quiet table. This carry was smooth and fully
+    observed, beating both checkpoint-26 carried-ball gates, and fired a
+    phantom `ShotTaken` 0.7 s after a settle (clock then stuck in MOTION 17 s
+    — no settle can follow a pickup). Measured discriminator with 4×/2×
+    margins: the carry confirmed on **8/8 merged observations** vs **0 %**
+    on every real strike in the corpus (worst outlier 11 %, non-newborn;
+    the 7361 mm/s break also 0 %). `BallState` now carries per-frame
+    merged-ness; a newborn candidate whose observed confirm rows are > 50 %
+    merged is a carry. Unit-tests the no-cue newborn path for the first time
+    (control + carried pair).
+  - **Hand-rolled placement — honest gap, pinned** (`hand_roll_place_0801` =
+    flag 2): Steven bowled the cue back to his drill spot from the top-left
+    corner; the launch is kinematically a strike (11 s rest, clean impulse,
+    coherent free roll, nothing merged after release) and the reach came in
+    over the masked rail, so there is no approach evidence either. The roll
+    died at the bottom-center pocket mouth and also minted a `Scratch`.
+    Position data cannot separate a hand-bowled ball from a struck one:
+    joined the sub-impulse class under the acoustic corroborator (a stick
+    strike clicks, a hand roll is silent — BACKLOG, top of accuracy queue).
+    Pinned known-wrong (1 shot, 1 scratch) so any change surfaces.
+  - **Corpus:** `stroke_tug_strike_0801`, `hand_roll_place_0801`,
+    `pickup_newborn_0801` added — 35 scenarios, 41 corpus tests; 143 unit
+    tests; ruff + mypy clean. Remaining residual: planted-glove slide
+    (needs the `glove_address` recording).
+
 - **2026-08-01 (checkpoint 28 — merge flag, pickup discard, IDLE break gate):**
   the first journal-instrumented session (checkpoint 27 ran live 11:14–11:19
   UTC) produced two flags, and the journal did its job: both root causes were

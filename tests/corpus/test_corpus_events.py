@@ -140,6 +140,33 @@ EXPECTED: dict[
     # (the handoff underread — see test_break_0801_speed_clears_the_idle_gate
     # below). First break clip from the TV-era camera position.
     "break_0801": (1, 0, 1, 1),
+    # 2026-08-01 midday drill flags (checkpoint 29).
+    # stroke_tug: the final stroke tugs the addressed cue 12.04 mm — just
+    # past the 12 mm axis-seed floor — and opens a candidate with a garbage
+    # axis 0.1 s before impact. The axis check kills it as designed, but the
+    # still-stamp was 0.01 s too stale for the documented re-open, and the
+    # live shot was missed outright (clock ran through the shot, then reset
+    # at settle). Pins the axis-kill re-open credit: exactly one shot, and
+    # both settles are real (the prior shot's tail, then this one's).
+    "stroke_tug_strike_0801": (1, 0, 2, 2),
+    # hand_roll: Steven bowls the cue ball back to his drill spot by hand
+    # from the top-left corner. KNOWN-WRONG, PINNED HONESTLY: the launch is
+    # kinematically a strike (11 s rest, clean impulse, coherent travel —
+    # the hand reaches in over the masked rail, so there is no approach
+    # evidence, and the ball rolls free on the cloth, so nothing is merged),
+    # and the roll dying at the bottom-center pocket mouth also mints a
+    # Scratch. Overhead position data cannot separate a hand-bowled ball
+    # from a struck one; this is the acoustic corroborator's case (BACKLOG,
+    # top of the accuracy queue — a stick strike clicks, a hand roll is
+    # silent). If this pin ever changes, something real moved.
+    "hand_roll_place_0801": (1, 1, 1, 1),
+    # pickup_newborn: picking the resting cue up births a new track from
+    # the hand+ball blob (the old track's merge-hold keeps eating the blob
+    # until it slides out of the association gate). The carry was smooth
+    # and fully observed — past both original carried-ball gates — but
+    # every confirm observation was merged (8/8; real strikes measure 0%).
+    # Pins the newborn merged-fraction gate: only the real shot fires.
+    "pickup_newborn_0801": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -164,6 +191,9 @@ REFERENCES: dict[str, str] = {
     "rack_place_0801": "empty_table_0729",
     "address_yank_strike_0801": "empty_table_0729",
     "break_0801": "empty_table_0729",
+    "stroke_tug_strike_0801": "empty_table_0729",
+    "hand_roll_place_0801": "empty_table_0729",
+    "pickup_newborn_0801": "empty_table_0729",
 }
 
 
