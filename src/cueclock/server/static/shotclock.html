@@ -137,8 +137,8 @@
             osc.start(now);
             osc.stop(now + duration + 0.05);
         }
-        function cueTen()  { playTone(659.25, 0.9, 0.18, 'sine'); }         // E5 — soft
-        function cueFive() { playTone(880.00, 0.9, 0.26, 'triangle'); }     // A5 — brighter
+        function cueTen()  { playTone(659.25, 0.9, 0.18, 'sine'); }      // E5 — soft
+        function cueBeep() { playTone(880.00, 0.16, 0.26, 'triangle'); } // A5 — short blip
         function cueExpired() {
             // Two-note resonant cadence: low then high.
             playTone(392.00, 0.6, 0.30, 'sine', 0.00);   // G4
@@ -150,6 +150,13 @@
         window.addEventListener('keydown', ensureAudio, { once: true });
 
         // ---------------- WebSocket to server ----------------
+        // WNT Event Rules §5: the TV table sounds a warning every second
+        // counting down from 5. Beep once per display decrement at 5..1
+        // while RUNNING; re-arm whenever the display leaves the final five
+        // (reset, extension, restart). The server's 'five' cue is
+        // deliberately ignored — these per-second beeps supersede it.
+        let lastBeeped = null;
+
         function render(state) {
             timerText.innerText = state.display ?? state.time ?? 30;
             clockEl.classList.toggle('motion',  state.state === 'MOTION');
@@ -158,8 +165,13 @@
             timerText.classList.toggle('urgent', (state.time ?? 99) <= 5 && state.state !== 'IDLE');
 
             if (!audioEnabled) return;
+            const d = state.display;
+            if (state.state === 'RUNNING' && d >= 1 && d <= 5) {
+                if (d !== lastBeeped) { cueBeep(); lastBeeped = d; }
+            } else if (d > 5) {
+                lastBeeped = null;
+            }
             if (state.cue === 'ten')     cueTen();
-            if (state.cue === 'five')    cueFive();
             if (state.cue === 'expired') cueExpired();
         }
 
