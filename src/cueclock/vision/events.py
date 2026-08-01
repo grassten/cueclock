@@ -341,12 +341,17 @@ class EventEngine:
         self._episode_free_mover = False
         # Occluded-address strike arming: one shot per rest cycle. Disarmed
         # when a newborn candidate fires (no machine-gun re-opens off the
-        # same strike) and when a Scratch fires (the next fast cue-flagged
-        # newborn is the fetched ball being carried back — scratch_replace).
-        # Re-armed by a cue-flagged ball at rest that has *translated since
-        # the disarm* (the struck cue coming to rest, or a fresh placement):
-        # after a scratch the whiteness vote falls back to some still ball
-        # that never moved, and that fallback must not re-arm.
+        # same strike); re-armed by a cue-flagged ball at rest that has
+        # *translated since the disarm* (the struck cue coming to rest, or a
+        # fresh placement) — the whiteness vote's fallback to some still ball
+        # that never moved must not re-arm. Scratch no longer disarms
+        # (checkpoint 31, jaw_strike_0801): a phantom scratch — the cue
+        # stopping *in* a jaw, dying untracked over the pocket mouth — left
+        # the disarm stuck with no cue track to ever re-arm it, and the real
+        # strike out of the jaws was categorically dropped. The fetched-carry
+        # false positive the scratch disarm guarded (scratch_replace, born
+        # 2220 mm/s) dies on the three measured confirm gates instead:
+        # observation ≥ 0.9, raw-step ratio ≤ 2, merged fraction ≤ 0.5.
         self._newborn_disarmed_at: float | None = None
 
     def update(self, t: float, balls: list[BallState]) -> list[Event]:
@@ -536,10 +541,6 @@ class EventEngine:
                 and self._near_pocket(last_x, last_y)
             ):
                 self._scratch_fired = True
-                # The cue has left the table: the next fast cue-flagged
-                # newborn is the fetched ball being carried back, not a
-                # strike (scratch_replace's carry was born at 2220 mm/s).
-                self._newborn_disarmed_at = t
                 events.append(Scratch(t))
 
         return events

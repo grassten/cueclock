@@ -124,6 +124,41 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 31 — Scratch no longer disarms the newborn strike
+  path):** the first post-30 session (13:59–14:07 UTC, checkpoints 29+30
+  live) ran two full racks cleanly — 22 shots, every strike/settle correct —
+  until one flag: a shot out of the jaws of a down-table pocket wasn't
+  recognized (Steven's report; journal confirms a settle with no
+  `shot_taken` bumping `rack_shots` 9→10 via the fallback at t=430.7).
+  - **Root cause — a stuck disarm, not a detection gap:** the previous
+    shot's cue stopped hanging in the top-left jaws, minting the known
+    phantom Scratch (checkpoint 30). Frame-verified: the hanging ball sits
+    **untracked over the pocket mouth** while the whiteness vote parks on a
+    still ball mid-table. The checkpoint-26 arming rule had Scratch disarm
+    the newborn strike path (fetch-carry guard), and re-arm needs a
+    cue-flagged ball at rest that translated since the disarm — with the
+    real cue trackless in the jaws, the disarm could never clear. The jaw
+    strike (newborn born at 1294 mm/s, clean/observed/unmerged — the cold
+    ring replay fires it) was categorically dropped live.
+  - **Fix — remove the Scratch disarm; keep the fire-path disarm:** the
+    scratch disarm predates all three carried-ball confirm gates and is
+    strictly redundant with them — `scratch_replace`'s real fetch carry
+    fails each independently (obs ≥ 0.9 and raw-step ≤ 2 were measured on
+    that very carry at checkpoint 26; merged ≤ 0.5 added in 29), while a
+    jaw ball rolling out cleanly passes all three. The categorical disarm
+    was suppressing exactly the discrimination the gates provide. All
+    scratch/carry corpus scenarios re-verified green (`scratch_replace`,
+    `scratch_shot_0801`, `ball_in_hand_pickup_0801`, `pickup_newborn_0801`,
+    `ball_in_hand_place/nudge`). Accepted residual, BACKLOG'd: a bowled
+    post-scratch return would now read as a strike — no observed corpus
+    case, and the exposure always existed outside the post-scratch window.
+  - **Corpus:** `jaw_strike_0801` added, pinned (1, 0, 1, 1) — the pin
+    guards jaw-emergence detection; the disarm regression is unit-guarded
+    (`test_shot_from_pocket_jaw_after_scratch_fires`, red on checkpoint-30
+    code) with a carry-back control, since a cold replay never sees the
+    pre-clip scratch. 36 scenarios, 42 corpus tests; 146 unit tests;
+    ruff + mypy clean.
+
 - **2026-08-01 (checkpoint 30 — young solid movers block settle; flag-2
   record corrected):** Steven reviewed checkpoint 29's read of the third
   flag clip and corrected it: "this isn't a hand roll — I shot the 4 ball."

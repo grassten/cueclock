@@ -448,3 +448,45 @@ def test_hand_carried_newborn_is_not_a_shot() -> None:
     sim.merge(7)  # hand+ball blob every frame
     sim.velocity(7, 900.0, 0.0)
     assert ShotTaken not in map(type, sim.run(0.4))
+
+
+def scratch_prelude() -> Sim:
+    """Strike the cue into the (0, 0) pocket zone and let Scratch latch."""
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)
+    sim.place(OBJ, 1200.0, 500.0)
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    shot = sim.run(0.65)  # dies ~60 mm from the (0, 0) pocket
+    assert types(shot) == [ShotTaken]
+    sim.remove(CUE)
+    assert types(sim.run(0.8)) == [Scratch, BallsSettled]
+    sim.run(1.0)  # table quiet; no cue-flagged track exists
+    return sim
+
+
+def test_shot_from_pocket_jaw_after_scratch_fires() -> None:
+    # jaw_strike_0801: a cue that stops hanging in a jaw dies untracked over
+    # the pocket mouth and mints a phantom Scratch — then the player strikes
+    # the invisible hanger out of the jaws, surfacing as a newborn at
+    # impulse speed. Scratch must not disarm the newborn path: with no cue
+    # track on the table there is nothing to ever re-arm it, and the strike
+    # is categorically dropped (live, the settle-counts-the-shot fallback
+    # silently absorbed the miss).
+    sim = scratch_prelude()
+    sim.place(7, 60.0, 60.0)  # the hanger emerges from the jaws...
+    sim.velocity(7, 900.0, 900.0)  # ...clean, fully observed, smooth
+    assert ShotTaken in map(type, sim.run(0.4))
+
+
+def test_post_scratch_carry_back_is_not_a_shot() -> None:
+    # scratch_replace's false-positive twin, contained by gates instead of
+    # the removed categorical disarm: the fetched cue ball comes back inside
+    # a hand, born as a fast newborn — but every carry observation is a
+    # merged blob (and the real carry also fails the observation and
+    # raw-step gates; any one of the three kills it).
+    sim = scratch_prelude()
+    sim.place(7, 800.0, 300.0)  # the fetch carry: hand+ball blob at speed
+    sim.merge(7)
+    sim.velocity(7, 900.0, 0.0)
+    assert ShotTaken not in map(type, sim.run(0.4))

@@ -24,12 +24,14 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 - [ ] **Live-validate match mode** during the first real match: rack flow,
       Push, Force 30, per-rack extensions, voice extension under pressure —
       Flag anything wrong.
-- [ ] **Live-validate checkpoints 26–29** (occluded-address strikes, roster
+- [ ] **Live-validate checkpoints 26–31** (occluded-address strikes, roster
       latch rule, settle-counts-the-shot, merge flag, pickup discard, IDLE
-      break gate, axis-kill re-open credit, carried-newborn merged gate):
-      every 2026-07-31/08-01 live failure is corpus-pinned or
-      journal-pinned; live play judges the fixes. Every flag dump now
-      carries `events.jsonl` with per-shot ball/speed/path detail.
+      break gate, axis-kill re-open credit, carried-newborn merged gate,
+      young-solid-mover settle block, scratch-disarm removal): every
+      2026-07-31/08-01 live failure is corpus-pinned or journal-pinned;
+      live play judges the fixes. Every flag dump now carries
+      `events.jsonl` with per-shot ball/speed/path detail. The 14:00 UTC
+      session validated 26–30 across two racks (11 + 11 shots, one flag).
 - [ ] **Sub-impulse touch shots are now honestly invisible** (checkpoint 28
       finding): `soft_touch_0731`'s settle used to ride a stick-yank phantom
       latch; with the merge flag it produces no events — a touch shot leaves
@@ -43,8 +45,19 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 - [ ] **Phantom Scratch when the cue stops hanging in a pocket jaw**
       (`hanger_pot_0801`, checkpoint 30): a follow-to-the-jaw stop is
       indistinguishable from a pot at track-death time, so Scratch fires;
-      journal-only in v1, so no clock damage — fix only if scratch ever
-      drives the clock (idea bank §4 has the candidate levers).
+      journal-only in v1 — fix only if scratch ever drives the clock (idea
+      bank §4 has the candidate levers). It found one indirect way to drive
+      it — disarming the newborn strike path and eating the next jaw shot
+      (`jaw_strike_0801`) — closed in checkpoint 31 by removing the scratch
+      disarm; the Scratch event itself remains phantom and journal-only.
+- [ ] **Post-scratch bowled return would read as a strike** (checkpoint 31
+      residual, accepted): with the scratch disarm gone, a cue ball bowled
+      back onto the cloth after a real scratch is kinematically a strike
+      (clean, fast, unmerged) and would fire. No observed case in the
+      corpus (checkpoint 29's "hand-rolled placement" was a misread,
+      withdrawn in 30), and the same exposure always existed outside the
+      post-scratch window. Flag it if it ever happens live; the acoustic
+      corroborator (click vs silence) is the structural fix.
 - [ ] **Record `glove_address`** (~10 s: address with the bridge glove
       planted, slide the bridge hand deliberately, never shoot): measures
       the planted-glove-slide residual the roster rule cannot cover, and

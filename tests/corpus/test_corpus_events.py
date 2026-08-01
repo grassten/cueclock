@@ -173,6 +173,15 @@ EXPECTED: dict[
     # every confirm observation was merged (8/8; real strikes measure 0%).
     # Pins the newborn merged-fraction gate: only the real shot fires.
     "pickup_newborn_0801": (1, 0, 1, 1),
+    # jaw_strike: the cue hangs in the top-left jaws after a phantom-scratch
+    # shot, untracked over the pocket mouth (the cue vote parks on a still
+    # ball mid-table); the strike out of the jaws surfaces as a newborn at
+    # 1294 mm/s. Live this was missed — Scratch had disarmed the newborn
+    # path and no cue track existed to re-arm it (checkpoint 31 removed the
+    # scratch disarm; test_shot_from_pocket_jaw_after_scratch_fires guards
+    # the regression, since this cold replay never sees the scratch). The
+    # pin guards the jaw-emergence detection itself.
+    "jaw_strike_0801": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -200,6 +209,7 @@ REFERENCES: dict[str, str] = {
     "stroke_tug_strike_0801": "empty_table_0729",
     "hanger_pot_0801": "empty_table_0729",
     "pickup_newborn_0801": "empty_table_0729",
+    "jaw_strike_0801": "empty_table_0729",
 }
 
 
