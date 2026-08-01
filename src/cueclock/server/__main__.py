@@ -1,6 +1,7 @@
 """Run the shot-clock server: ``uv run python -m cueclock.server``."""
 
 import argparse
+from pathlib import Path
 
 import uvicorn
 
@@ -16,7 +17,9 @@ def main() -> None:
     )
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
-    uvicorn.run(create_app(), host=args.host, port=args.port)
+    # Same gitignored score file `cueclock run` uses, so a mid-match server
+    # restart keeps the scoreboard.
+    uvicorn.run(create_app(score_path=Path("config/score.json")), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -19,8 +19,8 @@ from cueclock.server.hub import Hub
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_app() -> FastAPI:
-    hub = Hub()
+def create_app(score_path: Path | None = None) -> FastAPI:
+    hub = Hub(score_path=score_path)  # None = score is in-memory only
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -72,6 +72,24 @@ def create_app() -> FastAPI:
         await hub.reset()
         return {"ok": True}
 
+    @app.post("/api/rack")
+    async def api_rack() -> dict[str, bool]:
+        """Per-rack reset: fresh shot count + extension pool, IDLE (between games)."""
+        await hub.new_rack()
+        return {"ok": True}
+
+    @app.post("/api/restart")
+    async def api_restart() -> dict[str, bool]:
+        """Force a fresh countdown running immediately (missed auto-reset recovery)."""
+        await hub.restart()
+        return {"ok": True}
+
+    @app.post("/api/push")
+    async def api_push() -> dict[str, bool]:
+        """Push out called: re-enter the WNT §5 60 s first-shot window."""
+        await hub.push()
+        return {"ok": True}
+
     @app.post("/api/extension")
     async def api_extension() -> dict[str, bool]:
         return {"ok": True, "accepted": await hub.extension()}
@@ -92,7 +110,47 @@ def create_app() -> FastAPI:
 
     @app.get("/api/state")
     async def api_state() -> dict[str, object]:
-        return hub.clock.snapshot().as_dict()
+        return hub.payload()  # same composed payload the WS broadcasts
+
+    @app.get("/api/score")
+    async def api_score() -> dict[str, object]:
+        return hub.score.as_dict()
+
+    @app.post("/api/score/reset")
+    async def api_score_reset() -> dict[str, object]:
+        """Scores back to zero; names and race-to are kept."""
+        hub.score.reset_scores()
+        await hub.score_changed()
+        return {"ok": True, "score": hub.score.as_dict()}
+
+    @app.post("/api/score/config")
+    async def api_score_config(body: dict[str, object]) -> dict[str, object]:
+        """Partial update: `p1_name` / `p2_name` / `race_to` (null clears)."""
+        hub.score.configure(body)
+        await hub.score_changed()
+        return {"ok": True, "score": hub.score.as_dict()}
+
+    @app.post("/api/score/{player}/{op}")
+    async def api_score_adjust(player: str, op: str) -> JSONResponse:
+        if player not in ("p1", "p2") or op not in ("increment", "decrement"):
+            return JSONResponse(
+                {"ok": False, "error": f"unknown score action: {player}/{op}"},
+                status_code=404,
+            )
+        hub.score.adjust(player, 1 if op == "increment" else -1)  # floors at 0
+        await hub.score_changed()
+        return JSONResponse({"ok": True, "score": hub.score.as_dict()})
+
+    @app.post("/api/vision/on")
+    async def api_vision_on() -> dict[str, object]:
+        await hub.set_vision(True)
+        return {"ok": True, "vision": True}
+
+    @app.post("/api/vision/off")
+    async def api_vision_off() -> dict[str, object]:
+        """Match-day kill switch: vision events stop moving the clock."""
+        await hub.set_vision(False)
+        return {"ok": True, "vision": False}
 
     @app.post("/api/dump")
     async def api_dump(label: str = "flagged") -> JSONResponse:

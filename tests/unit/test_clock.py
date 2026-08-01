@@ -79,12 +79,16 @@ def test_extension_accepted_only_in_running_and_grace() -> None:
     assert snap.time == 44  # 30 - 1 + 15
 
 
-def test_extension_limit_per_frame() -> None:
+def test_extension_pool_is_per_rack() -> None:
     clock = make_clock()
     clock.start(now=0.0)
     assert clock.extension()
     assert not clock.extension()  # extensions_per_frame == 1
-    clock.balls_settled(now=1.0)  # fresh frame re-allows
+    clock.shot_taken()
+    clock.balls_settled(now=1.0)  # next shot, same rack — pool stays spent
+    assert not clock.extension()
+    clock.new_rack(now=2.0)  # only a new rack refills the pool
+    clock.start(now=2.0)
     assert clock.extension()
 
 
@@ -118,7 +122,7 @@ def test_shot_during_grace_freezes_then_settle_restarts() -> None:
     assert snap.time == 29
 
 
-def test_settle_resets_extensions_and_cues() -> None:
+def test_settle_rearms_cues_but_keeps_extensions() -> None:
     clock = make_clock()
     clock.start(now=0.0)
     clock.extension()  # 30 + 15 = 45 s
@@ -126,7 +130,7 @@ def test_settle_resets_extensions_and_cues() -> None:
     clock.shot_taken()
     clock.balls_settled(now=36.0)
     snap = clock.tick(now=56.5)  # crosses 10 again on the fresh countdown
-    assert snap.extensions_used == 0
+    assert snap.extensions_used == 1  # pool is per rack — settle doesn't refill
     assert snap.cue == "ten"
 
 
@@ -149,10 +153,11 @@ def test_reset_and_set_ruleset() -> None:
     clock.reset()
     assert clock.state is State.IDLE
     assert clock.remaining == 30
-    assert clock.extensions_used == 0
+    assert clock.extensions_used == 1  # reset is the foul button — no refill
     clock.set_ruleset(RULESETS["ultimate_pool_8ball_final10"])
     assert clock.snapshot().display == 15
     assert clock.snapshot().ruleset == "ultimate_pool_8ball_final10"
+    assert clock.extensions_used == 0  # ruleset switch is a full fresh state
 
 
 def test_rulesets_validated_values() -> None:
@@ -162,11 +167,13 @@ def test_rulesets_validated_values() -> None:
         "wnt_9ball",
     }
     default = RULESETS["ultimate_pool_8ball"]
-    assert default == Ruleset("ultimate_pool_8ball", 30, 15, 1, 2.0, 2.0)
+    assert default == Ruleset("ultimate_pool_8ball", 30, 30, 15, 1, 2.0, 2.0)
     assert RULESETS["ultimate_pool_8ball_final10"] == Ruleset(
-        "ultimate_pool_8ball_final10", 15, 15, 1, 2.0, 2.0
+        "ultimate_pool_8ball_final10", 15, 15, 15, 1, 2.0, 2.0
     )
-    assert RULESETS["wnt_9ball"] == Ruleset("wnt_9ball", 30, 30, 1, 2.0, 2.0)
+    # WNT Event Rules §5: 30 s shot, 60 s first shot, 30 s extension;
+    # the pool of 2 is one-per-player, self-policed (no turn tracking).
+    assert RULESETS["wnt_9ball"] == Ruleset("wnt_9ball", 30, 60, 30, 2, 2.0, 2.0)
 
 
 def test_ruleset_aliases_resolve() -> None:
@@ -174,3 +181,117 @@ def test_ruleset_aliases_resolve() -> None:
     assert get_ruleset("ultimate_9ball") is RULESETS["wnt_9ball"]
     assert get_ruleset("matchroom_9ball") is RULESETS["wnt_9ball"]
     assert get_ruleset("ultimate_pool_8ball") is RULESETS["ultimate_pool_8ball"]
+
+
+# ---------- rack context (WNT Event Rules §5, added 2026-07-31) ----------
+
+
+def test_wnt_rack_flow_first_shot_gets_60() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    assert clock.state is State.IDLE
+    assert clock.snapshot().display == 60  # first-shot window shown pre-break
+    clock.shot_taken()  # the untimed break lands in IDLE and counts as shot 1
+    assert clock.state is State.MOTION
+    clock.balls_settled(now=5.0)
+    assert clock.snapshot().display == 60  # WNT §5: first shot after the break-off
+    clock.shot_taken()  # rack shot 2 — the 60 s shot itself
+    clock.balls_settled(now=10.0)
+    assert clock.snapshot().display == 30  # normal clock from here on
+
+
+def test_shot_taken_in_motion_does_not_double_count() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()
+    clock.shot_taken()  # vision re-fires while balls still moving — one shot
+    clock.balls_settled(now=1.0)
+    assert clock.snapshot().display == 60  # still the first shot after the break
+
+
+def test_8ball_behavior_unchanged_by_rack_context() -> None:
+    # first_shot_seconds == base_seconds, so settles still start at 30.
+    clock = make_clock()
+    clock.new_rack(now=0.0)
+    assert clock.snapshot().display == 30
+    clock.shot_taken()
+    clock.balls_settled(now=1.0)
+    assert clock.snapshot().display == 30
+    assert clock.state is State.RUNNING
+
+
+def test_wnt_extension_pool_of_two_per_rack() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.start(now=0.0)
+    assert clock.extension()
+    assert clock.extension()  # pool of 2 — one per player, self-policed
+    assert not clock.extension()
+    clock.new_rack(now=1.0)
+    clock.start(now=1.0)
+    assert clock.extension()  # refilled
+
+
+def test_restart_runs_immediately_at_current_base() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.start(now=0.0)
+    clock.extension()
+    clock.restart(now=3.0)  # missed-auto-reset recovery
+    assert clock.state is State.RUNNING
+    assert clock.remaining == 60  # still inside the post-break window
+    assert clock.extensions_used == 1  # a force-restart is not a new rack
+    clock.shot_taken()
+    clock.balls_settled(now=4.0)
+    clock.shot_taken()
+    clock.balls_settled(now=5.0)
+    clock.restart(now=6.0)
+    assert clock.remaining == 30  # window over — same button, base time
+
+
+def test_reset_keeps_rack_shots_and_extensions() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.extension()
+    clock.reset()  # foul/bug button: timer normalize only
+    assert clock.state is State.IDLE
+    assert clock.remaining == 60  # still fewer than two rack shots
+    assert clock.extensions_used == 1  # a foul must not refill extensions
+    clock.shot_taken()  # rack shot 2
+    clock.balls_settled(now=2.0)
+    assert clock.snapshot().display == 30
+
+
+def test_push_out_restarts_at_60_and_rearms_the_window() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.shot_taken()  # the push-out shot
+    clock.balls_settled(now=2.0)
+    assert clock.snapshot().display == 30  # window over…
+    clock.push(now=3.0)  # …until the operator relays the verbal call
+    assert clock.state is State.RUNNING
+    assert clock.remaining == 60  # WNT §5: first shot after a push out
+    assert clock.extensions_used == 0  # untouched (none used here)
+    clock.shot_taken()  # the 60 s shot
+    clock.balls_settled(now=4.0)
+    assert clock.snapshot().display == 30  # back to normal
+    clock.push(now=5.0)  # pass-back: the original player gets 60 s again
+    assert clock.remaining == 60
+
+
+def test_push_during_motion_arms_the_following_settle() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.shot_taken()  # the push-out shot
+    clock.push(now=2.0)  # called while balls are still rolling
+    assert clock.state is State.MOTION  # clock stays frozen
+    clock.balls_settled(now=3.0)
+    snap = clock.snapshot()
+    assert snap.state == "RUNNING"
+    assert snap.display == 60  # first shot after the push out

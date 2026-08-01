@@ -11,6 +11,12 @@ time-dependent method takes ``now`` (monotonic seconds), so the machine is
 deterministic under test and replay. The vision events ``shot_taken`` /
 ``balls_settled`` replace the old ``motion_start`` / ``motion_end`` names;
 ``scratch`` intentionally does not touch the clock (see ``CHANGELOG.md``).
+
+Rack context (added 2026-07-31 for WNT match play): the clock counts shots per
+rack so the WNT §5 first-shot allowance works — 60 s for the first shot after
+the break-off or a push out, 30 s otherwise. ``new_rack`` resets the rack
+scope (shot count + extension pool); ``reset`` stays the foul/bug button and
+deliberately does not.
 """
 
 import math
@@ -48,7 +54,8 @@ class ShotClock:
     def __init__(self, ruleset: Ruleset, now: float) -> None:
         self.ruleset = ruleset
         self.state = State.IDLE
-        self.remaining = float(ruleset.base_seconds)
+        self._rack_shots = 0  # shots taken this rack; the break is shot 1
+        self.remaining = float(self.current_base())
         self.extensions_used = 0
         self.last_cue: str | None = None
         self._last_tick = now
@@ -56,11 +63,22 @@ class ShotClock:
         self._grace_left = 0.0
         self._expired_for = 0.0
 
+    def current_base(self) -> int:
+        """Full countdown for the next shot — rack-aware.
+
+        WNT Event Rules §5: 60 s for the first shot after the break-off or a
+        push out, 30 s otherwise. With the break as shot 1, "fewer than two
+        shots this rack" is exactly the first-shot window.
+        """
+        if self._rack_shots < 2:
+            return self.ruleset.first_shot_seconds
+        return self.ruleset.base_seconds
+
     # ---------- operator commands (HTTP API / Stream Deck) ----------
 
     def start(self, now: float) -> None:
         if self.state in (State.IDLE, State.EXPIRED):
-            self.remaining = float(self.ruleset.base_seconds)
+            self.remaining = float(self.current_base())
             self._cues_fired.clear()
         self.state = State.RUNNING
         self._last_tick = now
@@ -71,14 +89,66 @@ class ShotClock:
         self.state = State.IDLE
 
     def reset(self) -> None:
+        # Timer normalize only — the foul/bug button. Rack scope (shot count,
+        # extension pool) deliberately survives: a foul must not refill
+        # extensions. The per-rack reset is new_rack().
         self.state = State.IDLE
-        self.remaining = float(self.ruleset.base_seconds)
-        self.extensions_used = 0
+        self.remaining = float(self.current_base())
         self._cues_fired.clear()
         self.last_cue = None
 
+    def new_rack(self, now: float) -> None:
+        """Per-rack scope reset — pressed between games.
+
+        Fresh shot count and extension pool (WNT §5: extensions are per rack);
+        IDLE showing the first-shot countdown, so the untimed break can happen
+        whenever the player is ready.
+        """
+        self._rack_shots = 0
+        self.extensions_used = 0
+        self.state = State.IDLE
+        self.remaining = float(self.current_base())
+        self._cues_fired.clear()
+        self.last_cue = None
+        self._last_tick = now
+
+    def restart(self, now: float) -> None:
+        """Force a fresh countdown, running immediately.
+
+        Mid-rack recovery for a missed auto-reset — rack-aware (60 s during
+        the WNT post-break window, base otherwise), extensions untouched.
+        """
+        self.remaining = float(self.current_base())
+        self.state = State.RUNNING
+        self._cues_fired.clear()
+        self.last_cue = None
+        self._last_tick = now
+
+    def push(self, now: float) -> None:
+        """Operator-called push out — re-enter the first-shot window.
+
+        WNT Event Rules §5: "The first shot after the Break-Off or after a
+        Push Out, players will have 60 seconds available." Vision can't hear
+        the verbal call, and on a pass-back the original player gets 60 s
+        again — so this is a button, pressed once per 60 s shot. If balls
+        aren't moving the fresh countdown starts immediately; during MOTION
+        only the window is re-armed, so the following settle starts at 60 s.
+        Extensions untouched.
+        """
+        self._rack_shots = 1  # as if the break just happened
+        if self.state is not State.MOTION:
+            self.remaining = float(self.ruleset.first_shot_seconds)
+            self.state = State.RUNNING
+            self._cues_fired.clear()
+            self.last_cue = None
+            self._last_tick = now
+
     def set_ruleset(self, ruleset: Ruleset) -> None:
+        # Switching game types is a bigger scope change than a new rack:
+        # zero everything, then normalize the timer.
         self.ruleset = ruleset
+        self._rack_shots = 0
+        self.extensions_used = 0
         self.reset()
 
     def extension(self) -> bool:
@@ -98,14 +168,25 @@ class ShotClock:
     # ---------- vision events ----------
 
     def shot_taken(self) -> None:
-        """Freeze the clock while balls are moving."""
-        if self.state in (State.RUNNING, State.GRACE):
+        """Freeze the clock while balls are moving; count the rack shot.
+
+        IDLE→MOTION makes the untimed break count: New Rack leaves IDLE, the
+        break's ShotTaken lands in IDLE, and the following settle starts the
+        WNT 60 s first-shot clock (§5 — the break itself is not clocked).
+        """
+        if self.state is State.MOTION:
+            return  # vision re-fired mid-motion — don't double-count the shot
+        self._rack_shots += 1
+        if self.state in (State.RUNNING, State.GRACE, State.IDLE):
             self.state = State.MOTION
 
     def balls_settled(self, now: float) -> None:
-        """Balls at rest — start a fresh shot clock for the next shot."""
-        self.remaining = float(self.ruleset.base_seconds)
-        self.extensions_used = 0
+        """Balls at rest — start a fresh shot clock for the next shot.
+
+        Does not refill extensions: the pool is per rack (WNT §5), restored
+        only by new_rack().
+        """
+        self.remaining = float(self.current_base())
         self._cues_fired.clear()
         self.last_cue = None
         self.state = State.RUNNING
@@ -146,8 +227,7 @@ class ShotClock:
             # clock for the next player's shot.
             self._expired_for += dt
             if self._expired_for >= self.ruleset.post_expiry_seconds:
-                self.remaining = float(self.ruleset.base_seconds)
-                self.extensions_used = 0
+                self.remaining = float(self.current_base())
                 self._cues_fired.clear()
                 self.state = State.RUNNING
         # MOTION / IDLE: time passes but the countdown does not.
