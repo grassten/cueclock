@@ -135,7 +135,56 @@ survive unchanged in `design.md`.
   decode on read) — idea-bank material, not worth the ClipReader complexity
   while the battery is under 4 minutes.
 
+- **2026-08-01** Stream Deck music/media controls dropped from the backlog —
+  Steven controls music from his phone (the BT-amp caveat went with them).
+  Voice "extension" monitoring parked until a wired USB mic is bought;
+  match-day bring-up trimmed to the OBS scoreboard source + a dry-run rack,
+  with extensions deck-key only.
+
+- **2026-08-01** Empty-table reference refreshed to `empty_table_0801`
+  (`hardware.md` §E2 steps 4–5): the 07-29 reference had drifted to 8.1
+  (warn > 8, same-mount noise ~2); the fresh drift check reads ok. README
+  launch command updated; `empty_table_0729` kept on the T7 for a
+  drift-comparison later (idea bank §7D). `docs/cli.md` added to the plan
+  of record — the user/agent-facing CLI reference (commands, flags,
+  recipes); it must match `cli.py` in the same commit, like the Part C
+  button map.
+
 ## Checkpoint log (append-only, newest first)
+
+- **2026-08-01 (checkpoint 32 — own-rest strike path for a parked whiteness
+  vote):** first flag of the match-day guest session (16:12 UTC, one flag in
+  five shots on the dump journal). Steven's report: one missed shot. The
+  ring window actually holds **two live strike misses** — the first was
+  silently patched by settle-counts-the-shot 11 s later (clock ran through
+  the stroke, then a 9 s-late settle reset it), the second (the flagged one)
+  produced no live events at all.
+  - **Root cause — the whiteness vote parked on the wrong still ball:**
+    shot 1 rolled the cue into a cluster where it rested against the blue;
+    the merge corrupts its color sample, the vote wandered to the yellow
+    mid-table (t=6.5 in the dump), and stayed there. Shot 2 struck that
+    rested cue: telemetry shows a 9.5 s own-rest, two occluded frames at
+    contact, emergence at 619 mm/s with smooth decay — and the vote
+    returning only 0.6 s post-impact. Both strike paths structurally blind:
+    rest memory anchored to the parked flag-holder 578 mm from the impulse
+    (handoff path punts to newborn), and the struck track was 11 s old
+    (newborn path correctly rejects). Cold replay reproduces the shot-2
+    miss exactly; shot 1 it catches (live vote state predates the ring).
+  - **Fix — third identity-carrying path (`_maybe_open_rested`):** when the
+    flag-holder shows no impulse, a roster ball stepping to impulse speed
+    from a long own-rest opens a candidate anchored on its own rest spot.
+    Reuses only measured gates (roster admission, `pre_strike_dwell_s` on
+    the ball's own `_last_translate` — read before the impulse frame
+    updates it, so a hand ramp that trips the creep window early can never
+    show a dwell — carom guard, seed floor/ceiling, and the newborn
+    carried-ball confirm gates). **No new thresholds.** Design prose:
+    `design.md` §4.2.
+  - **Corpus:** `parked_vote_strike_0801` added, pinned (2, 0, 2, 2), the
+    first clip referenced against `empty_table_0801` (the §E2 refresh
+    earlier that day). Post-fix replay: ShotTaken 0.69 + 12.54, settles
+    3.14 + 17.97, no scratch. Unit-guarded three ways (fire from own rest,
+    merged hand-carry control, hand-ramp control) on a Sim extended with a
+    parkable cue vote. 37 scenarios; ruff + mypy clean.
 
 - **2026-08-01 (checkpoint 31 — Scratch no longer disarms the newborn strike
   path):** the first post-30 session (13:59–14:07 UTC, checkpoints 29+30

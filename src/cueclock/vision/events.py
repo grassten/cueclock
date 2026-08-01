@@ -411,21 +411,39 @@ class EventEngine:
             else:
                 self._maybe_open_candidate(t, cue)
             self._update_cue_rest(t, cue)
-        if self._candidate is None and (cue is None or not cue.observed):
-            # No *observed* ball holds the cue flag — the tracker lost the
-            # cue (address occlusion killed its track; the regrab grace and
-            # the whiteness floor keep the flag empty, and a fast newborn's
-            # blur-corrupted color sample cannot win it back within the
-            # newborn window), or the flag-holder is a coasting phantom (a
-            # dead cue coasts ~0.15 s after impact, long enough to age the
-            # real newborn out — the 2026-08-01 scratch-shot miss). The birth
-            # conjunction carries the identity instead: on a quiet table the
-            # only thing that can materialize at impulse speed is the ball
-            # that was just struck.
-            for ball in balls:
-                raw = ball.speed_mms if ball.raw_speed_mms is None else ball.raw_speed_mms
-                if raw >= cfg.strike_impulse_mms and ball.observed:
-                    self._maybe_open_newborn(t, ball, raw, follow_ball=True)
+        if self._candidate is None:
+            # Identity-carrying scans, for strikes the cue flag cannot vouch
+            # for. Two configurations: no *observed* ball holds the flag —
+            # the tracker lost the cue (address occlusion killed its track;
+            # the regrab grace and the whiteness floor keep the flag empty,
+            # and a fast newborn's blur-corrupted color sample cannot win it
+            # back within the newborn window), or the flag-holder is a
+            # coasting phantom (a dead cue coasts ~0.15 s after impact, long
+            # enough to age the real newborn out — the 2026-08-01
+            # scratch-shot miss) — or the flag is parked on some *other*
+            # still ball entirely (the real cue lost the vote resting merged
+            # against a cluster and the vote returned 0.6 s post-impact:
+            # parked_vote_strike_0801). On a quiet table the only thing that
+            # can materialize at impulse speed is the ball that was just
+            # struck: a fresh track carries the identity by its birth
+            # conjunction, an old roster track by its own rest.
+            cue_quiet = cue is None or not cue.observed
+            cue_raw = (
+                0.0
+                if cue is None
+                else (cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms)
+            )
+            if cue_quiet or cue_raw < cfg.strike_impulse_mms:
+                for ball in balls:
+                    if cue is not None and ball.ball_id == cue.ball_id:
+                        continue
+                    raw = ball.speed_mms if ball.raw_speed_mms is None else ball.raw_speed_mms
+                    if raw < cfg.strike_impulse_mms or not ball.observed:
+                        continue
+                    if cue_quiet:
+                        self._maybe_open_newborn(t, ball, raw, follow_ball=True)
+                    if self._candidate is None:
+                        self._maybe_open_rested(t, ball, raw)
                     if self._candidate is not None:
                         break
 
@@ -660,6 +678,64 @@ class EventEngine:
             newborn=True,
             last_raw=raw,
             ball_id=cue.ball_id if follow_ball else None,
+            impulse_raw=raw,
+        )
+
+    def _maybe_open_rested(self, t: float, ball: BallState, raw: float) -> None:
+        """Wrong-flag strike (parked_vote_strike_0801): a roster ball with a
+        long rest of its own steps to impulse speed while the whiteness vote
+        is parked elsewhere.
+
+        The real cue can lose the vote resting merged against a cluster (its
+        color sample corrupts) and win it back only ~0.6 s after being
+        struck — far outside every rest/newborn window. Both existing paths
+        are then structurally blind: the rest memory tracks the parked
+        flag-holder (the impulse lands hundreds of mm from it), and the
+        struck ball's track is seconds old (not a birth). The ball's own
+        history carries the anchor instead: it was admitted to the roster at
+        a settle (a real ball at rest, not junk), its last translation is a
+        full pre-strike dwell ago (a hand push ramps and trips the creep
+        window early — it can never show a long dwell at impulse speed), and
+        the impulse steps away from its own rest spot. The scan sees
+        `_last_translate` before this frame's update, so the impulse frame
+        itself cannot break its own dwell. Confirm runs the carried-ball
+        gates (observation fraction, raw-speed smoothness, merged fraction) —
+        the same measured hand discriminators the newborn path uses. No new
+        thresholds.
+        """
+        cfg = self._cfg
+        if ball.ball_id not in self._roster:
+            return
+        if self._newborn_disarmed_at is not None:
+            return
+        last_translate = self._last_translate.get(ball.ball_id)
+        if last_translate is None or t - last_translate < cfg.pre_strike_dwell_s:
+            return
+        history = self._history.get(ball.ball_id)
+        if history is None:
+            return
+        rest = next(((p[1], p[2]) for p in reversed(history.positions) if p[3]), None)
+        if rest is None:
+            return
+        rest_x, rest_y = rest
+        if any(
+            hypot(mx - rest_x, my - rest_y) <= cfg.carom_reach_mm
+            for _mt, mx, my in self._recent_movers
+        ):
+            return  # a mover reached the rest spot: kiss, not a strike
+        dx, dy = ball.x_mm - rest_x, ball.y_mm - rest_y
+        norm = hypot(dx, dy)
+        if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
+            return
+        self._candidate = _StrikeCandidate(
+            t0=t,
+            x0=rest_x,
+            y0=rest_y,
+            dir_x=dx / norm,
+            dir_y=dy / norm,
+            newborn=True,
+            last_raw=raw,
+            ball_id=ball.ball_id,
             impulse_raw=raw,
         )
 

@@ -10,28 +10,32 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       sessions, Flag anything wrong. The three failure modes it fixed (missed
       strikes with hands in frame, settle stalls, phantom shots) are corpus-
       pinned; live play is the remaining judge.
-- [ ] **Refresh the stale empty-table reference** (~10 min at the table): the
-      startup drift check fired 8.1 vs the 07-29 reference (same-mount noise
-      ~2, warn > 8) — lighting or a small shift. Recipe: `hardware.md` §E2
-      steps 4–5. Detection runs, but segmentation margins are degraded until
-      this is done.
-- [ ] **Match-day bring-up (before the 2026-08-01 match)**: get a wired USB
-      mic — the Mac mini has **no built-in mic** (`hardware.md` Part D) — then
-      TCC grant, `listen --devices`, 10× "extension" at playing distance, and
-      a false-positive soak with balls clacking and music; add the OBS
+- [ ] **Match-day bring-up (before the 2026-08-01 match)**: add the OBS
       scoreboard source (`hardware.md` §B3); dry-run one rack of WNT 9-ball
       end to end (New Rack → break → 60 → 30 → score keys → Push).
+      Extensions are deck-key only until a mic exists.
+- [ ] **Mic bring-up (parked — no mic yet)**: buy a wired USB mic (the Mac
+      mini has **no built-in mic**, `hardware.md` Part D), then TCC grant,
+      `listen --devices`, 10× "extension" at playing distance, and a
+      false-positive soak with balls clacking and music. Also the
+      prerequisite for the acoustic click corroborator (top of the
+      accuracy queue).
 - [ ] **Live-validate match mode** during the first real match: rack flow,
-      Push, Force 30, per-rack extensions, voice extension under pressure —
-      Flag anything wrong.
-- [ ] **Live-validate checkpoints 26–31** (occluded-address strikes, roster
+      Push, Force 30, per-rack extensions (deck keys; voice waits on the
+      mic) — Flag anything wrong.
+- [ ] **Live-validate checkpoints 26–32** (occluded-address strikes, roster
       latch rule, settle-counts-the-shot, merge flag, pickup discard, IDLE
       break gate, axis-kill re-open credit, carried-newborn merged gate,
-      young-solid-mover settle block, scratch-disarm removal): every
-      2026-07-31/08-01 live failure is corpus-pinned or journal-pinned;
-      live play judges the fixes. Every flag dump now carries
-      `events.jsonl` with per-shot ball/speed/path detail. The 14:00 UTC
-      session validated 26–30 across two racks (11 + 11 shots, one flag).
+      young-solid-mover settle block, scratch-disarm removal, own-rest
+      strike path): every 2026-07-31/08-01 live failure is corpus-pinned or
+      journal-pinned; live play judges the fixes. Every flag dump now
+      carries `events.jsonl` with per-shot ball/speed/path detail. The
+      14:00 UTC session validated 26–30 across two racks (11 + 11 shots,
+      one flag); the 16:12 match-day flag became checkpoint 32
+      (`parked_vote_strike_0801`). Unexplained residual from that dump:
+      the live settle after the first shot came 9 s late (cold replay
+      settles in 3.1 s) — state divergence the ring can't reproduce; watch
+      for late settles live.
 - [ ] **Sub-impulse touch shots are now honestly invisible** (checkpoint 28
       finding): `soft_touch_0731`'s settle used to ride a stick-yank phantom
       latch; with the merge flag it produces no events — a touch shot leaves
@@ -64,9 +68,7 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       whether admission needs an appearance gate.
 - [ ] **Stream Deck phase 2 — session toggle**: daemon owns `run` + OBS
       lifecycles; one-time OBS settings. Spec: `hardware.md` §C4.
-- [ ] **Stream Deck phase 3 — Replay key** (obs-websocket). The music keys
-      lost row 3 to the score keys — they need a new home (second page, or
-      fold into session states) before they're built.
+- [ ] **Stream Deck phase 3 — Replay key** (obs-websocket).
 - [ ] **Stream Deck phase 4 — `/triage-clips` skill** (the off-table half of
       the Flag key; flow in `hardware.md` §C5).
 - [ ] **Deck bring-up checks** at the table: `hardware.md` §C6 (HID wake,
@@ -100,11 +102,7 @@ Delete items as they land (history lives in `CHANGELOG.md`).
   banner also solves the burned-in clock overlay reading as live in replays.
 - **Stream Deck extras**: ground-truth mode (see idea bank §8 — a "real shot"
   key + auto-dump on disagreement; the Pedal if marking shots must not take a
-  hand off the cue), health face (grabs/s, clock state, drift warning),
-  music/playlist keys + now-playing face (displaced from row 3 by the score
-  keys), volume-step tuning.
-- **Music/BT amp caveat**: some BT amps need a re-pair nudge after power-off;
-  if it bites, a cheap USB DAC → amp line-in kills BT latency/dropout risk too.
+  hand off the cue), health face (grabs/s, clock state, drift warning).
 - **TV power via VIDAA network API** — only if the remote ever annoys.
 - **OBS taste calls left open**: 1080p-crop vs 1200p-letterbox canvas (decide
   at the TV); wired iPhone instead of Continuity Camera if flakiness/latency

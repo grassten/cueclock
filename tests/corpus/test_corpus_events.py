@@ -182,10 +182,26 @@ EXPECTED: dict[
     # the regression, since this cold replay never sees the scratch). The
     # pin guards the jaw-emergence detection itself.
     "jaw_strike_0801": (1, 0, 1, 1),
+    # parked_vote_strike: two real shots from the 2026-08-01 match-day
+    # session (the flag press followed the second). Shot 1 rolls the cue
+    # into a cluster where it comes to rest against the blue; the merge
+    # corrupts its color sample and the whiteness vote parks on the yellow
+    # mid-table. Shot 2 strikes that rested cue out of the cluster (it
+    # emerges from the stick occlusion at 619 mm/s) — both existing strike
+    # paths were blind: the rest memory tracked the parked flag-holder
+    # 578 mm away and the struck track was 11 s old, with the vote
+    # returning only 0.6 s post-impact. Pins the own-rest (wrong-flag)
+    # strike path. Live additionally missed shot 1 outright and delayed
+    # its settle 9 s (state divergence a cold replay cannot reproduce; the
+    # same wrong-flag configuration explains it and the same path covers
+    # it). Cold truth: two clean shot -> settle pairs.
+    "parked_vote_strike_0801": (2, 0, 2, 2),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
-# post-TV-install clips use empty_table_0729, everything earlier the original.
+# post-TV-install clips use empty_table_0729, everything earlier the original;
+# clips from 2026-08-01 midday onward use empty_table_0801 (the §E2 refresh
+# after the drift warning — same mount, new lighting state).
 REFERENCES: dict[str, str] = {
     "empty_table_0729": "empty_table_0729",
     "shot_debug": "empty_table_0729",
@@ -210,6 +226,7 @@ REFERENCES: dict[str, str] = {
     "hanger_pot_0801": "empty_table_0729",
     "pickup_newborn_0801": "empty_table_0729",
     "jaw_strike_0801": "empty_table_0729",
+    "parked_vote_strike_0801": "empty_table_0801",
 }
 
 

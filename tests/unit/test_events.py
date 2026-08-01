@@ -22,6 +22,7 @@ class Sim:
         self.engine = EventEngine()
         self.t = 0.0
         self.balls: dict[int, list[float]] = {}  # id -> [x, y, vx, vy]
+        self.cue_id = CUE  # whiteness-vote holder; tests park it elsewhere
         self.occluded: set[int] = set()
         self.flickering: set[int] = set()
         self.merged_ids: set[int] = set()
@@ -42,6 +43,10 @@ class Sim:
         """Ball still reported but no longer observed: the tracker coasts it
         along its last velocity (position keeps integrating), observed=False."""
         self.occluded.add(ball_id)
+
+    def reveal(self, ball_id: int) -> None:
+        """Occlusion over: the ball is observed again."""
+        self.occluded.discard(ball_id)
 
     def flicker(self, ball_id: int) -> None:
         """Junk-track signature: detected only every third frame (~33%
@@ -79,7 +84,7 @@ class Sim:
                         ball[0],
                         ball[1],
                         hypot(ball[2], ball[3]),
-                        is_cue=ball_id == CUE,
+                        is_cue=ball_id == self.cue_id,
                         observed=observed,
                         merged=observed and ball_id in self.merged_ids,
                         churn=self.churn.get(ball_id),
@@ -490,3 +495,54 @@ def test_post_scratch_carry_back_is_not_a_shot() -> None:
     sim.merge(7)
     sim.velocity(7, 900.0, 0.0)
     assert ShotTaken not in map(type, sim.run(0.4))
+
+
+def test_parked_vote_strike_fires_from_own_rest() -> None:
+    # parked_vote_strike_0801: the real cue rests merged against a cluster,
+    # loses the whiteness vote to another still ball, then gets struck. The
+    # flag-holder shows no impulse and the struck track is seconds old, so
+    # neither the rest-anchored nor the newborn path can open — the ball's
+    # own roster rest carries the anchor. The strike moment mirrors the
+    # measured clip: the stick hides the ball through contact (its still
+    # track coasts in place) and it emerges already displaced, at speed.
+    sim = rack()
+    sim.run(3.0)  # sustained quiet: both balls admitted to the roster
+    sim.cue_id = OBJ  # the vote parks on the wrong ball
+    sim.run(0.5)
+    sim.occlude(CUE)  # stick covers the ball through contact; coast holds
+    sim.run(0.05)
+    sim.place(CUE, 560.0, 500.0)  # emerges 60 mm out at impulse speed
+    sim.velocity(CUE, 600.0, 0.0)
+    sim.reveal(CUE)
+    assert ShotTaken in map(type, sim.run(0.5))
+
+
+def test_parked_vote_hand_carry_does_not_fire() -> None:
+    # The same configuration, but a hand lifts the rested ball instead: a
+    # ball in a hand is inseparable from the hand, so every confirm
+    # observation is a merged blob and the carried-ball gate kills it.
+    sim = rack()
+    sim.run(3.0)
+    sim.cue_id = OBJ
+    sim.run(0.5)
+    sim.occlude(CUE)
+    sim.run(0.05)
+    sim.place(CUE, 560.0, 500.0)
+    sim.velocity(CUE, 600.0, 0.0)
+    sim.merge(CUE)
+    sim.reveal(CUE)
+    assert ShotTaken not in map(type, sim.run(0.5))
+
+
+def test_parked_vote_hand_ramp_does_not_fire() -> None:
+    # A hand pushing the rested ball up to speed ramps through the creep
+    # window first — the translation trips before impulse speed is reached,
+    # so the own-rest dwell is already broken when the scan looks.
+    sim = rack()
+    sim.run(3.0)
+    sim.cue_id = OBJ
+    sim.run(0.5)
+    sim.velocity(CUE, 120.0, 0.0)  # sub-impulse push...
+    sim.run(0.3)
+    sim.velocity(CUE, 400.0, 0.0)  # ...accelerating to shot-like speed
+    assert ShotTaken not in map(type, sim.run(0.5))
