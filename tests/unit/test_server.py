@@ -89,12 +89,20 @@ def test_html_pages_served() -> None:
 
 
 def test_vision_events_drive_clock() -> None:
-    """The `cueclock run` wiring: settle (re)starts the countdown, a shot freezes it."""
+    """The `cueclock run` wiring: a shot freezes the clock, its settle restarts it.
+
+    A settle in IDLE is a no-op — racking after New Rack produces genuine
+    settles and must not start the countdown; the untimed break enters via
+    ShotTaken (IDLE → MOTION) instead.
+    """
     hub = Hub()
-    asyncio.run(hub.balls_settled())  # session's first shot settles → clock starts
+    asyncio.run(hub.balls_settled())  # racking settles while IDLE — ignored
+    assert hub.clock.state is State.IDLE
+    asyncio.run(hub.shot_taken())  # the break
+    assert hub.clock.state is State.MOTION
+    asyncio.run(hub.balls_settled())
     assert hub.clock.state is State.RUNNING
     asyncio.run(hub.shot_taken())
-    assert hub.clock.state is State.MOTION
     asyncio.run(hub.balls_settled())
     assert hub.clock.state is State.RUNNING
     assert hub.clock.remaining == float(hub.clock.ruleset.base_seconds)

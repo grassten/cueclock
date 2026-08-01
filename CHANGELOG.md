@@ -124,7 +124,50 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
-- **2026-07-31 (checkpoint 25 — match mode: WNT rack context, scoreboard,
+- **2026-08-01 (checkpoint 26 — accuracy: occluded-address strikes, phantom
+  resets, self-healing shot windows):** the 2026-07-31 evening match-mode
+  session surfaced three failure classes, diagnosed from six Flag-key dumps
+  plus the OBS recording (`~/Movies/2026-07-31 23-18-28.mov`, 2:08–2:25 and
+  5:28–5:47), all fixed and corpus-pinned this checkpoint.
+  - **Missed strikes — occluded address** (`vision/events.py`): the address
+    hides the cue ball long enough that its track dies; the whiteness vote
+    parks on another bright ball; the strike then surfaces as a new track
+    born at impulse speed (1572 mm/s, 964 mm from the wrong rest anchor) and
+    every rest-anchored gate rightly rejects it — that session's break and
+    post-push shot both died this way, and each miss also left the rack shot
+    count short, so the WNT 60 s window *replayed* on the following shot
+    (Steven's original report). Fix: the **newborn-cue strike path** — birth
+    spot as anchor, table-quiet dwell + kiss guard at birth, carried-ball
+    confirm gates (≥ 90 % observed, adjacent-frame raw ratio ≤ 2 — both
+    measured against `scratch_replace`'s 2220 mm/s fetch carry), armed once
+    per rest cycle (Scratch disarms; re-arm needs a cue at rest that
+    *translated since the disarm*, or the post-scratch vote fallback would
+    re-arm it). Details + measurements: `design.md` §4.2.
+  - **Phantom mid-address clock resets** (`vision/events.py`): bridge-glove /
+    watch tracks reach 79–94 % observed — past the checkpoint-23 flicker
+    filter — and a 30 mm gear drift latched `table_moving`, whose settle
+    reset a RUNNING clock (three video-verified resets in one session). Fix:
+    the **ball roster** — only tracks alive through a quiet dwell may latch;
+    gear born mid-play moving cannot join; union during quiet (occlusion must
+    not evict), wholesale prune at settle; carom stamps inherit the filter.
+    Residuals + provokers recorded in `design.md` §4.2 and BACKLOG (stick-
+    merge centroid yank `merge_yank_0731`, planted-glove slide, hand pickup
+    `triage_0801c`).
+  - **Clock semantics** (`clock/state.py`, `design.md` §2.1): settle in IDLE
+    is now a no-op (New Rack → racking settles must not start the countdown
+    — the first live complaint of the evening), and a settle with no
+    ShotTaken since the last settle **counts the shot** — missed strikes and
+    sub-impulse touch shots (`soft_touch_0731`: real shot, cue peaks at
+    225 mm/s raw, optically indistinguishable from a nudge) no longer replay
+    the 60 s window. Cue-rest slide guard: a whiteness-vote jump > handoff
+    radius restarts rest dwell instead of teleporting it with ancient credit.
+  - **Corpus:** six live captures promoted as graded scenarios —
+    `occluded_address_0731` (1 shot exactly, was 0), `rack_gather_0731`,
+    `soft_touch_0731` (shots unasserted by design), `soft_shot_0731`,
+    `glove_address_0731` (max_settles 0 — the phantom pin), `merge_yank_0731`
+    (max 2 tolerates the known yank settle); EXPECTED gains an optional
+    max_settles field. `triage_0801a/b/c` staged for the next iteration.
+    Suites: 135 unit + 29 corpus green; ruff + mypy --strict clean.
   voice "extension"):** built for the first real match (2026-08-01, WNT
   9-ball), in four parallel worktree agents + integration. All rulebook
   numbers verified against the official WNT Event Rules PDF §5 this session.

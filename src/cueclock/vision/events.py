@@ -155,6 +155,26 @@ class EventConfig:
     # 1-2 frames; a shaft/hand push ramps up over many. The cue must have
     # been reported still this recently for the impulse to count.
     strike_step_max_s: float = 0.12
+    # Occluded-address strike (§4.2, occluded_address_0731): when the player's
+    # body/stick hides the addressed cue ball long enough for its track to die,
+    # the whiteness vote parks on some other bright ball and the strike shows
+    # up as a brand-new track born already at impulse speed (measured: born at
+    # 1572 mm/s, 964 mm from the wrong flag-holder's rest spot — every
+    # rest-anchored gate correctly rejects it). A ball cannot teleport into
+    # existence at speed: on a table with no mover for a pre-strike dwell and
+    # none within kiss range of the birth spot, such a track is the struck cue
+    # emerging from the occlusion. The candidate anchors on the birth spot.
+    newborn_strike_max_age_s: float = 0.1  # cue-vote debounce (2 frames) plus
+    # a few association frames at the 78 Hz detect cadence; the real case
+    # opened 0.012 s after birth
+    # A hand-carried cue ball (scratch_replace, ball-in-hand) can also be born
+    # at speed with the table quiet. Two measured discriminators, both far
+    # from both sides: a struck cue on open cloth is observed every confirm
+    # frame with raw speed smooth within ±5%; a carried ball's track is
+    # 27-40% observed (fingers wrap it, long coast runs) with raw speed
+    # erratic (575 → 4140 mm/s between adjacent frames).
+    newborn_confirm_obs_min: float = 0.9
+    newborn_raw_step_ratio_max: float = 2.0
     # Flicker filter: hand/stick fragments pass the detector's geometry gates
     # only intermittently, so their tracks are mostly coasted — measured 7-43%
     # observed on the flagged live captures (missed_strike_0731,
@@ -194,6 +214,12 @@ class _StrikeCandidate:
     y0: float
     dir_x: float
     dir_y: float
+    # Newborn-origin candidates (occluded-address strike) carry extra confirm
+    # gates: full observation and smooth raw speed, the measured separators
+    # from a hand-carried ball. last_raw remembers the previous advance
+    # frame's raw speed for the step-ratio check.
+    newborn: bool = False
+    last_raw: float | None = None
 
 
 @dataclass
@@ -228,12 +254,53 @@ class EventEngine:
         # Per-ball last time it visibly translated (first sighting counts):
         # bounds how long the spin-churn gate may hold settle (spin_watch_s).
         self._last_translate: dict[int, float] = {}
+        # Birth registry: when and where each live track first appeared.
+        # Feeds the occluded-address strike path (a track born at impulse
+        # speed) and the roster rule below.
+        self._first_seen: dict[int, float] = {}
+        self._birth_pos: dict[int, tuple[float, float]] = {}
+        # Ball roster: only tracks that were part of a quiet table state may
+        # latch table motion. Address gear (glove knuckles, watch, stick
+        # fragments) reaches 79-90% observed — past the flicker filter — but
+        # in every measured clip real latches come from tracks alive since
+        # the last quiet period, while gear tracks are born mid-play and
+        # already moving. Membership: tracks seen during the engine's
+        # founding window, then wholesale refresh with the judgeable tracks
+        # present whenever the table has been continuously still for a settle
+        # dwell (not only at BallsSettled: racking and hand-placement produce
+        # quiet tables without a latch, and the newly placed balls must be
+        # able to latch the next shot). A gear fragment sweeping in cannot
+        # get admitted mid-sweep — its own motion breaks the quiet streak.
+        self._roster: set[int] = set()
+        self._engine_t0: float | None = None
+        self._last_mover_t = float("-inf")  # last genuine observed mover, any position
+        # Occluded-address strike arming: one shot per rest cycle. Disarmed
+        # when a newborn candidate fires (no machine-gun re-opens off the
+        # same strike) and when a Scratch fires (the next fast cue-flagged
+        # newborn is the fetched ball being carried back — scratch_replace).
+        # Re-armed by a cue-flagged ball at rest that has *translated since
+        # the disarm* (the struck cue coming to rest, or a fresh placement):
+        # after a scratch the whiteness vote falls back to some still ball
+        # that never moved, and that fallback must not re-arm.
+        self._newborn_disarmed_at: float | None = None
 
     def update(self, t: float, balls: list[BallState]) -> list[Event]:
         events: list[Event] = []
         cfg = self._cfg
         cue = next((b for b in balls if b.is_cue), None)
         was_moving = self._table_moving
+
+        # Birth registry + roster founding. Tracks present within the first
+        # creep window of engine life are founding roster members (the engine
+        # starts on a settled table); later admission happens only at settle.
+        if self._engine_t0 is None:
+            self._engine_t0 = t
+        for ball in balls:
+            if ball.ball_id not in self._first_seen:
+                self._first_seen[ball.ball_id] = t
+                self._birth_pos[ball.ball_id] = (ball.x_mm, ball.y_mm)
+                if t - self._engine_t0 <= cfg.settle_creep_window_s:
+                    self._roster.add(ball.ball_id)
 
         # ---- strike detection ----
         # Debounce the cue flag: the tracker's whiteness vote can visit the
@@ -262,13 +329,18 @@ class EventEngine:
                 self._last_translate[ball.ball_id] = t
         self._history = {b.ball_id: self._history[b.ball_id] for b in balls}
         self._last_translate = {b.ball_id: self._last_translate[b.ball_id] for b in balls}
+        self._first_seen = {b.ball_id: self._first_seen[b.ball_id] for b in balls}
+        self._birth_pos = {b.ball_id: self._birth_pos[b.ball_id] for b in balls}
 
         movers = [
             b
             for b in balls
-            if self._judgeable(b)
+            if b.ball_id in self._roster
+            and self._judgeable(b)
             and self._displacement_over(b, cfg.moving_window_s) > cfg.moving_enter_mm
         ]
+        if movers:
+            self._last_mover_t = t
         # Carom-guard evidence: non-cue balls in genuine observed motion. The
         # stamps are read by the *next* cycles' impulses (strike logic runs
         # first), which is exactly right — a bringer's approach precedes the
@@ -287,8 +359,18 @@ class EventEngine:
         elif balls and self._is_still(t, balls):
             if self._all_still_since is None:
                 self._all_still_since = t
+            if t - self._all_still_since >= cfg.settle_dwell_s:
+                # Roster admission on any sustained-quiet table: tracks
+                # standing judgeable through the stillness are balls at rest
+                # (racked balls, a placed cue). Union, not replacement — a
+                # roster ball occluded by the addressing player must not fall
+                # off mid-aim. Dead ids are inert (ids are never reused), and
+                # the settle below prunes to the standing set while the
+                # player is away from the table.
+                self._roster.update(b.ball_id for b in balls if self._judgeable(b))
             if self._table_moving and t - self._all_still_since >= cfg.settle_dwell_s:
                 self._table_moving = False
+                self._roster = {b.ball_id for b in balls if self._judgeable(b)}
                 events.append(BallsSettled(t))
         else:
             self._all_still_since = None
@@ -315,6 +397,10 @@ class EventEngine:
                 and self._near_pocket(last_x, last_y)
             ):
                 self._scratch_fired = True
+                # The cue has left the table: the next fast cue-flagged
+                # newborn is the fetched ball being carried back, not a
+                # strike (scratch_replace's carry was born at 2220 mm/s).
+                self._newborn_disarmed_at = t
                 events.append(Scratch(t))
 
         return events
@@ -324,7 +410,24 @@ class EventEngine:
     def _update_cue_rest(self, t: float, cue: BallState) -> None:
         cfg = self._cfg
         if cue.speed_mms < cfg.settle_floor_mms:
+            if (
+                self._newborn_disarmed_at is not None
+                and self._last_translate.get(cue.ball_id, float("-inf")) > self._newborn_disarmed_at
+            ):
+                # A cue at rest that moved since the disarm: rest cycle
+                # complete, the next fast newborn may be a strike again.
+                self._newborn_disarmed_at = None
             if self._cue_rest is None:
+                self._cue_rest = (t, cue.x_mm, cue.y_mm)
+            elif (
+                hypot(cue.x_mm - self._cue_rest[1], cue.y_mm - self._cue_rest[2])
+                > cfg.strike_handoff_radius_mm
+            ):
+                # The flag jumped to a different still ball (the whiteness
+                # vote wanders when the real cue is occluded): that is a new
+                # rest, not the old one relocated — dwell credit restarts.
+                # A genuinely creeping cue moves ~0.5 mm between stamps and
+                # never trips this.
                 self._cue_rest = (t, cue.x_mm, cue.y_mm)
             else:
                 self._cue_rest = (self._cue_rest[0], cue.x_mm, cue.y_mm)
@@ -335,9 +438,13 @@ class EventEngine:
     def _maybe_open_candidate(self, t: float, cue: BallState) -> None:
         cfg = self._cfg
         raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
-        if raw < cfg.strike_impulse_mms or self._cue_rest is None:
+        if raw < cfg.strike_impulse_mms:
+            return
+        if self._cue_rest is None:
+            self._maybe_open_newborn(t, cue, raw)
             return
         if t - self._cue_last_still_t > cfg.strike_step_max_s:
+            self._maybe_open_newborn(t, cue, raw)
             return  # ramp, not a step: shaft/hand push accelerating the ball
         rest_t0, rest_x, rest_y = self._cue_rest
         if self._cue_last_still_t - rest_t0 < cfg.pre_strike_dwell_s:
@@ -350,12 +457,57 @@ class EventEngine:
         dx, dy = cue.x_mm - rest_x, cue.y_mm - rest_y
         norm = hypot(dx, dy)
         if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
+            if norm > cfg.strike_handoff_radius_mm:
+                # Impulse far from the remembered rest: the rest may be
+                # anchored to the wrong ball (flag parked elsewhere while the
+                # real cue was occluded) — the birth evidence gets its say.
+                self._maybe_open_newborn(t, cue, raw)
             return  # too little displacement to trust as a direction, or too far
         # Rest memory is kept until a candidate *fires*: a bogus candidate
         # (e.g. the impact yanking the old track's centroid) then fails the
         # axis check and the real impulse can still re-open from the same rest.
         self._candidate = _StrikeCandidate(
             t0=t, x0=rest_x, y0=rest_y, dir_x=dx / norm, dir_y=dy / norm
+        )
+
+    def _maybe_open_newborn(self, t: float, cue: BallState, raw: float) -> None:
+        """Occluded-address strike: the cue-vote winner was just born at speed.
+
+        A ball cannot teleport into existence at impulse speed. When the
+        table has had no genuine mover for a pre-strike dwell and none within
+        kiss range of the birth spot, a fresh track born already fast that
+        wins the whiteness vote is the struck cue emerging from the player's
+        address occlusion (its resting track died under the stick/bridge, so
+        the rest-memory path had nothing — or the wrong ball — to anchor on).
+        The candidate anchors on the birth spot; the confirm adds the
+        carried-ball gates (full observation, smooth raw speed).
+        """
+        cfg = self._cfg
+        if self._newborn_disarmed_at is not None:
+            return
+        born = self._first_seen.get(cue.ball_id)
+        if born is None or t - born > cfg.newborn_strike_max_age_s:
+            return
+        if born - self._last_mover_t < cfg.pre_strike_dwell_s:
+            return  # something was genuinely moving right before this birth
+        birth_x, birth_y = self._birth_pos[cue.ball_id]
+        if any(
+            hypot(mx - birth_x, my - birth_y) <= cfg.carom_reach_mm
+            for _mt, mx, my in self._recent_movers
+        ):
+            return  # a mover reached the birth spot: kiss, not a strike
+        dx, dy = cue.x_mm - birth_x, cue.y_mm - birth_y
+        norm = hypot(dx, dy)
+        if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
+            return
+        self._candidate = _StrikeCandidate(
+            t0=t,
+            x0=birth_x,
+            y0=birth_y,
+            dir_x=dx / norm,
+            dir_y=dy / norm,
+            newborn=True,
+            last_raw=raw,
         )
 
     def _advance_candidate(self, t: float, cue: BallState) -> list[Event]:
@@ -366,6 +518,20 @@ class EventEngine:
         if t - candidate.t0 > cfg.strike_confirm_window_s:
             self._candidate = None  # impulse without follow-through: not a shot
             return []
+        if candidate.newborn:
+            # Carried-ball gates (measured on scratch_replace): a hand-carried
+            # cue's raw speed is erratic between adjacent frames while a
+            # struck cue's is smooth; kill on the first wild step.
+            raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
+            prev = candidate.last_raw
+            candidate.last_raw = raw
+            if (
+                prev is not None
+                and min(prev, raw) > 0
+                and max(prev, raw) / min(prev, raw) > cfg.newborn_raw_step_ratio_max
+            ):
+                self._candidate = None
+                return []
         dx, dy = cue.x_mm - candidate.x0, cue.y_mm - candidate.y0
         displacement = hypot(dx, dy)
         if displacement < cfg.strike_confirm_displacement_mm:
@@ -374,9 +540,23 @@ class EventEngine:
         if axis_dot < cfg.strike_axis_dot_min:
             self._candidate = None  # incoherent trajectory (e.g. detection jitter)
             return []
+        if candidate.newborn and not self._observed_since(cue, candidate.t0):
+            # A carried ball coasts through finger occlusions; a struck cue on
+            # open cloth is observed every frame of the confirm window.
+            self._candidate = None
+            return []
+        if candidate.newborn:
+            self._newborn_disarmed_at = t  # one shot per rest cycle
         self._candidate = None
         self._cue_rest = None
         return [ShotTaken(t)]
+
+    def _observed_since(self, ball: BallState, t0: float) -> bool:
+        rows = [p for p in self._history[ball.ball_id].positions if p[0] >= t0]
+        if not rows:
+            return False
+        observed = sum(1 for p in rows if p[3])
+        return observed >= self._cfg.newborn_confirm_obs_min * len(rows)
 
     # ---------- settle helpers ----------
 

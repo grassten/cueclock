@@ -27,8 +27,14 @@ pytestmark = pytest.mark.skipif(
     reason="corpus clips / local calibration not present",
 )
 
-# scenario -> (shots, scratches, min_settles) — None = don't assert
-EXPECTED: dict[str, tuple[int | None, int | None, int | None]] = {
+# scenario -> (shots, scratches, min_settles) — None = don't assert.
+# A fourth element, when present, is max_settles: the address/junk provokers
+# must produce NO settle at all (a settle there is a phantom clock reset).
+EXPECTED: dict[
+    str,
+    tuple[int | None, int | None, int | None]
+    | tuple[int | None, int | None, int | None, int | None],
+] = {
     "empty_table": (0, 0, None),
     "static_spread": (0, 0, None),
     "soft_shot": (1, 0, 1),
@@ -65,6 +71,32 @@ EXPECTED: dict[str, tuple[int | None, int | None, int | None]] = {
     "missed_strike_0731": (1, 0, 1),
     "live_divergence_0731a": (1, 0, 1),
     "live_divergence_0731b": (1, 0, 1),
+    # Flag-key captures from the 2026-07-31 evening match-mode session — the
+    # occluded-address / phantom-reset evidence (CHANGELOG checkpoint 26).
+    # occluded_address: the player's address hides the cue ball long enough
+    # that its track dies; the strike surfaces as a track born at 1572 mm/s.
+    # Pins the newborn-cue strike path (was a 0-shot miss + a 60 s replay).
+    "occluded_address_0731": (1, 0, 1, 1),
+    # rack_gather: racking after New Rack (the live "clock started while I
+    # racked" trigger; the clock-side IDLE gate is the real fix — no shot may
+    # be minted from racking motion).
+    "rack_gather_0731": (0, 0, None),
+    # soft_touch: a deliberate touch shot whose cue peaks at 225 mm/s raw —
+    # below any impulse floor that still rejects ball-in-hand nudges (§2.3
+    # lesson 6; the acoustic corroborator is the real answer). The settle is
+    # what the clock runs on, so shots stay unasserted rather than pinning a
+    # miss as correct.
+    "soft_touch_0731": (None, 0, 1),
+    "soft_shot_0731": (1, 0, 1),
+    # glove_address: bridge glove + watch on the cloth through an address; a
+    # gear track reached 87% observed (past the flicker filter). The roster
+    # rule keeps it from latching table motion: zero events, ever.
+    "glove_address_0731": (0, 0, None, 0),
+    # merge_yank: the addressed cue's blob merges with the stick tip and the
+    # centroid drifts 31 mm — a KNOWN phantom settle (max_settles 2 tolerates
+    # it). Drop to (1, 0, 1, 1) when a detector-level merge flag lands
+    # (BACKLOG).
+    "merge_yank_0731": (1, 0, 1, 2),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -75,6 +107,12 @@ REFERENCES: dict[str, str] = {
     "missed_strike_0731": "empty_table_0729",
     "live_divergence_0731a": "empty_table_0729",
     "live_divergence_0731b": "empty_table_0729",
+    "occluded_address_0731": "empty_table_0729",
+    "rack_gather_0731": "empty_table_0729",
+    "soft_touch_0731": "empty_table_0729",
+    "soft_shot_0731": "empty_table_0729",
+    "glove_address_0731": "empty_table_0729",
+    "merge_yank_0731": "empty_table_0729",
 }
 
 
@@ -131,13 +169,17 @@ def test_corpus_clip(name: str) -> None:
     summary = f"{name}: {[f'{type(e).__name__}@{e.t:.2f}' for e in events]}"
     print(summary)
 
-    exp_shots, exp_scratches, min_settles = EXPECTED[name]
+    expected = EXPECTED[name]
+    exp_shots, exp_scratches, min_settles = expected[:3]
+    max_settles = expected[3] if len(expected) == 4 else None
     if exp_shots is not None:
         assert shots == exp_shots, summary
     if exp_scratches is not None:
         assert scratches == exp_scratches, summary
     if min_settles is not None:
         assert settles >= min_settles, summary
+    if max_settles is not None:
+        assert settles <= max_settles, summary
 
 
 def test_spin_in_place_settle_waits_for_spin_stop() -> None:

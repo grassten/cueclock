@@ -295,3 +295,47 @@ def test_push_during_motion_arms_the_following_settle() -> None:
     snap = clock.snapshot()
     assert snap.state == "RUNNING"
     assert snap.display == 60  # first shot after the push out
+
+
+def test_settle_in_idle_is_ignored() -> None:
+    # Racking after New Rack genuinely moves and settles balls; the countdown
+    # must wait for the break (2026-07-31 live failure).
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.balls_settled(now=1.0)  # rack lifted, balls at rest
+    assert clock.state is State.IDLE
+    assert clock.remaining == 60  # first-shot window intact, not counting
+    clock.shot_taken()  # the break
+    clock.balls_settled(now=2.0)
+    assert clock.state is State.RUNNING
+    assert clock.remaining == 60  # WNT §5 window starts with the break's settle
+
+
+def test_settle_without_shot_still_counts_the_shot() -> None:
+    # A missed strike (or a sub-impulse touch shot) must not replay the WNT
+    # 60 s window: balls moved and settled, so a shot happened (2026-07-31
+    # live failure — 60 s again on the shot after the break).
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break, detected
+    clock.balls_settled(now=1.0)
+    assert clock.remaining == 60
+    clock.balls_settled(now=2.0)  # first shot happened but vision missed it
+    assert clock.state is State.RUNNING
+    assert clock.remaining == 30  # window consumed, not replayed
+
+
+def test_push_then_missed_shot_consumes_the_window() -> None:
+    # The push-incident bug: push re-arms 60 s; the shot under that window is
+    # missed by vision; the settle must still burn the window so the
+    # following shot gets 30 s.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.shot_taken()  # push-out
+    clock.balls_settled(now=2.0)
+    clock.push(now=3.0)
+    assert clock.remaining == 60
+    clock.balls_settled(now=4.0)  # the 60 s shot, strike missed
+    assert clock.remaining == 30  # following shot back on base time

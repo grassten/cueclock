@@ -55,6 +55,7 @@ class ShotClock:
         self.ruleset = ruleset
         self.state = State.IDLE
         self._rack_shots = 0  # shots taken this rack; the break is shot 1
+        self._shot_since_settle = False  # a ShotTaken has landed since the last settle
         self.remaining = float(self.current_base())
         self.extensions_used = 0
         self.last_cue: str | None = None
@@ -105,6 +106,7 @@ class ShotClock:
         whenever the player is ready.
         """
         self._rack_shots = 0
+        self._shot_since_settle = False
         self.extensions_used = 0
         self.state = State.IDLE
         self.remaining = float(self.current_base())
@@ -177,15 +179,35 @@ class ShotClock:
         if self.state is State.MOTION:
             return  # vision re-fired mid-motion — don't double-count the shot
         self._rack_shots += 1
+        self._shot_since_settle = True
         if self.state in (State.RUNNING, State.GRACE, State.IDLE):
             self.state = State.MOTION
 
     def balls_settled(self, now: float) -> None:
         """Balls at rest — start a fresh shot clock for the next shot.
 
+        Ignored in IDLE: IDLE means the operator said hold (New Rack, pause),
+        and racking motion produces genuine settles — a settle with no
+        detected shot must not start the clock (2026-07-31 live failure: New
+        Rack, rack the balls, countdown starts). The untimed break is
+        unaffected: its ShotTaken moves IDLE to MOTION first.
+
+        A settle that arrives with no ShotTaken since the previous settle
+        still counts the shot: balls moved and came to rest, so a shot
+        happened even if the strike gates missed it (or it was below the
+        impulse floor — the ultra-soft touch shot). Without this, a missed
+        strike leaves the rack shot count short and the WNT §5 60 s window
+        replays on the following shot (2026-07-31 live failure, twice: after
+        a push out and after the break).
+
         Does not refill extensions: the pool is per rack (WNT §5), restored
         only by new_rack().
         """
+        if self.state is State.IDLE:
+            return
+        if not self._shot_since_settle:
+            self._rack_shots += 1
+        self._shot_since_settle = False
         self.remaining = float(self.current_base())
         self._cues_fired.clear()
         self.last_cue = None

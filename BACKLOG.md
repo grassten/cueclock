@@ -24,6 +24,27 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 - [ ] **Live-validate match mode** during the first real match: rack flow,
       Push, Force 30, per-rack extensions, voice extension under pressure —
       Flag anything wrong.
+- [ ] **Live-validate checkpoint 26** (occluded-address strikes, roster
+      latch rule, settle-counts-the-shot): the 2026-07-31 evening failures
+      (missed break/push-out strikes, phantom mid-address resets, 60 s
+      window replays) are corpus-pinned; live play judges the fixes.
+- [ ] **Triage `triage_0801a/b/c`** (flagged 2026-08-01 00:07–00:08, already
+      replayed once): a = slow-motion shot with mid-roll handoff, no strike
+      (sub-impulse class — settle covers it); b = address merge-yank phantom
+      settle + a correctly detected shot; c = hand-pickup of a roster ball
+      near a pocket → phantom settle. Fold into graded scenarios once their
+      ground truth is confirmed at the table.
+- [ ] **Detector-level merge flag** (the remaining phantom-settle class):
+      when a ball's blob merges with the stick, its centroid can drift 31 mm
+      net (`merge_yank_0731`, `triage_0801b`) — just over the 30 mm latch.
+      Flag oversized/deformed blobs as unobserved so the tracker coasts
+      through the merge; drop `merge_yank_0731` to max 1 settle when it
+      lands. (Not shape-filtering motion — §2.3 lesson 2 stands; this is
+      per-ball observation quality.)
+- [ ] **Record `glove_address`** (~10 s: address with the bridge glove
+      planted, slide the bridge hand deliberately, never shoot): measures
+      the planted-glove-slide residual the roster rule cannot cover, and
+      whether admission needs an appearance gate.
 - [ ] **Stream Deck phase 2 — session toggle**: daemon owns `run` + OBS
       lifecycles; one-time OBS settings. Spec: `hardware.md` §C4.
 - [ ] **Stream Deck phase 3 — Replay key** (obs-websocket). The music keys
