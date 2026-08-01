@@ -122,6 +122,19 @@ survive unchanged in `design.md`.
   writes through the symlink to ExFAT-over-USB — smoke-test sustained ~360 MB/s write
   (watch the drop detector) before the next real corpus recording session.
 
+- **2026-08-01** Corpus battery parallelized with pytest-xdist: `uv run pytest
+  -n 4` is the checkpoint-battery command (tests/README.md). Measured on the
+  36-scenario corpus: serial 6:40 → `-n 4` 3:57 → `-n 8` 4:57 — the battery
+  streams ~90 GB off the T7, four workers reach its sequential-read ceiling,
+  and more workers only add contention (and spill onto the M2's efficiency
+  cores), so `-n auto` (8) is explicitly NOT the number. Kept opt-in (no
+  `addopts` default): unit-only runs finish in a second anyway, and worker
+  startup would just slow them. Tests share no state (each builds its own
+  pipeline), so parallel results are identical to serial. Deeper speedups
+  would mean cutting I/O per run (e.g. zstd-compressed clips at ~2:1 with
+  decode on read) — idea-bank material, not worth the ClipReader complexity
+  while the battery is under 4 minutes.
+
 ## Checkpoint log (append-only, newest first)
 
 - **2026-08-01 (checkpoint 31 — Scratch no longer disarms the newborn strike
