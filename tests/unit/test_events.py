@@ -386,6 +386,25 @@ def test_potted_ball_track_death_still_settles() -> None:
     assert BallsSettled in map(type, sim.run(1.3))
 
 
+def test_track_rebirth_mid_roll_defers_settle() -> None:
+    # hanger_pot_0801: a fast shot's terminal track churn can rebirth the
+    # still-rolling ball as a brand-new id (coast-overshoot death at the
+    # pocket jaw). The reborn track is cleanly observed and really
+    # displacing from its first frames — settle must wait for IT to stop,
+    # not fire the moment every *old* track has gone quiet (the live clip
+    # reset the clock 1.3 s after the strike with the cue visibly rolling).
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 500.0, 0.0)
+    sim.run(0.5)
+    sim.remove(CUE)  # terminal churn: the fast track dies mid-table...
+    sim.place(7, 760.0, 500.0)  # ...and is reborn as a young id, still rolling
+    sim.velocity(7, 200.0, 0.0)
+    assert BallsSettled not in map(type, sim.run(0.6))
+    sim.velocity(7, 0.0, 0.0)
+    assert BallsSettled in map(type, sim.run(1.2))
+
+
 def test_stroke_tug_then_strike_still_fires() -> None:
     # stroke_tug_strike_0801: the final stroke tugs the addressed cue's
     # centroid just past the axis-seed floor for longer than the step

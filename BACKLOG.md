@@ -30,18 +30,21 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       every 2026-07-31/08-01 live failure is corpus-pinned or
       journal-pinned; live play judges the fixes. Every flag dump now
       carries `events.jsonl` with per-shot ball/speed/path detail.
-- [ ] **Two shot classes are now honestly invisible/wrong without audio**
-      (checkpoints 28–29): (a) sub-impulse touch shots — `soft_touch_0731`'s
-      settle used to ride a stick-yank phantom latch; with the merge flag it
-      produces no events, the clock keeps counting (Reset recovers). No
-      displacement latch can fix it (`shaft_adjust` measures 59 mm/0.5 s
-      while judgeable, worse than the touch's 43). (b) hand-rolled placements
-      — `hand_roll_place_0801`: bowling the cue back to a drill spot is
-      kinematically a strike (11 s rest, clean impulse, free coherent roll)
-      and fires the clock; pinned known-wrong. Both are the acoustic click
-      corroborator's job (idea bank §5, `hardware.md` Part D mic): a stick
-      strike clicks, a touch shot clicks softly, a hand roll is silent. Top
-      of the accuracy queue.
+- [ ] **Sub-impulse touch shots are now honestly invisible** (checkpoint 28
+      finding): `soft_touch_0731`'s settle used to ride a stick-yank phantom
+      latch; with the merge flag it produces no events — a touch shot leaves
+      the clock counting (Reset recovers). No displacement latch can fix it
+      (`shaft_adjust` measures 59 mm/0.5 s while judgeable, worse than the
+      touch's 43): this is the acoustic click corroborator's job (idea bank
+      §5, `hardware.md` Part D mic), promoted from "if live play leaks
+      nudges" to the top of the accuracy queue. (Checkpoint 29 briefly
+      claimed hand-rolled placements as a second acoustic case — withdrawn
+      in checkpoint 30: that clip was a real pot, misread.)
+- [ ] **Phantom Scratch when the cue stops hanging in a pocket jaw**
+      (`hanger_pot_0801`, checkpoint 30): a follow-to-the-jaw stop is
+      indistinguishable from a pot at track-death time, so Scratch fires;
+      journal-only in v1, so no clock damage — fix only if scratch ever
+      drives the clock (idea bank §4 has the candidate levers).
 - [ ] **Record `glove_address`** (~10 s: address with the bridge glove
       planted, slide the bridge hand deliberately, never shoot): measures
       the planted-glove-slide residual the roster rule cannot cover, and

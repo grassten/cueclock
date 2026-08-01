@@ -124,6 +124,35 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 30 — young solid movers block settle; flag-2
+  record corrected):** Steven reviewed checkpoint 29's read of the third
+  flag clip and corrected it: "this isn't a hand roll — I shot the 4 ball."
+  He's right — the frames show him down on the shot from the top-left
+  corner, cue stick on the white ball, potting the 4 that hung at the
+  bottom-center pocket; the cue followed and stopped hanging in the jaw.
+  The `ShotTaken` was real and correctly detected; checkpoint 29's
+  "hand-rolled placement" bullet is **withdrawn** (clip renamed
+  `hand_roll_place_0801` → `hanger_pot_0801`, design/backlog corrected).
+  The clip's real failures, both journal-visible:
+  - **Premature settle, fixed:** the fast cue's terminal track churn
+    (coast-overshoot death → short rebirth → fresh id at the jaw) left the
+    still-rolling ball represented only by tracks too young to judge, and
+    settle fired 1.3 s after the strike while the cue visibly rolled
+    another 37 mm — the clock reset mid-flight (the flag). Real
+    displacement needs no measurement window: a **solidly observed** track
+    (≥ the flicker-filter fraction; junk measures 7–43 % observed) now
+    blocks stillness from its first frames, while creep and churn judgment
+    still require a full judgeable window. The clip's settle moves
+    12.85 → 14.56 s, after the ball truly stops; no other pin shifted.
+  - **Phantom Scratch, documented open:** the cue stopping hanging in the
+    jaw is indistinguishable from a pot at track-death time (last observed
+    position inside the pocket zone, table moving), so Scratch fired while
+    the cue sat on the table. Journal-only in v1 → no clock damage;
+    BACKLOG'd with the idea-bank levers, revisit only if scratch ever
+    drives the clock.
+  - **Corpus:** 35 scenarios, 41 corpus tests; 144 unit tests (new:
+    track-rebirth-mid-roll settle deferral); ruff + mypy clean.
+
 - **2026-08-01 (checkpoint 29 — stroke-tug re-open, carried-newborn gate):**
   the first post-28 drill session (12:31–12:40 UTC, restarted on the
   checkpoint-28 build) produced three flags in four minutes of

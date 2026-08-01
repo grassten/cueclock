@@ -816,6 +816,19 @@ class EventEngine:
         positions = self._history[ball.ball_id].positions
         if positions[-1][0] - positions[0][0] < 0.8 * self._cfg.settle_creep_window_s:
             return False
+        return self._solidly_observed(ball)
+
+    def _solidly_observed(self, ball: BallState) -> bool:
+        """Enough real observations to trust this track's positions at all.
+
+        The fraction half of :meth:`_judgeable`, without the age
+        requirement: hand/stick flicker measures 7-43 % observed vs.
+        90-100 % for every real ball. Stillness judgment (`_is_still`)
+        reads this alone — a newly reborn track carrying a still-rolling
+        ball is position evidence from its first frames (hanger_pot_0801)
+        even though its window is too short for creep or churn judgment.
+        """
+        positions = self._history[ball.ball_id].positions
         observed = sum(1 for p in positions if p[3])
         return observed >= self._cfg.judge_obs_fraction_min * len(positions)
 
@@ -834,19 +847,28 @@ class EventEngine:
         while reflection/decal noise on a glossy still ball persists
         indefinitely and must not hold settle hostage (2026-07-29, wall TV).
 
-        Tracks that fail :meth:`_judgeable` (too young, or mostly-coasted
-        hand/stick flicker) are not judged: junk creep at 5-6 mm per window
-        would otherwise hold settle hostage for as long as the player leans
-        over the table — the live "clock stays paused with my hands in
-        frame" stall. A genuinely moving young ball is caught by the
-        moving-entry displacement branch as soon as it is judgeable.
+        Mostly-coasted hand/stick flicker is never judged: junk creep at
+        5-6 mm per window would otherwise hold settle hostage for as long
+        as the player leans over the table — the live "clock stays paused
+        with my hands in frame" stall. But a *solidly observed* track blocks
+        settle on real displacement even before it is old enough to judge
+        (hanger_pot_0801: a fast shot's terminal track churn reborn the
+        still-rolling cue as a fresh id at the pocket jaw — 190 mm/s,
+        cleanly observed every frame — and the age gate let settle fire
+        1.3 s after the strike while the ball visibly rolled on for another
+        37 mm; the clock reset mid-flight). Junk cannot ride this: flicker
+        fragments are 7-43 % observed, far under the fraction floor. The
+        churn gate still requires a full judgeable window — a two-frame
+        churn sample is not spin evidence.
         """
         cfg = self._cfg
         for ball in balls:
-            if not self._judgeable(ball):
+            if not self._solidly_observed(ball):
                 continue
             if self._displacement_over(ball, cfg.settle_creep_window_s) > cfg.settle_creep_mm:
                 return False
+            if not self._judgeable(ball):
+                continue
             if (
                 ball.churn is not None
                 and ball.churn > cfg.spin_churn_max

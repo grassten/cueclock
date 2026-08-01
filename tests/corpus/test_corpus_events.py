@@ -149,17 +149,23 @@ EXPECTED: dict[
     # at settle). Pins the axis-kill re-open credit: exactly one shot, and
     # both settles are real (the prior shot's tail, then this one's).
     "stroke_tug_strike_0801": (1, 0, 2, 2),
-    # hand_roll: Steven bowls the cue ball back to his drill spot by hand
-    # from the top-left corner. KNOWN-WRONG, PINNED HONESTLY: the launch is
-    # kinematically a strike (11 s rest, clean impulse, coherent travel —
-    # the hand reaches in over the masked rail, so there is no approach
-    # evidence, and the ball rolls free on the cloth, so nothing is merged),
-    # and the roll dying at the bottom-center pocket mouth also mints a
-    # Scratch. Overhead position data cannot separate a hand-bowled ball
-    # from a struck one; this is the acoustic corroborator's case (BACKLOG,
-    # top of the accuracy queue — a stick strike clicks, a hand roll is
-    # silent). If this pin ever changes, something real moved.
-    "hand_roll_place_0801": (1, 1, 1, 1),
+    # hanger_pot: a real full-table pot of the 4 ball hanging at the
+    # bottom-center pocket, shot from the top-left corner; the cue follows
+    # and stops hanging in the jaw (Steven's ground truth — this clip was
+    # first misread as a hand roll, corrected same day). The strike was
+    # always detected; the clip pins the two real failures. (1) Premature
+    # settle, FIXED (checkpoint 30): terminal track churn reborn the
+    # still-rolling cue as a fresh id at the jaw and the age gate let
+    # settle fire 1.3 s after the strike, mid-roll — young solidly-observed
+    # movers now block stillness, and the settle lands at 14.56 s, after
+    # the ball truly stops. (2) The Scratch is PHANTOM (the cue never left
+    # the table — its track died inside the pocket zone because the ball
+    # genuinely stopped there): journal-only in v1, pinned as-is; a
+    # cue-stops-hanging shot is indistinguishable from a pot at track
+    # death, and the counter-evidence (a white still ball reappearing at
+    # the death spot) only arrives ~1 s later. Known limitation, see
+    # design.md §4.2.
+    "hanger_pot_0801": (1, 1, 1, 1),
     # pickup_newborn: picking the resting cue up births a new track from
     # the hand+ball blob (the old track's merge-hold keeps eating the blob
     # until it slides out of the association gate). The carry was smooth
@@ -192,7 +198,7 @@ REFERENCES: dict[str, str] = {
     "address_yank_strike_0801": "empty_table_0729",
     "break_0801": "empty_table_0729",
     "stroke_tug_strike_0801": "empty_table_0729",
-    "hand_roll_place_0801": "empty_table_0729",
+    "hanger_pot_0801": "empty_table_0729",
     "pickup_newborn_0801": "empty_table_0729",
 }
 
