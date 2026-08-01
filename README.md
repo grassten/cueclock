@@ -28,7 +28,7 @@ into a graded regression scenario. Current corpus: 22 scenarios, all green.
 
 ```
 grab thread (BayerRG8 @ 156 fps)
- ├─► ring buffer (last ~12 s, POST /api/dump saves it as a corpus clip)
+ ├─► ring buffer (last ~20 s, POST /api/dump saves it as a corpus clip)
  ├─► detection @ 78 Hz: |frame − empty-table reference| → blobs → tracker
  │      → undistortPoints + homography → table mm → event engine
  │      → ShotTaken / BallsSettled / Scratch → clock state machine

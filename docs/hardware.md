@@ -239,7 +239,7 @@ Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
 | 2,2 | **Extension** | `POST /api/extension` — face/flash follow the active ruleset (Ultimate Pool 15 s; WNT 30 s, WNT Event Rules §5) | `EXT +15` / `EXT +30`, flashes `+15 s` / `+30 s` / `NO EXT` | **live** |
 | 2,3 | **New Rack** | `POST /api/rack` — between racks: refills extensions, arms the first-shot window, clock idle | `NEW RACK`, flashes `RACKED` / `ERROR` | **live** |
 | 2,4 | **Force 30** | `POST /api/restart` — missed auto-reset recovery: clock restarts and runs immediately (rack-aware: 60 s in the first-shot window) | `FORCE 30`, flashes `GO` / `ERROR` | **live** |
-| 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~12 s of frames → corpus clip on T7 (60 s timeout: the reply comes after the ~2.2 GB write) | `FLAG` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
+| 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~20 s of frames → corpus clip on T7 (60 s timeout: the reply comes after the ~3.6 GB write) | `FLAG` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
 | 3,1 | **P1 +** | `POST /api/score/p1/increment` | `P1 +`, flashes `+1` / `ERROR` | **live** |
 | 3,2 | **P1 −** | `POST /api/score/p1/decrement` | `P1 -`, flashes `-1` / `ERROR` | **live** |
 | 3,4 | **P2 −** | `POST /api/score/p2/decrement` | `P2 -`, flashes `-1` / `ERROR` | **live** |
@@ -297,7 +297,9 @@ lifecycle).
 ### C5. Corpus-clip flow (Flag → triage)
 
 1. **At the table:** anything wrong or interesting → press **Flag** within
-   ~12 s. The ring buffer lands as a labeled clip on the T7.
+   ~20 s. The ring buffer lands as a labeled clip on the T7. (Was 12 s: a
+   measured live press came 12.7 s after the phantom it reacted to and the
+   evidence frames were already gone — checkpoint 28.)
 2. **Off the table:** Screen Sharing/SSH into the mini, open Claude Code, run
    the triage workflow (a `/triage-clips` skill is phase 4): replay each new
    clip through the vision core, diagnose → fix → re-grade. Each clip ends as

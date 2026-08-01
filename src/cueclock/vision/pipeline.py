@@ -78,6 +78,7 @@ class VisionPipeline:
                     else ball_churn(
                         gray, self._prev_gray, d.cx, d.cy, self._detect_cfg.churn_radius_px
                     ),
+                    merged=d.merged,
                 )
                 for p, d in zip(mm, detections, strict=True)
             ]

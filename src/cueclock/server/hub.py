@@ -13,11 +13,27 @@ from pathlib import Path
 
 from fastapi import WebSocket
 
-from cueclock.clock import DEFAULT_RULESET, ShotClock, Snapshot, get_ruleset
+from cueclock.clock import DEFAULT_RULESET, ShotClock, Snapshot, State, get_ruleset
 from cueclock.server.journal import SessionJournal
 from cueclock.server.score import MatchScore
 
 BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
+
+# IDLE break gate (checkpoint 28): out of New Rack the only legal shot is a
+# break, and the one live phantom that ever started a rack came from racking
+# motion (2026-08-01 11:14:49, journal-pinned: the phantom started the clock
+# 19 s early and swallowed the real break). ShotTaken.speed_mms is the
+# fastest observed ball in the strike-candidate window — NOT the candidate
+# target's own raw, which underreads on handoff strikes (the gate ate a real
+# break the same morning: target remnant read 2072 mm/s while the reborn cue
+# flew 5300+; `break_0801` + its corpus speed test pin the fix). Measured
+# with these semantics: breaks 5845-7361 mm/s, every ordinary shot
+# <= 2868 mm/s, placement lookalikes below 1000. 3000 is 1.9x under the
+# slowest measured break. Trade-offs (same recovery as a missed break): a
+# genuinely feather-soft break leaves the clock IDLE — Restart; drills that
+# start without a break use the Start key. Events without a speed
+# (manual/synthetic) pass.
+IDLE_BREAK_FLOOR_MMS = 3000.0
 
 
 class Hub:
@@ -142,12 +158,29 @@ class Hub:
 
     # ---------- vision events (dispatched from the `cueclock run` camera thread) ----------
 
-    async def shot_taken(self, t: float | None = None) -> None:
+    async def shot_taken(
+        self,
+        t: float | None = None,
+        ball_id: int | None = None,
+        speed_mms: float | None = None,
+        newborn: bool = False,
+    ) -> None:
+        detail: dict[str, object] = {"t": t, "ball": ball_id, "newborn": newborn}
+        if speed_mms is not None:
+            detail["speed"] = round(speed_mms)
         if not self.vision_enabled:
-            self._log("vision_shot_taken_killed", t=t)
+            self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock
+        if (
+            self.clock.state is State.IDLE
+            and speed_mms is not None
+            and speed_mms < IDLE_BREAK_FLOOR_MMS
+        ):
+            # Racking / placement motion, not a break — see IDLE_BREAK_FLOOR_MMS.
+            self._log("vision_shot_taken_ignored_idle", **detail)
+            return
         self.clock.shot_taken()
-        self._log("vision_shot_taken", t=t)
+        self._log("vision_shot_taken", **detail)
         await self.broadcast(self.clock.snapshot())
 
     async def balls_settled(self, t: float | None = None) -> None:

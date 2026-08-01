@@ -83,20 +83,24 @@ EXPECTED: dict[
     "rack_gather_0731": (0, 0, None),
     # soft_touch: a deliberate touch shot whose cue peaks at 225 mm/s raw —
     # below any impulse floor that still rejects ball-in-hand nudges (§2.3
-    # lesson 6; the acoustic corroborator is the real answer). The settle is
-    # what the clock runs on, so shots stay unasserted rather than pinning a
-    # miss as correct.
-    "soft_touch_0731": (None, 0, 1),
+    # lesson 6; the acoustic corroborator is the real answer). This clip used
+    # to pin min 1 settle, but that settle was measured (2026-08-01) to be
+    # phantom-latched by the STICK YANK on another blob — the touched ball
+    # itself peaks at 25-28 mm per 0.2 s window, under the 30 mm latch, and
+    # every honest slower latch also fires on shaft_adjust (59 mm/0.5 s
+    # while judgeable). With the merge flag the phantom is gone and so is
+    # the lucky settle: the whole sub-impulse class (shot AND settle) waits
+    # on the acoustic corroborator (BACKLOG).
+    "soft_touch_0731": (None, 0, None),
     "soft_shot_0731": (1, 0, 1),
     # glove_address: bridge glove + watch on the cloth through an address; a
     # gear track reached 87% observed (past the flicker filter). The roster
     # rule keeps it from latching table motion: zero events, ever.
     "glove_address_0731": (0, 0, None, 0),
     # merge_yank: the addressed cue's blob merges with the stick tip and the
-    # centroid drifts 31 mm — a KNOWN phantom settle (max_settles 2 tolerates
-    # it). Drop to (1, 0, 1, 1) when a detector-level merge flag lands
-    # (BACKLOG).
-    "merge_yank_0731": (1, 0, 1, 2),
+    # centroid drifts 31 mm. The detector merge flag (checkpoint 28) freezes
+    # still balls through the merge: exactly one shot, one settle.
+    "merge_yank_0731": (1, 0, 1, 1),
     # 2026-08-01 00:07-00:21 live captures (new-engine session) — the no-cue
     # strike evidence. The tracker can lose the cue outright (address
     # occlusion kills its track; regrab grace + whiteness floor + a dead
@@ -108,17 +112,34 @@ EXPECTED: dict[
     # detection on one shot.
     "scratch_shot_0801": (1, 1, 1),
     # ball_in_hand_pickup: Steven picking the cue ball up (his own report).
-    # The pickup drag latches motion (a roster ball genuinely moves) and the
-    # settle resets the clock — the known pickup residual, tolerated. The
-    # pinned zeros are the point: the carried ball must never mint a shot or
-    # a scratch.
-    "ball_in_hand_pickup_0801": (0, 0, None),
+    # The pickup discard (checkpoint 28) recognizes the episode — every ball
+    # that latched motion died far from a pocket after a hand-scale drag —
+    # and unlatches without a settle: zero events, ever.
+    "ball_in_hand_pickup_0801": (0, 0, None, 0),
     # triage_0801b/c: address merge-yank phantom settle (b) and a hand pickup
     # near a pocket (c), each followed by a real, correctly detected shot.
-    # The extra phantom settle is tolerated (min-only) until the detector
-    # merge flag lands.
-    "triage_0801b": (1, 0, 1),
-    "triage_0801c": (1, 0, 1),
+    # The merge flag killed both phantoms: exactly one settle each.
+    "triage_0801b": (1, 0, 1, 1),
+    "triage_0801c": (1, 0, 1, 1),
+    # 2026-08-01 morning flags (new-engine session, journal-correlated).
+    # rack_place: the tail of a racking sequence after New Rack. The live
+    # phantom ShotTaken fired 12.7 s before the Flag press — outside the
+    # then-12 s ring (which is why the ring is 20 s now) — so this pins only
+    # that racking/placement motion stays event-silent. The phantom's clock
+    # damage is covered by the Hub's IDLE break gate (sub-break impulses in
+    # IDLE are ignored), unit-tested in test_server.
+    "rack_place_0801": (0, 0, None, 0),
+    # address_yank_strike: the two-sided merge-yank failure in one clip. The
+    # stick merge yanks the addressed cue 47 mm (phantom settle live at
+    # t~4.7 which reset the clock mid-address) AND wrecks the rest/still
+    # state so the real strike 2 s later was missed live outright. With the
+    # merge flag both sides invert: no settle from the yank, and the real
+    # shot fires. Balls still roll at ring end, so settles stay min-None.
+    "address_yank_strike_0801": (1, 0, None, 1),
+    # break_0801: a real WNT 9-ball break the live IDLE gate wrongly ate
+    # (the handoff underread — see test_break_0801_speed_clears_the_idle_gate
+    # below). First break clip from the TV-era camera position.
+    "break_0801": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -140,6 +161,9 @@ REFERENCES: dict[str, str] = {
     "ball_in_hand_pickup_0801": "empty_table_0729",
     "triage_0801b": "empty_table_0729",
     "triage_0801c": "empty_table_0729",
+    "rack_place_0801": "empty_table_0729",
+    "address_yank_strike_0801": "empty_table_0729",
+    "break_0801": "empty_table_0729",
 }
 
 
@@ -207,6 +231,27 @@ def test_corpus_clip(name: str) -> None:
         assert settles >= min_settles, summary
     if max_settles is not None:
         assert settles <= max_settles, summary
+
+
+def test_break_0801_speed_clears_the_idle_gate() -> None:
+    """The IDLE break gate must never eat a real break — live, it did once.
+
+    2026-08-01 12:06: the gate read 2072 mm/s on Steven's break and held the
+    clock in IDLE. The candidate had advanced on the dying original track's
+    remnant while the reborn cue measurably flew 5300-5500 mm/s — on a
+    handoff strike the target's own raw underreads badly. ShotTaken now
+    carries the fastest observed ball in the candidate window; this replays
+    that exact break and pins the reported speed above the Hub's floor.
+    """
+    from cueclock.server.hub import IDLE_BREAK_FLOOR_MMS
+
+    if not (CLIPS / "break_0801").exists():
+        pytest.skip("clip break_0801 not recorded")
+    events = _run_clip("break_0801", _reference_frames("empty_table_0729"))
+    shots = [e for e in events if isinstance(e, ShotTaken)]
+    assert len(shots) == 1
+    assert shots[0].speed_mms is not None
+    assert shots[0].speed_mms >= IDLE_BREAK_FLOOR_MMS, f"break read {shots[0].speed_mms:.0f}"
 
 
 def test_spin_in_place_settle_waits_for_spin_stop() -> None:

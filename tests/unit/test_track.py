@@ -161,3 +161,43 @@ def test_cue_flag_does_not_flipflop() -> None:
         states = tracker.update(i * DT, [_obs(300, 300, w1), _obs(700, 700, w2)])
         flags.extend(s.ball_id for s in states if s.is_cue)
     assert len(set(flags)) == 1  # hysteresis: one winner, no oscillation
+
+
+def test_merged_blob_on_still_ball_holds_position() -> None:
+    # Checkpoint 28: the stick merging into an addressed ball's blob yanks
+    # the centroid (31-47 mm measured). A still ball cannot streak, so the
+    # merged observation is presence evidence only — position held.
+    tracker = BallTracker()
+    states = []
+    for i in range(10):
+        states = tracker.update(i * DT, [_obs(500, 500)])
+    for i in range(10, 40):
+        states = tracker.update(
+            i * DT, [Observation(x_mm=540, y_mm=500, whiteness=0.1, merged=True)]
+        )
+    assert len(states) == 1
+    assert abs(states[0].x_mm - 500) < 1.0  # yank ignored
+    assert not states[0].observed  # contaminated centroid is not evidence
+    assert states[0].speed_mms < 1.0
+    for i in range(40, 50):  # stick leaves: clean observation, tracking resumes
+        states = tracker.update(i * DT, [_obs(500, 500)])
+    assert states[0].observed
+    assert abs(states[0].x_mm - 500) < 2.0
+
+
+def test_merged_blob_on_moving_ball_still_tracks() -> None:
+    # §2.3 lesson 2 stands: fast balls streak into oversized blobs, and a
+    # moving track must keep following its merged observations.
+    tracker = BallTracker()
+    speed = 1500.0
+    last = None
+    for i in range(40):
+        t = i * DT
+        states = tracker.update(
+            t, [Observation(x_mm=100 + speed * t, y_mm=500, whiteness=0.1, merged=True)]
+        )
+        if states:
+            last = states[0]
+    assert last is not None
+    assert last.observed
+    assert last.speed_mms > 1000.0

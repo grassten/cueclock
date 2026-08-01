@@ -352,3 +352,27 @@ def test_cue_coasting_into_pocket_zone_is_not_scratch() -> None:
     sim.remove(CUE)  # coast budget exhausted: track dies inside the zone
     events = sim.run(1.5)
     assert Scratch not in map(type, events)
+
+
+def test_hand_pickup_of_a_ball_is_not_a_settle_cycle() -> None:
+    # ball_in_hand_pickup_0801: the pickup drag latches motion (a roster ball
+    # genuinely moves), then the fingers wrap it and the track dies mid-table.
+    # The quiet that follows is not a shot settling — no clock reset.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(OBJ, 400.0, 0.0)  # hand drag: past the motion latch
+    sim.run(0.2)  # ~80 mm, hand-drag scale (measured 41-78 mm live)
+    sim.remove(OBJ)  # picked up: track dead, far from any pocket
+    assert sim.run(1.5) == []
+
+
+def test_potted_ball_track_death_still_settles() -> None:
+    # The discard's contrast case: a potted ball also dies, but inside a
+    # pocket zone after real travel — its settle is real and must survive.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(OBJ, -2000.0, -800.0)  # rolled at the top-left pocket
+    sim.run(0.55)  # dies at ~(100, 60): inside the pocket zone
+    sim.remove(OBJ)
+    sim.velocity(CUE, 0.0, 0.0)
+    assert BallsSettled in map(type, sim.run(1.3))

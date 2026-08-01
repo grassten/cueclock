@@ -124,6 +124,63 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 28 — merge flag, pickup discard, IDLE break gate):**
+  the first journal-instrumented session (checkpoint 27 ran live 11:14–11:19
+  UTC) produced two flags, and the journal did its job: both root causes were
+  identified from `events.jsonl` + the ring before writing any code.
+  - **Detector merge flag + tracker hold** (`vision/detect.py`, `track.py`,
+    `pipeline.py`): the stick merging into an addressed ball's blob yanks the
+    shared centroid 31–47 mm — past the 30 mm motion latch (phantom settle ≈
+    phantom reset mid-address) *and* it wrecks the rest/still state, so the
+    real strike moments later was **also missed live** (frame-verified on the
+    second flag: phantom reset at t≈279, the real shot at t≈281 invisible to
+    both live and replay — one root cause behind "clock randomly resets to 30
+    and then doesn't see the shot I take a second later"). `Detection.merged`
+    reports blobs too big to be one clean ball (measured: clean still balls
+    ≤ 1471 px² / ≤ 47 px extent everywhere, merged ≥ 2071 px² / ≥ 102 px;
+    flag at 1800 / 70); the tracker holds a **confirmed, still** track in
+    place through merged observations (a still ball cannot streak — §2.3
+    lesson 2 untouched for movers). Kills the phantom settle AND recovers the
+    blinded strike: `address_yank_strike_0801` pins 1 shot; `merge_yank_0731`
+    tightens to exactly 1 settle; `triage_0801b/c` phantoms gone.
+  - **Pickup discard** (`vision/events.py`): `ball_in_hand_pickup_0801`'s
+    settle closed. Measured: a picked-up ball's track dies far from any
+    pocket after a 41–78 mm drag; a real shot always leaves a live mover or
+    a pocket-zone death after real travel (`shot_debug` cue: 1699 mm). When
+    every ball that latched the episode died off-pocket under 200 mm,
+    `table_moving` unlatches with no settle. Pot deaths keep settling.
+  - **IDLE break gate** (`server/hub.py`): the first flag's phantom
+    `ShotTaken` fired mid-racking (11:14:49, 19 s before the real break,
+    which was then swallowed in MOTION). Evidence frames predated the 12 s
+    ring (press came 12.7 s late), so no vision-side guard is anchorable —
+    instead `ShotTaken` now carries `ball_id`/`speed_mms`/`newborn`, and in
+    IDLE the Hub ignores impulses under 3000 mm/s (measured breaks 5690–6425
+    vs. every ordinary shot 892–2695). Feather break → IDLE → Restart;
+    drills → Start key. Ring default 12 s → 20 s (~3.6 GB) so a late press
+    keeps its evidence; flag presses are journaled (`flag_dump`).
+  - **Gate ate a real break, same morning — fixed before commit:** Steven's
+    12:06 UTC break was journaled `vision_shot_taken_ignored_idle speed=2072`
+    while the ring shows the cue flying 5300–5500 mm/s. On a handoff strike
+    the candidate advances on the dying original track's remnant, so the
+    open-frame raw underreads ~2.6×. `ShotTaken.speed_mms` is now the
+    fastest *observed* ball anywhere in the candidate window (the dwell gate
+    guarantees the table was quiet, so fast motion in that window is the
+    shot): the same break reads 7361. `break_0801` (first TV-era break clip)
+    pins it, including a corpus test asserting the reported speed clears
+    `IDLE_BREAK_FLOOR_MMS`. Re-anchored: breaks 5845–7361, ordinary shots
+    ≤ 2868, floor stays 3000.
+  - **Honest regression, accepted + documented:** `soft_touch_0731`'s old
+    settle was *phantom-latched by the stick yank* (the touched ball peaks
+    at 25–28 mm per 0.2 s window, under the latch; `shaft_adjust` proves no
+    slower latch is honest at 59 mm/0.5 s while judgeable). Touch shots now
+    produce no events; the acoustic corroborator (Part D mic) is promoted to
+    the top of the accuracy queue (BACKLOG).
+  - **Corpus:** `rack_place_0801`, `address_yank_strike_0801`, `break_0801`
+    added, five pins tightened, plus the break-vs-gate speed test — 32
+    scenarios, 38 corpus tests green; 140 unit tests; ruff + mypy clean.
+    Remaining residual: planted-glove slide (needs the `glove_address`
+    recording).
+
 - **2026-08-01 (checkpoint 27 — no-cue strikes + the session journal):**
   checkpoint 26 went live mid-session and Steven's next flags (half a rack,
   two dumps) caught its remaining gap within minutes.

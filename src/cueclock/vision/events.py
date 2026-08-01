@@ -49,6 +49,14 @@ class BallState:
 @dataclass(frozen=True)
 class ShotTaken:
     t: float
+    # Forensics + clock-side context (checkpoint 28): which track fired, at
+    # what impulse speed, and via which path. The IDLE break gate reads
+    # speed_mms (a break is fast; rack-gather placements are not) and the
+    # session journal records all three, so a live misfire is attributable
+    # from the dump alone.
+    ball_id: int | None = None
+    speed_mms: float | None = None
+    newborn: bool = False
 
 
 @dataclass(frozen=True)
@@ -186,6 +194,20 @@ class EventConfig:
     # while my hands are in frame" stall, checkpoint 22).
     judge_obs_fraction_min: float = 0.7
 
+    # Pickup discard (ball_in_hand_pickup_0801, checkpoint 28): a hand pickup
+    # latches table motion (a roster ball genuinely drags) and then the
+    # ball leaves the table — the subsequent quiet is not a shot settling,
+    # and the settle it minted reset the clock mid-visit. Discriminators,
+    # measured: a picked-up ball's track dies FAR from any pocket after a
+    # hand-scale drag (41-78 mm across the pickup captures), while a real
+    # shot always ends with a live mover still on the table (shot_debug's
+    # object ball) or a death inside a pocket zone after real travel (its
+    # potted cue: 1699 mm). When every ball that latched the episode has
+    # died off-pocket under this travel, the episode is a pickup: unlatch
+    # without a settle. 200 mm = 2.6x the measured drag max, far under any
+    # measured real-shot travel.
+    pickup_travel_max_mm: float = 200.0
+
     # Scratch
     cue_lost_latch_s: float = 0.3
     # 120, not 80: a sinking ball's last observations come from the pocket-jaw
@@ -223,6 +245,11 @@ class _StrikeCandidate:
     newborn: bool = False
     last_raw: float | None = None
     ball_id: int | None = None
+    impulse_raw: float = 0.0  # max raw speed seen while the candidate lives.
+    # Not just the opening sample: on a handoff strike the open-frame raw is
+    # averaged across the address-occlusion gap and reads far low (the
+    # 2026-08-01 gated break opened at 2072 mm/s while the cue measurably
+    # flew 5300-5500 — the confirm frames carry the honest speed).
 
 
 @dataclass
@@ -277,6 +304,16 @@ class EventEngine:
         self._roster: set[int] = set()
         self._engine_t0: float | None = None
         self._last_mover_t = float("-inf")  # last genuine observed mover, any position
+        # Motion-episode memory for the pickup discard: for every roster ball
+        # that latched this episode, its pre-motion position (oldest history
+        # row at first latch) and its last observed position.
+        self._episode_origin: dict[int, tuple[float, float]] = {}
+        self._episode_last: dict[int, tuple[float, float]] = {}
+        # Sticky per-episode marker: a judgeable ball outside the mover set
+        # translated while the table was latched — real motion is running
+        # free (a struck ball's newborn continuation is not roster, so it
+        # never joins the mover set), and the episode can never be a pickup.
+        self._episode_free_mover = False
         # Occluded-address strike arming: one shot per rest cycle. Disarmed
         # when a newborn candidate fires (no machine-gun re-opens off the
         # same strike) and when a Scratch fires (the next fast cue-flagged
@@ -319,6 +356,20 @@ class EventEngine:
             # (cue-follow candidate while the flag is empty, or a no-cue
             # candidate whose track died) must not linger and block the scan.
             self._candidate = None
+        if self._candidate is not None:
+            # The shot's honest speed is the fastest observed ball anywhere
+            # while the candidate confirms — the table was quiet by the dwell
+            # gate, so fast motion in this window IS the shot. The candidate's
+            # own target can read far low on a handoff strike: the 2026-08-01
+            # gated break advanced on the old track's remnant (2072 mm/s peak)
+            # while the reborn cue measurably flew 5300-5500.
+            fast = [
+                b.speed_mms if b.raw_speed_mms is None else b.raw_speed_mms
+                for b in balls
+                if b.observed
+            ]
+            if fast:
+                self._candidate.impulse_raw = max(self._candidate.impulse_raw, max(fast))
         if self._candidate is not None and self._candidate.ball_id is not None:
             # A no-cue candidate follows its own track, not the cue flag.
             target = next((b for b in balls if b.ball_id == self._candidate.ball_id), None)
@@ -371,6 +422,26 @@ class EventEngine:
         ]
         if movers:
             self._last_mover_t = t
+            for b in movers:
+                if b.ball_id not in self._episode_origin:
+                    positions = self._history[b.ball_id].positions
+                    oldest = positions[0]
+                    self._episode_origin[b.ball_id] = (oldest[1], oldest[2])
+                    # Seed the last-observed position too: a picked-up ball
+                    # may never be observed again after the latch (fingers
+                    # already wrap it — every later report is a coast).
+                    last_obs = next((p for p in reversed(positions) if p[3]), oldest)
+                    self._episode_last[b.ball_id] = (last_obs[1], last_obs[2])
+        for b in balls:
+            if b.ball_id in self._episode_origin and b.observed:
+                self._episode_last[b.ball_id] = (b.x_mm, b.y_mm)
+        if self._table_moving and not self._episode_free_mover:
+            self._episode_free_mover = any(
+                b.ball_id not in self._episode_origin
+                and self._last_translate.get(b.ball_id) == t
+                and self._judgeable(b)
+                for b in balls
+            )
         # Carom-guard evidence: non-cue balls in genuine observed motion. The
         # stamps are read by the *next* cycles' impulses (strike logic runs
         # first), which is exactly right — a bringer's approach precedes the
@@ -386,6 +457,16 @@ class EventEngine:
         if movers:
             self._table_moving = True
             self._all_still_since = None
+        elif self._table_moving and self._episode_is_pickup(t, balls):
+            # Every ball that latched this episode has left the table far
+            # from any pocket after a hand-scale drag: someone picked it up
+            # (ball in hand). The quiet that follows is not a shot settling —
+            # unlatch without an event so the clock keeps running.
+            self._table_moving = False
+            self._all_still_since = None
+            self._episode_origin.clear()
+            self._episode_last.clear()
+            self._episode_free_mover = False
         elif balls and self._is_still(t, balls):
             if self._all_still_since is None:
                 self._all_still_since = t
@@ -401,6 +482,9 @@ class EventEngine:
             if self._table_moving and t - self._all_still_since >= cfg.settle_dwell_s:
                 self._table_moving = False
                 self._roster = {b.ball_id for b in balls if self._judgeable(b)}
+                self._episode_origin.clear()
+                self._episode_last.clear()
+                self._episode_free_mover = False
                 events.append(BallsSettled(t))
         else:
             self._all_still_since = None
@@ -497,7 +581,7 @@ class EventEngine:
         # (e.g. the impact yanking the old track's centroid) then fails the
         # axis check and the real impulse can still re-open from the same rest.
         self._candidate = _StrikeCandidate(
-            t0=t, x0=rest_x, y0=rest_y, dir_x=dx / norm, dir_y=dy / norm
+            t0=t, x0=rest_x, y0=rest_y, dir_x=dx / norm, dir_y=dy / norm, impulse_raw=raw
         )
 
     def _maybe_open_newborn(
@@ -543,6 +627,7 @@ class EventEngine:
             newborn=True,
             last_raw=raw,
             ball_id=cue.ball_id if follow_ball else None,
+            impulse_raw=raw,
         )
 
     def _advance_candidate(self, t: float, cue: BallState) -> list[Event]:
@@ -553,11 +638,11 @@ class EventEngine:
         if t - candidate.t0 > cfg.strike_confirm_window_s:
             self._candidate = None  # impulse without follow-through: not a shot
             return []
+        raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
         if candidate.newborn:
             # Carried-ball gates (measured on scratch_replace): a hand-carried
             # cue's raw speed is erratic between adjacent frames while a
             # struck cue's is smooth; kill on the first wild step.
-            raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
             prev = candidate.last_raw
             candidate.last_raw = raw
             if (
@@ -584,7 +669,14 @@ class EventEngine:
             self._newborn_disarmed_at = t  # one shot per rest cycle
         self._candidate = None
         self._cue_rest = None
-        return [ShotTaken(t)]
+        return [
+            ShotTaken(
+                t,
+                ball_id=cue.ball_id,
+                speed_mms=candidate.impulse_raw,
+                newborn=candidate.newborn,
+            )
+        ]
 
     def _observed_since(self, ball: BallState, t0: float) -> bool:
         rows = [p for p in self._history[ball.ball_id].positions if p[0] >= t0]
@@ -594,6 +686,55 @@ class EventEngine:
         return observed >= self._cfg.newborn_confirm_obs_min * len(rows)
 
     # ---------- settle helpers ----------
+
+    def _episode_is_pickup(self, t: float, balls: list[BallState]) -> bool:
+        """True when this motion episode was a hand pickup, not a shot.
+
+        Every ball that latched the episode must be gone (track dead), each
+        must have last been observed far from any pocket (a pocket-adjacent
+        death is a potted ball — a real shot), and none may have travelled
+        beyond hand-drag scale (see EventConfig.pickup_travel_max_mm). A real
+        shot always fails at least one: its balls come to rest on the table
+        (tracks alive), or its potted balls die inside pocket zones after
+        real travel — and while anything is still visibly flying the episode
+        cannot be judged at all (below).
+        """
+        if not self._episode_origin:
+            return False
+        if self._episode_free_mover:
+            # A judgeable non-mover ball translated during this episode: the
+            # shot's motion ran on a track outside the roster mover set (a
+            # no-cue strike's newborn continuation) — its settle is real.
+            return False
+        if any(
+            self._last_translate.get(b.ball_id, float("-inf"))
+            > self._first_seen.get(b.ball_id, float("inf"))  # really moved, not birth-init
+            and t - self._last_translate[b.ball_id] < self._cfg.settle_dwell_s
+            for b in balls
+        ):
+            # Something on the table translated within the last settle dwell:
+            # the episode's motion is still in progress, so its movers dying
+            # proves nothing yet. This is not redundant with the liveness
+            # check below — in a no-cue strike (no_cue_strike_0801) the
+            # struck ball's *original* track dies in the address handoff
+            # (mirroring a pickup death) while its newborn continuation is
+            # not yet roster, so the episode's mover set is all-dead even
+            # though the shot is visibly mid-flight. _last_translate covers
+            # coasted frames too, so a brief occlusion cannot open a one-
+            # frame discard window.
+            return False
+        live = {b.ball_id for b in balls}
+        for ball_id, origin in self._episode_origin.items():
+            if ball_id in live:
+                return False
+            last = self._episode_last.get(ball_id)
+            if last is None:
+                return False
+            if self._near_pocket(last[0], last[1]):
+                return False
+            if hypot(last[0] - origin[0], last[1] - origin[1]) > self._cfg.pickup_travel_max_mm:
+                return False
+        return True
 
     def _displacement_over(self, ball: BallState, window_s: float) -> float:
         """Net displacement from the ball's position ~window_s ago."""

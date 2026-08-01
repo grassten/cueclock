@@ -36,6 +36,10 @@ class Detection:
     area: float
     bbox: tuple[int, int, int, int]  # x, y, w, h
     whiteness: float  # 0..1; high = bright and unsaturated (cue-ball-like)
+    merged: bool = False  # blob too big to be one clean ball: either a motion
+    # streak (legitimate) or the stick/hand/another ball merged into the blob
+    # (centroid contaminated). The tracker disambiguates by whether the
+    # matched track is moving — a still ball cannot streak.
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,20 @@ class DetectConfig:
     # disk radius safely inside the ~21 px ball radius, so centroid jitter
     # never lets cloth pixels into the sample.
     churn_radius_px: int = 16
+    # Merged-blob flag (the phantom-settle / blinded-strike root cause,
+    # checkpoint 28): a stick or hand merging into a still ball's blob yanks
+    # the centroid tens of mm. Measured on address_yank_strike_0801 and
+    # merge_yank_0731
+    # (2026-08-01): clean single still balls read area <= 1471 px^2 with
+    # bbox extent <= 47 px across every frame; stick-merged blobs read
+    # >= 2071 px^2 and >= 102 px. Thresholds sit in the gap with margin on
+    # the clean side; contamination small enough to slip under them cannot
+    # yank a centroid past the 30 mm motion latch (the yank scales with the
+    # contaminating area). Not a detection gate — merged blobs are still
+    # reported (§2.3 lesson 2: fast balls streak); the flag only tells the
+    # tracker the centroid is untrustworthy *if* the ball is known-still.
+    merged_area_px: float = 1800.0
+    merged_extent_px: int = 70
 
 
 def bayer_to_gray(bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -207,6 +225,7 @@ def detect_balls(
                     bh,
                 ),
                 whiteness=_whiteness(r, g, b),
+                merged=area > cfg.merged_area_px or max(bw, bh) > cfg.merged_extent_px,
             )
         )
     return detections

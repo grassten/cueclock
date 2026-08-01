@@ -423,6 +423,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         for ts_ns, ring_frame in ring.snapshot():
             writer.write(ring_frame, ts_ns)
         writer.close()
+        # Journal the press itself (before the tail copy, so it appears in
+        # it): the dump's own timestamp is what locates the ring inside the
+        # session timeline when triaging.
+        hub.journal.log("flag_dump", label=label, path=str(clip_dir))
         # The other half of the story: what the live engine did during (and
         # around) these frames — events, commands, clock transitions.
         hub.journal.dump_tail(clip_dir / "events.jsonl", seconds=args.ring_seconds + 60.0)
@@ -497,7 +501,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     def dispatch(event: object, t: float) -> None:
         print(f"{t:8.3f}s  {type(event).__name__}")
         if isinstance(event, ShotTaken):
-            coro = hub.shot_taken(t)
+            coro = hub.shot_taken(
+                t, ball_id=event.ball_id, speed_mms=event.speed_mms, newborn=event.newborn
+            )
         elif isinstance(event, BallsSettled):
             coro = hub.balls_settled(t)
         else:
@@ -780,9 +786,11 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument(
         "--ring-seconds",
         type=float,
-        default=12.0,
+        default=20.0,
         help="in-RAM rolling buffer POST /api/dump saves as a labeled clip "
-        "(~2.2 GB at the default 12 s; 0 disables)",
+        "(~3.6 GB at the default 20 s; 0 disables). 20 s because a measured "
+        "live flag press came 12.7 s after the phantom it reacted to — the "
+        "12 s ring had already dropped the evidence frames (2026-08-01)",
     )
     p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
     p_run.add_argument("--no-mic", action="store_true", help='disable the voice "extension" mic')

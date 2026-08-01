@@ -43,6 +43,9 @@ class Observation:
     whiteness: float
     churn: float | None = None  # appearance churn inside the ball's own disk
     # (detect.ball_churn); None when the caller has no previous frame yet
+    merged: bool = False  # oversized blob (detect.Detection.merged): either a
+    # motion streak or the stick/hand merged in — centroid untrustworthy on a
+    # still ball
 
 
 @dataclass(frozen=True)
@@ -118,7 +121,28 @@ class BallTracker:
                 continue
             matched_tracks.add(ti)
             matched_obs.add(oi)
-            self._update_track(self._tracks[ti], t, observations[oi])
+            track, obs = self._tracks[ti], observations[oi]
+            if (
+                obs.merged
+                and track.hits >= cfg.birth_frames
+                and hypot(track.vx, track.vy) < cfg.still_speed_mms
+            ):
+                # A still ball cannot streak, so an oversized blob here means
+                # the stick/hand (or a touching ball) merged into it and the
+                # centroid is yanked toward the intruder — measured 31-47 mm
+                # net on the flagged live captures, past the 30 mm motion
+                # latch (phantom settle) and enough to wreck the rest/still
+                # state the strike conjunction needs (the blinded-strike
+                # miss, checkpoint 28). The observation is presence evidence
+                # only: hold the ball at its known rest, don't let the
+                # contaminated sample touch position, velocity, whiteness or
+                # churn. The match still consumes the observation, so the
+                # yanked centroid cannot found a junk track next to the ball.
+                track.vx = track.vy = 0.0
+                track.raw_speed = 0.0
+                track.t = t
+                continue
+            self._update_track(track, t, obs)
 
         # ---- unmatched tracks: coast, or die after the coast budget ----
         # (stationary tracks get a much longer budget — see TrackConfig)

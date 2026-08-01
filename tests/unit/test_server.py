@@ -230,3 +230,22 @@ def test_score_corrupt_file_falls_back_to_defaults(tmp_path: Path) -> None:
     assert score.as_dict()["p1"] == {"name": "PLAYER 1", "score": 0}
     score.adjust("p1", 1)  # next mutation rewrites a clean file
     assert MatchScore(path=path).p1_score == 1
+
+
+def test_idle_break_gate() -> None:
+    """Out of New Rack, only a break-speed shot starts the rack (checkpoint 28).
+
+    The 2026-08-01 rack-gather phantom started the clock 19 s before the real
+    break; sub-break impulses in IDLE are racking/placement motion. The gate
+    is IDLE-only — mid-rack soft shots pass — and speedless events (manual /
+    synthetic) always pass.
+    """
+    hub = Hub()
+    asyncio.run(hub.shot_taken(speed_mms=800.0))  # racking lookalike
+    assert hub.clock.state is State.IDLE
+    asyncio.run(hub.shot_taken(speed_mms=5000.0))  # the break
+    assert hub.clock.state is State.MOTION
+    asyncio.run(hub.balls_settled())
+    assert hub.clock.state is State.RUNNING
+    asyncio.run(hub.shot_taken(speed_mms=800.0))  # ordinary soft shot mid-rack
+    assert hub.clock.state is State.MOTION
