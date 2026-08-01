@@ -1,0 +1,227 @@
+# cueclock CLI reference
+
+Every command goes through one entry point, run from the repo root:
+
+```bash
+uv run python -m cueclock.cli <command> [flags]
+```
+
+**Keep this file in the same commit as any `cli.py` command/flag change**
+(same discipline as `hardware.md` Part C ↔ `deck/layout.py`).
+
+Ground rules that apply to every command:
+
+- **The camera is single-consumer.** `run`, `record`, and `live` each own it
+  exclusively — stop the session before recording. Everything else
+  (`replay`, `analyze`, `fit-undistort`, `calibrate`, `listen`, `deck`)
+  never touches the camera and can run alongside.
+- **Concurrent `uv run`s contend.** While a long-lived `uv run` process is
+  alive (a `run` session, `live`, …), further `uv run` invocations can block
+  or die silently — call `.venv/bin/python3 -m cueclock.cli …` directly
+  instead.
+- **`tests/clips` is a symlink to the T7** (`/Volumes/T7/pool_room_clips`).
+  Unmounted ⇒ the symlink dangles: `record` fails fast, corpus tests skip.
+- Ctrl-C and `kill <pid>` (SIGTERM) both unwind cleanly: clips close,
+  Syphon servers retire.
+- **Footgun:** `--reference` on `run` and `analyze` defaults to
+  `tests/clips/empty_table` — the *original undated* clip, long stale.
+  Always pass the current dated reference (the README launch command names
+  it — keeping that current is part of the §E2 refresh recipe).
+
+## Commands at a glance
+
+| Command | What it does | Camera? |
+|---|---|---|
+| `run` | The product: camera + vision drive the clock, overlay server, and Syphon display feed | owns it |
+| `record` | Record a raw timestamped clip to `tests/clips/<label>` (corpus growth) | owns it |
+| `live` | Live camera → Syphon to OBS, no recording (framing/bring-up) | owns it |
+| `replay` | Publish a recorded clip (or test pattern) to OBS via Syphon | no |
+| `analyze` | Run the detection pipeline over a clip offline; print events | no |
+| `fit-undistort` | Fit display undistort params from the table's rails | no |
+| `calibrate` | Fit the px→mm table homography from the rails | no |
+| `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
+| `deck` | Stream Deck control-surface daemon | no |
+
+## Recipes
+
+### Start the session
+
+The canonical launch command lives in README ("Running it") — currently:
+
+```bash
+uv run python -m cueclock.cli run --rectify \
+    --reference tests/clips/empty_table_0801 --host 0.0.0.0
+```
+
+At startup watch for `reference check ok (boundary drift X.X, noise ~2)`.
+A `WARNING … drift > 8` means the reference has gone stale — detection may
+be silently blind (no events, clock never starts). Refresh it (next recipe)
+before trusting the clock.
+
+### Refresh the empty-table reference (~10 min)
+
+Condensed from `hardware.md` §E2 steps 4–5 (the full §E2 covers a bumped or
+moved camera). Stage the room in playing state — bare brushed cloth, match
+lighting, TV on — stop the session, step clear of the table, then:
+
+```bash
+uv run python -m cueclock.cli record --label empty_table_MMDD --seconds 3
+uv run python -m cueclock.cli fit-undistort tests/clips/empty_table_MMDD
+uv run python -m cueclock.cli calibrate tests/clips/empty_table_MMDD
+```
+
+`calibrate` prints the rails-fit residual — healthy is ≈ 0.76 px. If it
+moves meaningfully, the camera itself shifted: do the full §E2 (level,
+focus, WB) before continuing. Both fits write into `config/` where `run`
+picks them up by default. Relaunch with the new `--reference`, confirm the
+drift check is green, update the README launch command, and keep the old
+reference clip (end-of-session drift comparisons, idea bank §7D).
+
+### Record a corpus clip
+
+```bash
+uv run python -m cueclock.cli record --label <scenario>_MMDD --seconds 10
+```
+
+Streams ~360 MB/s through the symlink onto the T7 — watch the frame-drop
+report. Refuses to eat the last 5 GiB of the disk. Scenario naming and
+recording discipline: `design.md` §9.
+
+### Grade / triage a clip offline
+
+```bash
+uv run python -m cueclock.cli analyze --clip tests/clips/<label> \
+    --reference tests/clips/empty_table_0801 [--verbose]
+```
+
+Deterministic replay of the pure vision core — the same events the live
+session would have emitted. `--verbose` adds per-second track status lines.
+
+### Display-path checks
+
+```bash
+uv run python -m cueclock.cli replay --test-pattern     # labeled RGB bars → OBS
+uv run python -m cueclock.cli replay --clip tests/clips/<label> --once
+uv run python -m cueclock.cli live                      # live framing check
+```
+
+### Voice "extension" bring-up (parked — no mic yet)
+
+```bash
+uv run python -m cueclock.cli listen --devices           # list input devices
+uv run python -m cueclock.cli listen --mic-device NAME   # every recognition + verdict
+uv run python -m cueclock.cli listen --mic-device NAME \
+    --post http://localhost:8000/api/extension           # end-to-end soak
+```
+
+The model comes from `scripts/fetch_vosk_model.sh`. Full plan:
+`hardware.md` Part D.
+
+## Per-command flags
+
+### `run`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--host` | `127.0.0.1` | `0.0.0.0` to reach the API from other devices |
+| `--port` | `8000` | |
+| `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
+| `--calibration` | `config/table_calibration.json` | |
+| `--stride` | `2` | detect every Nth frame (2 ≈ 78 Hz) |
+| `--ring-seconds` | `20.0` | in-RAM rolling buffer that `POST /api/dump` saves as a labeled clip (~3.6 GB at 20 s; `0` disables). 20 s because a measured live Flag press came 12.7 s after the phantom it reacted to |
+| `--verbose` | off | per-second track status lines |
+| `--no-mic` | off | disable the voice-"extension" mic |
+
+Plus the shared display and mic args below.
+
+### `record`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--label` | required | scenario name = directory name under `--out` |
+| `--seconds` | `10.0` | reference clips use 3 |
+| `--out` | `tests/clips` | |
+
+### `replay`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--clip` | — | clip directory to replay |
+| `--once` | off | play once instead of looping |
+| `--test-pattern` | off | labeled RGB bars instead of a clip |
+
+Plus the shared display args below.
+
+### `live`
+
+Shared display args only.
+
+### `fit-undistort`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `frame` (positional) | required | clip directory (uses its middle frame) or a `.npy` frame |
+| `--out` | `config/display_undistort.json` | |
+
+### `calibrate`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `frame` (positional) | required | empty-table clip directory (middle frame) or `.npy` frame |
+| `--undistort` | `config/display_undistort.json` | run `fit-undistort` first |
+| `--out` | `config/table_calibration.json` | |
+
+### `analyze`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--clip` | required | clip directory to analyze |
+| `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
+| `--calibration` | `config/table_calibration.json` | |
+| `--stride` | `2` | detect every Nth frame (2 ≈ 78 Hz) |
+| `--verbose` | off | per-second track status lines |
+
+### `listen`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--devices` | off | list input devices and exit |
+| `--post` | — | URL to POST on accepted hits (e.g. `http://localhost:8000/api/extension`) |
+
+Plus the shared mic args below.
+
+### `deck`
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--server` | `http://127.0.0.1:8000` | cueclock server base URL |
+| `--brightness` | `60` | key backlight 0–100 |
+
+Never install the Elgato Stream Deck app — it would claim exclusive HID
+access and starve this daemon.
+
+### Shared display args (`run`, `replay`, `live`)
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--fps` | `30.0` | display publish rate (detection rate is unaffected) |
+| `--name` | `cueclock` | Syphon server name (what the OBS Syphon Client source selects) |
+| `--undistort` | `config/display_undistort.json` | |
+| `--no-undistort` | off | publish distorted frames |
+| `--rectify` | off | render the table axis-aligned via `config/table_calibration.json` |
+
+### Shared mic args (`run`, `listen`)
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--mic-device` | none — must be passed | CoreAudio name, exact then substring match (`listen --devices` lists them). No default on purpose: the Mac mini has no built-in mic |
+| `--mic-model` | `models/vosk-model-small-en-us-0.15` | fetch via `scripts/fetch_vosk_model.sh` |
+
+## Not in this CLI, but nearby
+
+- `uv run pytest` — unit tests; `uv run pytest -n 4` is the corpus
+  checkpoint battery (`tests/README.md`; needs the T7 mounted).
+- `scripts/live_view.py` — camera bring-up viewer with focus/WB/grade
+  hotkeys (`hardware.md` §A3); pylon Viewer doesn't exist on Apple Silicon.
+- `scripts/fetch_vosk_model.sh` — downloads the Vosk voice model.
+- The HTTP/WebSocket API the deck and overlays speak: `design.md` §2.1.
