@@ -169,6 +169,12 @@ grab thread (BayerRG8 @ 156 fps)
 - *Replay*: replay-buffer playback (Stream Deck phase 3).
 
 **Settings:**
+- On every cueclock browser source, tick **"Refresh browser when scene
+  becomes active"**: if a source first loads while the server is down, OBS's
+  embedded browser parks on a silent error page and never retries (the WS
+  reconnect only helps *after* a successful page load) — the checkbox heals
+  it on the next scene switch. Same reason the start order is server first,
+  then OBS (enforced automatically once the §C4 session toggle is built).
 - Canvas 1920×1080; keep color range consistent end-to-end (Full/Full or
   Limited/Limited — a mismatch shows as crushed blacks on the blue cloth).
 - Grade on the Syphon source with Color Correction or Apply LUT;
