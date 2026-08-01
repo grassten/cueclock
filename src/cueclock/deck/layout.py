@@ -71,6 +71,23 @@ class Key:
 _EXT_FACE: dict[str, str] = {n: f"EXT\n+{r.extension_seconds}" for n, r in RULESETS.items()}
 _EXT_FLASH: dict[str, str] = {n: f"+{r.extension_seconds} s" for n, r in RULESETS.items()}
 
+
+def _flag(label: str) -> ApiPost:
+    """Ring-dump action for one flag reason; the label names the clip dir.
+
+    Dump replies only after writing ~3.6 GB to the T7 — measured well over the
+    3 s default (2026-07-31: three "timed out" flashes for dumps that all
+    succeeded). Generous timeout + a pending face instead.
+    """
+    return ApiPost(
+        f"/api/dump?label={label}",
+        "SAVED",
+        "NO T7",
+        timeout=60.0,
+        pending_face="SAVING…",
+    )
+
+
 LAYOUT: tuple[Key, ...] = (
     Key(1, 3, "ruleset", "RULESET", RulesetCycle()),
     # Push-out call: clock restarts at the 60 s first-shot time (WNT §5) and the
@@ -92,24 +109,33 @@ LAYOUT: tuple[Key, ...] = (
         ),
         face_by_ruleset=_EXT_FACE,
     ),
+    # Row 2 reads left to right as recovery, then evidence: the two manual
+    # clock-recovery keys (Reset, Force 30) on the left, the flag family on
+    # the right (2026-08-01; Force 30 moved from 2,4 to make the run).
     Key(2, 1, "reset", "RESET", ApiPost("/api/reset", "RESET", "ERROR")),
-    # Match-mode keys (2026-07-31): rack-scope reset and mid-rack clock recovery.
-    Key(2, 3, "rack", "NEW\nRACK", ApiPost("/api/rack", "RACKED", "ERROR")),
-    Key(2, 4, "restart", "FORCE\n30", ApiPost("/api/restart", "GO", "ERROR")),
-    # Dump writes ~2.2 GB to the T7 before responding — measured well over the
-    # 3 s default (2026-07-31: three "timed out" flashes for dumps that all
-    # succeeded). Generous timeout + a pending face instead.
-    Key(
-        2,
-        5,
-        "flag",
-        "FLAG",
-        ApiPost("/api/dump?label=flagged", "SAVED", "NO T7", timeout=60.0, pending_face="SAVING…"),
-    ),
+    Key(2, 2, "restart", "FORCE\n30", ApiPost("/api/restart", "GO", "ERROR")),
+    # Flag family (2026-08-01): the single Flag split into three reason-coded
+    # keys after an OBS-side failure masqueraded as a vision bug through two
+    # triage passes — the label was "flagged" and carried no reason. Each key
+    # dumps the same ring through /api/dump; only the label differs, and the
+    # label names the clip dir (tests/clips/<label>_N) and rides the journal's
+    # flag_dump line, so triage starts from *why* it was pressed.
+    #   PHANTOM — an event was counted that shouldn't have been.
+    #   MISSED  — a real shot/settle wasn't detected, or came late.
+    #   OTHER   — display problems, anything else.
+    # (2,5) — the old Flag cell — stays a flag key on purpose: a pre-split
+    # reflex press still saves the ring, and OTHER is exactly what the old
+    # unspecified flag meant.
+    Key(2, 3, "flag_phantom", "FLAG\nPHANTOM", _flag("flag_phantom")),
+    Key(2, 4, "flag_missed", "FLAG\nMISSED", _flag("flag_missed")),
+    Key(2, 5, "flag_other", "FLAG\nOTHER", _flag("flag_other")),
     # Score row — the wall-TV scoreboard is the real press feedback; the tile
     # flash is just an ack. (Displaced the planned music keys; see BACKLOG.md.)
+    # New Rack sits mid-row (moved from 2,3 on 2026-08-01) so the whole
+    # between-racks ritual — adjust the score, rack the next game — is one row.
     Key(3, 1, "p1_plus", "P1 +", ApiPost("/api/score/p1/increment", "+1", "ERROR")),
     Key(3, 2, "p1_minus", "P1 -", ApiPost("/api/score/p1/decrement", "-1", "ERROR")),
+    Key(3, 3, "rack", "NEW\nRACK", ApiPost("/api/rack", "RACKED", "ERROR")),
     Key(3, 4, "p2_minus", "P2 -", ApiPost("/api/score/p2/decrement", "-1", "ERROR")),
     Key(3, 5, "p2_plus", "P2 +", ApiPost("/api/score/p2/increment", "+1", "ERROR")),
 )

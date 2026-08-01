@@ -119,7 +119,10 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       lifecycles; one-time OBS settings. Spec: `hardware.md` §C4.
 - [ ] **Stream Deck phase 3 — Replay key** (obs-websocket).
 - [ ] **Stream Deck phase 4 — `/triage-clips` skill** (the off-table half of
-      the Flag key; flow in `hardware.md` §C5).
+      the Flag keys; flow in `hardware.md` §C5). Flags are reason-coded since
+      2026-08-01 (`flag_phantom`/`flag_missed`/`flag_other`) — the skill
+      should route on the clip-name reason: phantom/missed → vision replay,
+      other → presentation side first (OBS logs, overlay, journal).
 - [ ] **Deck bring-up checks** at the table: `hardware.md` §C6 (HID wake,
       power assertions, OBS restore).
 - [ ] Deck placement: desk stand first; break-end wall mount later if it
@@ -308,7 +311,7 @@ injecting timestamp gaps — the observed 544 ms iCloud stall as a profile).
   auto-dumps the ring on every disagreement. Every practice session becomes
   corpus growth with zero extra table time — the single highest-leverage
   accuracy investment on this list. (The Flag key + ring dump built 2026-07-29
-  are its first half.)
+  are its first half; reason-coded since 2026-08-01.)
 - **Pocket ground truth for ~$10**: IR break-beams in the pockets as a
   *labeling* instrument (detection stays vision-only — settled).
 - **Latency grading**: a frame-accurate contact label per shot clip upgrades

@@ -129,6 +129,22 @@ def test_dump_calls_the_wired_ring_and_sanitizes_label() -> None:
     assert seen == ["weirdlabel"]
 
 
+def test_dump_without_label_stays_flagged() -> None:
+    # Backward compat: the deck's reason-coded keys always send a label
+    # (2026-08-01), but a bare POST — curl, old clients — still means "flagged".
+    app = create_app()
+    seen: list[str] = []
+
+    def fake_dump(label: str) -> str:
+        seen.append(label)
+        return f"tests/clips/{label}"
+
+    app.state.dump = fake_dump
+    with TestClient(app) as client:
+        assert client.post("/api/dump").status_code == 200
+    assert seen == ["flagged"]
+
+
 def test_dump_failure_is_503_not_a_crash() -> None:
     app = create_app()
 

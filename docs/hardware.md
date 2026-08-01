@@ -200,11 +200,13 @@ truth for the deck's current state**: update the button map here in the same
 commit as any `src/cueclock/deck/layout.py` change; the two must never
 disagree.
 
-**Status: phase 1 + match keys live (2026-07-31).** `cueclock deck` daemon runs
-under launchd (`com.cueclock.deck`) with eleven API keys working; session
-toggle and replay are phases 2–3 (see `BACKLOG.md`). The match-mode update
-(WNT 9-ball hosting) took row 3 for scoring, displacing the planned music
-keys to `BACKLOG.md`.
+**Status: phase 1 + match keys + reason-coded flags live (2026-08-01).**
+`cueclock deck` daemon runs under launchd (`com.cueclock.deck`) with thirteen
+API keys working; session toggle and replay are phases 2–3 (see `BACKLOG.md`).
+The match-mode update (WNT 9-ball hosting) took row 3 for scoring, displacing
+the planned music keys to `BACKLOG.md`. The flag split (2026-08-01) took the
+right half of row 2, moving Force 30 to (2,2), New Rack to (3,3), and the
+planned Replay key to (1,2).
 
 ### C1. Decision record
 
@@ -232,16 +234,18 @@ Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
 | Pos (row,col) | Key | Action | Face | Status |
 |---|---|---|---|---|
 | 1,1 | **Session** | Toggle: start/stop `run` + OBS (hold 1 s to stop) | `OFF` / `STARTING…` / `ON` / `DEV` | planned (phase 2) |
+| 1,2 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3; displaced from 2,2 by the flag reorg) |
 | 1,3 | **Ruleset** | Cycle rulesets via `POST /api/ruleset/{next}` | `8-BALL` / `FINAL 10` / `9-BALL` | **live** |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back (9-ball only, so the face stays static) | `PUSH`, flashes `60 s` / `ERROR` | **live** |
 | 1,5 | **Extension** | `POST /api/extension` — face/flash follow the active ruleset (Ultimate Pool 15 s; WNT 30 s, WNT Event Rules §5). Top-right corner so a player under the clock finds it without hunting (moved from 2,2 on 2026-08-01) | `EXT +15` / `EXT +30`, flashes `+15 s` / `+30 s` / `NO EXT` | **live** |
 | 2,1 | **Reset** | `POST /api/reset` (fouls, bug situations; does not refill extensions) | `RESET` | **live** |
-| 2,2 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3; displaced from 1,5 by Extension) |
-| 2,3 | **New Rack** | `POST /api/rack` — between racks: refills extensions, arms the first-shot window, clock idle | `NEW RACK`, flashes `RACKED` / `ERROR` | **live** |
-| 2,4 | **Force 30** | `POST /api/restart` — missed auto-reset recovery: clock restarts and runs immediately (rack-aware: 60 s in the first-shot window) | `FORCE 30`, flashes `GO` / `ERROR` | **live** |
-| 2,5 | **Flag** | `POST /api/dump?label=flagged` — last ~20 s of frames → corpus clip on T7 (60 s timeout: the reply comes after the ~3.6 GB write) | `FLAG` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
+| 2,2 | **Force 30** | `POST /api/restart` — missed auto-reset recovery: clock restarts and runs immediately (rack-aware: 60 s in the first-shot window). Beside Reset: the clock-recovery pair (moved from 2,4 on 2026-08-01) | `FORCE 30`, flashes `GO` / `ERROR` | **live** |
+| 2,3 | **Flag phantom** | `POST /api/dump?label=flag_phantom` — an event was counted that shouldn't have been | `FLAG PHANTOM` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
+| 2,4 | **Flag missed** | `POST /api/dump?label=flag_missed` — a real shot/settle wasn't detected, or came late | `FLAG MISSED` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
+| 2,5 | **Flag other** | `POST /api/dump?label=flag_other` — display problems, anything else. The old single-Flag cell on purpose: a pre-split reflex press still saves the ring | `FLAG OTHER` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
 | 3,1 | **P1 +** | `POST /api/score/p1/increment` | `P1 +`, flashes `+1` / `ERROR` | **live** |
 | 3,2 | **P1 −** | `POST /api/score/p1/decrement` | `P1 -`, flashes `-1` / `ERROR` | **live** |
+| 3,3 | **New Rack** | `POST /api/rack` — between racks: refills extensions, arms the first-shot window, clock idle. Mid-score-row so the whole between-racks ritual — score it, rack it — is one row (moved from 2,3 on 2026-08-01) | `NEW RACK`, flashes `RACKED` / `ERROR` | **live** |
 | 3,4 | **P2 −** | `POST /api/score/p2/decrement` | `P2 -`, flashes `-1` / `ERROR` | **live** |
 | 3,5 | **P2 +** | `POST /api/score/p2/increment` | `P2 +`, flashes `+1` / `ERROR` | **live** |
 
@@ -252,6 +256,16 @@ flash is just an ack. Row 3 was reserved for the phase-3 music keys
 (play/pause, vol ±) — displaced to `BACKLOG.md` by match scoring (2026-07-31).
 Deliberately absent (Steven, 2026-07-31): clock start/pause — Reset covers the
 bug cases, Force 30 the missed auto-reset.
+
+**The flag split (2026-08-01):** one Flag key became three reason-coded keys
+after an OBS-side failure (a dead camera source) masqueraded as a vision bug
+through two triage passes — the dump label was always `flagged` and carried no
+reason. All three keys dump the same ~20 s ring through the same endpoint;
+only the label differs (`flag_phantom` / `flag_missed` / `flag_other`), and
+the label names the clip dir (`tests/clips/<label>_N`) and rides the journal's
+`flag_dump` line. A bare `POST /api/dump` (no label) still means `flagged` —
+the endpoint is unchanged (`design.md` §2.1, 2026-07-29). Row 2 now reads
+left to right as recovery, then evidence.
 
 ### C3. Architecture
 
@@ -296,14 +310,22 @@ lifecycle).
 
 ### C5. Corpus-clip flow (Flag → triage)
 
-1. **At the table:** anything wrong or interesting → press **Flag** within
-   ~20 s. The ring buffer lands as a labeled clip on the T7. (Was 12 s: a
-   measured live press came 12.7 s after the phantom it reacted to and the
-   evidence frames were already gone — checkpoint 28.)
+1. **At the table:** anything wrong or interesting → press the **Flag** key
+   that names why, within ~20 s: **PHANTOM** (an event was counted that
+   shouldn't have been), **MISSED** (a real shot/settle wasn't detected, or
+   came late), **OTHER** (display problems, anything else — when in doubt).
+   The ring buffer lands as a clip on the T7 named for the reason. (Window
+   was 12 s: a measured live press came 12.7 s after the phantom it reacted
+   to and the evidence frames were already gone — checkpoint 28. Reasons
+   added after an OBS-side failure spent two triage passes being chased as
+   a vision bug — 2026-08-01.)
 2. **Off the table:** Screen Sharing/SSH into the mini, open Claude Code, run
    the triage workflow (a `/triage-clips` skill is phase 4): replay each new
    clip through the vision core, diagnose → fix → re-grade. Each clip ends as
-   a graded corpus scenario, kept evidence, or deleted.
+   a graded corpus scenario, kept evidence, or deleted. The reason in the
+   clip name sets the starting point: `flag_phantom`/`flag_missed` go
+   straight to vision replay; `flag_other` checks the presentation side
+   first (OBS logs, overlay, journal) before assuming a vision bug.
 
 ### C6. Bring-up checks (at the table, still open)
 

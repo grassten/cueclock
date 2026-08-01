@@ -277,5 +277,6 @@ lens-distortion data at the current focus (§4.3).
 
 - Spot-check one clip plays back (`ClipReader` frame count, or replay it to OBS
   via `uv run python -m cueclock.cli replay --clip tests/clips/<label>`).
-- New failure captures come from the Stream Deck Flag key (`POST /api/dump`) —
-  see `hardware.md` (Stream Deck part) for the triage flow.
+- New failure captures come from the Stream Deck Flag keys (`POST /api/dump`;
+  reason-coded labels since 2026-08-01) — see `hardware.md` (Stream Deck part)
+  for the triage flow.

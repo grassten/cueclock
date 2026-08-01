@@ -152,6 +152,34 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 34 — reason-coded flag keys: triage starts from
+  *why*):** tonight an OBS-side failure (the camera source died on the wall
+  TV) was flagged and then chased as a vision bug through two triage passes —
+  the dump label was always `flagged`, so the clip carried no hint that the
+  clock and events had been fine and only the presentation was broken. The
+  single Flag key is now three reason-coded keys on the right half of row 2:
+  **FLAG PHANTOM** (2,3 — an event was counted that shouldn't have been,
+  label `flag_phantom`), **FLAG MISSED** (2,4 — a real shot/settle wasn't
+  detected, or came late, `flag_missed`), **FLAG OTHER** (2,5 — display
+  problems, anything else, `flag_other`). Each presses the same
+  `POST /api/dump?label=<x>` contract (unchanged since 2026-07-29 — no server
+  edits); the label names the clip dir (`tests/clips/<label>_N`) and rides
+  the journal's `flag_dump` line, and `/triage-clips` (deck phase 4) can
+  route on it: phantom/missed → vision replay, other → OBS logs first.
+  A bare `POST /api/dump` still means `flagged` (pinned by a server test).
+  Placement decisions: (2,5) — the old Flag cell — stays a flag key so a
+  pre-split reflex press still saves the ring instead of no-opping while the
+  20 s of evidence expires; OTHER inherits it because "unspecified" is
+  exactly what the old key meant. To make the run contiguous, Force 30 moved
+  to (2,2) (beside Reset: the clock-recovery pair — row 2 now reads recovery,
+  then evidence), New Rack to (3,3) (mid-score-row: the whole between-racks
+  ritual on one row), and the planned Replay key to (1,2). Faces are words,
+  not glyphs, per the deck's rendering style: `FLAG` over
+  `PHANTOM`/`MISSED`/`OTHER` — the family reads as one group and the second
+  line is the reason, matching the clip name triage will see. `hardware.md`
+  §C2/§C5, `README.md`, and `BACKLOG.md` updated in step. The running deck
+  daemon renders the old layout until `cueclock deck` is relaunched.
+
 - **2026-08-01 (checkpoint 33 — episode closure: a fire is evidence; eight
   evening dumps triaged):** two drill sessions on the checkpoint-32 build
   (18:30–18:55 and 19:22–19:28 UTC) produced eight flag dumps. Triage

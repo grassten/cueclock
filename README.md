@@ -11,15 +11,16 @@ TV, controlled from a Stream Deck. Everything runs on one Mac mini.
 
 Hardware installed and calibrated; the clock runs real practice sessions.
 Detection accuracy work is ongoing — every live miss gets captured by a
-Stream Deck "Flag" key (last ~12 s of raw frames → a labeled clip) and turned
-into a graded regression scenario. Current corpus: 22 scenarios, all green.
+Stream Deck "Flag" key (last ~20 s of raw frames → a clip named for the
+failure reason) and turned into a graded regression scenario. Current
+corpus: 22 scenarios, all green.
 
 | Piece | State |
 |---|---|
 | Basler a2A1920-160ucBAS + Kowa 3.5 mm, ceiling mount | live, settings locked in UserSet1 |
 | Vision pipeline (`cueclock run`): detect → track → events → clock | live |
 | OBS: Syphon table feed + clock overlay → wall TV (Hisense 55" CanvasTV) | live |
-| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Reset / Extension / Ruleset / Flag / New Rack / Force 30 / Push / score keys |
+| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Reset / Extension / Ruleset / reason-coded Flag keys (phantom, missed, other) / New Rack / Force 30 / Push / score keys |
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
 | Session toggle, instant replay, music keys | planned — `BACKLOG.md` |

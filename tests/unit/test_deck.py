@@ -64,8 +64,8 @@ def test_next_ruleset_unknown_active_falls_back_to_first() -> None:
 def test_match_keys_sit_where_the_contract_put_them() -> None:
     spots = {k.name: (k.row, k.col) for k in LAYOUT}
     assert spots["push"] == (1, 4)
-    assert spots["rack"] == (2, 3)
-    assert spots["restart"] == (2, 4)
+    assert spots["rack"] == (3, 3)  # score row: the whole between-racks ritual (2026-08-01)
+    assert spots["restart"] == (2, 2)  # beside Reset: the clock-recovery pair (2026-08-01)
     assert spots["p1_plus"] == (3, 1)
     assert spots["p1_minus"] == (3, 2)
     assert spots["p2_minus"] == (3, 4)
@@ -150,10 +150,53 @@ def test_get_json_when_server_down() -> None:
     assert client.get_json("http://127.0.0.1:1", "/api/state", timeout=0.3) is None
 
 
+# --- flag family (one Flag became three reason-coded keys, 2026-08-01) ---
+
+
+FLAGS = tuple(k for k in LAYOUT if k.name.startswith("flag_"))
+
+
+def test_flag_family_is_a_contiguous_reason_coded_run() -> None:
+    # Right half of row 2, in reason order; (2,5) is the old single-Flag cell,
+    # kept as a flag key so a pre-split reflex press still saves the ring.
+    spots = {k.name: (k.row, k.col) for k in FLAGS}
+    assert spots == {
+        "flag_phantom": (2, 3),
+        "flag_missed": (2, 4),
+        "flag_other": (2, 5),
+    }
+
+
+def test_flag_family_sends_distinct_labels_through_the_dump_endpoint() -> None:
+    # The label is the whole point: it names the clip dir and rides the
+    # journal's flag_dump line, so triage starts from *why* it was pressed.
+    paths = {k.name: k.action.path for k in FLAGS if isinstance(k.action, ApiPost)}
+    assert paths == {
+        "flag_phantom": "/api/dump?label=flag_phantom",
+        "flag_missed": "/api/dump?label=flag_missed",
+        "flag_other": "/api/dump?label=flag_other",
+    }
+
+
+def test_flag_family_faces_are_instantly_distinguishable() -> None:
+    reasons = [k.face.split("\n") for k in FLAGS]
+    assert all(first == "FLAG" for first, _ in reasons)  # reads as one family
+    assert len({second for _, second in reasons}) == len(FLAGS)
+
+
+def test_flag_dump_timeouts_cover_the_t7_write() -> None:
+    # Dump replies only after writing ~3.6 GB to the T7; a short timeout makes
+    # successful saves flash red (2026-07-31 triage: three "failed" dumps, all fine).
+    for key in FLAGS:
+        assert isinstance(key.action, ApiPost)
+        assert key.action.timeout >= 30.0
+        assert key.action.pending_face
+
+
 # --- dispatch (HTTP faked at the client module boundary) ---
 
 
-FLAG = next(k for k in LAYOUT if k.name == "flag")
+FLAG = next(k for k in LAYOUT if k.name == "flag_phantom")
 RULESET_KEY = next(k for k in LAYOUT if isinstance(k.action, RulesetCycle))
 
 
@@ -191,14 +234,6 @@ def test_dispatch_ruleset_cycle_server_down(monkeypatch) -> None:  # type: ignor
     image, changed = _dispatch(RULESET_KEY, "http://x", None)
     assert image.getpixel((0, 0)) == faces.BG_ERR
     assert changed is None
-
-
-def test_flag_dump_timeout_covers_the_t7_write() -> None:
-    # Dump replies only after writing ~2.2 GB to the T7; a short timeout makes
-    # successful saves flash red (2026-07-31 triage: three "failed" dumps, all fine).
-    assert isinstance(FLAG.action, ApiPost)
-    assert FLAG.action.timeout >= 30.0
-    assert FLAG.action.pending_face
 
 
 # --- face selection ---
