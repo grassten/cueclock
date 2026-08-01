@@ -13,9 +13,11 @@ dependencies = [
     "opencv-python",
     "pillow>=12.3.0",
     "pypylon",
+    "sounddevice>=0.5.5",
     "streamdeck>=0.9.8",
     "syphon-python>=0.1.1; sys_platform == 'darwin'",
     "uvicorn>=0.51.0",
+    "vosk==0.3.44",  # newest release with a macOS universal2 wheel (0.3.45 is Linux/Windows only)
     "websockets>=16.1.1",
 ]
 
@@ -58,7 +60,7 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["pypylon.*", "syphon.*", "Foundation", "objc", "StreamDeck.*"]
+module = ["pypylon.*", "syphon.*", "Foundation", "objc", "StreamDeck.*", "vosk", "sounddevice"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -10,6 +10,7 @@ Run via:  uv run python -m cueclock.cli run --rectify
 """
 
 import argparse
+import contextlib
 import shutil
 import signal
 import sys
@@ -372,6 +373,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     import uvicorn
     from pypylon import pylon
 
+    # Import-safe despite the lazy-import rule: listener.py defers its
+    # vosk/sounddevice imports to run() (docs/hardware.md Part D).
+    from cueclock.audio.listener import ExtensionListener
     from cueclock.capture.camera import EXPOSURE_US, GAIN, open_camera
     from cueclock.capture.ring import FrameRing
     from cueclock.display.syphon_out import SyphonOutput
@@ -441,6 +445,36 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         return 1
     loop = cast("asyncio.AbstractEventLoop", app.state.loop)
+
+    # Voice "extension" (docs/hardware.md Part D): same Hub call as the deck
+    # key, fed by the mic instead of HID. Absent model = quiet skip, so `run`
+    # works unchanged on a machine that never ran scripts/fetch_vosk_model.sh.
+    listener: ExtensionListener | None = None
+    if not args.no_mic:
+        model_dir = Path(args.mic_model)
+        if not model_dir.is_dir():
+            print(
+                f'voice "extension" off — Vosk model not found at {model_dir} '
+                "(scripts/fetch_vosk_model.sh downloads it)"
+            )
+        else:
+
+            def _extension_done(future: "Future[bool]") -> None:
+                exc = future.exception()
+                if exc is not None:
+                    print(f"voice extension dispatch failed: {exc!r}", file=sys.stderr)
+                else:
+                    print(f'voice: "extension" -> accepted={future.result()}')
+
+            def _voice_extension() -> None:
+                asyncio.run_coroutine_threadsafe(hub.extension(), loop).add_done_callback(
+                    _extension_done
+                )
+
+            listener = ExtensionListener(
+                _voice_extension, model_path=model_dir, device_name=args.mic_device
+            )
+            listener.start()
 
     def _surface(future: "Future[None]") -> None:
         exc = future.exception()
@@ -550,6 +584,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if listener is not None:
+            listener.stop()
         server.should_exit = True
         server_thread.join(timeout=5)
     return 0
@@ -580,6 +616,69 @@ def _cmd_deck(args: argparse.Namespace) -> int:
     from cueclock.deck.daemon import run_deck
 
     return run_deck(args.server, args.brightness)
+
+
+def _cmd_listen(args: argparse.Namespace) -> int:
+    """Voice bring-up / false-positive soak tool (docs/hardware.md Part D).
+
+    Prints every finalized recognition with its confidence and verdict; with
+    --post, accepted hits also drive a running clock — the end-to-end check.
+    """
+    from cueclock.audio.listener import ExtensionListener, input_devices
+    from cueclock.audio.spotter import Final
+
+    if args.devices:
+        for index, name in input_devices():
+            print(f"{index:3d}  {name}")
+        return 0
+
+    model_dir = Path(args.mic_model)
+    if not model_dir.is_dir():
+        print(
+            f"Vosk model not found at {model_dir} — run scripts/fetch_vosk_model.sh",
+            file=sys.stderr,
+        )
+        return 1
+
+    def _show(final: Final) -> None:
+        verdict = "ACCEPTED" if final.accepted else f"rejected: {final.reason}"
+        print(f"heard {final.text!r}  conf={final.confidence:.2f}  {verdict}")
+
+    def _on_accept() -> None:
+        if args.post is None:
+            return
+        import urllib.request
+
+        # B310: --post is the operator's own clock API URL (http://localhost), never file:
+        try:
+            with urllib.request.urlopen(  # nosec B310
+                urllib.request.Request(args.post, method="POST"), timeout=3.0
+            ) as resp:
+                print(f"  POST {args.post} -> {resp.status}")
+        except OSError as exc:  # URLError/HTTPError both land here
+            print(f"  POST {args.post} failed: {exc}", file=sys.stderr)
+
+    listener = ExtensionListener(
+        _on_accept, model_path=model_dir, device_name=args.mic_device, on_final=_show
+    )
+    print('say "extension" — Ctrl-C to stop')
+    with contextlib.suppress(KeyboardInterrupt):
+        listener.run()
+    return 0
+
+
+def _add_mic_args(p: argparse.ArgumentParser) -> None:
+    """Args shared by `run` and `listen` (voice "extension", docs/hardware.md Part D)."""
+    p.add_argument(
+        "--mic-device",
+        default="Mac mini Microphone",
+        help='mic CoreAudio name, exact then substring match (default "Mac mini Microphone")',
+    )
+    p.add_argument(
+        "--mic-model",
+        default="models/vosk-model-small-en-us-0.15",
+        help="Vosk model directory (default models/vosk-model-small-en-us-0.15)",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -667,7 +766,18 @@ def main(argv: list[str] | None = None) -> int:
         "(~2.2 GB at the default 12 s; 0 disables)",
     )
     p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
+    p_run.add_argument("--no-mic", action="store_true", help='disable the voice "extension" mic')
+    _add_mic_args(p_run)
     _add_display_args(p_run)
+
+    p_listen = sub.add_parser(
+        "listen", help='voice "extension" bring-up/soak: print every recognition + verdict'
+    )
+    p_listen.add_argument("--devices", action="store_true", help="list input devices and exit")
+    p_listen.add_argument(
+        "--post", help="URL to POST on accepted hits (e.g. http://localhost:8000/api/extension)"
+    )
+    _add_mic_args(p_listen)
 
     p_deck = sub.add_parser(
         "deck", help="Stream Deck control-surface daemon (docs/hardware.md Part C)"
@@ -692,6 +802,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_calibrate(args)
     if args.command == "analyze":
         return _cmd_analyze(args)
+    if args.command == "listen":
+        return _cmd_listen(args)
     if args.command == "deck":
         return _cmd_deck(args)
     return _cmd_run(args)

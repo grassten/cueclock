@@ -299,12 +299,20 @@ lifecycle).
 
 ---
 
-## Part D — Audio / microphone (planned, not built)
+## Part D — Audio / microphone (voice "extension" built 2026-07-31)
 
-1. **v1 — voice "extension"** (the only planned shipped use): Vosk small-EN
-   model, grammar `["extension", "[unk]"]`, 16 kHz mono, min confidence 0.9,
-   2 s cooldown — the old app's proven listener re-implemented as-is
-   (`design.md` §2.1 audio row).
+1. **v1 — voice "extension"** (built 2026-07-31, the only shipped use): Vosk
+   small-EN model, grammar `["extension", "[unk]"]`, finals only, per-word
+   confidence ≥ 0.9, 2 s cooldown, 16 kHz mono int16 — the old app's proven
+   listener ported as-is (`design.md` §2.1 audio row). Code:
+   `src/cueclock/audio/` — `spotter.py` is the pure accept/reject gate
+   (recognizer injected, unit-tested with a scripted fake), `listener.py`
+   owns the mic stream and thread. `cueclock run` starts it automatically
+   when the model directory exists (one skip line otherwise); an accepted
+   hit calls the Hub's extension exactly like the deck key. Flags:
+   `--no-mic`, `--mic-device NAME`, `--mic-model PATH`. Model:
+   `scripts/fetch_vosk_model.sh` fetches `vosk-model-small-en-us-0.15`
+   (~40 MB) into gitignored `models/` — idempotent.
 2. **Backlog — acoustic strike-click corroborator** (`design.md` §4.2): a
    broadband transient detector coincident within ~100 ms of the cue-ball
    velocity impulse; resolves slow tip-nudge vs. soft shot. Build **only if**
@@ -313,17 +321,29 @@ lifecycle).
    the iPhone Continuity Camera and its mic — cueclock must never grab it.
 
 Design facts: keyword spotting is mic-agnostic (no calibration in the camera
-sense); pin the input device by CoreAudio *name* in config, never "system
-default". Any cheap wired USB mic works; avoid Bluetooth (latency +
-input flakiness). The `audio/` port: `sounddevice` stream → Vosk
-`KaldiRecognizer` → confidence + cooldown gate → Hub bridge; model
-`vosk-model-small-en-us-0.15` (~40 MB) into gitignored `models/`; recognizer
-logic accepts raw PCM chunks so it unit-tests from a WAV fixture.
+sense); the input device is pinned by CoreAudio *name* — `--mic-device`,
+default `"Mac mini Microphone"` (the built-in mic), exact match then
+case-insensitive substring — never "system default": on no match the
+listener prints the available inputs and runs without the mic, so a
+Bluetooth headset or the iPhone Continuity mic can't silently become the
+listener. Any cheap wired USB mic works; avoid Bluetooth (latency + input
+flakiness). macOS asks for microphone permission (TCC) the first time the
+process opens the mic — approve the prompt for the terminal app once, or the
+stream delivers silence.
 
-Bring-up when built: device list via `sounddevice`; 10× "extension" at playing
-distance (head down over a shot); then a full false-positive soak session
-(balls clacking, music playing, zero accepted hits) before wiring it to the
-clock.
+Bring-up (at the table, before trusting it live):
+
+- [ ] `uv run python -m cueclock.cli listen --devices` — confirm the mic's
+      CoreAudio name (built-in should list as "Mac mini Microphone").
+- [ ] `uv run python -m cueclock.cli listen` — say "extension" 10× at playing
+      distance, head down over a shot: every call prints `ACCEPTED`
+      (conf ≥ 0.9).
+- [ ] False-positive soak: leave `listen` running through a practice session
+      with balls clacking and music playing — zero `ACCEPTED` lines.
+- [ ] End-to-end: `uv run python -m cueclock.cli listen --post
+      http://localhost:8000/api/extension` against a running clock, then the
+      real thing — say "extension" during `cueclock run` and watch the
+      overlay add time.
 
 ---
 
