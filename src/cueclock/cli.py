@@ -426,7 +426,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"ring dumped -> {clip_dir}")
         return str(clip_dir)
 
-    app = create_app()
+    # Scores persist across restarts (a mid-match crash must not lose the match).
+    app = create_app(score_path=Path("config/score.json"))
     if ring_capacity > 0:
         app.state.dump = dump_ring
     hub = cast(Hub, app.state.hub)
@@ -456,6 +457,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
             print(
                 f'voice "extension" off — Vosk model not found at {model_dir} '
                 "(scripts/fetch_vosk_model.sh downloads it)"
+            )
+        elif args.mic_device is None:
+            print(
+                'voice "extension" off — no --mic-device given '
+                "(`cueclock listen --devices` lists the CoreAudio names)"
             )
         else:
 
@@ -639,6 +645,9 @@ def _cmd_listen(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    if args.mic_device is None:
+        print("pass --mic-device NAME (--devices lists the inputs)", file=sys.stderr)
+        return 1
 
     def _show(final: Final) -> None:
         verdict = "ACCEPTED" if final.accepted else f"rejected: {final.reason}"
@@ -669,10 +678,13 @@ def _cmd_listen(args: argparse.Namespace) -> int:
 
 def _add_mic_args(p: argparse.ArgumentParser) -> None:
     """Args shared by `run` and `listen` (voice "extension", docs/hardware.md Part D)."""
+    # No default on purpose: the Mac mini has no built-in mic (hardware.md
+    # Part D), and pin-by-name means never guessing among whatever inputs
+    # exist. Bake the USB mic's name in here once it's chosen.
     p.add_argument(
         "--mic-device",
-        default="Mac mini Microphone",
-        help='mic CoreAudio name, exact then substring match (default "Mac mini Microphone")',
+        default=None,
+        help="mic CoreAudio name, exact then substring match (see `listen --devices`)",
     )
     p.add_argument(
         "--mic-model",

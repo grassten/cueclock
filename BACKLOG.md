@@ -15,10 +15,20 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       ~2, warn > 8) — lighting or a small shift. Recipe: `hardware.md` §E2
       steps 4–5. Detection runs, but segmentation margins are degraded until
       this is done.
+- [ ] **Match-day bring-up (before the 2026-08-01 match)**: get a wired USB
+      mic — the Mac mini has **no built-in mic** (`hardware.md` Part D) — then
+      TCC grant, `listen --devices`, 10× "extension" at playing distance, and
+      a false-positive soak with balls clacking and music; add the OBS
+      scoreboard source (`hardware.md` §B3); dry-run one rack of WNT 9-ball
+      end to end (New Rack → break → 60 → 30 → score keys → Push).
+- [ ] **Live-validate match mode** during the first real match: rack flow,
+      Push, Force 30, per-rack extensions, voice extension under pressure —
+      Flag anything wrong.
 - [ ] **Stream Deck phase 2 — session toggle**: daemon owns `run` + OBS
       lifecycles; one-time OBS settings. Spec: `hardware.md` §C4.
-- [ ] **Stream Deck phase 3 — Replay + music keys** (obs-websocket +
-      osascript).
+- [ ] **Stream Deck phase 3 — Replay key** (obs-websocket). The music keys
+      lost row 3 to the score keys — they need a new home (second page, or
+      fold into session states) before they're built.
 - [ ] **Stream Deck phase 4 — `/triage-clips` skill** (the off-table half of
       the Flag key; flow in `hardware.md` §C5).
 - [ ] **Deck bring-up checks** at the table: `hardware.md` §C6 (HID wake,
@@ -28,8 +38,15 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 
 ## Queued features (build when asked)
 
-- **Audio listener port** (`audio/`): the v1 voice-"extension" Vosk listener —
-  plan in `hardware.md` Part D. Last unbuilt item of the original scaffold.
+- **Auto game-end detection (auto New Rack)**: in 9-ball the rack ends when
+  the 9 ball leaves the table (8 ball in 8-ball) — detecting that requires
+  ball *identity*, a standing v1 exclusion. The deck **New Rack** key is the
+  decided interface; revisit only if 16-ball identity ever ships. (Ball-count
+  proxies don't work: object balls leave the table all rack long.)
+- **Per-player extension tracking**: WNT is one extension per player per rack;
+  the clock has no turn tracking, so `wnt_9ball` allows a shared, self-policed
+  pool of 2. Real enforcement needs turn state — manual input or inference —
+  which is also what foul handling (below) waits on.
 - **ChArUco intrinsics calibration** (`design.md` §4.3): gold-standard mm
   accuracy out at the pockets. Not urgent — the rails-fit shortcut gives
   0.76 px residual and a green corpus. Blocked on a session to generate the
@@ -45,9 +62,9 @@ Delete items as they land (history lives in `CHANGELOG.md`).
   banner also solves the burned-in clock overlay reading as live in replays.
 - **Stream Deck extras**: ground-truth mode (see idea bank §8 — a "real shot"
   key + auto-dump on disagreement; the Pedal if marking shots must not take a
-  hand off the cue), score/match page (needs server endpoints + overlay
-  element), health face (grabs/s, clock state, drift warning), playlist keys +
-  now-playing face, volume-step tuning.
+  hand off the cue), health face (grabs/s, clock state, drift warning),
+  music/playlist keys + now-playing face (displaced from row 3 by the score
+  keys), volume-step tuning.
 - **Music/BT amp caveat**: some BT amps need a re-pair nudge after power-off;
   if it bites, a cheap USB DAC → amp line-in kills BT latency/dropout risk too.
 - **TV power via VIDAA network API** — only if the remote ever annoys.

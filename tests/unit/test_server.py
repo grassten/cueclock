@@ -84,6 +84,7 @@ def test_html_pages_served() -> None:
         # scene) and ?audio=off both live client-side in the one page.
         assert "body.full" in page
         assert "audioEnabled" in page
+        assert "scoreboard-container" in client.get("/score").text
         assert "Shot Clock Control" in client.get("/control").text
 
 

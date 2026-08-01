@@ -60,8 +60,9 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   local gitignored symlink — always use the symlink path in code and docs. T7 unmounted
   ⇒ symlink dangles ⇒ corpus tests skip; mount it before recording or corpus runs.
 - Principles Steven has named explicitly: **KISS, YAGNI, DRY.** This repo will be
-  open-sourced — write for a stranger reading it. v1 scope is clock + events + overlay +
-  API; replay export, break speed, stats, and 16-ball identity are backlog until asked for.
+  open-sourced — write for a stranger reading it. v1 scope is clock + events + overlays
+  (clock + scoreboard) + API + match mode (rack context, scores) + voice "extension";
+  replay export, break speed, stats, and 16-ball identity are backlog until asked for.
 
 ## Hardware / environment facts
 

@@ -124,6 +124,47 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-07-31 (checkpoint 25 — match mode: WNT rack context, scoreboard,
+  voice "extension"):** built for the first real match (2026-08-01, WNT
+  9-ball), in four parallel worktree agents + integration. All rulebook
+  numbers verified against the official WNT Event Rules PDF §5 this session.
+  - **Rack context in the clock** (`clock/state.py`): `first_shot_seconds`
+    per ruleset (WNT 60 — "the first shot after the Break-Off or after a Push
+    Out"; both 8-ball rulesets keep 30), a per-rack shot counter (the break
+    counts from IDLE), and per-**rack** extensions — settles no longer refill
+    the pool; `new_rack()` does. `wnt_9ball` pool is 2 (one per player per
+    rack, self-policed — no turn tracking; backlog). `reset()` redefined as
+    timer-normalize only (a foul must not refill extensions); `restart()` =
+    fresh rack-aware countdown, RUNNING immediately; `push()` re-arms the
+    60 s window and handles pass-backs (press again). New API:
+    `POST /api/{rack,restart,push}` — design.md §2.1 updated.
+  - **Score + vision kill switch on the Hub**: `MatchScore`
+    (`server/score.py`, persisted to gitignored `config/score.json` so a
+    crash can't lose the match; in-memory under tests), `/api/score/*`
+    endpoints, `/api/vision/{on,off}` (when off, vision events can't touch
+    the clock — the match-day fallback is deck/voice/manual). WS + `/api/state`
+    now share one composed payload with `vision` and `score` keys.
+  - **Scoreboard overlay** (`/score`): the v1 prototype's broadcast
+    lower-third ported (dark-blue gradient bar, silver border), live over WS,
+    RACE TO n center segment, hidden until data. OBS recipe: hardware.md §B3.
+    `control.html` gains New Rack / Push / Force 30 / vision toggle / score
+    panel. `shotclock.html`: WNT-style beeps every second from 5 down
+    (replaces the single 5 s chime).
+  - **Stream Deck row filled out** (`deck/layout.py` + hardware.md §C2):
+    Push (1,4), New Rack (2,3), Force 30 (2,4), score keys (3,1/3,2 P1,
+    3,4/3,5 P2). Extension face/flash now ruleset-aware (+15/+30, derived
+    from `RULESETS` so it can't drift). Music keys displaced to BACKLOG.
+  - **Voice "extension" built** (`src/cueclock/audio/`, hardware.md Part D):
+    the v1 Vosk spotter ported — grammar-constrained, finals only, conf
+    ≥ 0.9, 2 s cooldown; pure core unit-tested with a fake recognizer;
+    `cueclock run` wires it to `hub.extension()`; `cueclock listen` is the
+    bring-up/soak tool. vosk pinned 0.3.44 (newest macOS wheel). **Found in
+    bring-up: the Mac mini has no built-in microphone** — a wired USB mic is
+    required hardware; `--mic-device` has no default by design.
+  - Smoke-tested end to end over HTTP (WNT switch → 60/pool-2, push/restart/
+    rack, score CRUD + persistence round-trip, vision toggle, all pages).
+    132 unit tests (98 → 132), ruff + mypy --strict clean.
+
 - **2026-07-31 (checkpoint 24 — full-screen clock view + docs consolidation):**
   - **Broadcast-style full-screen shot clock** (`shotclock.html?view=full`):
     bare viewport-sized number, no box/icon, transparent background — for a

@@ -19,9 +19,10 @@ into a graded regression scenario. Current corpus: 22 scenarios, all green.
 | Basler a2A1920-160ucBAS + Kowa 3.5 mm, ceiling mount | live, settings locked in UserSet1 |
 | Vision pipeline (`cueclock run`): detect → track → events → clock | live |
 | OBS: Syphon table feed + clock overlay → wall TV (Hisense 55" CanvasTV) | live |
-| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Reset / Extension / Ruleset / Flag |
+| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Reset / Extension / Ruleset / Flag / New Rack / Force 30 / Push / score keys |
+| Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
+| Voice "extension" (built-in mic, offline Vosk) | live |
 | Session toggle, instant replay, music keys | planned — `BACKLOG.md` |
-| Voice "extension" (mic) | planned — `BACKLOG.md` |
 
 ## How it works
 
@@ -57,9 +58,15 @@ uv run python -m cueclock.cli deck
   `--reference` at it — recipe in `docs/hardware.md` §E2. The startup drift
   check warns loudly if the reference has gone stale.
 - OBS browser sources: `http://localhost:8000/shotclock` (corner overlay,
-  220×220, "Control audio via OBS") and
+  220×220, "Control audio via OBS"),
   `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
-  broadcast-style clock scene). Phone control page: `/control`.
+  broadcast-style clock scene), and `http://localhost:8000/score`
+  (1920×1080 bottom-bar scoreboard, driven by the Stream Deck score keys).
+  Phone control page: `/control`.
+- Voice "extension": say the word and the clock grants one. Needs the Vosk
+  model (`scripts/fetch_vosk_model.sh`, once) and a wired USB mic named via
+  `--mic-device` — the Mac mini has no built-in mic. `cueclock listen` is the
+  bring-up/soak tool (`docs/hardware.md` Part D).
 - Other subcommands: `record`, `replay`, `analyze`, `calibrate`,
   `fit-undistort`, `live` — see `--help`.
 

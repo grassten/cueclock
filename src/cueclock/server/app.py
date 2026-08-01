@@ -38,11 +38,15 @@ def create_app(score_path: Path | None = None) -> FastAPI:
 
     @app.get("/")
     async def index() -> JSONResponse:
-        return JSONResponse({"endpoints": ["/shotclock", "/control", "/ws", "/api/*"]})
+        return JSONResponse({"endpoints": ["/shotclock", "/score", "/control", "/ws", "/api/*"]})
 
     @app.get("/shotclock")
     async def shotclock_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "shotclock.html")
+
+    @app.get("/score")
+    async def score_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "score.html")
 
     @app.get("/control")
     async def control_page() -> FileResponse:

@@ -148,9 +148,16 @@ grab thread (BayerRG8 @ 156 fps)
 - Browser source `http://localhost:8000/shotclock` — the corner clock overlay
   (transparent 220×220; enable **"Control audio via OBS"** so the chimes reach
   the TV speakers).
+- Browser source `http://localhost:8000/score` — the match scoreboard
+  (transparent 1920×1080; the bar sits bottom-center, broadcast lower-third
+  style). No audio of its own. Names/race-to are set from `/control`; scores
+  from the Stream Deck score keys. Hidden until the server answers, so a dead
+  source shows nothing rather than a broken box.
 
 **Scenes:**
-- *Table* (default): Syphon feed cropped to the table + corner clock overlay.
+- *Table* (default): Syphon feed cropped to the table + corner clock overlay
+  (+ the scoreboard source when a match is on — toggle its eye icon, or keep a
+  separate *Match* scene = Table + scoreboard).
 - *Clock* (full-screen shot clock, readable from anywhere): a browser source
   `http://localhost:8000/shotclock?view=full&audio=off` sized to the full
   canvas (1920×1080). It renders just a huge bare number — broadcast style —
@@ -320,21 +327,29 @@ lifecycle).
 3. Nothing else. Overlay chimes come from the browser page via OBS; OBS owns
    the iPhone Continuity Camera and its mic — cueclock must never grab it.
 
+**The Mac mini has no built-in microphone** (verified 2026-07-31:
+`system_profiler SPAudioDataType` lists only the built-in *speakers*, HDMI
+out, and virtual devices — Apple's spec sheet agrees; mic arrays are an
+iMac/MacBook feature). A wired USB mic is required hardware for this
+feature; until one is plugged in, `run` prints the no-mic line and
+everything else works normally.
+
 Design facts: keyword spotting is mic-agnostic (no calibration in the camera
-sense); the input device is pinned by CoreAudio *name* — `--mic-device`,
-default `"Mac mini Microphone"` (the built-in mic), exact match then
-case-insensitive substring — never "system default": on no match the
-listener prints the available inputs and runs without the mic, so a
-Bluetooth headset or the iPhone Continuity mic can't silently become the
-listener. Any cheap wired USB mic works; avoid Bluetooth (latency + input
-flakiness). macOS asks for microphone permission (TCC) the first time the
-process opens the mic — approve the prompt for the terminal app once, or the
-stream delivers silence.
+sense); the input device is pinned by CoreAudio *name* — `--mic-device`
+(exact match, then case-insensitive substring) — never "system default": on
+no match the listener prints the available inputs and runs without the mic,
+so a Bluetooth headset, the Jump Desktop virtual mic, or the iPhone
+Continuity mic can't silently become the listener. Once the USB mic is
+chosen, bake its name in as the `--mic-device` default. Any cheap wired USB
+mic works; avoid Bluetooth (latency + input flakiness). macOS asks for
+microphone permission (TCC) the first time the process opens the mic —
+approve the prompt for the terminal app once, or the stream delivers
+silence.
 
 Bring-up (at the table, before trusting it live):
 
-- [ ] `uv run python -m cueclock.cli listen --devices` — confirm the mic's
-      CoreAudio name (built-in should list as "Mac mini Microphone").
+- [ ] Plug in the USB mic, then `uv run python -m cueclock.cli listen
+      --devices` — confirm its CoreAudio name and pass it as `--mic-device`.
 - [ ] `uv run python -m cueclock.cli listen` — say "extension" 10× at playing
       distance, head down over a shot: every call prints `ACCEPTED`
       (conf ≥ 0.9).
