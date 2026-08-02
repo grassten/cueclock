@@ -727,7 +727,11 @@ the floor, Mac mini + T7 + power strip behind the panel, cable raceway down to
 the outlet. **TV settings: Game Mode ON for the Mac's HDMI input, motion
 smoothing OFF.**
 
-#### TV power from the deck (built 2026-08-02)
+#### TV power from the deck (built 2026-08-02, validated live the same day)
+
+Steven's verdict after using it: *"power on and off buttons are working well."*
+Nothing below changed as a result — it is recorded because the four measured
+facts that follow are the kind that only look obvious afterwards.
 
 The set runs **Google TV** — not VIDAA, which earlier notes here assumed — so
 it speaks the **Android TV Remote** protocol: TLS + protobuf on 6466, pairing
