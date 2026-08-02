@@ -2,24 +2,90 @@
 
 The button map in docs/hardware.md Part C mirrors this table; change both in the
 same commit.
+
+Three rules shape it (2026-08-02, layout v2):
+
+**A key that can't be pressed goes dark, it doesn't dim.** Visibility is
+declared per key against the session mode and the ruleset, so what is lit is
+always exactly what is pressable. Nothing reflows when a key leaves: every
+survivor keeps its cell, so position stays learnable even though the set
+changes. Dimming survives only as typography (`Face.sub`), never as state.
+
+**The spine sits top-left and never moves.** Session, Mode, Replay and Flag work
+in every mode, so they hold the 2x2 corner; everything to the right of them is
+mode-dependent. Position therefore answers "does this key persist" while colour
+answers "how much time do I have" — two questions, two channels.
+
+**Face grammar** — the `OFF`-button confusion was never the word, it was a
+*state* on a key read as a *command*. So: command keys say the verb and nothing
+else; cycle keys put the current value bright over the next value dim, so both
+are on the face and neither can be mistaken for the other; the one hold key
+states where it is and names the gesture out.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 
-from cueclock.clock.rulesets import DEFAULT_RULESET, RULESETS
+from cueclock.clock import MODES, RULESETS
+from cueclock.deck.faces import (
+    STRIPE_CLOCK,
+    STRIPE_EVIDENCE,
+    STRIPE_MATCH,
+    STRIPE_SYSTEM,
+    Face,
+    Rgb,
+)
 
 ROWS = 3
 COLS = 5  # MK.2: 15 keys, row-major from the top-left
 
 
-def _for_ruleset(by_ruleset: Mapping[str, str] | None, active: str | None, default: str) -> str:
-    """Pick the active ruleset's text, falling back to the static default."""
-    if by_ruleset is None or active is None:
-        return default
-    return by_ruleset.get(active, default)
+class Group(Enum):
+    """What a key's stripe colour says about how much time you have."""
+
+    CLOCK = STRIPE_CLOCK  # seconds matter — extension, push, start
+    MATCH = STRIPE_MATCH  # between racks, no pressure — score, set up, ruleset
+    EVIDENCE = STRIPE_EVIDENCE  # flag and its reasons
+    SYSTEM = STRIPE_SYSTEM  # session, mode, replay
+
+    @property
+    def stripe(self) -> Rgb:
+        stripe: Rgb = self.value
+        return stripe
+
+
+# Modes the clock actually runs in — the keys that shape a countdown are absent
+# outside them. Named from the modes table so a rename fails loudly here.
+CLOCKED = frozenset({"match", "run_out"})
+RACKED = frozenset({"match"})
+NINE_BALL = frozenset({"wnt_9ball"})
+
+
+@dataclass(frozen=True)
+class DeckState:
+    """Everything the faces need, polled from `GET /api/state` in one request.
+
+    Session fields are plain data rather than a `SessionState`, so this module
+    stays free of the process-management import.
+    """
+
+    up: bool = False
+    mode: str | None = None
+    ruleset: str | None = None
+    base: int = 30  # what a fresh countdown gives you now — the START N face
+    extensions_used: int = 0
+    extensions_allowed: int = 0
+    p1: int = 0
+    p2: int = 0
+    session_face: str = "START"
+    session_sub: str | None = None
+    session_dot: Rgb | None = None
+
+
+# ---------- actions ----------
 
 
 @dataclass(frozen=True)
@@ -29,18 +95,15 @@ class ApiPost:
     path: str
     ok_face: str
     err_face: str
-    timeout: float = 3.0  # raise for endpoints that work before replying (dump!)
+    timeout: float = 3.0
     pending_face: str | None = None  # shown while a slow call is in flight
-    ok_face_by_ruleset: Mapping[str, str] | None = None  # per-ruleset ok flash (else ok_face)
-
-    def ok_face_for(self, active: str | None) -> str:
-        """Ok-flash text under the active ruleset (static when no mapping / unpolled)."""
-        return _for_ruleset(self.ok_face_by_ruleset, active, self.ok_face)
 
 
 @dataclass(frozen=True)
-class RulesetCycle:
-    """Advance to the next ruleset; the face tracks the active one."""
+class Cycle:
+    """Advance a context axis; the face shows current over next."""
+
+    kind: str  # "mode" | "ruleset"
 
 
 @dataclass(frozen=True)
@@ -56,109 +119,66 @@ class SessionToggle:
     hold_s: float = 1.0
 
 
-Action = ApiPost | RulesetCycle | SessionToggle
+@dataclass(frozen=True)
+class ScoreAdjust:
+    """Tap adds a point, hold takes one back.
+
+    Four score keys became two on the same rule the rest of the deck follows:
+    tap does the common thing, hold does the rare inverse. A mis-tap is visible
+    on the wall scoreboard, which is the real feedback for these keys anyway.
+    """
+
+    player: str  # "p1" | "p2"
+    hold_s: float = 0.6
+
+    def path(self, *, decrement: bool) -> str:
+        return f"/api/score/{self.player}/{'decrement' if decrement else 'increment'}"
 
 
 @dataclass(frozen=True)
-class Key:
-    row: int  # 1-based from the top
-    col: int  # 1-based from the left
-    name: str
-    face: str  # static face text; RulesetCycle keys render the active ruleset instead
-    action: Action
-    face_by_ruleset: Mapping[str, str] | None = None  # per-ruleset face (else `face`)
+class FlagStart:
+    """Open the reason page. The dump fires from whichever reason is chosen.
 
-    @property
-    def index(self) -> int:
-        """Hardware key number: 0-based, row-major from the top-left."""
-        return (self.row - 1) * COLS + (self.col - 1)
-
-    def face_for(self, active: str | None) -> str:
-        """Face text under the active ruleset (static when no mapping / unpolled)."""
-        return _for_ruleset(self.face_by_ruleset, active, self.face)
-
-
-# The Extension key is ruleset-aware: Ultimate Pool extensions are 15 s, WNT
-# extensions are 30 s (WNT Event Rules §5). Face and flash derive from the
-# rulesets table so a rulebook correction there lands on the deck automatically.
-_EXT_FACE: dict[str, str] = {n: f"EXT\n+{r.extension_seconds}" for n, r in RULESETS.items()}
-_EXT_FLASH: dict[str, str] = {n: f"+{r.extension_seconds} s" for n, r in RULESETS.items()}
-
-
-def _flag(label: str) -> ApiPost:
-    """Ring-dump action for one flag reason; the label names the clip dir.
-
-    Dump replies only after writing ~3.6 GB to the staging dir — measured well
-    over the 3 s default (2026-07-31: three "timed out" flashes for dumps that
-    all succeeded). Generous timeout + a pending face instead. The failure
-    flash is a plain ERROR: since checkpoint 37 the write goes to the internal
-    SSD, so the old `NO T7` (drive unmounted) is no longer the likely cause and
-    the deck can't tell disk-full from server-down anyway — the writer names
-    the remedy in the journal.
+    One key pressed by feel beats reading three faces inside a 20 s ring — and
+    the reason itself has no deadline, so it moves off the reflex press. The
+    page auto-files as OTHER after `auto_s`, which is what an unspecified flag
+    has always meant, so walking away still saves the clip. Cost is the couple
+    of seconds between the two presses, off a 20 s ring (`--ring-seconds`).
     """
-    return ApiPost(
-        f"/api/dump?label={label}",
-        "SAVED",
-        "ERROR",
-        timeout=60.0,
-        pending_face="SAVING…",
-    )
+
+    auto_s: float = 4.0
+    auto_reason: str = "flag_other"
 
 
-LAYOUT: tuple[Key, ...] = (
-    # Top-left, the first key a hand lands on: tap to bring the whole session
-    # up, hold 1 s to take it down (hardware.md §C4).
-    Key(1, 1, "session", "OFF", SessionToggle()),
-    Key(1, 3, "ruleset", "RULESET", RulesetCycle()),
-    # Push-out call: clock restarts at the 60 s first-shot time (WNT §5) and the
-    # window re-arms for a pass-back. Push outs exist only in 9-ball, so the
-    # face and flash stay static — no ruleset-aware treatment.
-    Key(1, 4, "push", "PUSH", ApiPost("/api/push", "60 s", "ERROR")),
-    # Top-right corner: the one key a player under the clock hunts for — it
-    # must be findable without reading faces (Steven, 2026-08-01 match day).
-    Key(
-        1,
-        5,
-        "extension",
-        _EXT_FACE[DEFAULT_RULESET],
-        ApiPost(
-            "/api/extension",
-            _EXT_FLASH[DEFAULT_RULESET],
-            "NO EXT",
-            ok_face_by_ruleset=_EXT_FLASH,
-        ),
-        face_by_ruleset=_EXT_FACE,
-    ),
-    # Row 2 reads left to right as recovery, then evidence: the two manual
-    # clock-recovery keys (Reset, Force 30) on the left, the flag family on
-    # the right (2026-08-01; Force 30 moved from 2,4 to make the run).
-    Key(2, 1, "reset", "RESET", ApiPost("/api/reset", "RESET", "ERROR")),
-    Key(2, 2, "restart", "FORCE\n30", ApiPost("/api/restart", "GO", "ERROR")),
-    # Flag family (2026-08-01): the single Flag split into three reason-coded
-    # keys after an OBS-side failure masqueraded as a vision bug through two
-    # triage passes — the label was "flagged" and carried no reason. Each key
-    # dumps the same ring through /api/dump; only the label differs, and the
-    # label names the clip dir (<dump-dir>/<label>_N) and rides the journal's
-    # flag_dump line, so triage starts from *why* it was pressed.
-    #   PHANTOM — an event was counted that shouldn't have been.
-    #   MISSED  — a real shot/settle wasn't detected, or came late.
-    #   OTHER   — display problems, anything else.
-    # (2,5) — the old Flag cell — stays a flag key on purpose: a pre-split
-    # reflex press still saves the ring, and OTHER is exactly what the old
-    # unspecified flag meant.
-    Key(2, 3, "flag_phantom", "FLAG\nPHANTOM", _flag("flag_phantom")),
-    Key(2, 4, "flag_missed", "FLAG\nMISSED", _flag("flag_missed")),
-    Key(2, 5, "flag_other", "FLAG\nOTHER", _flag("flag_other")),
-    # Score row — the wall-TV scoreboard is the real press feedback; the tile
-    # flash is just an ack. (Displaced the planned music keys; see BACKLOG.md.)
-    # New Rack sits mid-row (moved from 2,3 on 2026-08-01) so the whole
-    # between-racks ritual — adjust the score, rack the next game — is one row.
-    Key(3, 1, "p1_plus", "P1 +", ApiPost("/api/score/p1/increment", "+1", "ERROR")),
-    Key(3, 2, "p1_minus", "P1 -", ApiPost("/api/score/p1/decrement", "-1", "ERROR")),
-    Key(3, 3, "rack", "NEW\nRACK", ApiPost("/api/rack", "RACKED", "ERROR")),
-    Key(3, 4, "p2_minus", "P2 -", ApiPost("/api/score/p2/decrement", "-1", "ERROR")),
-    Key(3, 5, "p2_plus", "P2 +", ApiPost("/api/score/p2/increment", "+1", "ERROR")),
-)
+@dataclass(frozen=True)
+class FlagReason:
+    """One reason on the transient page; dumps the ring under its own label.
+
+    The label names the clip dir (`<dump-dir>/<label>_N`) and rides the
+    journal's `flag_dump` line, so triage starts from *why* it was pressed
+    (2026-08-01: an OBS-side failure spent two triage passes being chased as a
+    vision bug because the label was always `flagged`).
+    """
+
+    label: str
+    timeout: float = 60.0  # a dump replies only after writing ~3.6 GB
+
+
+@dataclass(frozen=True)
+class ReplaySave:
+    """Save the OBS replay buffer to disk over obs-websocket."""
+
+
+Action = ApiPost | Cycle | SessionToggle | ScoreAdjust | FlagStart | FlagReason | ReplaySave
+
+
+# ---------- cycle label tables ----------
+
+MODE_FACES: dict[str, str] = {
+    "match": "MATCH",
+    "run_out": "RUN OUT",
+    "no_clock": "NO CLOCK",
+}
 
 RULESET_FACES: dict[str, str] = {
     "ultimate_pool_8ball": "8-BALL",
@@ -166,18 +186,169 @@ RULESET_FACES: dict[str, str] = {
     "wnt_9ball": "9-BALL",
 }
 
+_CYCLES: dict[str, tuple[Mapping[str, str], tuple[str, ...], str, str]] = {
+    # kind -> (label table, cycle order, listing endpoint, POST prefix)
+    "mode": (MODE_FACES, tuple(MODES), "/api/modes", "/api/mode/"),
+    "ruleset": (RULESET_FACES, tuple(RULESETS), "/api/rulesets", "/api/ruleset/"),
+}
 
-def ruleset_face(name: str) -> str:
-    """Face text for a ruleset; unknown names show raw (truncated) rather than hide."""
-    return RULESET_FACES.get(name, name[:12].upper())
+
+def cycle_label(kind: str, name: str | None) -> str:
+    """Face text for a value; unknown names show raw (truncated) rather than hide."""
+    if name is None:
+        return "—"
+    table, _, _, _ = _CYCLES[kind]
+    return table.get(name, name[:12].upper())
 
 
-def next_ruleset(active: str, available: list[str]) -> str:
-    """The ruleset after `active` in server order, wrapping; unknown active -> first."""
-    if not available:
-        return active
+def cycle_next(kind: str, active: str | None, available: list[str] | None = None) -> str:
+    """The value after `active` in server order, wrapping; unknown -> the first."""
+    _, order, _, _ = _CYCLES[kind]
+    names = available if available else list(order)
+    if not names:
+        return active or ""
     try:
-        i = available.index(active)
+        return names[(names.index(active or "") + 1) % len(names)]
     except ValueError:
-        return available[0]
-    return available[(i + 1) % len(available)]
+        return names[0]
+
+
+def cycle_listing(kind: str) -> str:
+    return _CYCLES[kind][2]
+
+
+def cycle_path(kind: str, name: str) -> str:
+    return _CYCLES[kind][3] + name
+
+
+# ---------- keys ----------
+
+
+@dataclass(frozen=True)
+class Key:
+    row: int  # 1-based from the top
+    col: int  # 1-based from the left
+    name: str
+    group: Group
+    action: Action
+    modes: frozenset[str] | None = None  # None = every mode
+    rulesets: frozenset[str] | None = None  # None = every ruleset
+    offline: bool = False  # survives a server-down deck (Session only)
+    text: str = ""  # static face text, where the face isn't state-derived
+    meta: Mapping[str, str] = field(default_factory=dict)
+
+    @property
+    def index(self) -> int:
+        """Hardware key number: 0-based, row-major from the top-left."""
+        return (self.row - 1) * COLS + (self.col - 1)
+
+    def visible(self, state: DeckState) -> bool:
+        """Is this key pressable right now? If not, its cell goes dark."""
+        if not state.up:
+            return self.offline
+        if self.modes is not None and state.mode is not None and state.mode not in self.modes:
+            return False
+        return not (
+            self.rulesets is not None
+            and state.ruleset is not None
+            and state.ruleset not in self.rulesets
+        )
+
+    def face(self, state: DeckState) -> Face:
+        """What this key looks like under the current state."""
+        stripe = self.group.stripe
+        action = self.action
+        if isinstance(action, SessionToggle):
+            return Face(
+                text=state.session_face,
+                sub=state.session_sub,
+                dot=state.session_dot,
+                stripe=stripe,
+            )
+        if isinstance(action, Cycle):
+            active = state.mode if action.kind == "mode" else state.ruleset
+            return Face(
+                text=cycle_label(action.kind, active),
+                sub=cycle_label(action.kind, cycle_next(action.kind, active)),
+                stripe=stripe,
+            )
+        if isinstance(action, ScoreAdjust):
+            score = state.p1 if action.player == "p1" else state.p2
+            return Face(text=action.player.upper(), big=str(score), stripe=stripe)
+        if self.name == "start":
+            # The countdown a press hands you, straight off the clock's own
+            # current_base(): 60 s inside the WNT first-shot window, 15 under
+            # Final 10, 30 otherwise. A plain "Reset" can't say which.
+            return Face(text="START", big=str(state.base), stripe=stripe)
+        if self.name == "extension":
+            left = max(0, state.extensions_allowed - state.extensions_used)
+            pips = (left, state.extensions_allowed) if state.extensions_allowed else None
+            return Face(text="EXT", pips=pips, stripe=stripe)
+        return Face(text=self.text, stripe=stripe)
+
+
+LAYOUT: tuple[Key, ...] = (
+    # --- the spine: top-left 2x2, present in every mode, never moves ---
+    Key(1, 1, "session", Group.SYSTEM, SessionToggle(), offline=True),
+    Key(1, 2, "mode", Group.SYSTEM, Cycle("mode")),
+    Key(2, 1, "replay", Group.SYSTEM, ReplaySave(), text="REPLAY"),
+    # Flag's reason page unfolds rightward into the empty cells beside it.
+    Key(2, 2, "flag", Group.EVIDENCE, FlagStart(), text="FLAG"),
+    # --- the clock: top-right, absent once the clock is off ---
+    # Start replaced Reset + Force 30, which differed by exactly one bit: both
+    # set the countdown to full and both are rack-aware; one landed IDLE, the
+    # other RUNNING. The stopped variant moved to `no_clock`, where it's
+    # visible. "Force 30" was misnamed too — it gives 60 in the WNT window.
+    Key(1, 3, "start", Group.CLOCK, ApiPost("/api/restart", "GO", "ERROR"), modes=CLOCKED),
+    # Push outs are a 9-ball rule and need a break to follow, so the key is
+    # absent under 8-ball and outside a rack.
+    Key(
+        1,
+        4,
+        "push",
+        Group.CLOCK,
+        ApiPost("/api/push", "PUSH", "ERROR"),
+        modes=RACKED,
+        rulesets=NINE_BALL,
+        text="PUSH",
+    ),
+    # Top-right corner: the one key a player under the clock hunts for — it
+    # must be findable without reading faces (Steven, 2026-08-01 match day).
+    # It never goes dark inside a clocked mode; a spent pool shows as empty
+    # pips, because those are the only readout of how many are left.
+    Key(
+        1,
+        5,
+        "extension",
+        Group.CLOCK,
+        ApiPost("/api/extension", "OK", "NO EXT"),
+        modes=CLOCKED,
+    ),
+    # --- the match: bottom row, blue block ---
+    Key(3, 1, "ruleset", Group.MATCH, Cycle("ruleset"), modes=CLOCKED),
+    # One word for both clocked modes: racking is setting up, and so is
+    # throwing fifteen balls back up. Clock parks, extensions refill, shot
+    # count zeroes.
+    Key(
+        3,
+        2,
+        "setup",
+        Group.MATCH,
+        ApiPost("/api/rack", "SET", "ERROR"),
+        modes=CLOCKED,
+        text="SET\nUP",
+    ),
+    Key(3, 3, "p1", Group.MATCH, ScoreAdjust("p1"), modes=RACKED),
+    Key(3, 4, "p2", Group.MATCH, ScoreAdjust("p2"), modes=RACKED),
+)
+
+# The transient reason page: shown only while a Flag press is waiting for a
+# reason, overlaid on the cells to Flag's right (which are otherwise dark).
+REASON_KEYS: tuple[Key, ...] = (
+    Key(2, 3, "flag_phantom", Group.EVIDENCE, FlagReason("flag_phantom"), text="PHANTOM"),
+    Key(2, 4, "flag_missed", Group.EVIDENCE, FlagReason("flag_missed"), text="MISSED"),
+    Key(2, 5, "flag_other", Group.EVIDENCE, FlagReason("flag_other"), text="OTHER"),
+)
+
+FLAG_PENDING_FACE = "WHY?"  # on the Flag key itself while the page is open
+DUMP_PENDING_FACE = "SAVING…"

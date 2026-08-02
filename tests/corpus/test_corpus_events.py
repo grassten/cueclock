@@ -476,9 +476,12 @@ def test_break_0801_speed_clears_the_idle_gate() -> None:
     remnant while the reborn cue measurably flew 5300-5500 mm/s — on a
     handoff strike the target's own raw underreads badly. ShotTaken now
     carries the fastest observed ball in the candidate window; this replays
-    that exact break and pins the reported speed above the Hub's floor.
+    that exact break and pins the reported speed above the floor.
+
+    The floor moved to `clock/modes.py` in checkpoint 45 — it is a *match*
+    rule, and `run_out` has none because it has no break to gate.
     """
-    from cueclock.server.hub import IDLE_BREAK_FLOOR_MMS
+    from cueclock.clock.modes import MATCH_BREAK_FLOOR_MMS
 
     if not (CLIPS / "break_0801").exists():
         pytest.skip("clip break_0801 not recorded")
@@ -486,7 +489,7 @@ def test_break_0801_speed_clears_the_idle_gate() -> None:
     shots = [e for e in events if isinstance(e, ShotTaken)]
     assert len(shots) == 1
     assert shots[0].speed_mms is not None
-    assert shots[0].speed_mms >= IDLE_BREAK_FLOOR_MMS, f"break read {shots[0].speed_mms:.0f}"
+    assert shots[0].speed_mms >= MATCH_BREAK_FLOOR_MMS, f"break read {shots[0].speed_mms:.0f}"
 
 
 def test_spin_in_place_settle_waits_for_spin_stop() -> None:

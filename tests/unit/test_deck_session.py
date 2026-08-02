@@ -369,12 +369,18 @@ def test_the_key_reads_as_the_action_not_the_state() -> None:
     # Idle says START, because a key labelled OFF that turns the rig on reads
     # backwards at the table (Steven, 2026-08-02). Running has no tap action,
     # so it states where you are and names the way out.
+    # The gesture moved off the face text and onto `sub` in layout v2, so it
+    # renders as the deck's dim second line — same words, the face grammar
+    # every other key now follows.
     assert SessionState.OFF.face == "START"
-    assert SessionState.ON.face == "ON\nHOLD 1s"
+    assert SessionState.ON.face == "ON"
+    assert SessionState.ON.sub == "HOLD 1s"
     assert [s.face for s in SessionState] == [
         "START",
         "STARTING…",
-        "ON\nHOLD 1s",
+        "ON",
         "STOPPING…",
         "DEV",
     ]
+    # Only the running state needs one — the rest already say what a tap does.
+    assert [s.name for s in SessionState if s.sub is not None] == ["ON"]

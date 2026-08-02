@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from cueclock.clock import ALIASES, RULESETS
+from cueclock.clock import ALIASES, MODES, RULESETS
 from cueclock.server.hub import Hub
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -104,6 +104,13 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
             return JSONResponse({"ok": False, "error": f"unknown ruleset: {name}"}, status_code=404)
         return JSONResponse({"ok": True})
 
+    @app.post("/api/mode/{name}")
+    async def api_set_mode(name: str) -> JSONResponse:
+        """Switch session mode: match / run_out / no_clock (docs/design.md §2.1)."""
+        if not await hub.set_mode(name):
+            return JSONResponse({"ok": False, "error": f"unknown mode: {name}"}, status_code=404)
+        return JSONResponse({"ok": True})
+
     @app.get("/api/rulesets")
     async def api_rulesets() -> dict[str, object]:
         return {
@@ -111,6 +118,10 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
             "available": list(RULESETS),
             "aliases": ALIASES,
         }
+
+    @app.get("/api/modes")
+    async def api_modes() -> dict[str, object]:
+        return {"active": hub.clock.mode.name, "available": list(MODES)}
 
     @app.get("/api/state")
     async def api_state() -> dict[str, object]:

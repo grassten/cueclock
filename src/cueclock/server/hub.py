@@ -13,7 +13,15 @@ from pathlib import Path
 
 from fastapi import WebSocket
 
-from cueclock.clock import DEFAULT_RULESET, ShotClock, Snapshot, State, get_ruleset
+from cueclock.clock import (
+    DEFAULT_MODE,
+    DEFAULT_RULESET,
+    ShotClock,
+    Snapshot,
+    State,
+    get_mode,
+    get_ruleset,
+)
 from cueclock.server.journal import SessionJournal
 from cueclock.server.score import MatchScore
 
@@ -24,44 +32,42 @@ BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
 # BACKLOG, checkpoint 33), rare enough to be journal noise-free.
 HEARTBEAT_INTERVAL_SECONDS = 5.0
 
-# IDLE break gate (checkpoint 28): out of New Rack the only legal shot is a
-# break, and the one live phantom that ever started a rack came from racking
+# IDLE break gate (checkpoint 28): out of a fresh rack the only legal shot is
+# a break, and the one live phantom that ever started a rack came from racking
 # motion (2026-08-01 11:14:49, journal-pinned: the phantom started the clock
-# 19 s early and swallowed the real break). ShotTaken.speed_mms is the
-# fastest observed ball in the strike-candidate window — NOT the candidate
-# target's own raw, which underreads on handoff strikes (the gate ate a real
-# break the same morning: target remnant read 2072 mm/s while the reborn cue
-# flew 5300+; `break_0801` + its corpus speed test pin the fix). Measured
-# with these semantics: breaks 5845-7361 mm/s, every ordinary shot
-# <= 2868 mm/s, placement lookalikes below 1000. 3000 is 1.9x under the
-# slowest measured break. Checkpoint 33: the gate also ate a real break
-# whose white streaked too fast to be *observed* (705 mm/s reported on a
-# frame-verified rack explosion, `break_underread_0801`), so speed_mms now
-# additionally carries the confirm's own kinematics — note fast ordinary
-# shots therefore read higher than the pre-33 margins above (a real shot
-# passing the gate in IDLE starts the clock, which is the right failure
-# direction; placement lookalikes stay slow under both estimators).
-# Trade-offs (same recovery as a missed break): a genuinely feather-soft
-# break leaves the clock IDLE — Restart; drills that start without a break
-# use the Start key. Events without a speed (manual/synthetic) pass.
+# 19 s early and swallowed the real break). The *number* and the measurements
+# behind it live with the mode that owns it — `clock/modes.py`, since it is a
+# match rule and `run_out` deliberately has no floor. Two things about the
+# inputs belong here, with the code that reads them:
 #
-# Newborn fires are also ignored in IDLE (checkpoint 33): hard bowled
-# returns during rack setup measured 3489 and 3926 mm/s — above the speed
-# floor — and each started the rack as "shot 1" while Steven was still
-# placing balls (flagged_9/flagged_14, 19:33 and 19:51 UTC). Measured
-# discriminator: every real break in the corpus fires rest-anchored
-# (newborn=False — a break is struck from an openly addressed white:
-# break_0801, break_0801b, break_underread_0801, cluster_shot_0801's
-# session break), while a bowled ball is always a newborn track (it
-# materializes leaving a hand). Residual: a break from a fully occluded
-# address would fire newborn and be eaten — Restart recovers, same as a
-# missed break.
-IDLE_BREAK_FLOOR_MMS = 3000.0
+# `ShotTaken.speed_mms` is the fastest observed ball in the strike-candidate
+# window — NOT the candidate target's own raw, which underreads on handoff
+# strikes (the gate ate a real break on 2026-08-01: target remnant read
+# 2072 mm/s while the reborn cue flew 5300+; `break_0801` + its corpus speed
+# test pin the fix). Since checkpoint 33 it additionally carries the confirm's
+# own kinematics, because the gate also ate a break whose white streaked too
+# fast to be *observed* (705 mm/s on a frame-verified rack explosion,
+# `break_underread_0801`). Fast ordinary shots therefore read higher than the
+# pre-33 margins — a real shot passing the gate starts the clock, which is the
+# right failure direction. Events without a speed (manual/synthetic) pass.
+#
+# Newborn fires are ignored in IDLE regardless of speed (checkpoint 33): hard
+# bowled returns during rack setup measured 3489 and 3926 mm/s — above the
+# floor — and each started the rack as "shot 1" while Steven was still placing
+# balls (flagged_9/flagged_14, 19:33 and 19:51 UTC). Measured discriminator:
+# every real break in the corpus fires rest-anchored (newborn=False — a break
+# is struck from an openly addressed white: break_0801, break_0801b,
+# break_underread_0801, cluster_shot_0801's session break), while a bowled ball
+# is always a newborn track, materializing as it leaves a hand. Residual: a
+# break from a fully occluded address fires newborn and is eaten — the Start
+# key recovers, same as a missed break.
 
 
 class Hub:
     def __init__(self, score_path: Path | None = None, journal_path: Path | None = None) -> None:
-        self.clock = ShotClock(get_ruleset(DEFAULT_RULESET), now=time.monotonic())
+        self.clock = ShotClock(
+            get_ruleset(DEFAULT_RULESET), now=time.monotonic(), mode=get_mode(DEFAULT_MODE)
+        )
         self.clients: set[WebSocket] = set()
         self.score = MatchScore(path=score_path)  # None = in-memory only
         # Match-day kill switch: when False, vision events are ignored and
@@ -221,6 +227,22 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return True
 
+    async def set_mode(self, name: str) -> bool:
+        """Switch session mode by name; False if unknown.
+
+        One command, one journal line — `no_clock` has to both stop vision
+        driving the clock and park the countdown, and a triage reader should
+        see that as one intent rather than reassembling it from two.
+        """
+        try:
+            mode = get_mode(name)
+        except KeyError:
+            return False
+        self.clock.set_mode(mode)
+        self._log("cmd_mode", mode=self.clock.mode.name)
+        await self.broadcast(self.clock.snapshot())
+        return True
+
     async def set_vision(self, enabled: bool) -> None:
         self.vision_enabled = enabled
         self._log("cmd_vision", enabled=enabled)
@@ -254,10 +276,16 @@ class Hub:
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock
-        if self.clock.state is State.IDLE and (
-            newborn or (speed_mms is not None and speed_mms < IDLE_BREAK_FLOOR_MMS)
+        if not self.clock.mode.clock_live:
+            self._log("vision_shot_taken_no_clock", **detail)
+            return  # no_clock mode: still journaled as evidence, never clocked
+        floor = self.clock.mode.break_floor_mms
+        if (
+            self.clock.state is State.IDLE
+            and floor is not None
+            and (newborn or (speed_mms is not None and speed_mms < floor))
         ):
-            # Racking / placement motion, not a break — see IDLE_BREAK_FLOOR_MMS.
+            # Racking / placement motion, not a break — see the gate note above.
             self._log("vision_shot_taken_ignored_idle", **detail)
             return
         self.clock.shot_taken()
@@ -268,6 +296,9 @@ class Hub:
         if not self.vision_enabled:
             self._log("vision_balls_settled_killed", t=t, frame_t=t)
             return  # kill switch, as above
+        if not self.clock.mode.clock_live:
+            self._log("vision_balls_settled_no_clock", t=t, frame_t=t)
+            return  # journaled, not clocked — as above
         self.clock.balls_settled(time.monotonic())
         self._log("vision_balls_settled", t=t, frame_t=t)
         await self.broadcast(self.clock.snapshot())

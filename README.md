@@ -20,10 +20,12 @@ corpus: 22 scenarios, all green.
 | Basler a2A1920-160ucBAS + Kowa 3.5 mm, ceiling mount | live, settings locked in UserSet1 |
 | Vision pipeline (`cueclock run`): detect → track → events → clock | live |
 | OBS: Syphon table feed + clock overlay → wall TV (Hisense 55" CanvasTV) | live |
-| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Reset / Extension / Ruleset / reason-coded Flag keys (phantom, missed, other) / New Rack / Force 30 / Push / score keys |
+| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Session / Mode / Replay / Flag / Start N / Push / Extension / Ruleset / Set up / score. Keys that the current mode can't use go dark rather than dim (`hardware.md` §C) |
+| Session modes: match · run out · no clock — orthogonal to the ruleset | live |
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
-| Session toggle, instant replay, music keys | planned — `BACKLOG.md` |
+| Session toggle (one key brings up `run` + OBS + the TV projector) | live |
+| Replay playback on the TV, music keys, drill tracking | planned — `BACKLOG.md` |
 
 ## How it works
 

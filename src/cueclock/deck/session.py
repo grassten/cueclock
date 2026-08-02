@@ -79,18 +79,27 @@ class SessionState(Enum):
         2026-08-02) — at the table you read a button for what pressing it
         does. So idle says `START`. Running has no tap action (a stray tap
         must never kill the camera mid-rack), so it states where you are and
-        names the gesture that gets out.
+        `sub` names the gesture that gets out.
         """
         return _FACES[self]
+
+    @property
+    def sub(self) -> str | None:
+        """The dimmed second line, where the state alone wouldn't say enough."""
+        return _SUBS.get(self)
 
 
 _FACES = {
     SessionState.OFF: "START",
     SessionState.STARTING: "STARTING…",
-    SessionState.ON: "ON\nHOLD 1s",
+    SessionState.ON: "ON",
     SessionState.STOPPING: "STOPPING…",
     SessionState.DEV: "DEV",
 }
+
+# Only the running state needs one: it is the one face that states where you
+# are rather than what a tap does, so it has to name the way out.
+_SUBS = {SessionState.ON: "HOLD 1s"}
 
 
 class Process(Protocol):

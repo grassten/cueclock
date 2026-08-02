@@ -1,6 +1,16 @@
 """Shot-clock state machine — behavior locked to docs/design.md §2.1."""
 
-from cueclock.clock import RULESETS, Ruleset, ShotClock, State, get_ruleset
+from cueclock.clock import (
+    MODES,
+    RULESETS,
+    Ruleset,
+    ShotClock,
+    State,
+    get_mode,
+    get_ruleset,
+    next_mode,
+)
+from cueclock.clock.modes import MATCH_BREAK_FLOOR_MMS
 
 
 def make_clock(name: str = "ultimate_pool_8ball") -> ShotClock:
@@ -339,3 +349,95 @@ def test_push_then_missed_shot_consumes_the_window() -> None:
     assert clock.remaining == 60
     clock.balls_settled(now=4.0)  # the 60 s shot, strike missed
     assert clock.remaining == 30  # following shot back on base time
+
+
+# --- session modes (2026-08-02): the axis orthogonal to the rulebook ---
+
+
+def test_run_out_has_no_first_shot_allowance() -> None:
+    # The WNT 60 s exists for the shot after a break-off. Throw fifteen balls
+    # up with no rack and there is no break for it to follow, so every shot —
+    # including the opener — gets the base countdown.
+    clock = make_clock("wnt_9ball")
+    assert clock.current_base() == 60
+    clock.set_mode(get_mode("run_out"))
+    assert clock.current_base() == 30
+    clock.shot_taken()
+    clock.balls_settled(now=1.0)
+    assert clock.remaining == 30
+
+
+def test_match_keeps_the_first_shot_allowance() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.set_mode(get_mode("run_out"))
+    clock.set_mode(get_mode("match"))
+    assert clock.current_base() == 60
+
+
+def test_push_outside_a_rack_scoped_mode_gives_base_time() -> None:
+    # push() re-enters the first-shot window; without one there is nothing to
+    # re-enter, so it must not hand out 60 s anyway.
+    clock = make_clock("wnt_9ball")
+    clock.set_mode(get_mode("run_out"))
+    clock.push(now=0.0)
+    assert clock.remaining == 30
+    assert clock.state is State.RUNNING
+
+
+def test_switching_mode_zeroes_the_rack_scope() -> None:
+    # Same scope change as switching rulebooks: a rack in progress means
+    # nothing once there is no rack, and the extension pool is per rack.
+    clock = make_clock("wnt_9ball")
+    clock.shot_taken()
+    clock.balls_settled(now=1.0)
+    clock.extension()
+    assert clock.extensions_used == 1
+    assert clock.rack_shots == 1
+    clock.set_mode(get_mode("run_out"))
+    assert clock.extensions_used == 0
+    assert clock.rack_shots == 0
+    assert clock.state is State.IDLE
+
+
+def test_no_clock_parks_the_countdown() -> None:
+    # Gating vision alone would leave whatever was already counting to run
+    # down and fire the urgency cues and EXPIRED mid-drill.
+    clock = make_clock("ultimate_pool_8ball")
+    clock.start(now=0.0)
+    clock.tick(now=25.0)
+    assert clock.state is State.RUNNING
+    clock.set_mode(get_mode("no_clock"))
+    assert clock.state is State.IDLE
+    assert clock.remaining == 30
+    snap = clock.tick(now=60.0)
+    assert snap.state == "IDLE"
+    assert snap.cue is None
+
+
+def test_snapshot_carries_mode_and_the_countdown_a_start_would_give() -> None:
+    clock = make_clock("wnt_9ball")
+    snap = clock.snapshot()
+    assert snap.mode == "match"
+    assert snap.base == 60  # first-shot window: what the deck's START key says
+    clock.shot_taken()
+    clock.balls_settled(now=1.0)
+    clock.shot_taken()
+    clock.balls_settled(now=2.0)
+    assert clock.snapshot().base == 30
+
+
+def test_mode_table_break_floors_match_their_purpose() -> None:
+    # Only match gates the opening shot; run_out exists precisely because that
+    # gate ate honest ~1000 mm/s drill openers (BACKLOG, checkpoint 33).
+    assert get_mode("match").break_floor_mms == MATCH_BREAK_FLOOR_MMS
+    assert get_mode("run_out").break_floor_mms is None
+    assert get_mode("run_out").clock_live
+    assert not get_mode("no_clock").clock_live
+
+
+def test_next_mode_cycles_and_wraps() -> None:
+    seen = ["match"]
+    for _ in MODES:
+        seen.append(next_mode(seen[-1]))
+    assert seen == ["match", "run_out", "no_clock", "match"]
+    assert next_mode("garbage") == "match"

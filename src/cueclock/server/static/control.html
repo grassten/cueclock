@@ -95,6 +95,16 @@
         <select id="ruleset" onchange="setRuleset(this.value)"></select>
     </div>
 
+    <div class="row" style="align-items:center;">
+        <!-- Session mode — orthogonal to the ruleset (docs/design.md §2.1).
+             match: rack rules + the break gate. run_out: no rack, so no
+             first-shot allowance and any-speed opener. no_clock: vision keeps
+             journaling but never drives the clock. Mirrored here because the
+             deck's Mode key is otherwise the only way out of no_clock. -->
+        <label for="mode">Mode:</label>
+        <select id="mode" onchange="setMode(this.value)"></select>
+    </div>
+
     <div class="row">
         <!-- Match-day kill switch: when OFF the server ignores vision
              shot/settle events and the clock runs manually (deck/voice). -->
@@ -133,16 +143,22 @@
         async function setRuleset(name) {
             await fetch('/api/ruleset/' + encodeURIComponent(name), { method: 'POST' });
         }
-        async function loadRulesets() {
-            const r = await fetch('/api/rulesets').then(x => x.json());
-            const sel = document.getElementById('ruleset');
+        async function setMode(name) {
+            await fetch('/api/mode/' + encodeURIComponent(name), { method: 'POST' });
+        }
+        function fillSelect(id, listing) {
+            const sel = document.getElementById(id);
             sel.innerHTML = '';
-            for (const n of r.available) {
+            for (const n of listing.available) {
                 const opt = document.createElement('option');
                 opt.value = n; opt.textContent = n;
-                if (n === r.active) opt.selected = true;
+                if (n === listing.active) opt.selected = true;
                 sel.appendChild(opt);
             }
+        }
+        async function loadRulesets() {
+            fillSelect('ruleset', await fetch('/api/rulesets').then(x => x.json()));
+            fillSelect('mode', await fetch('/api/modes').then(x => x.json()));
         }
 
         // ---- Vision kill switch ----
@@ -193,10 +209,12 @@
             document.getElementById('state').innerText = s.state;
             document.getElementById('extensions').innerText =
                 `extensions: ${s.extensions_used}/${s.extensions_allowed}`;
-            const sel = document.getElementById('ruleset');
-            if (sel.value !== s.ruleset) {
-                // re-sync dropdown selection if ruleset changed elsewhere
-                for (const o of sel.options) if (o.value === s.ruleset) o.selected = true;
+            // re-sync the dropdowns if either axis changed elsewhere (the deck)
+            for (const [id, active] of [['ruleset', s.ruleset], ['mode', s.mode]]) {
+                const sel = document.getElementById(id);
+                if (active && sel.value !== active) {
+                    for (const o of sel.options) if (o.value === active) o.selected = true;
+                }
             }
             if (typeof s.vision === 'boolean') renderVision(s.vision);
             if (s.score) renderScore(s.score);

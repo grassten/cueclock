@@ -5,6 +5,11 @@ imports everywhere); `layout`/`faces`/`client` stay pure and unit-tested. The
 physical deck is exercised live, like the camera. Production runs under
 launchd — `scripts/install_deck_agent.sh`; `cueclock deck` is the same loop
 in a terminal.
+
+The loop polls `GET /api/state` once every `POLL_S` and rebuilds a `DeckState`
+from it — one request carrying clock state, mode, ruleset, the countdown a
+Start press would hand you, the extension pool and the score, so every face is
+drawn from the same snapshot and none of them can drift apart.
 """
 
 from __future__ import annotations
@@ -12,73 +17,163 @@ from __future__ import annotations
 import contextlib
 import queue
 import time
+from dataclasses import replace
 from typing import Any
 
 from PIL import Image
 
-from cueclock.deck import client, faces
+from cueclock.deck import client, faces, obsws
 from cueclock.deck.layout import (
+    DUMP_PENDING_FACE,
+    FLAG_PENDING_FACE,
     LAYOUT,
+    REASON_KEYS,
     ApiPost,
+    Cycle,
+    DeckState,
+    FlagReason,
+    FlagStart,
     Key,
-    RulesetCycle,
+    ReplaySave,
+    ScoreAdjust,
     SessionToggle,
-    next_ruleset,
-    ruleset_face,
+    cycle_listing,
+    cycle_next,
+    cycle_path,
 )
 from cueclock.deck.session import SessionManager, SessionState
 
-POLL_S = 2.0  # server/ruleset poll cadence
+POLL_S = 2.0  # server/state poll cadence
 FLASH_S = 1.2  # how long a press outcome stays on the key
 RETRY_S = 3.0  # device reconnect cadence
 HOLD_FACE = "HOLD…"  # shown while the Session key is held toward a stop
 
 _BY_INDEX: dict[int, Key] = {key.index: key for key in LAYOUT}
+_REASONS_BY_INDEX: dict[int, Key] = {key.index: key for key in REASON_KEYS}
+
+_FLAG_KEY: Key = next(k for k in LAYOUT if isinstance(k.action, FlagStart))
+# What an unanswered reason page files itself as, resolved once at import so a
+# renamed reason key can't leave the auto-file path pointing at nothing.
+_AUTO_REASON: Key = next(
+    k
+    for k in REASON_KEYS
+    if isinstance(_FLAG_KEY.action, FlagStart) and k.name == _FLAG_KEY.action.auto_reason
+)
 
 
-def _face_for(key: Key, up: bool, active: str | None, state: SessionState) -> Image.Image:
-    # The Session key is the one key that stays lit with the server down — it
-    # is what starts the server, so dimming it would hide the way back up.
-    if isinstance(key.action, SessionToggle):
-        return faces.render(state.face)
-    if isinstance(key.action, RulesetCycle) and up and active is not None:
-        return faces.render(ruleset_face(active))
-    face = key.face_for(active)  # ruleset-aware keys (Extension) track the poll
-    return faces.render(face) if up else faces.dimmed(face)
+def _score_of(payload: object, slot: str) -> int:
+    """One player's score out of the state payload's nested `score` object."""
+    if not isinstance(payload, dict):
+        return 0
+    entry = payload.get(slot)
+    if not isinstance(entry, dict):
+        return 0
+    value = entry.get("score")
+    return value if isinstance(value, int) else 0
 
 
-def _dispatch(key: Key, base: str, active: str | None) -> tuple[Image.Image, str | None]:
-    """Run a key's action against the server; return (flash face, ruleset change|None)."""
+def build_state(data: dict[str, object] | None, session: SessionState) -> DeckState:
+    """Turn one `GET /api/state` body into everything the faces need.
+
+    Server down is a `DeckState` too, not an exception: every key but Session
+    goes dark, and the Session key still says how to bring the server back.
+    """
+    if data is None:
+        return DeckState(up=False, session_face=session.face, session_sub=session.sub)
+
+    def _int(field: str, default: int) -> int:
+        value = data.get(field)
+        return value if isinstance(value, int) else default
+
+    def _str(field: str) -> str | None:
+        value = data.get(field)
+        return value if isinstance(value, str) else None
+
+    return DeckState(
+        up=True,
+        mode=_str("mode"),
+        ruleset=_str("ruleset"),
+        base=_int("base", 30),
+        extensions_used=_int("extensions_used", 0),
+        extensions_allowed=_int("extensions_allowed", 0),
+        p1=_score_of(data.get("score"), "p1"),
+        p2=_score_of(data.get("score"), "p2"),
+        session_face=session.face,
+        session_sub=session.sub,
+        # The session is what the health dot reports on: green once the server
+        # is answering, absent otherwise (there is nothing to be healthy).
+        session_dot=faces.DOT_OK,
+    )
+
+
+def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckState | None]:
+    """Run a key's action; return (flash face, an eagerly-updated state | None).
+
+    The second element exists so a cycle key's own face — and every face that
+    depends on the axis it just moved — can be redrawn before the next poll,
+    which would otherwise report the value we already know we changed.
+    """
     action = key.action
+    if isinstance(action, ReplaySave):
+        saved = obsws.save_replay_buffer()
+        print(f"{key.name}: replay buffer save -> {saved}", flush=True)
+        return (faces.flash_ok("SAVED") if saved else faces.flash_err("ERROR")), None
+    if isinstance(action, FlagReason):
+        result = client.post(base, f"/api/dump?label={action.label}", timeout=action.timeout)
+        print(f"{key.name}: dump {action.label} -> {result.status}", flush=True)
+        return (faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")), None
     if isinstance(action, ApiPost):
         result = client.post(base, action.path, timeout=action.timeout)
         print(
-            f"{key.name}: POST {action.path} -> {result.status} {result.detail[:200]}",
-            flush=True,
+            f"{key.name}: POST {action.path} -> {result.status} {result.detail[:200]}", flush=True
         )
         if result.ok:
-            return faces.flash_ok(action.ok_face_for(active)), None
+            return faces.flash_ok(action.ok_face), None
         return faces.flash_err(action.err_face), None
-    listing = client.active_rulesets(base)
-    if listing is None:
-        return faces.flash_err("ERROR"), None
-    target = next_ruleset(*listing)
-    result = client.post(base, f"/api/ruleset/{target}")
-    print(f"{key.name}: -> {target} ({result.status})", flush=True)
-    if result.ok:
-        return faces.flash_ok(ruleset_face(target)), target
-    return faces.flash_err("ERROR"), None
+    if isinstance(action, Cycle):
+        listing = client.get_json(base, cycle_listing(action.kind))
+        available = listing.get("available") if listing else None
+        names = [n for n in available if isinstance(n, str)] if isinstance(available, list) else []
+        active = state.mode if action.kind == "mode" else state.ruleset
+        target = cycle_next(action.kind, active, names)
+        result = client.post(base, cycle_path(action.kind, target))
+        print(f"{key.name}: -> {target} ({result.status})", flush=True)
+        if not result.ok:
+            return faces.flash_err("ERROR"), None
+        moved = (
+            replace(state, mode=target) if action.kind == "mode" else replace(state, ruleset=target)
+        )
+        return faces.flash_ok(key.face(moved).text), moved
+    raise TypeError(f"{key.name}: action has no dispatch path")  # pragma: no cover
 
 
-def _poll(base: str) -> tuple[bool, str | None]:
-    """(server up, active ruleset) in one request."""
-    listing = client.active_rulesets(base)
-    return (True, listing[0]) if listing is not None else (False, None)
+def _score_post(action: ScoreAdjust, name: str, base: str, *, decrement: bool) -> Image.Image:
+    result = client.post(base, action.path(decrement=decrement))
+    print(f"{name}: {'-' if decrement else '+'}1 -> {result.status}", flush=True)
+    return faces.flash_ok("-1" if decrement else "+1") if result.ok else faces.flash_err("ERROR")
 
 
-def _set_key(deck: Any, index: int, image: Image.Image) -> None:
+def _draw_all(
+    deck: Any,
+    state: DeckState,
+    *,
+    reasons: bool = False,
+    skip: frozenset[int] = frozenset(),
+) -> None:
+    """Repaint every cell: the visible keys, dark everywhere else."""
+    overlay = _REASONS_BY_INDEX if reasons else {}
+    for i in range(deck.key_count()):
+        if i in skip:
+            continue
+        key = overlay.get(i) or _BY_INDEX.get(i)
+        visible = key is not None and (key.index in overlay or key.visible(state))
+        _set_key(deck, i, key.face(state) if visible and key else faces.Face())
+
+
+def _set_key(deck: Any, index: int, face: faces.Face | Image.Image) -> None:
     from StreamDeck.ImageHelpers import PILHelper
 
+    image = face if isinstance(face, Image.Image) else faces.render(face)
     size = tuple(deck.key_image_format()["size"])
     if image.size != size:
         image = image.resize(size)
@@ -86,92 +181,139 @@ def _set_key(deck: Any, index: int, image: Image.Image) -> None:
         deck.set_key_image(index, PILHelper.to_native_key_format(deck, image))
 
 
-def _draw_all(
-    deck: Any,
-    up: bool,
-    active: str | None,
-    state: SessionState,
-    skip: frozenset[int] = frozenset(),
-) -> None:
-    blank = faces.render("")
-    for i in range(deck.key_count()):
-        if i in skip:
-            continue
-        key = _BY_INDEX.get(i)
-        _set_key(deck, i, _face_for(key, up, active, state) if key else blank)
+def _visible_key(index: int, state: DeckState, reasons: bool) -> Key | None:
+    """The key at `index` if it is pressable right now, else None."""
+    if reasons and index in _REASONS_BY_INDEX:
+        return _REASONS_BY_INDEX[index]
+    key = _BY_INDEX.get(index)
+    if key is None or not key.visible(state):
+        return None
+    return key
 
 
 def _loop(deck: Any, base: str, session: SessionManager) -> None:
     """Poll + dispatch forever; raises TransportError on unplug, KeyboardInterrupt on stop."""
     events: queue.Queue[tuple[int, bool]] = queue.Queue()
     deck.set_key_callback(lambda _deck, k, pressed: events.put((int(k), bool(pressed))))
-    up, active = _poll(base)
-    state = session.tick(up)
-    _draw_all(deck, up, active, state)
+
+    def poll() -> DeckState:
+        """One request serves both the session machine and every face."""
+        data = client.get_json(base, "/api/state")
+        # The session machine advances on this same poll: STARTING becomes ON
+        # the moment the server answers (that is when OBS is launched), and
+        # STOPPING becomes OFF when `run` finally exits.
+        return build_state(data, session.tick(data is not None))
+
+    state = poll()
+    _draw_all(deck, state)
     flashes: dict[int, float] = {}
-    holds: dict[int, float] = {}  # Session key index -> monotonic stop deadline
+    holds: dict[int, tuple[float, str]] = {}  # index -> (deadline, kind)
+    reason_deadline: float | None = None  # flag reason page auto-files at this time
     next_poll = time.monotonic() + POLL_S
     while True:
         now = time.monotonic()
         if now >= next_poll:
-            polled = _poll(base)
-            # The session machine advances on this same poll: STARTING becomes
-            # ON the moment the server answers (that is when OBS is launched),
-            # and STOPPING becomes OFF when `run` finally exits.
-            polled_state = session.tick(polled[0])
-            if (polled, polled_state) != ((up, active), state):
-                up, active = polled
-                state = polled_state
-                _draw_all(deck, up, active, state, skip=frozenset(flashes))
+            polled = poll()
+            if polled != state:
+                state = polled
+                _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
             next_poll = now + POLL_S
-        for index, deadline in list(holds.items()):
-            if now >= deadline:
-                del holds[index]
+        if reason_deadline is not None and now >= reason_deadline:
+            # Walked away: an unspecified flag has always meant OTHER, and a
+            # saved clip beats a lost one.
+            reason_deadline = None
+            auto = _AUTO_REASON
+            _set_key(deck, auto.index, faces.Face(DUMP_PENDING_FACE))
+            image, _ = _dispatch(auto, base, state)
+            _set_key(deck, auto.index, image)
+            flashes[auto.index] = time.monotonic() + FLASH_S
+            _draw_all(deck, state, skip=frozenset(flashes))
+        for index, (deadline, kind) in list(holds.items()):
+            if now < deadline:
+                continue
+            del holds[index]
+            if kind == "session":
                 session.stop()
-                state = session.tick(up)
-                _set_key(deck, index, _face_for(_BY_INDEX[index], up, active, state))
+                state = poll()
+                _draw_all(deck, state, skip=frozenset(flashes))
+                continue
+            # A score key held past its threshold: take the point back.
+            action = _BY_INDEX[index].action
+            if isinstance(action, ScoreAdjust):
+                _set_key(
+                    deck, index, _score_post(action, _BY_INDEX[index].name, base, decrement=True)
+                )
+                flashes[index] = time.monotonic() + FLASH_S
         for index, deadline in list(flashes.items()):
             if now >= deadline:
                 del flashes[index]
-                _set_key(deck, index, _face_for(_BY_INDEX[index], up, active, state))
+                key = _visible_key(index, state, reason_deadline is not None)
+                _set_key(deck, index, key.face(state) if key else faces.Face())
         try:
             index, pressed = events.get(timeout=0.25)
         except queue.Empty:
             continue
-        key = _BY_INDEX.get(index)
+
+        key = _visible_key(index, state, reason_deadline is not None)
         if key is None:
-            continue
+            continue  # dark cell: this mode has no such key
+
         if isinstance(key.action, SessionToggle):
+            sess_state = session.tick(state.up)
             if not pressed:
-                # Released before the hold matured: a tap while ON means
-                # nothing, so put the honest state back.
                 if holds.pop(index, None) is not None:
-                    _set_key(deck, index, _face_for(key, up, active, state))
-            elif state is SessionState.ON:
-                holds[index] = time.monotonic() + key.action.hold_s
-                _set_key(deck, index, faces.render(HOLD_FACE))
-            elif state is SessionState.OFF:
+                    _set_key(deck, index, key.face(state))
+            elif sess_state is SessionState.ON:
+                holds[index] = (time.monotonic() + key.action.hold_s, "session")
+                _set_key(deck, index, faces.Face(HOLD_FACE))
+            elif sess_state is SessionState.OFF:
                 session.start()
-                state = session.tick(up)
-                _set_key(deck, index, _face_for(key, up, active, state))
+                state = poll()
+                _set_key(deck, index, key.face(state))
             else:  # DEV (not ours to touch) or mid-transition — refuse, say why
-                print(f"session: press ignored in {state.name}", flush=True)
-                _set_key(deck, index, faces.flash_err(state.face))
+                print(f"session: press ignored in {sess_state.name}", flush=True)
+                _set_key(deck, index, faces.flash_err(sess_state.face))
                 flashes[index] = time.monotonic() + FLASH_S
             continue
+
+        if isinstance(key.action, ScoreAdjust):
+            if pressed:
+                holds[index] = (time.monotonic() + key.action.hold_s, "score")
+            elif holds.pop(index, None) is not None:
+                # Released before the hold matured: the ordinary tap.
+                _set_key(deck, index, _score_post(key.action, key.name, base, decrement=False))
+                flashes[index] = time.monotonic() + FLASH_S
+            continue
+
         if not pressed:
             continue
-        if not up:
+        if not state.up:
             print(f"{key.name}: ignored — server down", flush=True)
             continue
+
+        if isinstance(key.action, FlagStart):
+            reason_deadline = time.monotonic() + key.action.auto_s
+            _set_key(deck, index, faces.Face(FLAG_PENDING_FACE))
+            _draw_all(deck, state, reasons=True, skip=frozenset(flashes) | {index})
+            continue
+
+        if isinstance(key.action, FlagReason):
+            reason_deadline = None
+            _set_key(deck, index, faces.Face(DUMP_PENDING_FACE))
+            image, _ = _dispatch(key, base, state)
+            _set_key(deck, index, image)
+            flashes[index] = time.monotonic() + FLASH_S
+            _draw_all(deck, state, skip=frozenset(flashes) | {index})
+            continue
+
         if isinstance(key.action, ApiPost) and key.action.pending_face is not None:
-            _set_key(deck, index, faces.render(key.action.pending_face))
-        image, changed = _dispatch(key, base, active)
-        if changed is not None:
-            active = changed
-            # Ruleset-aware faces must follow right away — the next poll can't
-            # catch this change because `active` already moved.
-            _draw_all(deck, up, active, state, skip=frozenset(flashes) | {index})
+            _set_key(deck, index, faces.Face(key.action.pending_face))
+        image, moved = _dispatch(key, base, state)
+        if moved is not None:
+            # A cycle changed the axis every other face keys off — redraw now;
+            # the next poll can't catch it because `state` already moved.
+            state = moved
+            _draw_all(deck, state, skip=frozenset(flashes) | {index})
         _set_key(deck, index, image)
         flashes[index] = time.monotonic() + FLASH_S
 

@@ -176,7 +176,9 @@ actually runs — the original plan called them *Table* / *Clock*):
   source size.
 - **Canvas**: standby card shown between sessions (still image, no cueclock
   sources).
-- *Replay*: replay-buffer playback — not built yet (Stream Deck phase 3).
+- *Replay*: replay-buffer **playback** — not built yet (Stream Deck phase 3).
+  The deck's Replay key already *saves* the buffer to the recording folder
+  (§C2); what's missing is a scene that plays it back on the TV.
 
 **Settings:**
 - On every cueclock browser source, tick **"Refresh browser when scene
@@ -211,13 +213,40 @@ truth for the deck's current state**: update the button map here in the same
 commit as any `src/cueclock/deck/layout.py` change; the two must never
 disagree.
 
-**Status: phase 1 + match keys + reason-coded flags live (2026-08-01).**
-`cueclock deck` daemon runs under launchd (`com.cueclock.deck`) with thirteen
-API keys working; session toggle and replay are phases 2–3 (see `BACKLOG.md`).
-The match-mode update (WNT 9-ball hosting) took row 3 for scoring, displacing
-the planned music keys to `BACKLOG.md`. The flag split (2026-08-01) took the
-right half of row 2, moving Force 30 to (2,2), New Rack to (3,3), and the
-planned Replay key to (1,2).
+**Status: layout v2 live (2026-08-02).** `cueclock deck` runs under launchd
+(`com.cueclock.deck`). Eleven keys, four spare — down from fourteen used and
+one spare, by consolidating the pairs that differed by one bit and splitting
+session *mode* out as its own axis. Replay saves the OBS buffer to disk; the
+on-TV playback half is still phase 3 (`BACKLOG.md`).
+
+### C0. The three rules of layout v2
+
+Everything below follows from these; they are also the module docstring of
+`deck/layout.py`.
+
+1. **A key that can't be pressed goes dark, it doesn't dim.** Visibility is
+   declared per key against the session mode and the ruleset, so what is lit is
+   always exactly what is pressable. **Nothing reflows** when a key leaves — it
+   leaves a hole and every survivor keeps its cell, so position stays learnable
+   even though the set changes. The deck goes 11 keys in Match → 8 in Run out →
+   4 in No clock → 1 with the server down. Dimming survives only as typography
+   (the small second line), never as state.
+2. **The spine sits top-left and never moves.** Session, Mode, Replay and Flag
+   work in every mode, so they hold the 2×2 corner. Position therefore answers
+   *does this key persist*, and colour answers *how much time do I have* — two
+   questions, two channels, which is why the spine isn't one colour.
+3. **Face grammar.** The `OFF`-button confusion was never the word, it was a
+   *state* shown on a key read as a *command*. So: **commands** say the verb and
+   nothing else (`START 30`, `PUSH`, `FLAG`); **cycles** put the current value
+   bright over the next value dim, so both are on the face and neither can be
+   mistaken for the other; the one **hold** key states where it is and names the
+   gesture out (`ON` / `HOLD 1s`).
+
+Colour groups (bottom stripe, `faces.STRIPE_*`): **amber** = on the clock
+(seconds matter) · **blue** = the match (no pressure) · **purple** = evidence ·
+**grey** = system. Red and green are reserved for the press-outcome flash, which
+is why the group colour is a stripe and not the tile: colour the tile and the
+flash stops reading.
 
 ### C1. Decision record
 
@@ -240,44 +269,93 @@ planned Replay key to (1,2).
 
 ### C2. Button map — current state
 
-Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
+Page 1 (only page). 5 columns × 3 rows; unlisted cells stay dark, as do listed
+keys outside the modes and rulesets named in **Present in**.
 
-| Pos (row,col) | Key | Action | Face | Status |
+```
+        col 1        col 2        col 3        col 4        col 5
+row 1   SESSION      MODE         START 30     PUSH         EXT ••
+        ▁▁grey▁▁     ▁▁grey▁▁     ▁▁▁▁▁▁▁▁▁▁▁▁amber▁▁▁▁▁▁▁▁▁▁▁▁▁
+
+row 2   REPLAY       FLAG         (·)          (·)          (·)
+        ▁▁grey▁▁     ▁purple▁      ← the reason page unfolds here →
+
+row 3   RULESET      SET UP       P1  3        P2  2        (·)
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+```
+
+| Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
-| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON` + `HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held | **live** |
-| 1,2 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3; displaced from 2,2 by the flag reorg) |
-| 1,3 | **Ruleset** | Cycle rulesets via `POST /api/ruleset/{next}` | `8-BALL` / `FINAL 10` / `9-BALL` | **live** |
-| 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back (9-ball only, so the face stays static) | `PUSH`, flashes `60 s` / `ERROR` | **live** |
-| 1,5 | **Extension** | `POST /api/extension` — face/flash follow the active ruleset (Ultimate Pool 15 s; WNT 30 s, WNT Event Rules §5). Top-right corner so a player under the clock finds it without hunting (moved from 2,2 on 2026-08-01) | `EXT +15` / `EXT +30`, flashes `+15 s` / `+30 s` / `NO EXT` | **live** |
-| 2,1 | **Reset** | `POST /api/reset` (fouls, bug situations; does not refill extensions) | `RESET` | **live** |
-| 2,2 | **Force 30** | `POST /api/restart` — missed auto-reset recovery: clock restarts and runs immediately (rack-aware: 60 s in the first-shot window). Beside Reset: the clock-recovery pair (moved from 2,4 on 2026-08-01) | `FORCE 30`, flashes `GO` / `ERROR` | **live** |
-| 2,3 | **Flag phantom** | `POST /api/dump?label=flag_phantom` — an event was counted that shouldn't have been | `FLAG PHANTOM` → `SAVING…`, flashes `SAVED` / `ERROR` | **live** |
-| 2,4 | **Flag missed** | `POST /api/dump?label=flag_missed` — a real shot/settle wasn't detected, or came late | `FLAG MISSED` → `SAVING…`, flashes `SAVED` / `ERROR` | **live** |
-| 2,5 | **Flag other** | `POST /api/dump?label=flag_other` — display problems, anything else. The old single-Flag cell on purpose: a pre-split reflex press still saves the ring | `FLAG OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | **live** |
-| 3,1 | **P1 +** | `POST /api/score/p1/increment` | `P1 +`, flashes `+1` / `ERROR` | **live** |
-| 3,2 | **P1 −** | `POST /api/score/p1/decrement` | `P1 -`, flashes `-1` / `ERROR` | **live** |
-| 3,3 | **New Rack** | `POST /api/rack` — between racks: refills extensions, arms the first-shot window, clock idle. Mid-score-row so the whole between-racks ritual — score it, rack it — is one row (moved from 2,3 on 2026-08-01) | `NEW RACK`, flashes `RACKED` / `ERROR` | **live** |
-| 3,4 | **P2 −** | `POST /api/score/p2/decrement` | `P2 -`, flashes `-1` / `ERROR` | **live** |
-| 3,5 | **P2 +** | `POST /api/score/p2/increment` | `P2 +`, flashes `+1` / `ERROR` | **live** |
+| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. Green dot = server answering | **always**, incl. server down |
+| 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → match | current over next: `MATCH`/`RUN OUT` | always |
+| 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out |
+| 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
+| 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left**, so the pool reads before the press instead of after a red `NO EXT`. Never removed inside a clocked mode — a spent pool shows as empty pips, which are the only readout of how many remain | `EXT` + one pip per extension, flashes `OK` / `NO EXT` | match, run out |
+| 2,1 | **Replay** | obs-websocket `SaveReplayBuffer` — writes the last ~20 s to OBS's recording folder | `REPLAY`, flashes `SAVED` / `ERROR` | always |
+| 2,2 | **Flag** | Opens the reason page at 2,3–2,5. The dump fires from whichever reason is pressed | `FLAG` → `WHY?` | always |
+| 2,3–2,5 | **Phantom / Missed / Other** | `POST /api/dump?label=flag_phantom` etc. Only visible while the page is open | `PHANTOM` / `MISSED` / `OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | reason page only |
+| 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` | current over next: `8-BALL`/`FINAL 10` | match, run out |
+| 3,2 | **Set up** | `POST /api/rack` — you're not shooting, you're setting up: clock parks, extensions refill, shot count zeroes. One word for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `SET UP`, flashes `SET` / `ERROR` | match, run out |
+| 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
+| 3,4 | **P2** | as P1 | `P2` over the score | match |
 
-Press outcomes flash as background color (green ok / red error) for 1.2 s —
-words only, no glyphs. Keys dim while the server is down; presses no-op. The
-wall-TV scoreboard is the real press feedback for the score keys; the tile
-flash is just an ack. Row 3 was reserved for the phase-3 music keys
-(play/pause, vol ±) — displaced to `BACKLOG.md` by match scoring (2026-07-31).
-Deliberately absent (Steven, 2026-07-31): clock start/pause — Reset covers the
-bug cases, Force 30 the missed auto-reset.
+Press outcomes flash as background colour (green ok / red error) for 1.2 s —
+words only, no decorative glyphs. The only graphics are *data*: extension pips,
+the live score numeral, the Start countdown, the session health dot. The wall-TV
+scoreboard is the real feedback for the score keys; the tile flash is an ack.
+Deliberately absent (Steven, 2026-07-31): clock start/pause.
 
-**The flag split (2026-08-01):** one Flag key became three reason-coded keys
-after an OBS-side failure (a dead camera source) masqueraded as a vision bug
-through two triage passes — the dump label was always `flagged` and carried no
-reason. All three keys dump the same ~20 s ring through the same endpoint;
-only the label differs (`flag_phantom` / `flag_missed` / `flag_other`), and
-the label names the clip dir (`<dump-dir>/<label>_N`, default
-`~/cueclock-dumps` since checkpoint 37) and rides the journal's `flag_dump`
-line. A bare `POST /api/dump` (no label) still means `flagged` — the endpoint
-is unchanged (`design.md` §2.1, 2026-07-29). Row 2 now reads left to right as
-recovery, then evidence.
+**What consolidated (2026-08-02).** Four score keys → two (tap adds, hold takes
+back — the same rule the whole deck follows: tap does the common thing, hold
+does the rare inverse). Three flag keys → one plus the reason page. **Reset and
+Force 30 → one key**: they differed by exactly one bit — both set the countdown
+to full, both rack-aware, both leaving extensions and shot count alone; one
+landed `IDLE`, the other `RUNNING`. Parking the clock moved to No clock mode,
+where it's visible. *Force 30* was misnamed anyway: it gives 60 s inside the
+first-shot window, which is exactly what `START 60` now says out loud.
+
+**The flag reason page.** One Flag key became three reason-coded keys on
+2026-08-01, after an OBS-side failure (a dead camera source) masqueraded as a
+vision bug through two triage passes because the dump label was always
+`flagged`. Layout v2 keeps every bit of that — the label still names the clip
+dir (`<dump-dir>/<label>_N`, default `~/cueclock-dumps`) and still rides the
+journal's `flag_dump` line — but moves the *choice* off the reflex press: one
+key found by feel beats reading three faces inside a 20 s ring, and the reason
+itself has no deadline. An unanswered page files itself as `flag_other` after
+4 s, which is what an unspecified flag has always meant, so walking away still
+saves the clip. Cost is the couple of seconds between the two presses, off a
+20 s ring (`run --ring-seconds`). A bare `POST /api/dump` still means `flagged`
+— the endpoint is unchanged (`design.md` §2.1, 2026-07-29).
+
+### C2a. Session modes
+
+A **mode** is orthogonal to a ruleset: a ruleset is a *rulebook* (every entry in
+`clock/rulesets.py` cites published rules), a mode is what you're doing at the
+table. Both are cycle keys, both blue-adjacent on the deck, and `clock/modes.py`
+is the table.
+
+| Mode | What it is | Opening shot | Clock |
+|---|---|---|---|
+| **match** | A rack: break, rack boundaries, the ruleset's first-shot allowance | must reach 3000 mm/s (the IDLE break gate) | live, rack-aware |
+| **run out** | Fifteen balls thrown up, no rack, run them | any speed | live, base countdown on every shot |
+| **no clock** | Actual drills — repeat a shot as long as you like | — | off; vision still journals |
+
+`run_out` exists because the break gate ate honest ~1000 mm/s drill openers
+twice (`BACKLOG.md`, checkpoint 33) and lowering the floor for everyone was the
+wrong fix — placement lookalikes sit at ~1000 too. There is no break to gate
+without a rack, so the mode simply has no floor. It also drops the first-shot
+allowance: the WNT 60 s exists for the shot *after* a break-off, and without one
+there is nothing for it to attach to.
+
+`no_clock` **parks the countdown as well as gating vision** — one command, one
+journal line (`cmd_mode`). Gating vision alone would leave whatever was already
+counting to run down and fire the 10 s / 5 s calls and EXPIRED mid-drill.
+Detections keep being journaled (`vision_shot_taken_no_clock`), so a drill still
+produces evidence and a Flag press during one still dumps a real ring. On the TV
+the shot-clock overlay **hides the digits entirely** and shows `NO CLOCK`: a
+parked clock rendering a static `30` is indistinguishable from the stalled clock
+a missed settle produces, which is the exact failure Steven is trained to
+distrust.
 
 ### C3. Architecture
 
@@ -387,9 +465,10 @@ a camera bump alongside the README command (§E2).
 on exit" on, and OBS was never in Login Items. The client is
 `deck/obsws.py` — one request per connection (open, authenticate, send, read,
 close), every call best-effort so OBS being closed or the WebSocket server
-being off can never raise into the deck loop. Phase 2 uses it only to stop the
-replay buffer; the spec's "verify projector + replay buffer" check lands with
-phase 3's Replay key, which builds on the same client.
+being off can never raise into the deck loop. The Session key uses it to stop
+the outputs, bind Syphon and open the projector; the **Replay** key adds
+`SaveReplayBuffer` (2026-08-02). Still outstanding for phase 3: showing a
+replay back on the TV — replay scene, stinger, slow-mo (`BACKLOG.md`).
 
 ### C5. Corpus-clip flow (Flag → triage)
 

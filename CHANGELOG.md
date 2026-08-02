@@ -199,6 +199,86 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 45 — deck layout v2: session modes, and the deck
+  shrinks to what the mode can do):** fourteen of fifteen keys were spoken for
+  with ~nine more queued, so the crowding was the presenting problem — but the
+  fix that came out of designing it was mostly about *naming things correctly*.
+  Eleven keys now, four spare, and three rules doing the work.
+  - **Session mode is its own axis** (`clock/modes.py`, `POST /api/mode/{name}`,
+    `GET /api/modes`). Steven's first instinct was to add "drill" as a ruleset —
+    right that it shouldn't cost a key, wrong container: `rulesets.py` is a
+    published-rules table whose docstring says *validated against published
+    rules*, with a source per entry, and you can drill 8-ball patterns or 9-ball
+    patterns. Mode is orthogonal to rulebook. Modes are **match** (a rack:
+    break, boundaries, first-shot allowance, break gate), **run out** (fifteen
+    balls thrown up, no rack — any-speed opener, base countdown on every shot),
+    **no clock** (drills; vision journals but never clocks).
+  - **"Drill" was the wrong word**, and the miss was instructive: it named a
+    training activity when the difference is structural — *there is no rack*.
+    Steven caught it by describing what he'd actually do ("throwing 15 balls up
+    without racking/breaking and trying to run them out"), and once the mode was
+    named for that, "New Rack" stopped grating on its own. An actual drill is
+    what **no clock** is for.
+  - This closes the BACKLOG item where the IDLE break gate ate honest
+    ~1000 mm/s drill openers twice (checkpoint 33). Lowering the floor for
+    everyone was always the wrong fix — placement lookalikes sit at ~1000 too.
+    `run_out` has no floor because it has no break to gate. `MATCH_BREAK_FLOOR_MMS`
+    moved to `modes.py` with its measurements; the gate's *input* semantics
+    (what `speed_mms` means, why newborn fires are ignored) stayed in `hub.py`
+    with the code that reads them.
+  - **Reset and Force 30 were one key wearing two faces.** They differed by
+    exactly one bit — both set the countdown to full, both rack-aware, both
+    leaving extensions and shot count alone; one landed `IDLE`, the other
+    `RUNNING`. Steven: *"I'm also unclear on the difference between those keys."*
+    Merged into **Start N**, and the misnaming is now impossible: the face
+    renders `current_base()`, so it says `START 60` inside the WNT first-shot
+    window and `START 15` under Final 10. That is also the answer to *"we can't
+    just have a Reset button because of the 60 second after break time"* — the
+    button says which one it's about to give you. Parking the clock moved to
+    No clock mode, where it's visible. `Snapshot` gained `base` to carry it, so
+    the face is drawn from the same function the press calls and cannot drift.
+  - **A key that can't be pressed goes dark, it doesn't dim** — Steven's call,
+    and better than expected: dim stops being a state signal anywhere and
+    survives only as typography (a cycle key's dim "next" line). One channel,
+    one meaning. **Nothing reflows**: a removed key leaves a hole and every
+    survivor keeps its cell, so position stays learnable. Match 11 keys → Run
+    out 8 → No clock 4 → server down 1. Removal follows the *ruleset* axis too:
+    `PUSH` is absent under either 8-ball rulebook, because push outs are 9-ball.
+  - **Face grammar** — the `OFF`-button problem (checkpoint 43) was never the
+    word, it was a *state* on a key read as a *command*. Three key types, three
+    grammars: commands say the verb; cycles put the current value bright over
+    the next value dim, so both are on the face and neither can be mistaken for
+    the other; the one hold key states where it is and names the gesture out
+    (`ON` / `HOLD 1s`, which moved from the face text to the dim sub-line).
+  - **The spine**: Session, Mode, Replay, Flag work in every mode and hold the
+    top-left 2×2, never moving. Position answers *does this key persist*, colour
+    answers *how much time do I have* — two questions, two channels, which is
+    why the spine isn't one colour. Group colour rides a **bottom stripe** and
+    not the tile, because the tile is the press-outcome language: colour the
+    tile and the green/red flash stops reading.
+  - **Data graphics, no decorative ones** (`faces.Face`): extension pips (the
+    pool reads *before* the press instead of after a red `NO EXT`), the live
+    score numeral, the Start countdown, a session health dot. Four score keys
+    became two on the deck's one hold rule — tap does the common thing, hold
+    does the rare inverse.
+  - **Flag keeps everything the 2026-08-01 split bought and moves the choice off
+    the reflex press**: one key found by feel, then a reason page in the empty
+    cells beside it. Labels, clip dirs and the journal's `flag_dump` line are
+    unchanged, so `/triage-clips` needs nothing. An unanswered page files as
+    `flag_other` after 4 s — what an unspecified flag always meant. Cost is the
+    couple of seconds between presses, off a 20 s ring; no new API surface,
+    which is why this beat dump-then-rename.
+  - **Replay key** (`obsws.save_replay_buffer`) writes the buffer to disk.
+    Playback on the TV — scene, stinger, slow-mo — is still phase 3.
+  - **On the TV, `no_clock` hides the digits** and shows `NO CLOCK`. A parked
+    clock renders a static `30`, which is indistinguishable from the stalled
+    clock a missed settle produces — the exact failure Steven is trained to
+    distrust. The control page gained a Mode selector, since the deck would
+    otherwise be the only way out of `no_clock`.
+  - Tests: 234 unit (+39). The deck suite is now written against *visibility*
+    and *face grammar* rather than fixed cell contents, so it grades the rules
+    instead of restating the table.
+
 - **2026-08-02 (checkpoint 44 — the corpus battery gets two tiers):** the
   battery is the accuracy gate, and at ~5 minutes it was also the reason
   event-logic work happened in batches instead of in a loop. Three changes,

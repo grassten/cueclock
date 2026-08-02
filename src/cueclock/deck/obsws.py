@@ -224,6 +224,20 @@ def bind_syphon(source: str = SYPHON_SOURCE, server: str = SYPHON_SERVER) -> boo
     return True
 
 
+def save_replay_buffer() -> bool:
+    """Write the replay buffer's last ~20 s to disk. True when OBS took it.
+
+    The buffer is armed by the Session key's `--startreplaybuffer` launch, so
+    the clip is already in memory and this is just the "keep that" command —
+    it lands in OBS's recording folder. Showing it back on the TV (replay scene
+    + stinger + slow-mo) is the rest of deck phase 3; see BACKLOG.md.
+    """
+    if request("SaveReplayBuffer") is None:
+        return False
+    print("obsws: replay buffer saved", flush=True)
+    return True
+
+
 def stop_all_outputs(attempts: int = 6, settle_s: float = 0.4) -> bool:
     """Drive OBS to zero active outputs. True when it got there.
 

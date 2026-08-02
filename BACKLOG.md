@@ -91,21 +91,20 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       journal's `detect_heartbeat` (every ~5 s: effective Hz + newest-frame
       age) around the next live flag press; flat Hz ⇒ delete this item, a dip
       ⇒ throttle the writer or lower `--ring-seconds`.
-- [ ] **IDLE break gate vs real breaks/openers** (checkpoint 33): the gate
-      ate a real, frame-verified break that read 705 mm/s
-      (`break_underread_0801` — the white streaked unobservably fast; the
-      kinematic speed bound fixes the live-shaped underread when the
-      candidate confirms, but a cold replay never confirms that break at
-      all: the candidate follows the flag and the streak dies first). It
-      also ate honest ~1000 mm/s drill openers twice (flagged_7 session,
-      Restart pressed both times). Live-validate the kinematic bound on
-      the next real break; if drill openers keep annoying, the answer is
-      a deck-key workflow ("Start begins a drill rack") or a rack-context
-      discriminator — not a lower floor (placement lookalikes sit at
-      ~1000 too, and hard bowled returns at 3489-3926 — the newborn IDLE
-      gate now catches those). Also live-validate the newborn IDLE gate's
-      residual: a break struck from a fully occluded address would fire
-      newborn and be eaten.
+- [ ] **IDLE break gate vs real breaks** (checkpoint 33): the gate ate a real,
+      frame-verified break that read 705 mm/s (`break_underread_0801` — the
+      white streaked unobservably fast; the kinematic speed bound fixes the
+      live-shaped underread when the candidate confirms, but a cold replay
+      never confirms that break at all: the candidate follows the flag and the
+      streak dies first). Live-validate the kinematic bound on the next real
+      break. Also live-validate the newborn IDLE gate's residual: a break
+      struck from a fully occluded address would fire newborn and be eaten
+      (Start recovers, same as a missed break).
+      **The drill-opener half of this item is closed** by checkpoint 45: the
+      gate is a *match* rule now, and `run_out` mode has no floor because it
+      has no break to gate. Lowering the floor for everyone stays the wrong
+      fix — placement lookalikes sit at ~1000 too, and hard bowled returns at
+      3489-3926 (the newborn IDLE gate catches those).
 - [ ] **Quiet-table bowls/placements fire mid-rack** (checkpoint 33, the
       dominant remaining phantom class — flagged_10/11/13's first fires
       and both flagged_9/14 bowls counted rack shots live): a ball bowled
@@ -129,10 +128,16 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       by itself on launch. Still one-time manual in the OBS UI: enable the
       WebSocket server, replay buffer, "Save projectors on exit", and remove
       OBS from Login Items (`hardware.md` §C4).
-- [ ] **Stream Deck phase 3 — Replay key** (obs-websocket). Carries phase 2's
-      deferred half: obs-websocket is disabled on this machine, so the toggle
-      ships without the "verify projector + replay buffer" step — it lands
-      with the client this key needs anyway.
+- [ ] **Live-validate deck layout v2** (checkpoint 45, built 2026-08-02): the
+      whole thing is unexercised at the table. Specifically — does `START 60`
+      read right mid-rack, does the 0.6 s score hold fire on accidental dwell,
+      is 4 s enough to pick a flag reason before it auto-files as OTHER, and
+      do keys vanishing on a mode change read as *clear* or as *broken*.
+      Mode lives on the deck's Mode key and on the control page's Mode select.
+- [ ] **Stream Deck phase 3 — replay playback on the TV**. The Replay key
+      already saves the buffer to OBS's recording folder
+      (`obsws.save_replay_buffer`); what's missing is the scene that plays it
+      back — see "Replay polish" below for the stinger/slow-mo/banner half.
 - [ ] **Deck bring-up checks** at the table: `hardware.md` §C6 (HID wake,
       power assertions, OBS restore).
 - [ ] Deck placement: desk stand first; break-end wall mount later if it
@@ -162,9 +167,19 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 - **Replay polish** (after deck phase 3's plain-cut replay): branded stinger
   transition (alpha-channel animation), 50% slow-mo, a REPLAY banner — the
   banner also solves the burned-in clock overlay reading as live in replays.
+- **Drill tracking + scorecard** (Steven, 2026-08-02 — its own feature, not a
+  deck-layout change): a way to record how a drill went and see it back. Needs
+  a data model (drill identity, reps, target, hit/miss, progress across
+  sessions), its own OBS overlay — **not** the two-player scoreboard, which is
+  why P1/P2 are absent outside `match` — and its own keys, which the four spare
+  cells can hold. Lands in **no clock** mode, where actual drills happen and the
+  deck is emptiest (4 keys).
 - **Stream Deck extras**: ground-truth mode (see idea bank §8 — a "real shot"
   key + auto-dump on disagreement; the Pedal if marking shots must not take a
-  hand off the cue), health face (grabs/s, clock state, drift warning).
+  hand off the cue), and **auto-flag on a Start press** — every press of Start
+  is by definition a vision failure, so dumping the ring as `flag_missed` would
+  turn each annoyance into corpus evidence with no extra key and no extra
+  press. Wants a rate limit or a `run` flag first: 3.6 GB a press.
 - **TV power via VIDAA network API** — only if the remote ever annoys.
 - **Foul/game-state handling**: v1 has none by decision (vision can't see
   whose visit it is — CHANGELOG 2026-07-27). If match-grade foul handling is

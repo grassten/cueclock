@@ -17,12 +17,18 @@ rack so the WNT §5 first-shot allowance works — 60 s for the first shot after
 the break-off or a push out, 30 s otherwise. ``new_rack`` resets the rack
 scope (shot count + extension pool); ``reset`` stays the foul/bug button and
 deliberately does not.
+
+Session mode (added 2026-08-02, ``modes.py``) is a second, orthogonal axis: a
+ruleset says which rulebook, a mode says what you are doing at the table. Only
+``match`` is rack-scoped, so ``run_out`` gets the base countdown on every shot
+including the first, and ``no_clock`` doesn't run at all.
 """
 
 import math
 from dataclasses import asdict, dataclass
 from enum import Enum
 
+from cueclock.clock.modes import DEFAULT_MODE, Mode, get_mode
 from cueclock.clock.rulesets import Ruleset
 
 
@@ -42,6 +48,8 @@ class Snapshot:
     time: float
     display: int
     ruleset: str
+    mode: str
+    base: int  # what a fresh countdown gives you now — the deck's START N face
     extensions_used: int
     extensions_allowed: int
     cue: str | None
@@ -51,8 +59,9 @@ class Snapshot:
 
 
 class ShotClock:
-    def __init__(self, ruleset: Ruleset, now: float) -> None:
+    def __init__(self, ruleset: Ruleset, now: float, mode: Mode | None = None) -> None:
         self.ruleset = ruleset
+        self.mode = mode if mode is not None else get_mode(DEFAULT_MODE)
         self.state = State.IDLE
         self._rack_shots = 0  # shots taken this rack; the break is shot 1
         self._shot_since_settle = False  # a ShotTaken has landed since the last settle
@@ -70,13 +79,17 @@ class ShotClock:
         return self._rack_shots
 
     def current_base(self) -> int:
-        """Full countdown for the next shot — rack-aware.
+        """Full countdown for the next shot — rack- and mode-aware.
 
         WNT Event Rules §5: 60 s for the first shot after the break-off or a
         push out, 30 s otherwise. With the break as shot 1, "fewer than two
         shots this rack" is exactly the first-shot window.
+
+        Only ``match`` is rack-scoped. Without a rack there is no break-off, so
+        the allowance it exists to grant has nothing to attach to and every
+        shot gets the base countdown.
         """
-        if self._rack_shots < 2:
+        if self.mode.rack_scoped and self._rack_shots < 2:
             return self.ruleset.first_shot_seconds
         return self.ruleset.base_seconds
 
@@ -144,7 +157,9 @@ class ShotClock:
         """
         self._rack_shots = 1  # as if the break just happened
         if self.state is not State.MOTION:
-            self.remaining = float(self.ruleset.first_shot_seconds)
+            # current_base(), not first_shot_seconds directly: outside a
+            # rack-scoped mode there is no allowance to re-enter.
+            self.remaining = float(self.current_base())
             self.state = State.RUNNING
             self._cues_fired.clear()
             self.last_cue = None
@@ -155,6 +170,21 @@ class ShotClock:
         # zero everything, then normalize the timer.
         self.ruleset = ruleset
         self._rack_shots = 0
+        self.extensions_used = 0
+        self.reset()
+
+    def set_mode(self, mode: Mode) -> None:
+        """Switch session mode — same scope change as switching rulebooks.
+
+        Whatever was half-played under the old mode doesn't carry: a rack in
+        progress means nothing once there is no rack, and the extension pool is
+        per rack. Parking in IDLE is also what makes ``no_clock`` honest —
+        gating vision alone would leave whatever was already counting to run
+        down and fire the urgency cues and EXPIRED mid-drill.
+        """
+        self.mode = mode
+        self._rack_shots = 0
+        self._shot_since_settle = False
         self.extensions_used = 0
         self.reset()
 
@@ -268,6 +298,8 @@ class ShotClock:
             time=round(self.remaining, 2),
             display=0 if self.state is State.EXPIRED else math.ceil(self.remaining),
             ruleset=self.ruleset.name,
+            mode=self.mode.name,
+            base=self.current_base(),
             extensions_used=self.extensions_used,
             extensions_allowed=self.ruleset.extensions_per_frame,
             cue=cue,

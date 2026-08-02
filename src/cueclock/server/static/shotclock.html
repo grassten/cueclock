@@ -63,6 +63,36 @@
             fill: white;
         }
 
+        /* no_clock mode: a parked countdown rendering a static 30 is
+           indistinguishable from the stalled clock a missed settle produces —
+           the exact failure Steven is trained to distrust. So the digits go
+           away entirely and the overlay says why it is quiet. */
+        .no-clock .time-number,
+        .no-clock .clock-icon {
+            display: none;
+        }
+
+        .mode-label {
+            display: none;
+            color: #8d949b;
+            font-family: 'Arial', sans-serif;
+            font-weight: bold;
+            letter-spacing: 0.12em;
+            font-size: 26px;
+        }
+
+        .no-clock .mode-label {
+            display: block;
+        }
+
+        body.full .no-clock {
+            border: none;
+        }
+
+        body.full .mode-label {
+            font-size: min(12vh, 7vw);
+        }
+
         /* ?view=full — broadcast-style bare number (Ultimate Pool TV look):
            no box, transparent background, digits sized off the viewport so
            the OBS browser source's own resolution sets the sharpness. */
@@ -98,6 +128,7 @@
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z"/>
         </svg>
         <div class="time-number" id="timer-text">30</div>
+        <div class="mode-label" id="mode-label">NO CLOCK</div>
     </div>
 
     <script>
@@ -158,6 +189,18 @@
         let lastBeeped = null;
 
         function render(state) {
+            // Sessions before mode existed (and any older server) send no
+            // `mode` — treat that as a normal clocked session, not as quiet.
+            const noClock = state.mode === 'no_clock';
+            clockEl.classList.toggle('no-clock', noClock);
+            if (noClock) {
+                // Drop any countdown styling with it — an EXPIRED flash left
+                // behind would keep pulsing red over a clock that isn't there.
+                clockEl.classList.remove('motion', 'grace', 'expired');
+                lastBeeped = null;
+                return;
+            }
+
             timerText.innerText = state.display ?? state.time ?? 30;
             clockEl.classList.toggle('motion',  state.state === 'MOTION');
             clockEl.classList.toggle('grace',   state.state === 'GRACE');

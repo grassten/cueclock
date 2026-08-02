@@ -25,12 +25,18 @@ def test_state_snapshot_shape() -> None:
             "time",
             "display",
             "ruleset",
+            "mode",
+            # What a fresh countdown gives you right now. The deck's START key
+            # renders it, so the face can't drift from the behaviour.
+            "base",
             "extensions_used",
             "extensions_allowed",
             "cue",
             "vision",
             "score",
         }
+        assert snap["mode"] == "match"
+        assert snap["base"] == 30
         assert snap["vision"] is True
         assert snap["score"] == {
             "p1": {"name": "PLAYER 1", "score": 0},
@@ -338,3 +344,74 @@ def test_detect_heartbeat_reports_hz_and_frame_age() -> None:
     assert beat["frame_t"] == 3.0  # newest processed frame's capture time
     age = beat["frame_age_s"]
     assert isinstance(age, float) and age >= 0.0
+
+
+# --- session modes (2026-08-02) ---
+
+
+def test_mode_listing_and_switch_and_unknown() -> None:
+    with make_client() as client:
+        listing = client.get("/api/modes").json()
+        assert listing["active"] == "match"
+        assert listing["available"] == ["match", "run_out", "no_clock"]
+        assert client.post("/api/mode/run_out").json() == {"ok": True}
+        assert client.get("/api/state").json()["mode"] == "run_out"
+        assert client.post("/api/mode/no_such_mode").status_code == 404
+        assert client.get("/api/state").json()["mode"] == "run_out"  # unchanged
+
+
+def test_run_out_drops_the_first_shot_allowance_over_the_api() -> None:
+    with make_client() as client:
+        client.post("/api/ruleset/wnt_9ball")
+        assert client.get("/api/state").json()["base"] == 60
+        client.post("/api/mode/run_out")
+        assert client.get("/api/state").json()["base"] == 30
+
+
+def test_no_clock_ignores_vision_but_still_journals_it(tmp_path: Path) -> None:
+    # A drill still produces evidence: the events are recorded, they just
+    # never move the clock. This is what makes a Flag press during one useful.
+    journal = tmp_path / "session.jsonl"
+    app = create_app(journal_path=journal)
+    hub: Hub = app.state.hub
+    with TestClient(app) as client:
+        client.post("/api/mode/no_clock")
+        asyncio.run(hub.shot_taken(t=1.0, speed_mms=4000.0))
+        asyncio.run(hub.balls_settled(t=2.0))
+        snap = client.get("/api/state").json()
+        assert snap["state"] == "IDLE"
+        assert snap["display"] == 30
+    kinds = [line.split('"kind": "')[1].split('"')[0] for line in journal.read_text().splitlines()]
+    assert "vision_shot_taken_no_clock" in kinds
+    assert "vision_balls_settled_no_clock" in kinds
+
+
+def test_run_out_lets_a_slow_opener_start_the_clock() -> None:
+    # The gate that exists for breaks ate honest ~1000 mm/s drill openers
+    # twice (BACKLOG, checkpoint 33) — run_out is the fix, not a lower floor.
+    app = create_app()
+    hub: Hub = app.state.hub
+    with TestClient(app) as client:
+        client.post("/api/mode/run_out")
+        asyncio.run(hub.shot_taken(t=1.0, speed_mms=1000.0))
+        assert client.get("/api/state").json()["state"] == "MOTION"
+
+
+def test_match_still_eats_a_slow_opener_out_of_idle() -> None:
+    app = create_app()
+    hub: Hub = app.state.hub
+    with TestClient(app) as client:
+        asyncio.run(hub.shot_taken(t=1.0, speed_mms=1000.0))
+        assert client.get("/api/state").json()["state"] == "IDLE"
+
+
+def test_run_out_still_ignores_vision_under_the_kill_switch() -> None:
+    # Mode and the match-day kill switch are independent gates; neither one
+    # being open may reopen the other.
+    app = create_app()
+    hub: Hub = app.state.hub
+    with TestClient(app) as client:
+        client.post("/api/mode/run_out")
+        client.post("/api/vision/off")
+        asyncio.run(hub.shot_taken(t=1.0, speed_mms=4000.0))
+        assert client.get("/api/state").json()["state"] == "IDLE"
