@@ -10,8 +10,8 @@ to be assembled by hand in the OBS UI at the table:
   * **Replay Media** — the saved buffer, muted, playing at 100%
   * **Replay Badge** — the `/replay` overlay: scrim, REPLAY wordmark, drain bar
 
-Two of the media source's settings are load-bearing rather than cosmetic, and
-both are the opposite of the OBS default:
+Three settings are load-bearing rather than cosmetic, and all three are the
+opposite of the OBS default:
 
   ``restart_on_activate: false``  the seek happens *before* the scene switch, so
       a restart-on-activate would throw it away and play from the top — the
@@ -19,6 +19,9 @@ both are the opposite of the OBS default:
   ``close_when_inactive: false``  the source has to hold the file open while the
       scene is dark, because that is when `GetMediaInputStatus` is asked for the
       duration the cue point is computed from.
+  ``restart_when_active: false``  on the badge: the deck loads and reloads that
+      page itself, before the cut, so the page is already painted when the TV
+      sees it (`deck/replay.py`, `BADGE_PAINT_S`).
 
 Prerequisites: OBS running, its WebSocket server enabled, and credentials in
 `config/obs_websocket.json` (`docs/hardware.md` §C4).
@@ -168,7 +171,13 @@ def main() -> int:
         "width": CANVAS_W,
         "height": CANVAS_H,
         "reroute_audio": False,
-        "restart_when_active": True,  # re-runs the drain bar on every replay
+        # Deliberately off, and it is the third load-bearing inversion here.
+        # A reload triggered by the cut takes ~0.57 s (measured), and OBS shows
+        # the previous replay's last frame throughout — which is a fully
+        # blacked-out one, since the badge fades to black on the way out. The
+        # deck reloads it itself while the scene is still dark instead, and
+        # waits for the paint before switching (`replay.BADGE_PAINT_S`).
+        "restart_when_active": False,
         "shutdown": False,
     }
 

@@ -13,7 +13,12 @@
            the live shot clock is burned into every replayed frame and keeps
            counting down on the TV. Without a badge the wall is showing a clock
            that isn't real — the exact failure Steven is trained to distrust
-           (same reasoning as the no_clock label in shotclock.html). */
+           (same reasoning as the no_clock label in shotclock.html).
+
+           The page draws three things, in this order:
+             scrim + masks   dim the footage, and paint the burned-in clock out
+             mark + drain    say REPLAY, and how long until the table is back
+             blackout        fade to black just before the deck cuts to live */
         html, body {
             background-color: transparent;
             margin: 0;
@@ -32,9 +37,19 @@
             opacity: 0.22;
         }
 
-        /* A hairline across the very top, not a full-width band: a band would
-           clip the top of the burned-in corner clock (hardware.md §B3 puts it
-           at x=1141, y=0). Top-left is the only dead space in the layout. */
+        /* Opaque patches over whatever the live scene had the shot clock in,
+           measured from OBS at the press and handed over as `?mask=` (see
+           `deck/replay.py`). Black rather than blurred: a browser source
+           composites in OBS, so nothing on this page can see — let alone
+           blur — the video underneath it. */
+        .mask {
+            position: fixed;
+            background: #000;
+        }
+
+        /* A hairline across the very top, not a full-width band. It answers the
+           only question worth asking from twelve feet away — when do I get my
+           table back — and it does it without covering any of the shot. */
         .drain {
             position: fixed;
             top: 0;
@@ -102,31 +117,101 @@
         }
 
         .secs:empty { display: none; }
+
+        /* The last half second: fade the whole replay to black, so the cut back
+           to live is a *visible* event.
+
+           Without it there is nothing to see. A replay is a pixel-exact rewind
+           of the TV, so OBS's 300 ms fade dissolves one picture of the table
+           into a nearly identical picture of the table and the return reads as
+           "nothing happened" (Steven, 2026-08-02: hard to tell when we're back
+           on the live view). Black between the two is what separates them.
+
+           It also covers the media source running out: `clear_on_media_end`
+           blanks the file a beat before the deck cuts, and this is already
+           black by then. Late is safe too — an overrun holds black rather than
+           showing more replay. */
+        .blackout {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            opacity: 0;
+        }
+
+        .blackout.running {
+            animation: blackout var(--blackout-s) ease-in var(--blackout-delay) forwards;
+        }
+
+        @keyframes blackout {
+            to { opacity: 1; }
+        }
     </style>
 </head>
 <body>
     <div class="scrim"></div>
+    <div id="masks"></div>
     <div class="drain"><div class="drain-fill" id="fill"></div></div>
     <div class="mark">
         <span class="dot"></span>
         <span class="word">REPLAY</span>
         <span class="secs" id="secs"></span>
     </div>
+    <div class="blackout" id="blackout"></div>
 
     <script>
+        // How long the fade to black at the end runs. Long enough to read as a
+        // transition, short enough that it never eats the shot: the footage it
+        // covers is the tail of the balls settling.
+        const BLACKOUT_S = 0.45;
+
+        const params = new URLSearchParams(location.search);
+
+        // ?mask=x,y,w,h;… — rectangles of the frame the live shot clock was
+        // burned into, in percent of the canvas, measured from OBS at the
+        // press. Percent because the recording may be a rescaled output of the
+        // canvas the transforms were read from; the fraction survives that.
+        for (const spec of (params.get('mask') || '').split(';')) {
+            const [x, y, w, h] = spec.split(',').map(Number);
+            if (![x, y, w, h].every(Number.isFinite)) continue;
+            const patch = document.createElement('div');
+            patch.className = 'mask';
+            patch.style.cssText = `left:${x}%;top:${y}%;width:${w}%;height:${h}%`;
+            document.getElementById('masks').appendChild(patch);
+        }
+
         // ?s=<seconds> — how long this replay runs, so the bar drains in step
         // with it. The deck rewrites this URL on every press (which reloads the
-        // source and restarts both animations), because the replay's length is
+        // source and restarts every animation), because the replay's length is
         // computed per press from where the shot sits in the buffer.
-        const seconds = parseFloat(new URLSearchParams(location.search).get('s'));
+        const seconds = parseFloat(params.get('s'));
         if (Number.isFinite(seconds) && seconds > 0) {
             const fill = document.getElementById('fill');
             fill.style.setProperty('--play-s', `${seconds}s`);
             fill.classList.add('running');
-            document.getElementById('secs').innerText = `${seconds.toFixed(1)} S`;
+
+            const blackout = document.getElementById('blackout');
+            blackout.style.setProperty('--blackout-s', `${BLACKOUT_S}s`);
+            blackout.style.setProperty('--blackout-delay',
+                `${Math.max(0, seconds - BLACKOUT_S)}s`);
+            blackout.classList.add('running');
+
+            // Counts down to the return rather than stating the replay's own
+            // length, which nobody at the table wanted to know. It says when,
+            // never *that* we are live: this page only ever sits over old
+            // footage, so a LIVE reading here would be the same lie the
+            // burned-in clock tells.
+            const secs = document.getElementById('secs');
+            const started = performance.now();
+            const tick = () => {
+                const left = seconds - (performance.now() - started) / 1000;
+                secs.innerText = left > 0 ? `LIVE IN ${Math.ceil(left)}` : '';
+            };
+            tick();
+            setInterval(tick, 100);
         }
-        // No `s`: the bar stays full rather than guessing. A wrong drain rate
-        // is worse than none — it would promise a return that isn't coming.
+        // No `s`: the bar stays full, nothing counts down and nothing fades.
+        // A wrong rate is worse than none — it would promise a return that
+        // isn't coming, and black out a replay that is still playing.
     </script>
 </body>
 </html>

@@ -155,11 +155,13 @@ grab thread (BayerRG8 @ 156 fps)
   (transparent, ~200×200; enable **"Control audio via OBS"** so the chimes
   reach the TV speakers).
 - Browser source `http://localhost:8000/replay` — the REPLAY badge: scrim,
-  wordmark, drain bar. Lives only in the Replay scene; the deck rewrites its
-  URL with `?s=<seconds>` on every press so the bar drains in step with that
-  replay's own length. It exists because the buffer records program output, so
-  the live shot clock is burned into every replayed frame and keeps counting
-  on the TV — same reasoning as the `no_clock` label (§C2a).
+  clock mask, wordmark, countdown, drain bar, closing fade to black. Lives only
+  in the Replay scene; the deck rewrites its URL on every press with
+  `?s=<seconds>` (that replay's own length) and `?mask=<x,y,w,h;…>` (the
+  rectangles the burned-in shot clock occupies, in percent of the canvas,
+  measured from OBS at the press). It exists because the buffer records program
+  output, so the live shot clock is burned into every replayed frame and keeps
+  counting on the TV — same reasoning as the `no_clock` label (§C2a).
 - Browser source `http://localhost:8000/score` — the match scoreboard
   (transparent 1920×1080; the bar sits bottom-center, broadcast lower-third
   style). No audio of its own. Names/race-to are set from `/control`; scores
@@ -187,11 +189,14 @@ actually runs — the original plan called them *Table* / *Clock*):
   file the buffer just wrote, muted) under **Replay Badge** (browser source
   `http://localhost:8000/replay`). **Never build this scene by hand** —
   `uv run python scripts/setup_obs_replay.py` creates it and re-applies the
-  settings, two of which are load-bearing and the opposite of the OBS default:
+  settings, three of which are load-bearing and the opposite of the OBS default:
   `restart_on_activate: false` (the seek happens *before* the scene switch, so
   a restart would discard it and play the twenty seconds of chalking the seek
-  exists to skip) and `close_when_inactive: false` (the source must hold the
-  file open while the scene is dark — that is when its duration is read).
+  exists to skip), `close_when_inactive: false` (the source must hold the
+  file open while the scene is dark — that is when its duration is read), and
+  on the badge `restart_when_active: false` (the deck loads that page itself,
+  before the cut — a reload triggered *by* the cut shows the previous replay's
+  last frame, which is a blacked-out one, for the half second it takes).
   Nothing is cropped: the overhead in a recording is a ~586×1080 portrait strip
   already downscaled to 57%, so filling a 16:9 canvas from it would be a 3.3×
   upscale of a downscale. Playing the composed frame 1:1 is pixel-native and
@@ -563,9 +568,49 @@ so it always lands early; the recordings carry keyframes every **1.90–1.97 s**
 cannot tighten the framing past the keyframe grid — that needs a shorter
 keyframe interval in OBS's encoder settings.
 
+**The shot clock is painted out, and the rect comes from OBS** (added
+2026-08-02, from live validation — issue #13's third question answered "no").
+A scrim and a badge were not enough: the burned-in countdown still read as live
+on the wall. The badge now covers it. What made the patch acceptable this time
+is that nothing about it is hardcoded — at each press the deck asks OBS for the
+live scene's items, keeps the *enabled browser sources whose URL contains
+`/shotclock`*, converts each transform to a percentage rect of the canvas
+(`GetVideoSettings`, so even the canvas size isn't assumed) and hands them to
+the badge as `?mask=`. Identity is the page, so a renamed, moved, resized or
+duplicated overlay stays covered; a hidden one is skipped, because it was never
+burned in. Rotated items are covered by their bounding box and every rect gets
+2 px of slop — over-covering is the harmless direction, a surviving seam of
+live countdown is not. If OBS can't answer, the replay still plays with the
+clock visible (the old behaviour) rather than being refused.
+
+**The return to live is a fade to black, not a transition.** OBS's Fade is
+already set and it is invisible here by construction: a replay is a pixel-exact
+rewind of the TV, so a 300 ms cross-fade dissolves one picture of the table into
+a nearly identical one and reads as "nothing happened" (Steven, 2026-08-02:
+*hard to tell when we're back on the live view*). The badge instead fades the
+whole frame to black over its last 0.45 s, so black separates the two pictures.
+The `.secs` slot became a `LIVE IN n` countdown to the same moment — it says
+*when*, never *that* we are live, because the page only ever sits over old
+footage.
+
+**The badge is loaded before the cut, and its timeline is longer than the
+replay.** Two instants that look like one, both measured 2026-08-02: the page's
+clock starts **0.03–0.05 s** after `SetInputSettings`, but its first frame
+reaches OBS **0.567–0.570 s** later (three trials each, repeatable to 3 ms).
+Cut instantly and the badge is invisible — clock unmasked — for half a second;
+give it time to paint and it is already half a second into its own animation.
+So the deck does both: it sets the URL and presses the source's own refresh
+button early (behind the seek, whose round trips hide most of the wait), sleeps
+out the remainder of `BADGE_PAINT_S`, *then* switches; and it hands the page
+`play_s + BADGE_PAINT_S`, so the drain bar, the countdown and the fade all land
+on the deck's actual return. The explicit refresh is why the source has
+`restart_when_active` off — see §B3.
+
 **Measured live, 2026-08-02** (four consecutive presses, camera not running):
-`show()` takes **0.34–0.63 s** end to end, which is how long the deck blocks;
-saved files come out at **18.6–20.0 s** against the 20 s buffer setting.
+`show()` took **0.34–0.63 s** end to end, which is how long the deck blocks;
+saved files come out at **18.6–20.0 s** against the 20 s buffer setting. The
+badge pre-warm adds up to `BADGE_PAINT_S` (0.7 s) minus whatever the seek
+already spent, so a press now blocks on the order of a second.
 
 Every failure leaves the program scene alone — unreachable OBS, missing Replay
 scene, a save that never lands all mean the TV keeps showing live, which is
