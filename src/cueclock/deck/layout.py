@@ -80,6 +80,7 @@ class DeckState:
     extensions_allowed: int = 0
     p1: int = 0
     p2: int = 0
+    replaying: bool = False  # a replay is on the TV — the Replay key says BACK
     session_face: str = "START"
     session_sub: str | None = None
     session_dot: Rgb | None = None
@@ -165,11 +166,16 @@ class FlagReason:
 
 
 @dataclass(frozen=True)
-class ReplaySave:
-    """Save the OBS replay buffer to disk over obs-websocket."""
+class ReplayShow:
+    """Save the OBS replay buffer and cut to it on the TV; press again for live.
+
+    One key for both directions because there is only ever one thing to do with
+    it: while live it starts a replay, while a replay is on it ends one. The
+    face says which (`deck/replay.py` owns the sequence).
+    """
 
 
-Action = ApiPost | Cycle | SessionToggle | ScoreAdjust | FlagStart | FlagReason | ReplaySave
+Action = ApiPost | Cycle | SessionToggle | ScoreAdjust | FlagStart | FlagReason | ReplayShow
 
 
 # ---------- cycle label tables ----------
@@ -280,6 +286,11 @@ class Key:
             # current_base(): 60 s inside the WNT first-shot window, 15 under
             # Final 10, 30 otherwise. A plain "Reset" can't say which.
             return Face(text="START", big=str(state.base), stripe=stripe)
+        if self.name == "replay" and state.replaying:
+            # The only two-line command face on the deck. "BACK" alone would
+            # not say where, and "LIVE" alone is a *state* on a key read as a
+            # command — the exact confusion rule 3 exists to prevent.
+            return Face(text="BACK", sub="TO LIVE", stripe=stripe)
         if self.name == "extension":
             left = max(0, state.extensions_allowed - state.extensions_used)
             pips = (left, state.extensions_allowed) if state.extensions_allowed else None
@@ -291,7 +302,7 @@ LAYOUT: tuple[Key, ...] = (
     # --- the spine: top-left 2x2, present in every mode, never moves ---
     Key(1, 1, "session", Group.SYSTEM, SessionToggle(), offline=True),
     Key(1, 2, "mode", Group.SYSTEM, Cycle("mode")),
-    Key(2, 1, "replay", Group.SYSTEM, ReplaySave(), text="REPLAY"),
+    Key(2, 1, "replay", Group.SYSTEM, ReplayShow(), text="REPLAY"),
     # Flag's reason page unfolds rightward into the empty cells beside it.
     Key(2, 2, "flag", Group.EVIDENCE, FlagStart(), text="FLAG"),
     # --- the clock: top-right, absent once the clock is off ---
@@ -352,3 +363,4 @@ REASON_KEYS: tuple[Key, ...] = (
 
 FLAG_PENDING_FACE = "WHY?"  # on the Flag key itself while the page is open
 DUMP_PENDING_FACE = "SAVING…"
+REPLAY_PENDING_FACE = "CUEING…"  # while the buffer is written and seeked

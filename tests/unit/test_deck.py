@@ -325,10 +325,11 @@ def test_every_key_actually_renders_in_every_mode_and_rulebook() -> None:
     """
     for mode in MODES:
         for ruleset in RULESETS:
-            state = replace(MATCH, mode=mode, ruleset=ruleset)
-            for key in (*LAYOUT, *REASON_KEYS):
-                image = faces.render(key.face(state))
-                assert image.size == (faces.SIZE, faces.SIZE), (key.name, mode, ruleset)
+            for replaying in (False, True):
+                state = replace(MATCH, mode=mode, ruleset=ruleset, replaying=replaying)
+                for key in (*LAYOUT, *REASON_KEYS):
+                    image = faces.render(key.face(state))
+                    assert image.size == (faces.SIZE, faces.SIZE), (key.name, mode, ruleset)
 
 
 def test_render_survives_a_newline_in_every_field() -> None:
@@ -500,23 +501,24 @@ def test_score_post_picks_the_direction(monkeypatch: pytest.MonkeyPatch) -> None
     assert posted == ["/api/score/p1/increment", "/api/score/p1/decrement"]
 
 
-def test_replay_key_saves_the_obs_buffer(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cueclock.deck import obsws
-
-    calls: list[str] = []
-    monkeypatch.setattr(obsws, "request", lambda name, *a, **k: calls.append(name) or {})
-    image, moved = _dispatch(BY_NAME["replay"], "http://x", MATCH)
-    assert calls == ["SaveReplayBuffer"]
-    assert image.getpixel((0, 0)) == faces.BG_OK
-    assert moved is None
+# --- the Replay key: one key, both directions ---
 
 
-def test_replay_key_flashes_red_when_obs_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cueclock.deck import obsws
+def test_replay_key_offers_the_verb_that_applies() -> None:
+    live = BY_NAME["replay"].face(MATCH)
+    mid_replay = BY_NAME["replay"].face(replace(MATCH, replaying=True))
+    assert live.text == "REPLAY"
+    assert live.sub is None
+    # "LIVE" alone would be a state on a key read as a command (rule 3), so the
+    # face names the destination on its second line instead.
+    assert mid_replay.text == "BACK"
+    assert mid_replay.sub == "TO LIVE"
 
-    monkeypatch.setattr(obsws, "request", lambda *a, **k: None)
-    image, _ = _dispatch(BY_NAME["replay"], "http://x", MATCH)
-    assert image.getpixel((0, 0)) == faces.BG_ERR
+
+def test_replay_key_stays_on_the_spine_mid_replay() -> None:
+    for mode in MODES:
+        state = replace(MATCH, mode=mode, replaying=True)
+        assert BY_NAME["replay"].visible(state), mode
 
 
 # --- MODE_FACES is the deck's copy of the modes table ---

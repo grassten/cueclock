@@ -86,6 +86,14 @@ class Hub:
         self._detect_frames = 0
         self._detect_last: tuple[float, float] | None = None  # (frame_t, mono when processed)
         self._heartbeat_prev: tuple[float, int] | None = None  # (mono, frames) at last line
+        # When the last shot was seen, monotonic — the instant replay's anchor
+        # (`GET /api/last_shot`). Stamped for every ShotTaken the vision core
+        # emits, *before* the kill switch / mode / break gates: those decide
+        # whether a shot moves the clock, and replay asks a different question —
+        # what is on the video. So the anchor still works in `no_clock` mode,
+        # which is exactly where drills happen. Cost: a phantom shot anchors a
+        # phantom replay, which is a bug you would want to see anyway.
+        self._last_shot_mono: float | None = None
 
     def _log(self, kind: str, **detail: object) -> None:
         state = self.clock.state.value
@@ -97,6 +105,18 @@ class Hub:
             **detail,
         )
         self._journal_state = state
+
+    def last_shot_age(self) -> float | None:
+        """Seconds since the last ShotTaken, or None if none this session.
+
+        Deliberately an *age* rather than a timestamp: the caller is the deck
+        daemon, a separate process whose monotonic clock shares no epoch with
+        this one. An age is comparable across processes; a `monotonic()` value
+        is not.
+        """
+        if self._last_shot_mono is None:
+            return None
+        return time.monotonic() - self._last_shot_mono
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
         """The composed broadcast/state payload: clock + `vision` + `score`."""
@@ -273,6 +293,7 @@ class Hub:
         detail: dict[str, object] = {"t": t, "frame_t": t, "ball": ball_id, "newborn": newborn}
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
+        self._last_shot_mono = time.monotonic()  # replay anchor — before every gate
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock

@@ -25,7 +25,8 @@ corpus: 22 scenarios, all green.
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
 | Session toggle (one key brings up `run` + OBS + the TV projector) | live |
-| Replay playback on the TV, music keys, drill tracking | planned — `BACKLOG.md` |
+| Instant replay: one key cuts the TV to the last shot, seeked to 1.5 s before it | live |
+| Replay stinger + slow-mo, music keys, drill tracking | planned — `BACKLOG.md` |
 
 ## How it works
 
@@ -67,8 +68,10 @@ uv run python -m cueclock.cli deck
 - OBS browser sources: `http://localhost:8000/shotclock` (corner overlay,
   ~200×200, "Control audio via OBS"),
   `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
-  broadcast-style clock scene), and `http://localhost:8000/score`
-  (1920×1080 bottom-bar scoreboard, driven by the Stream Deck score keys).
+  broadcast-style clock scene), `http://localhost:8000/score`
+  (1920×1080 bottom-bar scoreboard, driven by the Stream Deck score keys), and
+  `http://localhost:8000/replay` (the REPLAY badge — lives only in the Replay
+  scene, which `scripts/setup_obs_replay.py` builds; never assemble it by hand).
   Phone control page: `/control`.
 - Voice "extension": say the word and the clock grants one. Needs the Vosk
   model (`scripts/fetch_vosk_model.sh`, once) and a wired USB mic named via

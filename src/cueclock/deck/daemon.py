@@ -22,19 +22,20 @@ from typing import Any
 
 from PIL import Image
 
-from cueclock.deck import client, faces, obsws
+from cueclock.deck import client, faces, replay
 from cueclock.deck.layout import (
     DUMP_PENDING_FACE,
     FLAG_PENDING_FACE,
     LAYOUT,
     REASON_KEYS,
+    REPLAY_PENDING_FACE,
     ApiPost,
     Cycle,
     DeckState,
     FlagReason,
     FlagStart,
     Key,
-    ReplaySave,
+    ReplayShow,
     ScoreAdjust,
     SessionToggle,
     cycle_listing,
@@ -72,14 +73,22 @@ def _score_of(payload: object, slot: str) -> int:
     return value if isinstance(value, int) else 0
 
 
-def build_state(data: dict[str, object] | None, session: SessionState) -> DeckState:
+def build_state(
+    data: dict[str, object] | None, session: SessionState, *, replaying: bool = False
+) -> DeckState:
     """Turn one `GET /api/state` body into everything the faces need.
 
     Server down is a `DeckState` too, not an exception: every key but Session
     goes dark, and the Session key still says how to bring the server back.
+
+    ``replaying`` is the one face input the server knows nothing about — the
+    replay lives entirely between the deck and OBS — so the loop passes its own
+    answer in rather than inventing a second source of state for one key.
     """
     if data is None:
-        return DeckState(up=False, session_face=session.face, session_sub=session.sub)
+        return DeckState(
+            up=False, replaying=replaying, session_face=session.face, session_sub=session.sub
+        )
 
     def _int(field: str, default: int) -> int:
         value = data.get(field)
@@ -98,6 +107,7 @@ def build_state(data: dict[str, object] | None, session: SessionState) -> DeckSt
         extensions_allowed=_int("extensions_allowed", 0),
         p1=_score_of(data.get("score"), "p1"),
         p2=_score_of(data.get("score"), "p2"),
+        replaying=replaying,
         session_face=session.face,
         session_sub=session.sub,
         # The session is what the health dot reports on: green once the server
@@ -114,10 +124,6 @@ def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckS
     which would otherwise report the value we already know we changed.
     """
     action = key.action
-    if isinstance(action, ReplaySave):
-        saved = obsws.save_replay_buffer()
-        print(f"{key.name}: replay buffer save -> {saved}", flush=True)
-        return (faces.flash_ok("SAVED") if saved else faces.flash_err("ERROR")), None
     if isinstance(action, FlagReason):
         result = client.post(base, f"/api/dump?label={action.label}", timeout=action.timeout)
         print(f"{key.name}: dump {action.label} -> {result.status}", flush=True)
@@ -196,13 +202,15 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
     events: queue.Queue[tuple[int, bool]] = queue.Queue()
     deck.set_key_callback(lambda _deck, k, pressed: events.put((int(k), bool(pressed))))
 
+    playing: replay.Playing | None = None  # a replay currently on the TV
+
     def poll() -> DeckState:
         """One request serves both the session machine and every face."""
         data = client.get_json(base, "/api/state")
         # The session machine advances on this same poll: STARTING becomes ON
         # the moment the server answers (that is when OBS is launched), and
         # STOPPING becomes OFF when `run` finally exits.
-        return build_state(data, session.tick(data is not None))
+        return build_state(data, session.tick(data is not None), replaying=playing is not None)
 
     state = poll()
     _draw_all(deck, state)
@@ -218,6 +226,14 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 state = polled
                 _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
             next_poll = now + POLL_S
+        if playing is not None and now >= playing.until:
+            # The file ran out — cut back to whatever was live when it started.
+            # A failed cut still clears the handle: leaving the key saying BACK
+            # forever would be worse than one press that does nothing.
+            replay.stop(playing)
+            playing = None
+            state = replace(state, replaying=False)
+            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
         if reason_deadline is not None and now >= reason_deadline:
             # Walked away: an unspecified flag has always meant OTHER, and a
             # saved clip beats a lost one.
@@ -289,6 +305,23 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
             continue
         if not state.up:
             print(f"{key.name}: ignored — server down", flush=True)
+            continue
+
+        if isinstance(key.action, ReplayShow):
+            if playing is not None:
+                replay.stop(playing)
+                playing = None
+            else:
+                # Blocks the loop for as long as OBS takes to write the file
+                # and open it — same deal as a ring dump, and the face says so.
+                _set_key(deck, index, faces.Face(REPLAY_PENDING_FACE))
+                playing = replay.show(base)
+                if playing is None:
+                    _set_key(deck, index, faces.flash_err("ERROR"))
+                    flashes[index] = time.monotonic() + FLASH_S
+                    continue
+            state = replace(state, replaying=playing is not None)
+            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
             continue
 
         if isinstance(key.action, FlagStart):

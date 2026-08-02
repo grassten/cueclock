@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Replay</title>
+    <style>
+        /* Full-canvas transparent overlay for the OBS Replay scene: it sits
+           above the media source, so the scrim below dims the replayed footage
+           and everything else draws on top of it.
+
+           Why this exists at all: the replay buffer records program output, so
+           the live shot clock is burned into every replayed frame and keeps
+           counting down on the TV. Without a badge the wall is showing a clock
+           that isn't real — the exact failure Steven is trained to distrust
+           (same reasoning as the no_clock label in shotclock.html). */
+        html, body {
+            background-color: transparent;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+        }
+
+        /* The scrim does most of the work: the picture visibly drops before
+           anyone has read a word. Kept light enough that an already-dim
+           overhead feed stays legible. */
+        .scrim {
+            position: fixed;
+            inset: 0;
+            background: #000;
+            opacity: 0.22;
+        }
+
+        /* A hairline across the very top, not a full-width band: a band would
+           clip the top of the burned-in corner clock (hardware.md §B3 puts it
+           at x=1141, y=0). Top-left is the only dead space in the layout. */
+        .drain {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 0.4vh;
+            background: rgba(255, 255, 255, 0.16);
+        }
+
+        .drain-fill {
+            height: 100%;
+            width: 100%;
+            background: #2E86C8;
+            transform-origin: left center;
+        }
+
+        .drain-fill.running {
+            animation: drain linear forwards;
+            animation-duration: var(--play-s);
+        }
+
+        @keyframes drain {
+            to { transform: scaleX(0); }
+        }
+
+        .mark {
+            position: fixed;
+            top: 4.5vh;
+            left: 2.6vw;
+            display: flex;
+            align-items: center;
+            gap: 1.1vh;
+            /* A short rise-in reads as "something just happened" without
+               being a transition — OBS owns the scene fade. */
+            animation: rise 260ms ease-out both;
+        }
+
+        @keyframes rise {
+            from { opacity: 0; transform: translateY(0.9vh); }
+            to   { opacity: 1; transform: none; }
+        }
+
+        .dot {
+            width: 1.1vh;
+            height: 1.1vh;
+            border-radius: 50%;
+            background: #2E86C8;
+        }
+
+        .word {
+            color: #fff;
+            font-weight: bold;
+            font-size: 2.6vh;
+            letter-spacing: 0.24em;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+        }
+
+        .secs {
+            color: #9FB3C4;
+            font-weight: bold;
+            font-size: 1.4vh;
+            letter-spacing: 0.14em;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+        }
+
+        .secs:empty { display: none; }
+    </style>
+</head>
+<body>
+    <div class="scrim"></div>
+    <div class="drain"><div class="drain-fill" id="fill"></div></div>
+    <div class="mark">
+        <span class="dot"></span>
+        <span class="word">REPLAY</span>
+        <span class="secs" id="secs"></span>
+    </div>
+
+    <script>
+        // ?s=<seconds> — how long this replay runs, so the bar drains in step
+        // with it. The deck rewrites this URL on every press (which reloads the
+        // source and restarts both animations), because the replay's length is
+        // computed per press from where the shot sits in the buffer.
+        const seconds = parseFloat(new URLSearchParams(location.search).get('s'));
+        if (Number.isFinite(seconds) && seconds > 0) {
+            const fill = document.getElementById('fill');
+            fill.style.setProperty('--play-s', `${seconds}s`);
+            fill.classList.add('running');
+            document.getElementById('secs').innerText = `${seconds.toFixed(1)} S`;
+        }
+        // No `s`: the bar stays full rather than guessing. A wrong drain rate
+        // is worse than none — it would promise a return that isn't coming.
+    </script>
+</body>
+</html>

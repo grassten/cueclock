@@ -199,6 +199,61 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 46 — instant replay: the TV cuts to the last shot,
+  seeked):** Stream Deck phase 3. The Replay key saved a file nobody watched;
+  it now cuts the wall TV to that file, starting 1.5 s before the shot, and
+  comes back on its own. `deck/replay.py`, `scripts/setup_obs_replay.py`,
+  `/replay`, `GET /api/last_shot`.
+  - **The seek is the feature, and it needed no new vision.** Steven asked
+    whether playback could start when the cue stick first appears. It can do
+    better: every ShotTaken is already timestamped to ~20 ms of contact, so
+    `cursor = duration − shot_age + display_lag − lead` puts playback where it
+    belongs with arithmetic. Cue-stick detection would have been new detection
+    work with no ground truth (the detector discards the stick blob *by
+    design* — it is the oversized occluder, idea bank §2) to answer a question
+    already answered. It would also have answered the wrong question: the stick
+    appears at *address*, which can be ten seconds of standing still.
+  - **Side effect worth naming:** the replay is as long as you make it. Press
+    as the balls stop and it is ~5 s; press after wandering off and it is
+    longer, capped at 20 s. No shot in the buffer plays the whole thing rather
+    than failing — a press always shows something.
+  - **The anchor is stamped before every gate** (kill switch, mode, IDLE break
+    floor). Those decide whether a shot moves the *clock*; replay asks what is
+    on the *video*. That is what makes the seek work in `no_clock`, which is
+    where drills happen. Accepted: a phantom shot anchors a phantom replay.
+  - **What is in a replay is not a choice the Replay scene can make.** The
+    buffer records *program output*, so a replay is a pixel-exact rewind of the
+    TV. Steven wanted a full-screen overhead; the overhead in the recording is a
+    ~586×1080 portrait strip already downscaled to 57% (rotated 270° in
+    `Stream Detail`), so cropping it to a 16:9 canvas would be a 3.3× upscale of
+    a downscale. Nothing is cropped: the composed frame is the only pixel-native
+    thing in the buffer and it carries both angles. A full-screen overhead
+    replay is a *live layout* change, BACKLOG'd as such.
+  - **100% speed, and the reason is the recording, not taste.** OBS records at
+    30 fps, so half speed is frame-doubled mush; the camera's 160 fps never
+    reaches the file, only detection. Real slow-mo has a prerequisite — OBS at
+    60 fps — now written down where `SPEED` lives.
+  - **A REPLAY badge is not decoration.** The live shot clock is burned into
+    every replayed frame and keeps counting on the TV. `/replay` adds a scrim,
+    a top-left wordmark and a hairline drain bar (top-left because a full-width
+    band would clip the burned-in clock; the bar because the real question from
+    twelve feet away is *when do I get my table back*). An opaque patch over
+    the clock's rect was considered and rejected as brittle — it would break
+    silently the day the overlay moves.
+  - **Two OBS settings are load-bearing and both invert the default:**
+    `restart_on_activate: false` (else the scene switch discards the seek) and
+    `close_when_inactive: false` (the duration is read while the scene is
+    dark). `scripts/setup_obs_replay.py` builds the scene and re-applies them,
+    so a hand-edit in the OBS UI is repaired by re-running it rather than
+    debugged at the table.
+  - Order is unit-tested — load, read duration, seek, *then* switch — because
+    seeking after the switch cuts the TV to frame 0 and then jumps. Every
+    failure path leaves the program scene alone: OBS unreachable, no Replay
+    scene, or a save that never lands all keep the TV live. 259 unit tests
+    (+23); both the display-lag sign and the seek itself were mutation-checked.
+  - Deck: Replay is one key in both directions (`REPLAY` → `CUEING…` →
+    `BACK`/`TO LIVE`), still on the spine at 2,1.
+
 - **2026-08-02 (checkpoint 45 — deck layout v2: session modes, and the deck
   shrinks to what the mode can do):** fourteen of fifteen keys were spoken for
   with ~nine more queued, so the crowding was the presenting problem — but the

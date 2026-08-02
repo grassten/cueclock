@@ -38,7 +38,9 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
 
     @app.get("/")
     async def index() -> JSONResponse:
-        return JSONResponse({"endpoints": ["/shotclock", "/score", "/control", "/ws", "/api/*"]})
+        return JSONResponse(
+            {"endpoints": ["/shotclock", "/score", "/replay", "/control", "/ws", "/api/*"]}
+        )
 
     @app.get("/shotclock")
     async def shotclock_page() -> FileResponse:
@@ -51,6 +53,11 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
     @app.get("/control")
     async def control_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "control.html")
+
+    @app.get("/replay")
+    async def replay_page() -> FileResponse:
+        """REPLAY badge for the OBS Replay scene (`?s=<seconds>` drains the bar)."""
+        return FileResponse(STATIC_DIR / "replay.html")
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:
@@ -126,6 +133,17 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
     @app.get("/api/state")
     async def api_state() -> dict[str, object]:
         return hub.payload()  # same composed payload the WS broadcasts
+
+    @app.get("/api/last_shot")
+    async def api_last_shot() -> dict[str, object]:
+        """How long ago the last shot was seen — the instant replay's anchor.
+
+        Its own endpoint rather than a field of `/api/state` because the deck
+        polls state every 2 s and this answer is only worth having at the
+        instant of the press: two seconds of staleness is two seconds of the
+        replay starting in the wrong place.
+        """
+        return {"age_s": hub.last_shot_age()}
 
     @app.get("/api/score")
     async def api_score() -> dict[str, object]:

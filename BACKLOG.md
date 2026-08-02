@@ -121,27 +121,17 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       planted, slide the bridge hand deliberately, never shoot): measures
       the planted-glove-slide residual the roster rule cannot cover, and
       whether admission needs an appearance gate.
-- [ ] **Live-validate the session toggle** (phase 2, built 2026-08-02): tap
-      Session at the table and watch `run` + OBS come up, hold 1 s to take
-      them down. Two things only the rig can judge — whether 60 s is enough
-      start budget on a cold camera, and whether OBS restores the projector
-      by itself on launch. Still one-time manual in the OBS UI: enable the
-      WebSocket server, replay buffer, "Save projectors on exit", and remove
-      OBS from Login Items (`hardware.md` §C4).
-- [ ] **Live-validate deck layout v2** (checkpoint 45, built 2026-08-02): the
-      whole thing is unexercised at the table. Specifically — does `START 60`
-      read right mid-rack, does the 0.6 s score hold fire on accidental dwell,
-      is 4 s enough to pick a flag reason before it auto-files as OTHER, and
-      do keys vanishing on a mode change read as *clear* or as *broken*.
-      Mode lives on the deck's Mode key and on the control page's Mode select.
-- [ ] **Stream Deck phase 3 — replay playback on the TV**. The Replay key
-      already saves the buffer to OBS's recording folder
-      (`obsws.save_replay_buffer`); what's missing is the scene that plays it
-      back — see "Replay polish" below for the stinger/slow-mo/banner half.
-- [ ] **Deck bring-up checks** at the table: `hardware.md` §C6 (HID wake,
-      power assertions, OBS restore).
-- [ ] Deck placement: desk stand first; break-end wall mount later if it
-      earns it.
+- [ ] **Live-validate instant replay** (checkpoint 46, built 2026-08-02):
+      `uv run python scripts/setup_obs_replay.py` once with OBS up, then press
+      Replay after a shot. Four things only the rig can judge — whether the
+      1.5 s lead frames the stroke or clips it, whether ~0.1 s of display lag
+      is the real camera→Syphon→OBS offset, whether the scrim + badge stop the
+      burned-in clock reading as live (if not, the fix is an opaque patch over
+      its rect in the Replay scene — five lines, deliberately skipped as
+      brittle), and whether the deck's few hundred ms of blocking while OBS
+      writes the file is noticeable. Also unmeasured: whether a replay dents
+      detect Hz (check `detect_heartbeat` around a press, same as the flag-dump
+      item above).
 
 ## Queued features (build when asked)
 
@@ -164,9 +154,15 @@ Delete items as they land (history lives in `CHANGELOG.md`).
   from the ring buffer (160 fps → 5.3× slow-mo), break-speed measurement,
   match stats, 16-ball identity, config hot-reload, auto-switch to final-10,
   match timer.
-- **Replay polish** (after deck phase 3's plain-cut replay): branded stinger
-  transition (alpha-channel animation), 50% slow-mo, a REPLAY banner — the
-  banner also solves the burned-in clock overlay reading as live in replays.
+- **Replay polish** (after checkpoint 46's fade-cut replay): a branded stinger
+  transition — an alpha-channel *video* asset, so it needs making or buying;
+  the built-in Fade is what phase 3 uses. **Real slow-mo** is the other half
+  and has a prerequisite: OBS records at 30 fps, so half speed is frame-doubled
+  mush. Set OBS to 60 fps, then `SPEED = 0.5` in `deck/replay.py` and the setup
+  script's `speed_percent` follows it. (The REPLAY banner shipped in 46.)
+  Wanted-if-it-annoys: a **full-screen overhead** replay, which is not a Replay
+  scene change — the buffer records program output, so it means making the
+  overhead the main *live* view (`hardware.md` §B3).
 - **Drill tracking + scorecard** (Steven, 2026-08-02 — its own feature, not a
   deck-layout change): a way to record how a drill went and see it back. Needs
   a data model (drill identity, reps, target, hit/miss, progress across

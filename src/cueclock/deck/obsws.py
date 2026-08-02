@@ -229,13 +229,72 @@ def save_replay_buffer() -> bool:
 
     The buffer is armed by the Session key's `--startreplaybuffer` launch, so
     the clip is already in memory and this is just the "keep that" command —
-    it lands in OBS's recording folder. Showing it back on the TV (replay scene
-    + stinger + slow-mo) is the rest of deck phase 3; see BACKLOG.md.
+    it lands in OBS's recording folder. Playing it back on the TV is
+    `deck/replay.py`; this stays the one-line save.
     """
     if request("SaveReplayBuffer") is None:
         return False
     print("obsws: replay buffer saved", flush=True)
     return True
+
+
+def last_replay_path() -> str | None:
+    """Path of the most recently saved replay, or None if OBS has none/can't say.
+
+    `SaveReplayBuffer` returns the moment OBS accepts the command, not when the
+    file exists — so the only way to know a save landed is to watch this value
+    change. `deck/replay.py` polls it.
+    """
+    data = request("GetLastReplayBufferReplay")
+    if data is None:
+        return None
+    path = data.get("savedReplayPath")
+    return path if isinstance(path, str) and path else None
+
+
+def current_scene() -> str | None:
+    """The program scene's name — what to return to when a replay finishes."""
+    data = request("GetCurrentProgramScene")
+    if data is None:
+        return None
+    # OBS 30 renamed the field; accept both so an OBS upgrade can't strand a
+    # replay in the Replay scene with nowhere recorded to go back to.
+    for field in ("currentProgramSceneName", "sceneName"):
+        value = data.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def set_scene(name: str) -> bool:
+    return request("SetCurrentProgramScene", {"sceneName": name}) is not None
+
+
+def set_input_settings(name: str, settings: dict[str, Any], *, overlay: bool = True) -> bool:
+    """Merge settings into an input (`overlay=False` replaces them wholesale)."""
+    payload = {"inputName": name, "inputSettings": settings, "overlay": overlay}
+    return request("SetInputSettings", payload) is not None
+
+
+def media_duration_s(name: str) -> float | None:
+    """Length of the file loaded in a media source, or None until it is ready.
+
+    OBS reports a negative duration while the file is still opening, which is
+    indistinguishable from "no file" in the payload — both come back here as
+    None, so the caller polls rather than trusting the first answer.
+    """
+    data = request("GetMediaInputStatus", {"inputName": name})
+    if data is None:
+        return None
+    ms = data.get("mediaDuration")
+    if not isinstance(ms, int | float) or ms <= 0:
+        return None
+    return float(ms) / 1000.0
+
+
+def set_media_cursor(name: str, seconds: float) -> bool:
+    payload = {"inputName": name, "mediaCursor": int(max(0.0, seconds) * 1000)}
+    return request("SetMediaInputCursor", payload) is not None
 
 
 def stop_all_outputs(attempts: int = 6, settle_s: float = 0.4) -> bool:

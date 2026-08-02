@@ -386,6 +386,42 @@ def test_no_clock_ignores_vision_but_still_journals_it(tmp_path: Path) -> None:
     assert "vision_balls_settled_no_clock" in kinds
 
 
+def test_last_shot_is_null_until_one_is_seen() -> None:
+    with make_client() as client:
+        assert client.get("/api/last_shot").json() == {"age_s": None}
+
+
+def test_last_shot_reports_how_long_ago_the_shot_was() -> None:
+    app = create_app()
+    hub: Hub = app.state.hub
+    with TestClient(app) as client:
+        asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))
+        age = client.get("/api/last_shot").json()["age_s"]
+    assert age is not None
+    assert 0.0 <= age < 1.0
+
+
+def test_the_replay_anchor_is_stamped_before_every_gate() -> None:
+    """Replay asks what is on the video, not what moved the clock.
+
+    So the anchor survives the two gates that discard a shot — `no_clock`
+    (where drills live, and where a replay is most wanted) and the vision kill
+    switch — and the IDLE break floor, which drops racking lookalikes.
+    """
+    for setup in (
+        lambda c: c.post("/api/mode/no_clock"),
+        lambda c: c.post("/api/vision/off"),
+        lambda c: c.post("/api/reset"),  # IDLE: a sub-floor shot is gated out
+    ):
+        app = create_app()
+        hub: Hub = app.state.hub
+        with TestClient(app) as client:
+            setup(client)
+            assert client.get("/api/last_shot").json()["age_s"] is None
+            asyncio.run(hub.shot_taken(t=1.0, speed_mms=800.0))
+            assert client.get("/api/last_shot").json()["age_s"] is not None
+
+
 def test_run_out_lets_a_slow_opener_start_the_clock() -> None:
     # The gate that exists for breaks ate honest ~1000 mm/s drill openers
     # twice (BACKLOG, checkpoint 33) — run_out is the fix, not a lower floor.
