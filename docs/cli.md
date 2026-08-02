@@ -21,6 +21,15 @@ Ground rules that apply to every command:
   instead.
 - **`tests/clips` is a symlink to the T7** (`/Volumes/T7/pool_room_clips`).
   Unmounted ⇒ the symlink dangles: `record` fails fast, corpus tests skip.
+- **A live `run` session must have the machine to itself.** Corpus batteries
+  (`pytest tests/corpus -n 4`) and other CPU/T7-heavy jobs starve the detect
+  loop — measured 2026-08-01 evening: 78 Hz → 20 Hz (`flag_missed`'s "20 s"
+  ring spans 78.4 s; a same-night dump with the machine quiet is a flawless
+  12.8 ms cadence). At starved cadence a break streaks across in 2–3 detect
+  frames, reads a few hundred mm/s, and the IDLE break floor eats it: "the
+  clock sees nothing" with zero errors anywhere. The journal's
+  `detect_heartbeat` `hz` field (~5 s cadence) is the tell — glance there
+  first whenever detection seems blind.
 - Ctrl-C and `kill <pid>` (SIGTERM) both unwind cleanly: clips close,
   Syphon servers retire.
 - **Footgun:** `--reference` on `run` and `analyze` defaults to

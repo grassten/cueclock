@@ -150,6 +150,23 @@ survive unchanged in `design.md`.
   recipes); it must match `cli.py` in the same commit, like the Part C
   button map.
 
+- **2026-08-01** Live sessions must run alone on the Mac mini — settled after a
+  full evening's "accuracy crisis" turned out to be environmental. Two sessions
+  reported "no shots detected"; both exactly coincided with corpus batteries
+  running (subagent worktrees + a merge-gate run at `-n 4`), which starved the
+  detect loop to 11–20 Hz (heartbeat `hz`; `flag_missed`'s ring: 1562
+  detect-stride frames spanning 78.4 s instead of 20). Starved cadence makes a
+  real break read 469/939 mm/s (corpus range 5845–7361), so the checkpoint-28
+  IDLE floor eats it and the clock never starts — vision code exonerated (a
+  same-night quiet-machine dump shows a flawless 12.8 ms cadence). Rule
+  recorded in `docs/cli.md`; the checkpoint-36 `detect_heartbeat` proved it on
+  its first day in service. Also resolved the same evening: the
+  `cluster_shot_0801` open question from checkpoint 33 — Steven's report ("a
+  jump shot, correctly handled") plus the OBS log closed it as the iPhone
+  Continuity Camera side-angle dying mid-session (15:23:30 disconnect event,
+  never reconnected; the Camo/USB migration replaces that source). The clip
+  stays in the corpus as the only jump-shot scenario, graded green.
+
 ## Checkpoint log (append-only, newest first)
 
 - **2026-08-01 (checkpoint 36 — warm replay: ring dumps carry live state;
