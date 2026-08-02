@@ -167,6 +167,25 @@ survive unchanged in `design.md`.
   never reconnected; the Camo/USB migration replaces that source). The clip
   stays in the corpus as the only jump-shot scenario, graded green.
 
+- **2026-08-02** UX doc-drift sweep — four interface facts reconciled with the
+  rig as built, checked against the live OBS scene collection and
+  `deck/layout.py` rather than from memory. (1) **The side angle is Camo**
+  (USB, device "Camo Camera"), not Continuity Camera: the swap completed
+  2026-08-01 but `hardware.md` §B3, `CLAUDE.md`, Part D's TCC note, and
+  `spotter.py`'s device-pinning docstring all still named Continuity. (2)
+  **OBS scene names are Stream Detail / Shot Clock / Canvas**, not the planned
+  Table / Clock — §B3 documents what actually runs, with Replay still marked
+  unbuilt. (3) **Canvas settled at 1080p crop** (1920×1080, judged on the TV);
+  the letterbox-vs-crop taste call leaves the backlog. (4) **The flag keys
+  flash ERROR, not NO T7** — checkpoint 37 moved dumps to the internal SSD, so
+  an unmounted T7 is no longer the likely failure and the deck can't tell
+  disk-full from server-down; the writer names the remedy in the journal.
+  Backlog closures in the same sweep: match-day bring-up (scoreboard source is
+  in both scenes, dry-run done), deck phase 4 (shipped in checkpoint 37), and
+  the flag-dump starvation item — trimmed to its one unverified residual
+  (whether a *local* dump dents detect Hz; one heartbeat read around the next
+  live flag press closes it).
+
 ## Checkpoint log (append-only, newest first)
 
 - **2026-08-02 (checkpoint 38 — the missed ball-in-hand stroke: witnessed

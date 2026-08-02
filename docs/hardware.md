@@ -144,29 +144,39 @@ grab thread (BayerRG8 @ 156 fps)
 
 **Sources:**
 - Syphon Client — the overhead table feed.
-- iPhone Continuity Camera — wireless side angle, owned by OBS directly.
+- Video Capture Device → **Camo Camera** — the iPhone side angle over USB,
+  owned by OBS directly (Camo Studio on the mini + the Camo app on the phone,
+  manual focus/exposure/WB locks). It replaced the wireless **iPhone
+  Continuity Camera** source on 2026-08-01: Continuity looked washed out with
+  blotching (iPhone auto tone-mapping/AF, no manual controls) and it died
+  mid-session once without reconnecting, which cost two triage passes chasing
+  a vision bug that wasn't one (CHANGELOG 2026-08-01).
 - Browser source `http://localhost:8000/shotclock` — the corner clock overlay
-  (transparent 220×220; enable **"Control audio via OBS"** so the chimes reach
-  the TV speakers).
+  (transparent, ~200×200; enable **"Control audio via OBS"** so the chimes
+  reach the TV speakers).
 - Browser source `http://localhost:8000/score` — the match scoreboard
   (transparent 1920×1080; the bar sits bottom-center, broadcast lower-third
   style). No audio of its own. Names/race-to are set from `/control`; scores
   from the Stream Deck score keys. Hidden until the server answers, so a dead
   source shows nothing rather than a broken box.
 
-**Scenes:**
-- *Table* (default): Syphon feed cropped to the table + corner clock overlay
-  (+ the scoreboard source when a match is on — toggle its eye icon, or keep a
-  separate *Match* scene = Table + scoreboard).
-- *Clock* (full-screen shot clock, readable from anywhere): a browser source
-  `http://localhost:8000/shotclock?view=full&audio=off` sized to the full
-  canvas (1920×1080). It renders just a huge bare number — broadcast style —
-  transparent background over the scene's black; add a color/shape source
-  behind it only if a panel color is ever wanted. `audio=off` because the
-  corner overlay already sounds the cues (OBS keeps non-visible browser
-  sources running, so two sounding sources would chime twice). The number is
-  browser-rendered text: sharpness comes free at any source size.
-- *Replay*: replay-buffer playback (Stream Deck phase 3).
+**Scenes** (scene collection `Untitled`; names below are what the rig
+actually runs — the original plan called them *Table* / *Clock*):
+- **Stream Detail** (default, the live table scene): Camo side angle + Syphon
+  overhead + scoreboard + corner clock overlay. The scoreboard's eye icon is
+  the match/practice toggle — no separate *Match* scene.
+- **Shot Clock** (full-screen shot clock, readable from anywhere): a browser
+  source `http://localhost:8000/shotclock?view=full&audio=off` sized to the
+  full canvas (1920×1080), scoreboard alongside. It renders just a huge bare
+  number — broadcast style — transparent background over the scene's black;
+  add a color/shape source behind it only if a panel color is ever wanted.
+  `audio=off` because the corner overlay already sounds the cues (OBS keeps
+  non-visible browser sources running, so two sounding sources would chime
+  twice). The number is browser-rendered text: sharpness comes free at any
+  source size.
+- **Canvas**: standby card shown between sessions (still image, no cueclock
+  sources).
+- *Replay*: replay-buffer playback — not built yet (Stream Deck phase 3).
 
 **Settings:**
 - On every cueclock browser source, tick **"Refresh browser when scene
@@ -175,7 +185,8 @@ grab thread (BayerRG8 @ 156 fps)
   reconnect only helps *after* a successful page load) — the checkbox heals
   it on the next scene switch. Same reason the start order is server first,
   then OBS (enforced automatically once the §C4 session toggle is built).
-- Canvas 1920×1080; keep color range consistent end-to-end (Full/Full or
+- Canvas 1920×1080 — **settled 2026-08-02** (judged on the TV): 1080p crop,
+  not 1200p letterbox. Keep color range consistent end-to-end (Full/Full or
   Limited/Limited — a mismatch shows as crushed blacks on the blue cloth).
 - Grade on the Syphon source with Color Correction or Apply LUT;
   starter LUTs in `assets/obs/` (`cueclock-tone.cube` is the dialed-in table
@@ -240,9 +251,9 @@ Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
 | 1,5 | **Extension** | `POST /api/extension` — face/flash follow the active ruleset (Ultimate Pool 15 s; WNT 30 s, WNT Event Rules §5). Top-right corner so a player under the clock finds it without hunting (moved from 2,2 on 2026-08-01) | `EXT +15` / `EXT +30`, flashes `+15 s` / `+30 s` / `NO EXT` | **live** |
 | 2,1 | **Reset** | `POST /api/reset` (fouls, bug situations; does not refill extensions) | `RESET` | **live** |
 | 2,2 | **Force 30** | `POST /api/restart` — missed auto-reset recovery: clock restarts and runs immediately (rack-aware: 60 s in the first-shot window). Beside Reset: the clock-recovery pair (moved from 2,4 on 2026-08-01) | `FORCE 30`, flashes `GO` / `ERROR` | **live** |
-| 2,3 | **Flag phantom** | `POST /api/dump?label=flag_phantom` — an event was counted that shouldn't have been | `FLAG PHANTOM` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
-| 2,4 | **Flag missed** | `POST /api/dump?label=flag_missed` — a real shot/settle wasn't detected, or came late | `FLAG MISSED` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
-| 2,5 | **Flag other** | `POST /api/dump?label=flag_other` — display problems, anything else. The old single-Flag cell on purpose: a pre-split reflex press still saves the ring | `FLAG OTHER` → `SAVING…`, flashes `SAVED` / `NO T7` | **live** |
+| 2,3 | **Flag phantom** | `POST /api/dump?label=flag_phantom` — an event was counted that shouldn't have been | `FLAG PHANTOM` → `SAVING…`, flashes `SAVED` / `ERROR` | **live** |
+| 2,4 | **Flag missed** | `POST /api/dump?label=flag_missed` — a real shot/settle wasn't detected, or came late | `FLAG MISSED` → `SAVING…`, flashes `SAVED` / `ERROR` | **live** |
+| 2,5 | **Flag other** | `POST /api/dump?label=flag_other` — display problems, anything else. The old single-Flag cell on purpose: a pre-split reflex press still saves the ring | `FLAG OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | **live** |
 | 3,1 | **P1 +** | `POST /api/score/p1/increment` | `P1 +`, flashes `+1` / `ERROR` | **live** |
 | 3,2 | **P1 −** | `POST /api/score/p1/decrement` | `P1 -`, flashes `-1` / `ERROR` | **live** |
 | 3,3 | **New Rack** | `POST /api/rack` — between racks: refills extensions, arms the first-shot window, clock idle. Mid-score-row so the whole between-racks ritual — score it, rack it — is one row (moved from 2,3 on 2026-08-01) | `NEW RACK`, flashes `RACKED` / `ERROR` | **live** |
@@ -262,10 +273,11 @@ after an OBS-side failure (a dead camera source) masqueraded as a vision bug
 through two triage passes — the dump label was always `flagged` and carried no
 reason. All three keys dump the same ~20 s ring through the same endpoint;
 only the label differs (`flag_phantom` / `flag_missed` / `flag_other`), and
-the label names the clip dir (`tests/clips/<label>_N`) and rides the journal's
-`flag_dump` line. A bare `POST /api/dump` (no label) still means `flagged` —
-the endpoint is unchanged (`design.md` §2.1, 2026-07-29). Row 2 now reads
-left to right as recovery, then evidence.
+the label names the clip dir (`<dump-dir>/<label>_N`, default
+`~/cueclock-dumps` since checkpoint 37) and rides the journal's `flag_dump`
+line. A bare `POST /api/dump` (no label) still means `flagged` — the endpoint
+is unchanged (`design.md` §2.1, 2026-07-29). Row 2 now reads left to right as
+recovery, then evidence.
 
 ### C3. Architecture
 
@@ -361,7 +373,7 @@ lifecycle).
    velocity impulse; resolves slow tip-nudge vs. soft shot. Build **only if**
    live play shows nudges leaking through.
 3. Nothing else. Overlay chimes come from the browser page via OBS; OBS owns
-   the iPhone Continuity Camera and its mic — cueclock must never grab it.
+   the Camo side-angle camera and its audio — cueclock must never grab it.
 
 **The Mac mini has no built-in microphone** (verified 2026-07-31:
 `system_profiler SPAudioDataType` lists only the built-in *speakers*, HDMI
@@ -374,8 +386,8 @@ Design facts: keyword spotting is mic-agnostic (no calibration in the camera
 sense); the input device is pinned by CoreAudio *name* — `--mic-device`
 (exact match, then case-insensitive substring) — never "system default": on
 no match the listener prints the available inputs and runs without the mic,
-so a Bluetooth headset, the Jump Desktop virtual mic, or the iPhone
-Continuity mic can't silently become the listener. Once the USB mic is
+so a Bluetooth headset, the Jump Desktop virtual mic, or Camo's virtual audio
+device can't silently become the listener. Once the USB mic is
 chosen, bake its name in as the `--mic-device` default. Any cheap wired USB
 mic works; avoid Bluetooth (latency + input flakiness). macOS asks for
 microphone permission (TCC) the first time the process opens the mic —

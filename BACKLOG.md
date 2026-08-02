@@ -10,10 +10,6 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       sessions, Flag anything wrong. The three failure modes it fixed (missed
       strikes with hands in frame, settle stalls, phantom shots) are corpus-
       pinned; live play is the remaining judge.
-- [ ] **Match-day bring-up (before the 2026-08-01 match)**: add the OBS
-      scoreboard source (`hardware.md` §B3); dry-run one rack of WNT 9-ball
-      end to end (New Rack → break → 60 → 30 → score keys → Push).
-      Extensions are deck-key only until a mic exists.
 - [ ] **Mic bring-up (parked — no mic yet)**: buy a wired USB mic (the Mac
       mini has **no built-in mic**, `hardware.md` Part D), then TCC grant,
       `listen --devices`, 10× "extension" at playing distance, and a
@@ -85,18 +81,16 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       vote/roster state) — but future occurrences will be warm-replayable
       (ring dumps carry live state since checkpoint 36, `analyze --warm`);
       unit-simulate if a gate is ever attempted before one recurs.
-- [ ] **Flag-dump writes starve the detect loop** (checkpoint 33 finding):
-      `drill_shot_0801`'s ring spans 41 s for 1562 frames — detection ran
-      at ~38 Hz while the previous dump was writing 3.6 GB to the T7, and
-      the live stick-sweep phantom fired inside the degraded window.
-      Candidate fixes: throttle the dump writer, lower ring seconds, or
-      accept (flags cluster at failures anyway). **Now measurable in every
-      session** (checkpoint 36): the journal's `detect_heartbeat` line
-      (every ~5 s: effective detect Hz + newest-processed-frame age,
-      emitted from the tick loop so it keeps beating through the stall)
-      brackets any starvation window — read the heartbeats around the next
-      flag press instead of staging a dump-within-15-s experiment. Decide
-      throttle-vs-accept from that data.
+- [ ] **Confirm the flag-dump starvation fix on the internal SSD** (residual
+      of the checkpoint 33 finding, closed by checkpoint 37): the cause was
+      the write target, not the writer — 3.6 GB to the **USB** T7 saturated
+      the bus it shared with the phone feeding Camo (detect 75 → 45 Hz, the
+      side-angle source frozen ~1 s on the TV). `run --dump-dir` now stages
+      dumps on the internal SSD. **Unverified since:** whether a local dump
+      still dents detect Hz at all. One line of evidence closes it — read the
+      journal's `detect_heartbeat` (every ~5 s: effective Hz + newest-frame
+      age) around the next live flag press; flat Hz ⇒ delete this item, a dip
+      ⇒ throttle the writer or lower `--ring-seconds`.
 - [ ] **IDLE break gate vs real breaks/openers** (checkpoint 33): the gate
       ate a real, frame-verified break that read 705 mm/s
       (`break_underread_0801` — the white streaked unobservably fast; the
@@ -131,11 +125,6 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 - [ ] **Stream Deck phase 2 — session toggle**: daemon owns `run` + OBS
       lifecycles; one-time OBS settings. Spec: `hardware.md` §C4.
 - [ ] **Stream Deck phase 3 — Replay key** (obs-websocket).
-- [ ] **Stream Deck phase 4 — `/triage-clips` skill** (the off-table half of
-      the Flag keys; flow in `hardware.md` §C5). Flags are reason-coded since
-      2026-08-01 (`flag_phantom`/`flag_missed`/`flag_other`) — the skill
-      should route on the clip-name reason: phantom/missed → vision replay,
-      other → presentation side first (OBS logs, overlay, journal).
 - [ ] **Deck bring-up checks** at the table: `hardware.md` §C6 (HID wake,
       power assertions, OBS restore).
 - [ ] Deck placement: desk stand first; break-end wall mount later if it
@@ -169,9 +158,6 @@ Delete items as they land (history lives in `CHANGELOG.md`).
   key + auto-dump on disagreement; the Pedal if marking shots must not take a
   hand off the cue), health face (grabs/s, clock state, drift warning).
 - **TV power via VIDAA network API** — only if the remote ever annoys.
-- **OBS taste calls left open**: 1080p-crop vs 1200p-letterbox canvas (decide
-  at the TV); wired iPhone instead of Continuity Camera if flakiness/latency
-  annoys during real sessions.
 - **Foul/game-state handling**: v1 has none by decision (vision can't see
   whose visit it is — CHANGELOG 2026-07-27). If match-grade foul handling is
   ever wanted, the state comes from manual input (a "foul → ball in hand"

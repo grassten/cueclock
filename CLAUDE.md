@@ -75,7 +75,9 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
 - Camera's 8-bit Bayer format is **BayerRG8**; the OpenCV↔GenICam naming mismatch is
   **resolved**: decode with `cv2.COLOR_BayerBG2BGR` (verified against the blue cloth
   2026-07-27 — see `docs/hardware.md` §A3).
-- iPhone Continuity Camera remains a wireless side-angle source, owned by OBS directly.
+- The iPhone side angle runs through **Camo** over USB (Camo Studio + the phone app,
+  manual focus/exposure/WB), owned by OBS directly. It replaced Continuity Camera on
+  2026-08-01 — wireless, no manual controls, and it died mid-session once.
 - Stream Deck hits the HTTP API; keep the `/api/*` contract from `docs/design.md` §2.1.
   **Never install the Elgato Stream Deck app** — it would claim exclusive HID access
   and starve the `cueclock deck` daemon.

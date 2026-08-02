@@ -75,14 +75,18 @@ _EXT_FLASH: dict[str, str] = {n: f"+{r.extension_seconds} s" for n, r in RULESET
 def _flag(label: str) -> ApiPost:
     """Ring-dump action for one flag reason; the label names the clip dir.
 
-    Dump replies only after writing ~3.6 GB to the T7 — measured well over the
-    3 s default (2026-07-31: three "timed out" flashes for dumps that all
-    succeeded). Generous timeout + a pending face instead.
+    Dump replies only after writing ~3.6 GB to the staging dir — measured well
+    over the 3 s default (2026-07-31: three "timed out" flashes for dumps that
+    all succeeded). Generous timeout + a pending face instead. The failure
+    flash is a plain ERROR: since checkpoint 37 the write goes to the internal
+    SSD, so the old `NO T7` (drive unmounted) is no longer the likely cause and
+    the deck can't tell disk-full from server-down anyway — the writer names
+    the remedy in the journal.
     """
     return ApiPost(
         f"/api/dump?label={label}",
         "SAVED",
-        "NO T7",
+        "ERROR",
         timeout=60.0,
         pending_face="SAVING…",
     )
@@ -118,7 +122,7 @@ LAYOUT: tuple[Key, ...] = (
     # keys after an OBS-side failure masqueraded as a vision bug through two
     # triage passes — the label was "flagged" and carried no reason. Each key
     # dumps the same ring through /api/dump; only the label differs, and the
-    # label names the clip dir (tests/clips/<label>_N) and rides the journal's
+    # label names the clip dir (<dump-dir>/<label>_N) and rides the journal's
     # flag_dump line, so triage starts from *why* it was pressed.
     #   PHANTOM — an event was counted that shouldn't have been.
     #   MISSED  — a real shot/settle wasn't detected, or came late.
