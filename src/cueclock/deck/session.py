@@ -57,17 +57,34 @@ SYPHON_BIND_ATTEMPTS = 20
 
 
 class SessionState(Enum):
-    """What the Session key is showing — and what a press means next."""
+    """The session's state; `face` is what the key says about it."""
 
-    OFF = "OFF"
-    STARTING = "STARTING…"
-    ON = "ON"
-    STOPPING = "STOPPING…"
-    DEV = "DEV"  # a session is up that this daemon didn't spawn — hands off
+    OFF = "off"
+    STARTING = "starting"
+    ON = "on"
+    STOPPING = "stopping"
+    DEV = "dev"  # a session is up that this daemon didn't spawn — hands off
 
     @property
     def face(self) -> str:
-        return self.value
+        """Key text: the **action** when there is one, the state otherwise.
+
+        A key reading `OFF` that turns the rig *on* is backwards (Steven,
+        2026-08-02) — at the table you read a button for what pressing it
+        does. So idle says `START`. Running has no tap action (a stray tap
+        must never kill the camera mid-rack), so it states where you are and
+        names the gesture that gets out.
+        """
+        return _FACES[self]
+
+
+_FACES = {
+    SessionState.OFF: "START",
+    SessionState.STARTING: "STARTING…",
+    SessionState.ON: "ON\nHOLD 1s",
+    SessionState.STOPPING: "STOPPING…",
+    SessionState.DEV: "DEV",
+}
 
 
 class Process(Protocol):

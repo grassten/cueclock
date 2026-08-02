@@ -186,6 +186,17 @@ survive unchanged in `design.md`.
   (whether a *local* dump dents detect Hz; one heartbeat read around the next
   live flag press closes it).
 
+- **2026-08-02** Deck keys read as the **action**, not the state, wherever
+  there is an action to take — Steven, on the Session key: "I'm holding the
+  OFF button which counterintuitively turns the system on." At the table you
+  read a button for what pressing it does. So idle is `START`, not `OFF`.
+  Running keeps a state face (`ON`) because it has no tap action — a stray tap
+  must never kill the camera mid-rack — plus a second line, `HOLD 1s`, that
+  names the way out; the transient `STARTING…` / `STOPPING…` stay states
+  because nothing is pressable then. `SessionState`'s enum values are now
+  plain identifiers with faces in a separate map, so wording changes never
+  touch the state machine.
+
 ## Checkpoint log (append-only, newest first)
 
 - **2026-08-02 (checkpoint 42 — the black table feed: Syphon identity moves

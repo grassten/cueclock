@@ -244,7 +244,7 @@ Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
 
 | Pos (row,col) | Key | Action | Face | Status |
 |---|---|---|---|---|
-| 1,1 | **Session** | Tap while `OFF`: spawn `run` + a `caffeinate -d` assertion, then launch OBS as soon as the server answers. **Hold 1 s** while `ON`: quit OBS (AppleScript), SIGINT `run`, release the assertion. The face is the state, and it stays lit with the server down — it is what starts the server | `OFF` / `STARTING…` / `ON` / `STOPPING…` / `DEV`; `HOLD…` while held | **live** |
+| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON` + `HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held | **live** |
 | 1,2 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3; displaced from 2,2 by the flag reorg) |
 | 1,3 | **Ruleset** | Cycle rulesets via `POST /api/ruleset/{next}` | `8-BALL` / `FINAL 10` / `9-BALL` | **live** |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back (9-ball only, so the face stays static) | `PUSH`, flashes `60 s` / `ERROR` | **live** |

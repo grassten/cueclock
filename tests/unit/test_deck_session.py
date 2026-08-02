@@ -299,6 +299,17 @@ def test_reference_override_reaches_the_run_command() -> None:
     assert "--rectify" in h.spawned[0]
 
 
-def test_state_faces_are_the_documented_words() -> None:
+def test_the_key_reads_as_the_action_not_the_state() -> None:
     # hardware.md §C2's button map quotes these — keep the two in step.
-    assert [s.face for s in SessionState] == ["OFF", "STARTING…", "ON", "STOPPING…", "DEV"]
+    # Idle says START, because a key labelled OFF that turns the rig on reads
+    # backwards at the table (Steven, 2026-08-02). Running has no tap action,
+    # so it states where you are and names the way out.
+    assert SessionState.OFF.face == "START"
+    assert SessionState.ON.face == "ON\nHOLD 1s"
+    assert [s.face for s in SessionState] == [
+        "START",
+        "STARTING…",
+        "ON\nHOLD 1s",
+        "STOPPING…",
+        "DEV",
+    ]
