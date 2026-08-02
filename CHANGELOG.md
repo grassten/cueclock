@@ -232,6 +232,128 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 50 — the stroke's own gear was vetoing the strike):**
+  two `flag_missed` dumps from the evening session, 2.5 min apart. Ground truth
+  from the table: one real struck shot each. Live, neither fired a `ShotTaken`
+  — the clock never froze, counted down *through* the stroke (5.3 s left on the
+  first) and only jumped back to 30 when the settle landed via the
+  counts-the-shot fallback. Steven's read of the risk is the right one: shoot
+  at 1 s remaining and the buzzer fires on a legal shot. Fixed, with the guard
+  moving from a distance test to a direction test. `vision/events.py`, +1 unit
+  test (40 in `test_events.py`), corpus 51 → 53 scenarios.
+  - **The vetoer is not a ball.** Instrumenting `_maybe_open_candidate` on
+    `stroke_gear_veto_0802`: at the impulse (raw 701 mm/s after a 12.9 s dwell
+    — an unambiguous strike) five carom-guard stamps sit **138–148 mm** from
+    the cue's rest spot and refuse it. They belong to a transient non-roster
+    blob that appears on empty cloth **0.3 s before** the impulse, flickering
+    merged and impulse-fast, so the hand-stamp rule (merged + non-roster +
+    fast, checkpoint 33) marks it. The roster held 6 balls throughout and none
+    was within 279 mm of the cue: it is the player's own stick/bridge gear,
+    killing the shot it is in the act of taking.
+  - **The 271/340 mm anchor is falsified.** `carom_reach_mm = 200` was
+    justified on stroke gear reading "from behind the bridge — measured 271 mm
+    (`medium_shot`) and 340 mm (`power_shot`) from the rest spot." These live
+    strokes put it at **138 mm** and **152 mm**. §2.3 had already recorded the
+    same gear at **66–72 mm** from `lone_roller_0801`'s *birth* spot, which is
+    why hand stamps were excluded from the birth paths; the rest-anchored cue
+    path kept them on the strength of the 271 mm figure, and that figure does
+    not survive a normal stroke.
+  - **Distance was exhausted, so the guard now reads direction.**
+    `cue_grab_0801` — the phantom the hand stamps exist to reject — grabs from
+    **116 mm**. Accept at 138, reject at 116: 22 mm apart, one measurement
+    each side. No radius separates them. Physics supplies the axis distance
+    could not: a stroke drives the cue **away** from the gear behind it, a
+    grab drags it **across toward** the hand. Measured as the angle between
+    the cue's departure and the direction to the stamp — **148–162°** for the
+    two strokes, **61°** for the grab. The guard now exempts a hand stamp when
+    that dot product is negative, a 90° boundary sitting 29° off the grab and
+    58° off the nearest stroke, with no constant introduced to tune. It
+    applies to hand stamps only: a genuine carom also sends the cue away from
+    its bringer, so direction cannot judge ball movers, and they keep the pure
+    distance rule. The exemption reuses `strike_dir_seed_min_mm` as its
+    minimum trustworthy departure — a floor the candidate must clear anyway.
+  - **`cue_merged` was measured and rejected as the discriminator.** The
+    obvious alternative — "a carried ball is merged every frame, a struck ball
+    on open cloth almost never" (§2.3) — reads `False` on the cue in *all three*
+    clips, grab included. It would not have worked, and only instrumenting
+    both candidates before writing code showed that.
+  - **A second, distinct bug, not fixed here.** `stroke_gear_margin_0802`
+    passed cold and failed warm. Warm replay (its snapshot restores clean,
+    fingerprint `c68d9cf…`) shows the cue's *identity* had drifted: the
+    whiteness vote's rest sat at (1325.4,719.1) while the real struck cue ran
+    as non-cue track 100, which closed to **26 mm** — inside a ball diameter,
+    so provably not a second ball — and vetoed the strike as a kiss. The cue
+    self-vetoed. Cold rebuilds identity from scratch and cannot express it, so
+    no cold pin covers it; the clip keeps its `state.pkl` on the T7 as the
+    evidence. Own card.
+  - **Cold used to pass by one frame.** Same clip, before the fix: gear stamps
+    vetoed at 12.097 s and 12.110 s and the candidate opened at 12.123 s —
+    **13 ms, one frame at 78 Hz**, after the last stamp aged out of the 0.4 s
+    window. That it ever passed was timing luck, not a working guard.
+  - **Scenarios:** `stroke_gear_veto_0802` and `stroke_gear_margin_0802`, both
+    (1 shot, 0 scratches, exactly 1 settle), both referencing
+    `empty_table_0801`. `KNOWN_FAILURES` is empty again. The new unit test is
+    deliberately the grab test's twin — same blob, same kiss range, same
+    impulse, only the departure direction differs — and it fails on the
+    pre-fix engine while the grab test passes on both, so the pin is on the
+    discriminator itself. Staging drained.
+
+- **2026-08-02 (checkpoint 49 — the replay stops lying about the clock, and
+  says when it is giving the table back):** live validation of checkpoint 46,
+  from the table: *"the shot clock is still showing in the replay… and there is
+  no transition from replay back to live so it's hard to tell when we're back
+  on the live view."* Both are now fixed in the badge. `deck/replay.py`,
+  `deck/obsws.py`, `/replay`, `scripts/setup_obs_replay.py`, +17 unit tests.
+  - **The patch checkpoint 46 skipped as brittle is in — de-brittled by asking
+    OBS.** Issue #13 predicted this exact outcome ("if not, the fix is an opaque
+    patch over its rect — five lines, deliberately skipped as brittle"), and the
+    objection was right: a hardcoded rect drifts off the overlay the day the
+    layout moves. So nothing is hardcoded. At each press the deck reads the live
+    scene's items, keeps the **enabled browser sources whose URL contains
+    `/shotclock`**, converts each transform to a percentage rect of the canvas
+    (`GetVideoSettings` — even the canvas size is asked for, not assumed) and
+    hands them to the badge as `?mask=`. Identity is the *page*, so a renamed,
+    moved, resized or duplicated overlay stays covered and a hidden one is
+    skipped — it was never burned in. Measured against the live scene, the
+    corner clock at 1141,0 193×193 becomes `59.32,0.00,10.26,18.06`, which is
+    also what the unit test pins.
+  - **It reads as layout, not as a hole**, and that was checked rather than
+    hoped: the clock overlay's own background is opaque black, so compositing
+    the real badge render over a real program frame (OBS screenshots, never
+    touching program) shows the number vanishing from a panel that stays.
+  - **Nothing was wrong with the transition — Fade was already set.** A replay
+    is a pixel-exact rewind of the TV, so a 300 ms cross-fade dissolves one
+    picture of the table into a nearly identical one; there is no transition to
+    see because there is nothing to see *between*. The badge now fades the whole
+    frame to black over its last 0.45 s, so black separates the two pictures and
+    Fade reads as a fade-up to live. The seconds readout became a `LIVE IN n`
+    countdown to the same instant: it says *when*, never *that* we are live,
+    because that page only ever sits over old footage — the same rule the
+    burned-in clock breaks.
+  - **Two instants that look like one, and the bug lives between them.**
+    Measured on the rig, three trials each: the badge page's clock starts
+    **0.03–0.05 s** after `SetInputSettings`, but its first frame reaches OBS
+    **0.567–0.570 s** later. Cut instantly and the badge is invisible — clock
+    unmasked — for half a second. Give it time to paint and it is already half a
+    second into its own animation, so the fade to black completes *after* the
+    deck has cut away and is never seen. The deck now does both: it sets the URL
+    and presses the source's own refresh early (behind the seek, which hides
+    most of the wait), sleeps out the rest of `BADGE_PAINT_S`, then switches —
+    and hands the page `play_s + BADGE_PAINT_S`, a timeline that includes its
+    own invisible head start.
+  - **The fade would have introduced a worse bug than it fixed, uncaught.** With
+    `restart_when_active` on, the reload fires *at* the cut and OBS shows the
+    previous frame for the ~0.57 s it takes — which, once the badge ends on
+    black, is a fully blacked-out one. Every replay after the first would have
+    opened on half a second of black. Found by cutting the program scene for
+    real with nothing live; the setting is now off (a third load-bearing
+    inversion in the setup script) and the deck owns the reload.
+  - Everything above was measured against the running rig through the studio
+    **preview** and `GetSourceScreenshot`, so the program scene and the wall TV
+    were never taken over except for one deliberate 2 s cut.
+  - Still open on #13: whether a replay dents detect Hz — moved to #9, which is
+    already the detect-starvation card.
+
 - **2026-08-02 (checkpoint 47 — the Session key powers the wall TV):** the one
   remaining manual step in "come down in the morning, press one button" was
   picking up the TV remote. The key now does it, and the work was almost

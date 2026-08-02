@@ -293,6 +293,45 @@ EXPECTED: dict[
     # 3.66 s; the second (15.16 s) is the shot's own. Timing pinned by
     # test_address_chatter_shot_fires_at_impulse below.
     "address_chatter_miss_0801": (1, 0, 2, 2),
+    # 2026-08-02 evening flags (checkpoint 48) — two `flag_missed` dumps,
+    # 2.5 min apart in one session. Ground truth from the table: one real
+    # struck shot each, no scratch, balls settle in-clip. Live, NEITHER
+    # fired a ShotTaken: the clock never froze, ran down through the shot
+    # (5.3 s left on the first) and only jumped back to 30 when the settle
+    # landed via the counts-the-shot fallback. Shoot at 1 s remaining and
+    # the buzzer fires on a legal shot — a false violation, not cosmetic.
+    #
+    # stroke_gear_veto: pins the gear-behind exemption. Before it, the
+    # carom guard vetoed the strike. The vetoing stamp is not a ball: a
+    # transient non-roster blob appears 0.3 s BEFORE the impulse on empty
+    # cloth 138 mm behind the cue's rest spot, flickering merged and
+    # impulse-fast, so the hand-stamp rule (merged + non-roster + fast)
+    # marks it and the rest-anchored cue path refuses the strike. It is
+    # the player's own stroke gear. The cue then departs *away* from it
+    # (rest 1443.7,675.5 -> 1348,666 while the stamp sits at 1528,783) —
+    # the discriminator distance no longer provides: 157.7 deg here
+    # against cue_grab_0801's 61.5 deg. §2.3's anchor for this guard was
+    # gear at 271 mm (medium_shot) / 340 mm (power_shot) from the rest
+    # spot; these live strokes put it at 138 mm, and cue_grab_0801 — the
+    # phantom the stamps exist to reject — sits at 116 mm. 22 mm between
+    # accept and reject is not a threshold, so the guard now reads
+    # direction for hand stamps. Shot fires at 13.04 s.
+    "stroke_gear_veto_0802": (1, 0, 1, 1),
+    # stroke_gear_margin: the SAME mechanism, which before the exemption
+    # survived cold by ONE FRAME — gear stamps vetoed at 12.097 s and
+    # 12.110 s and the candidate opened at 12.123 s, 13 ms (one frame at
+    # 78 Hz) after the last stamp aged out of the 0.4 s window. That it
+    # ever passed was luck of timing, not a working guard; the exemption
+    # (gear at 151.7 mm, 161.9 deg behind the departure) is what holds it
+    # now. Second independent measurement of the stroke-gear geometry.
+    # Its LIVE failure is a different bug and this cold pin does not
+    # cover it: warm replay (state.pkl is in the clip) shows the cue's
+    # identity had drifted — the vote's rest sat at (1325.4,719.1) while
+    # the real struck cue ran as non-cue track 100, which closed to 26 mm
+    # (inside a ball diameter, so not a second ball) and vetoed the
+    # strike as a kiss. The cue self-vetoed. Cold replay rebuilds
+    # identity from scratch and cannot reproduce it.
+    "stroke_gear_margin_0802": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -334,6 +373,8 @@ REFERENCES: dict[str, str] = {
     "drill_shot_0801": "empty_table_0801",
     "settle_stall_0801": "empty_table_0801",
     "address_chatter_miss_0801": "empty_table_0801",
+    "stroke_gear_veto_0802": "empty_table_0801",
+    "stroke_gear_margin_0802": "empty_table_0801",
 }
 
 

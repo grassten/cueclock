@@ -753,13 +753,37 @@ class EventEngine:
         rest_t0, rest_x, rest_y = self._cue_rest
         if self._cue_last_still_t - rest_t0 < cfg.pre_strike_dwell_s:
             return
-        if any(
-            hypot(mx - rest_x, my - rest_y) <= cfg.carom_reach_mm
-            for _mt, mx, my, mid, _hand in self._recent_movers
-            if mid != cue.ball_id
-        ):
-            return  # carom guard: a mover (ball or hand) reached the rest spot
         dx, dy = cue.x_mm - rest_x, cue.y_mm - rest_y
+        # Gear-behind exemption (stroke_gear_veto_0802, checkpoint 50): a hand
+        # stamp inside carom_reach_mm is not, by itself, evidence of a grab.
+        # The player's own stick/bridge blob stamps from *behind* the cue on a
+        # normal stroke — measured 138 mm (stroke_gear_veto_0802) and 152 mm
+        # (stroke_gear_margin_0802) from the rest spot, well inside the 200 mm
+        # reach and nothing like the 271 mm (medium_shot) / 340 mm
+        # (power_shot) this guard was anchored on. It killed both live shots:
+        # no ShotTaken, the clock ran down *through* the stroke.
+        # Distance cannot fix it — cue_grab_0801, the phantom the hand stamps
+        # exist to reject, grabs from 116 mm, so accept-at-138 and
+        # reject-at-116 leaves 22 mm and one measurement each side.
+        # Direction can, and by physics: a stroke drives the cue *away* from
+        # the gear behind it (measured 148-162 deg between the cue's departure
+        # and the direction to the stamp), while a grab drags it across toward
+        # the hand (61 deg). The test is the sign of the dot product — a 90 deg
+        # boundary sitting 29 deg off the grab and 58 deg off the nearest
+        # stroke, with no constant to tune. It needs a departure long enough to
+        # have a trustworthy direction, so it reuses the seed floor the
+        # candidate must clear anyway.
+        # Ball movers keep the pure-distance rule: a genuine carom also sends
+        # the cue away from its bringer, so direction cannot judge them.
+        departing = hypot(dx, dy) >= cfg.strike_dir_seed_min_mm
+        for _mt, mx, my, mid, hand in self._recent_movers:
+            if mid == cue.ball_id:
+                continue
+            if hypot(mx - rest_x, my - rest_y) > cfg.carom_reach_mm:
+                continue
+            if hand and departing and (mx - rest_x) * dx + (my - rest_y) * dy < 0.0:
+                continue  # the stroke's own gear, behind the departing cue
+            return  # carom guard: a mover reached the rest spot
         norm = hypot(dx, dy)
         if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
             if norm > cfg.strike_handoff_radius_mm:

@@ -715,6 +715,29 @@ def test_hand_grab_of_the_resting_cue_is_not_a_shot() -> None:
     assert ShotTaken not in map(type, sim.run(0.4))
 
 
+def test_stroke_gear_behind_the_departing_cue_does_not_reject_strike() -> None:
+    # stroke_gear_veto_0802 / stroke_gear_margin_0802: the stroke's own
+    # merged stick/bridge blob stamps *inside* carom_reach_mm — measured
+    # 138 mm and 152 mm from the cue's rest spot, against the 271-340 mm
+    # the v2 guard was anchored on — and killed both real shots live (no
+    # ShotTaken; the clock counted down through the stroke). Distance
+    # cannot separate it from cue_grab_0801's grab at 116 mm, so the
+    # guard reads direction for hand stamps: a stroke drives the cue away
+    # from the gear behind it (148-162 deg measured), a grab drags it
+    # toward the hand (61 deg). Deliberately the same blob, the same kiss
+    # range and the same impulse as the grab test above — only the
+    # departure direction differs, so this pins the discriminator itself.
+    sim = rack()
+    sim.run(1.0)
+    sim.place(7, 250.0, 500.0)  # stroke gear approaching from behind...
+    sim.merge(7)
+    sim.velocity(7, 900.0, 0.0)  # ...merged and fast, sweeping in to contact
+    sim.run(0.1)  # ends ~160 mm behind the cue: inside kiss range
+    sim.velocity(7, 0.0, 0.0)
+    sim.velocity(CUE, 1200.0, 0.0)  # the cue departs AWAY from the gear
+    assert ShotTaken in map(type, sim.run(0.4))
+
+
 def test_hand_stamps_do_not_guard_the_birth_paths() -> None:
     # lone_roller_0801's near-miss regression: the stroke's own merged
     # stick/arm blob stamps 66-72 mm from the birth spot moments before
