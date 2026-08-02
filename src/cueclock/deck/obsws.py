@@ -276,20 +276,21 @@ def set_input_settings(name: str, settings: dict[str, Any], *, overlay: bool = T
     return request("SetInputSettings", payload) is not None
 
 
-def media_duration_s(name: str) -> float | None:
-    """Length of the file loaded in a media source, or None until it is ready.
+def media_status(name: str) -> tuple[float, float] | None:
+    """``(cursor_s, duration_s)`` for a media source, or None until it is ready.
 
-    OBS reports a negative duration while the file is still opening, which is
-    indistinguishable from "no file" in the payload — both come back here as
+    OBS reports a null/negative duration while the file is still opening, which
+    is indistinguishable from "no file" in the payload — both come back here as
     None, so the caller polls rather than trusting the first answer.
     """
     data = request("GetMediaInputStatus", {"inputName": name})
     if data is None:
         return None
-    ms = data.get("mediaDuration")
-    if not isinstance(ms, int | float) or ms <= 0:
+    duration_ms, cursor_ms = data.get("mediaDuration"), data.get("mediaCursor")
+    if not isinstance(duration_ms, int | float) or duration_ms <= 0:
         return None
-    return float(ms) / 1000.0
+    cursor = float(cursor_ms) if isinstance(cursor_ms, int | float) else 0.0
+    return cursor / 1000.0, float(duration_ms) / 1000.0
 
 
 def set_media_cursor(name: str, seconds: float) -> bool:

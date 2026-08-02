@@ -549,6 +549,24 @@ phantom shot anchors a phantom replay, which is a bug worth seeing anyway.
 scene. Seeking after the switch would cut the TV to frame 0 and then jump;
 unit-tested as such (`tests/unit/test_replay.py`).
 
+**The seek proves itself, because OBS drops seeks silently.** Measured against
+OBS 32 on 2026-08-02: `SetMediaInputCursor` issued in the ~70 ms after the media
+source first reports a duration is **accepted and ignored** — success code, no
+movement. Unverified, that failure is invisible: the replay just plays from the
+top and reads as the lead being wrong rather than the seek being lost. So the
+seek is re-asked until the cursor proves it landed, and if it never does the cut
+is refused (TV stays live) rather than showing a wrong replay.
+
+**Effective lead is 1.5–3.5 s, not 1.5.** A media source seeks to a *keyframe*,
+so it always lands early; the recordings carry keyframes every **1.90–1.97 s**
+(`ffprobe` on real replay files, 2026-08-02). Lowering `LEAD_S` alone therefore
+cannot tighten the framing past the keyframe grid — that needs a shorter
+keyframe interval in OBS's encoder settings.
+
+**Measured live, 2026-08-02** (four consecutive presses, camera not running):
+`show()` takes **0.34–0.63 s** end to end, which is how long the deck blocks;
+saved files come out at **18.6–20.0 s** against the 20 s buffer setting.
+
 Every failure leaves the program scene alone — unreachable OBS, missing Replay
 scene, a save that never lands all mean the TV keeps showing live, which is
 always the safe state for a key pressed mid-session.

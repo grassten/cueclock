@@ -298,6 +298,22 @@ survive unchanged in `design.md`.
     (+23); both the display-lag sign and the seek itself were mutation-checked.
   - Deck: Replay is one key in both directions (`REPLAY` → `CUEING…` →
     `BACK`/`TO LIVE`), still on the spine at 2,1.
+  - **Found by smoke-testing against live OBS, after the first commit: OBS
+    drops seeks silently.** `SetMediaInputCursor` issued in the ~70 ms after
+    the media source first reports a duration — which is exactly when `show()`
+    was issuing it — returns success and does nothing. That failure is
+    invisible by construction: the replay plays from the top, and it reads as
+    the lead being wrong rather than the seek being lost. The seek now proves
+    itself (re-ask until the cursor lands; refuse the cut if it never does),
+    which is the general lesson — an obs-websocket call that reports success is
+    not evidence the thing happened.
+  - **Keyframes every 1.90–1.97 s** (`ffprobe` on real replay files), so a seek
+    always lands early and the *effective* lead is 1.5–3.5 s. The first
+    tolerance for "did the seek land" was 2.0 s — a 0.03 s margin over the
+    measured worst case, which would have started refusing good seeks the day
+    the encoder preset changed. Now 4.0 s, anchored to the measurement.
+  - Measured live across four presses: `show()` blocks the deck for
+    **0.34–0.63 s**; saved files run 18.6–20.0 s against the 20 s buffer.
 
 - **2026-08-02 (checkpoint 45 — deck layout v2: session modes, and the deck
   shrinks to what the mode can do):** fourteen of fifteen keys were spoken for

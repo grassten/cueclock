@@ -121,17 +121,23 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       planted, slide the bridge hand deliberately, never shoot): measures
       the planted-glove-slide residual the roster rule cannot cover, and
       whether admission needs an appearance gate.
-- [ ] **Live-validate instant replay** (checkpoint 46, built 2026-08-02):
-      `uv run python scripts/setup_obs_replay.py` once with OBS up, then press
-      Replay after a shot. Four things only the rig can judge — whether the
-      1.5 s lead frames the stroke or clips it, whether ~0.1 s of display lag
-      is the real camera→Syphon→OBS offset, whether the scrim + badge stop the
-      burned-in clock reading as live (if not, the fix is an opaque patch over
-      its rect in the Replay scene — five lines, deliberately skipped as
-      brittle), and whether the deck's few hundred ms of blocking while OBS
-      writes the file is noticeable. Also unmeasured: whether a replay dents
-      detect Hz (check `detect_heartbeat` around a press, same as the flag-dump
-      item above).
+- [ ] **Live-validate instant replay** (checkpoint 46, built 2026-08-02). The
+      scene, the seek, the badge and the return were all exercised against live
+      OBS on the build day, so what's left is judgment with a real shot in the
+      buffer — three things only the table can answer:
+      (1) **does the lead frame the stroke?** Effective lead is **1.5–3.5 s**,
+      not 1.5: a seek lands on a keyframe and they sit 1.9 s apart. Too long
+      can't be fixed by lowering `LEAD_S` alone — it needs a shorter keyframe
+      interval in OBS's encoder settings.
+      (2) **is `DISPLAY_LAG_S` = 0.1 the real camera→Syphon→OBS offset?** Only
+      a shot whose contact frame you can see in the replay settles it.
+      (3) **do the scrim + badge stop the burned-in clock reading as live?** If
+      not, the fix is an opaque patch over its rect in the Replay scene — five
+      lines, deliberately skipped as brittle.
+      Also unmeasured: whether a replay dents detect Hz (check
+      `detect_heartbeat` around a press, same as the flag-dump item above).
+      Known-good and *not* worth re-checking: `show()` blocks the deck for
+      0.34–0.63 s, saved files run 18.6–20.0 s.
 
 ## Queued features (build when asked)
 

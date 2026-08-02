@@ -93,7 +93,9 @@ class FakeObs:
         self.saved_path: str | None = "/Users/steven/Movies/Replay 01.mov"
         self.new_path: str | None = "/Users/steven/Movies/Replay 02.mov"
         self.settings: dict[str, dict[str, Any]] = {}
-        self.cursor_s: float | None = None
+        self.cursor_s: float = 0.0
+        self.drop_seeks = 0  # how many seeks OBS swallows before honouring one
+        self.snap_s = 0.3  # keyframe snap: a seek always lands slightly early
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def log(name: str, value: Any) -> Any:
@@ -109,7 +111,9 @@ class FakeObs:
                 "last_path", self.saved_path if "save" not in self.calls else self.new_path
             ),
         )
-        monkeypatch.setattr(obsws, "media_duration_s", lambda name: log("duration", self.duration))
+        monkeypatch.setattr(
+            obsws, "media_status", lambda name: log("status", (self.cursor_s, self.duration))
+        )
         monkeypatch.setattr(
             obsws, "set_media_cursor", lambda name, s: log("cursor", self._cursor(s))
         )
@@ -121,7 +125,13 @@ class FakeObs:
         monkeypatch.setattr(obsws, "set_scene", lambda name: log("set_scene", self._scene(name)))
 
     def _cursor(self, seconds: float) -> bool:
-        self.cursor_s = seconds
+        # OBS drops a seek silently while the source is still opening, and lands
+        # on a keyframe (slightly early) once it takes. Both are modelled here
+        # because both are what the real thing measurably does.
+        if self.drop_seeks > 0:
+            self.drop_seeks -= 1
+            return True
+        self.cursor_s = max(0.0, seconds - self.snap_s)
         return True
 
     def _settings(self, name: str, settings: dict[str, Any]) -> bool:
@@ -163,7 +173,54 @@ def test_show_seeks_before_switching_scenes(
     replay.show("http://x")
 
     assert fake.calls.index("cursor") < fake.calls.index("set_scene")
-    assert fake.cursor_s == pytest.approx(14.6)
+    assert fake.cursor_s == pytest.approx(14.6 - fake.snap_s)
+
+
+def test_a_dropped_seek_is_re_asked_until_it_lands(
+    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
+) -> None:
+    """OBS swallows a seek issued before the source is ready, and says nothing.
+
+    Measured 2026-08-02 against OBS 32: the first attempt vanished, the second
+    landed ~70 ms later. Unverified, that failure is invisible — the replay just
+    plays from the top.
+    """
+    fake = FakeObs()
+    fake.install(monkeypatch)
+    fake.drop_seeks = 3
+    monkeypatch.setattr(replay, "POLL_S", 0.001)
+
+    playing = replay.show("http://x")
+
+    assert playing is not None
+    assert fake.calls.count("cursor") == 4
+    assert fake.cursor_s == pytest.approx(14.6 - fake.snap_s)
+
+
+def test_a_seek_that_never_lands_keeps_the_tv_live(
+    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
+) -> None:
+    fake = FakeObs()
+    fake.install(monkeypatch)
+    fake.drop_seeks = 10_000
+    monkeypatch.setattr(replay, "SEEK_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(replay, "POLL_S", 0.01)
+
+    assert replay.show("http://x") is None
+    assert fake.scene == "Stream Detail"
+
+
+def test_a_seek_landing_early_on_a_keyframe_is_accepted(
+    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
+) -> None:
+    # Early is the harmless direction — extra runway before the shot, never
+    # less — so it must not be mistaken for a dropped seek and re-asked.
+    fake = FakeObs()
+    fake.install(monkeypatch)
+    fake.snap_s = replay.SEEK_SNAP_S - 0.1
+
+    assert replay.show("http://x") is not None
+    assert fake.calls.count("cursor") == 1
 
 
 def test_show_loads_the_file_that_was_just_saved(
@@ -217,7 +274,7 @@ def test_show_gives_up_when_the_media_source_never_opens_the_file(
 ) -> None:
     fake = FakeObs()
     fake.install(monkeypatch)
-    monkeypatch.setattr(obsws, "media_duration_s", lambda name: None)
+    monkeypatch.setattr(obsws, "media_status", lambda name: None)
     monkeypatch.setattr(replay, "LOAD_TIMEOUT_S", 0.05)
     monkeypatch.setattr(replay, "POLL_S", 0.01)
 

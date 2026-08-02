@@ -49,7 +49,8 @@ BADGE_INPUT = "Replay Badge"
 
 LEAD_S = 1.5
 """How much runway before the shot. Enough to watch the stroke land, short
-enough to skip the address."""
+enough to skip the address. The seek then lands on the preceding keyframe, so
+what you actually get is 1.5-3.5 s — see ``SEEK_SNAP_S``."""
 
 DISPLAY_LAG_S = 0.1
 """Camera -> Syphon -> OBS lag (`hardware.md` §B3 budgets ~100 ms end to end).
@@ -70,7 +71,22 @@ point this becomes 0.5 and the setup script's `speed_percent` follows it."""
 
 SAVE_TIMEOUT_S = 3.0  # how long to wait for OBS to write the file
 LOAD_TIMEOUT_S = 2.0  # how long to wait for the media source to report a duration
+SEEK_TIMEOUT_S = 1.5  # how long to keep re-asking for a seek that hasn't landed
 POLL_S = 0.1
+
+SEEK_SNAP_S = 4.0
+"""How far *before* the target a seek may legitimately land.
+
+A media source seeks to a **keyframe**, so it always lands early. Measured on
+real replay files 2026-08-02 (`ffprobe`): keyframes every 1.90-1.97 s, so the
+worst case is one full interval. This is 2x that — the tolerance only has to
+separate "landed near the target" from "never moved" (targets sit 13-19 s into
+a 20 s file, a dropped seek leaves the cursor near 0), and a tight margin would
+start refusing good seeks the day OBS's encoder preset changes.
+
+Landing early is the harmless direction: extra runway before the shot, never
+less. It does mean the **effective lead is 1.5-3.5 s**, not a flat `LEAD_S` —
+so lowering `LEAD_S` alone cannot tighten the framing past the keyframe grid."""
 
 
 @dataclass(frozen=True)
@@ -133,11 +149,34 @@ def _await_new_replay(before: str | None, deadline: float) -> str | None:
 def _await_duration(deadline: float) -> float | None:
     """Poll the media source until it has the file open and knows its length."""
     while time.monotonic() < deadline:
-        duration = obsws.media_duration_s(MEDIA_INPUT)
-        if duration is not None:
-            return duration
+        status = obsws.media_status(MEDIA_INPUT)
+        if status is not None:
+            return status[1]
         time.sleep(POLL_S)
     return None
+
+
+def _seek(target_s: float, deadline: float) -> bool:
+    """Seek, then prove it landed — re-asking until it does.
+
+    A media source that has only just reported its duration is not yet ready to
+    seek, and OBS **drops the request silently** rather than failing it
+    (measured 2026-08-02 against OBS 32: honoured on the second attempt, ~70 ms
+    after the duration first appeared; a burst of un-spaced attempts inside that
+    window all vanished). An unverified seek is the worst failure this feature
+    has, because it is invisible: the replay simply plays from the top, showing
+    twenty seconds of chalking, and nothing anywhere says the seek was lost.
+
+    Landing early is fine and expected — see ``SEEK_SNAP_S``.
+    """
+    while True:
+        obsws.set_media_cursor(MEDIA_INPUT, target_s)
+        status = obsws.media_status(MEDIA_INPUT)
+        if status is not None and status[0] >= target_s - SEEK_SNAP_S:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(POLL_S)
 
 
 def show(base: str, *, now: float | None = None) -> Playing | None:
@@ -184,7 +223,11 @@ def show(base: str, *, now: float | None = None) -> Playing | None:
         return None
 
     cue = cue_point(duration, shot_age_s)
-    obsws.set_media_cursor(MEDIA_INPUT, cue.cursor_s)
+    if cue.cursor_s > 0.0 and not _seek(cue.cursor_s, time.monotonic() + SEEK_TIMEOUT_S):
+        # Say so rather than cutting anyway: a replay that quietly plays from
+        # the top reads as the lead being wrong, not as the seek being lost.
+        print(f"replay: seek to {cue.cursor_s:.1f}s never landed", flush=True)
+        return None
     obsws.set_input_settings(BADGE_INPUT, {"url": f"{base}/replay?s={cue.play_s:.1f}"})
     if not obsws.set_scene(SCENE_NAME):
         return None
