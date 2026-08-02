@@ -197,6 +197,39 @@ survive unchanged in `design.md`.
   plain identifiers with faces in a separate map, so wording changes never
   touch the state machine.
 
+- **2026-08-02** **`BACKLOG.md` is retired as a task list — open work moves to a
+  GitHub project board** ([grassten/projects/3](https://github.com/users/grassten/projects/3)),
+  cards backed by issues on `grassten/cueclock`. Steven wanted a visual board he can
+  transition tasks on, categorisation, and phone access. The board wins on three
+  repo-specific counts, not general preference: (1) **nothing runs on the Mac mini** —
+  a self-hosted board (Planka/Vikunja) would have satisfied the LAN requirement but
+  costs a Docker daemon on the production box, and live sessions must run alone
+  (2026-08-01 post-mortem); (2) **work here is already commit-shaped**, so `Closes #N`
+  in a checkpoint commit transitions the card and there is no second place to update;
+  (3) it survives open-sourcing, which a Trello or self-hosted board does not.
+  Known limitation, accepted: the GitHub *mobile app*'s Projects support is partial —
+  full drag-between-columns is mobile web (github.com in Safari), which is fine.
+  - **Categorisation is two orthogonal label axes, not one field**: `area:*`
+    (accuracy · corpus · deck-ui · obs-display · hardware · docs-infra) and `needs:*`
+    (table-time · purchase · code-only). A card is routinely both an accuracy item and
+    a table-time item; folding them into one select loses a filter. Labels rather than
+    project fields because labels work in the mobile app, the issue list, `gh`, and
+    search — the board filters on them fine.
+  - **Columns** add one beyond the default three: *Awaiting live validation*, which is
+    the honest state of most of the old punch list — built and corpus-pinned, waiting
+    on judgment at the table.
+  - **The idea bank split off to `docs/accuracy-ideas.md`** (un-gitignored — the
+    content was already published inside `BACKLOG.md`, so the "personal scratch notes"
+    exclusion was stale). §1–§9 are research notes, not work; the existing house rule
+    that ideas graduate when a live failure implicates them becomes "open an issue".
+    Keeps the board ~20 real cards instead of ~60. **Noted while porting: there is no
+    §5** — it was lost in the 2026-07-31 consolidation, and prose citing "idea bank §5"
+    for the acoustic corroborator means the §4 bullet. Left unrenumbered per the
+    never-renumber rule; the gap is documented in the file header.
+  - 20 issues opened (#1–#20) carrying the old prose verbatim. Dropped rather than
+    filed: the v1-scope-exclusions entry (a decision record, already `design.md` §5)
+    and the completed VIDAA/Google-TV item (history lives here).
+
 ## Checkpoint log (append-only, newest first)
 
 - **2026-08-02 (checkpoint 47 — the Session key powers the wall TV):** the one

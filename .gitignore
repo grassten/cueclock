@@ -32,6 +32,5 @@ tests/clips
 # Mount-specific calibration artifacts (refit after every camera move)
 config/
 
-# Steven's personal scratch notes
-docs/accuracy-ideas.md
+# Session logs
 logs/

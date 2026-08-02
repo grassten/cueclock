@@ -17,7 +17,10 @@ they're in `docs/design.md` §2.3 and must not be re-learned the hard way.
 Deck phase 1 running. Accuracy hardening is the ongoing work: live failures get Flagged
 (ring-buffer dump → labeled clip), triaged offline, and promoted to graded corpus
 scenarios. Live execution status: **`CHANGELOG.md`** (check the newest checkpoint first;
-append a checkpoint entry there in every checkpoint commit). Open work: **`BACKLOG.md`**.
+append a checkpoint entry there in every checkpoint commit). Open work: the
+**[project board](https://github.com/users/grassten/projects/3)** — cards are issues on
+`grassten/cueclock`, so a checkpoint commit closes its own item with `Closes #N`. Filter
+by `area:*` / `needs:*` labels; `BACKLOG.md` explains the layout.
 
 ## Plan of record — the docs
 
@@ -26,7 +29,8 @@ append a checkpoint entry there in every checkpoint commit). Open work: **`BACKL
 | `docs/design.md` | Architecture, detection design, event logic, engineering standards, build order, resolved decisions, corpus checklist. **§ numbers are cited from code — never renumber; append.** |
 | `docs/hardware.md` | Camera assembly/bring-up/locked settings (Part A) · display path debayer → undistort → Syphon → OBS → TV (Part B) · Stream Deck (Part C — **living button map: must match `deck/layout.py` in the same commit**) · mic plan (Part D) · TV + post-bump recalibration recipes (Part E) |
 | `docs/cli.md` | CLI reference: commands, flags, recipes — **must match `cli.py` in the same commit** |
-| `BACKLOG.md` | Punch list, queued features, accuracy idea bank |
+| `docs/accuracy-ideas.md` | Exploratory accuracy idea bank. **§ numbers cited from issues/commits — never renumber; append.** Nothing here is committed work; an idea graduates to a board issue only when a live failure implicates it. |
+| `BACKLOG.md` | Pointer to the work board + how it's organised (columns, labels, views). Not a task list — don't add items here, open an issue. |
 | `CHANGELOG.md` | Append-only dated checkpoints + build decisions (pre-2026-07-31 entries cite the old doc layout; originals archived in `~/Documents/cueclock-docs-archive/`) |
 | `README.md` | Public-facing overview, launch commands, OBS sources — keep the launch command here current |
 
