@@ -276,6 +276,15 @@ EXPECTED: dict[
     # prior-shot tail). The timing itself is pinned by
     # test_settle_stall_settle_is_prompt below.
     "settle_stall_0801": (1, 0, 2, 2),
+    # A real 1396 mm/s stroke on the rested replacement cue while the
+    # whiteness vote parked on another white-ish ball (post-scratch
+    # ball-in-hand rack). Address chatter used to refresh the ball's
+    # translation stamp so the own-rest path never saw a dwell — no shot
+    # fired live or cold (the settle-counts-the-shot fallback patched the
+    # rack count 11 s later). First settle is the cold-start warmup at
+    # 3.66 s; the second (15.16 s) is the shot's own. Timing pinned by
+    # test_address_chatter_shot_fires_at_impulse below.
+    "address_chatter_miss_0801": (1, 0, 2, 2),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -316,6 +325,7 @@ REFERENCES: dict[str, str] = {
     "pickup_snatch_0801": "empty_table_0801",
     "drill_shot_0801": "empty_table_0801",
     "settle_stall_0801": "empty_table_0801",
+    "address_chatter_miss_0801": "empty_table_0801",
 }
 
 
@@ -441,3 +451,23 @@ def test_settle_stall_settle_is_prompt() -> None:
     post_shot = [t for t in settles if t > 6.9]
     assert post_shot, "the shot's settle never fired — the settle stall is back"
     assert 9.7 <= post_shot[0] <= 10.7, f"settle at {post_shot[0]:.2f}s — outside rest+2 dwells"
+
+
+def test_address_chatter_shot_fires_at_impulse() -> None:
+    """The own-rest strike must open off the impulse, not off vote recovery.
+
+    address_chatter_miss_0801: the cue steps to 1396 mm/s at 10.13 s
+    (clip-relative) from a 13 s rest while the whiteness vote is parked on
+    another white ball, and address chatter throws sub-window excursions
+    through the rest. Before the translation-stamp persistence rule the
+    own-rest dwell gate read ~0 rest and no shot ever fired (live or cold);
+    with it the fire confirms at 10.25 s. The window pinned here is impulse
+    to impulse + ~1 s of confirm: later means the path is riding the vote's
+    recovery (which took 2 s live) instead of the ball's own rest anchor.
+    """
+    if not (CLIPS / "address_chatter_miss_0801").exists():
+        pytest.skip("clip address_chatter_miss_0801 not recorded")
+    events = _run_clip("address_chatter_miss_0801", _reference_frames("empty_table_0801"))
+    shots = [e.t for e in events if isinstance(e, ShotTaken)]
+    assert shots, "the stroke never fired — the address-chatter miss is back"
+    assert 10.0 <= shots[0] <= 11.2, f"shot at {shots[0]:.2f}s — not anchored on the impulse"

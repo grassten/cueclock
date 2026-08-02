@@ -169,6 +169,52 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 38 — the missed ball-in-hand stroke: witnessed
+  dwell, chatter-revised stamps, feasibility confirm):** first reason-coded
+  flag of the post-36 era (`FLAG MISSED`, 02:51 UTC) and the first warm
+  dump — `analyze --warm` reproduced the live session to the millisecond on
+  its first production use. The miss: a real 1396 mm/s stroke on the
+  post-scratch replacement cue while the whiteness vote sat parked on
+  another white-ish ball (it recovered 2 s post-impulse, at the vote's
+  motion-freeze release); settle-counts-the-shot patched the count 11 s
+  later, so the clock ran through the stroke. The own-rest path — built for
+  exactly this (checkpoint 32) — stayed shut because sustained address
+  churn (raw 300–3000 mm/s on a ball wobbling ≤ ~10 mm) kept refreshing the
+  ball's translate stamp: the checkpoint-35 residual, live four hours after
+  it was written down. Closing it honestly took three rules (all existing
+  constants; measured anchors cited in `design.md` §4.2 and the code):
+  - **Chatter-revised stamps:** translate stamps land immediately — a ramp
+    or bump still breaks the strike dwell on its first supra-gate frame —
+    but an excursion that closes within `moving_window_s` with net travel
+    under `moving_enter_mm` failed the table's own motion-evidence bar:
+    chatter, and its stamps are revised away. (A first "persist before
+    stamping" design corrupted the carom guard's mover evidence and let the
+    OBJECT ball of the missed stroke mis-fire off its 10 s rest — caught by
+    the kiss guard once stamps flowed honestly again.)
+  - **Witnessed dwell:** with the stamp still broken at an impulse, the
+    ball's own history may vouch for its rest — every observed position
+    through the pre-strike window inside `moving_enter_mm` of the rest spot
+    and **no unobserved run longer than `moving_window_s`**. That last
+    clause is what finally separated `tip_bump`'s 3.5 s event — re-measured
+    tonight at 203 mm of travel emerging at ~600 mm/s, kinematically a soft
+    shot, not the 47 mm nudge checkpoint 10 described — from a real strike:
+    a push rides the ball out of sight (666 ms unobserved; its emergence
+    frame is stored AT the rest spot by coast smoothing, so the gate trusts
+    observation timing, never reported positions), a strike's stick passes
+    through contact (worst gap 77 ms, chatter flicker included).
+  - **Feasibility confirm:** a candidate that can no longer reach the 60 mm
+    confirm floor in its remaining window (displacement + raw × time left)
+    dies immediately — no more lingering at rest where a stick-merge
+    centroid jump can fake the distance.
+  Corpus: `address_chatter_miss_0801` promoted (1, 0, 2, 2) plus an
+  impulse-window pin (fires at 10.14 s cold, red pre-fix live and cold);
+  `tip_bump` stays green at 0 shots. Warm-snapshot note: this changes the
+  vision fingerprint, so tonight's `state.pkl` is version-locked — by
+  design; the clip pins cold, which is stronger. Unit guards: address
+  chatter must not close the own-rest window (red pre-fix), an occluded
+  push must not open it, a short bump's candidate dies at rest not expiry.
+  169 unit tests; 56 corpus scenarios green; ruff + mypy --strict clean.
+
 - **2026-08-01 (checkpoint 37 — flag dumps stage locally; `/triage-clips`
   skill):** the flag-dump starvation BACKLOG item, decided from data and
   closed — and the off-table half of the Flag keys finally built.

@@ -265,17 +265,6 @@ awareness (§2), and MOLT-style re-spawn suppression after a pot.
   present and pointing at the cue ball". Costs line logic in distorted space,
   and every nudge provoker also has a stick present — only if hand-only false
   strikes appear.
-- **Chatter-robust translate stamps**: the dwell chatter guard
-  (`settle_stall_0801`) fixed settle, but `_last_translate` still refreshes
-  on corrupt sub-window excursions — a chattering ball keeps its own
-  spin-watch armed, defers pickup-discard judgment while latched, and cannot
-  open an own-rest strike (its dwell never completes). No live failure yet;
-  extend the persistence rule to the per-ball translate stamp if one appears.
-  The same clip is the measuring stick (excursions ≤ 64 ms vs genuine motion
-  ≥ 371 ms).
-
-### §5. Corroborating signals (non-vision)
-
 - **Acoustic click coincidence** — the designed answer to `tip_bump` vs
   `soft_shot` (`hardware.md` Part D, patent US10226685 precedent). The corpus
   graded `tip_bump` correctly, so the trigger hasn't fired; if live play leaks

@@ -352,6 +352,20 @@ class EventEngine:
         # Per-ball last time it visibly translated (first sighting counts):
         # bounds how long the spin-churn gate may hold settle (spin_watch_s).
         self._last_translate: dict[int, float] = {}
+        # Per-ball open creep-gate excursion: (start t, pre-excursion x/y,
+        # pre-excursion translate stamp). Translate stamps land immediately —
+        # a hand ramp or tip bump must break the strike dwell on its very
+        # first supra-gate frame, exactly as before — but an excursion that
+        # CLOSES within the motion window back at its starting spot was
+        # observation chatter, not travel, and the stamps it wrote are
+        # revised away (checkpoint 35's measured discriminator: corrupt
+        # excursions persist <= 64 ms and return to base — centroid modes
+        # 7-10 mm apart, zero net travel — while genuine motion holds
+        # >= 371 ms or ends displaced). Without the revision, address
+        # chatter on a rested ball kept `_last_translate` current and the
+        # own-rest strike path could never see a dwell
+        # (`address_chatter_miss_0801`: a real 1396 mm/s stroke unseen).
+        self._translate_excursion: dict[int, tuple[float, float, float, float]] = {}
         # Birth registry: when and where each live track first appeared.
         # Feeds the occluded-address strike path (a track born at impulse
         # speed) and the roster rule below.
@@ -507,9 +521,40 @@ class EventEngine:
                 history.positions.popleft()
             self._last_translate.setdefault(ball.ball_id, t)
             if self._displacement_over(ball, cfg.settle_creep_window_s) > cfg.settle_creep_mm:
+                if ball.ball_id not in self._translate_excursion:
+                    positions = self._history[ball.ball_id].positions
+                    base = positions[-2] if len(positions) >= 2 else positions[-1]
+                    self._translate_excursion[ball.ball_id] = (
+                        t,
+                        base[1],
+                        base[2],
+                        self._last_translate[ball.ball_id],
+                    )
                 self._last_translate[ball.ball_id] = t
+            else:
+                excursion = self._translate_excursion.pop(ball.ball_id, None)
+                if excursion is not None:
+                    start_t, base_x, base_y, prev_stamp = excursion
+                    if (
+                        t - start_t < cfg.moving_window_s
+                        and hypot(ball.x_mm - base_x, ball.y_mm - base_y)
+                        < cfg.moving_enter_mm
+                    ):
+                        # The excursion failed the table's own motion-evidence
+                        # bar (moving_enter_mm over moving_window_s): chatter,
+                        # not travel — its stamps never happened. Centroid
+                        # mode flips close up to ~10.6 mm from base (p95,
+                        # settle_stall_0801), so the creep gate is too tight
+                        # a "returned" test; a tip bump travels 47 mm and can
+                        # never qualify.
+                        self._last_translate[ball.ball_id] = prev_stamp
         self._history = {b.ball_id: self._history[b.ball_id] for b in balls}
         self._last_translate = {b.ball_id: self._last_translate[b.ball_id] for b in balls}
+        self._translate_excursion = {
+            b.ball_id: exc
+            for b in balls
+            if (exc := self._translate_excursion.get(b.ball_id)) is not None
+        }
         self._first_seen = {b.ball_id: self._first_seen[b.ball_id] for b in balls}
         self._birth_pos = {b.ball_id: self._birth_pos[b.ball_id] for b in balls}
 
@@ -821,9 +866,6 @@ class EventEngine:
             # rest. Every real own-rest strike fires from a settled table
             # (parked_vote_strike_0801 both live cases).
             return
-        last_translate = self._last_translate.get(ball.ball_id)
-        if last_translate is None or t - last_translate < cfg.pre_strike_dwell_s:
-            return
         history = self._history.get(ball.ball_id)
         if history is None:
             return
@@ -831,6 +873,52 @@ class EventEngine:
         if rest is None:
             return
         rest_x, rest_y = rest
+        last_translate = self._last_translate.get(ball.ball_id)
+        if last_translate is None or t - last_translate < cfg.pre_strike_dwell_s:
+            # The stamp says "recently moved" — but sustained address churn
+            # fakes that: the stick and bridge hand over the addressed ball
+            # drive raw chatter of 300-3000 mm/s for a second-plus while the
+            # ball never leaves a ~10 mm wobble (address_chatter_miss_0801,
+            # the struck cue pre-impulse; settle_stall_0801 measured the
+            # centroid modes at 7-10 mm). The ball's own observed positions
+            # are the truth: if everything through the pre-strike window
+            # stayed inside the table's motion-evidence bar around the rest
+            # spot, it never actually left its rest. A hand push cannot
+            # pass — reaching impulse speed through the ramp puts it
+            # >= moving_enter_mm out (120 mm/s for the 0.3 s ramp control is
+            # 36 mm of real travel); chatter's net stays <= 10.6 mm (p95).
+            recent = [
+                p
+                for p in history.positions
+                if p[0] >= t - cfg.pre_strike_dwell_s and p[3]
+            ]
+            if not recent or any(
+                hypot(px - rest_x, py - rest_y) >= cfg.moving_enter_mm
+                for _pt, px, py, *_rest_fields in recent
+            ):
+                return
+            # And the rest must be continuously WITNESSED, not inferred
+            # through an occlusion: a push rides the ball out of sight for
+            # its whole travel (666 ms unobserved, tip_bump) while a
+            # strike's stick passes through contact (worst observed gap
+            # 77 ms, chatter flicker included, address_chatter_miss_0801).
+            # Reported positions after a long coast carry smoothing and
+            # association artifacts (tip_bump's emergence frame is stored AT
+            # the rest spot), so this gate reads observation timing only:
+            # the dwell window must contain no unobserved run longer than
+            # the motion-evidence window.
+            window_start = t - cfg.pre_strike_dwell_s
+            prev_seen = window_start
+            max_gap = 0.0
+            for p in history.positions:
+                if p[0] < window_start:
+                    continue
+                if p[3]:
+                    max_gap = max(max_gap, p[0] - prev_seen)
+                    prev_seen = p[0]
+            max_gap = max(max_gap, t - prev_seen)
+            if max_gap > cfg.moving_window_s:
+                return
         if any(
             hypot(mx - rest_x, my - rest_y) <= cfg.carom_reach_mm
             for _mt, mx, my, mid, hand in self._recent_movers
@@ -878,6 +966,17 @@ class EventEngine:
         dx, dy = cue.x_mm - candidate.x0, cue.y_mm - candidate.y0
         displacement = hypot(dx, dy)
         if displacement < cfg.strike_confirm_displacement_mm:
+            # Feasibility: a candidate that can no longer reach the confirm
+            # displacement in the window it has left is dead now, not at
+            # expiry. Physics, no new constants — a tip bump travels ~47 mm
+            # and rests short of the 60 mm floor, and before this check its
+            # candidate lingered at rest until a stick-merge centroid jump
+            # could fake the remaining distance (tip_bump's phantom fire).
+            # A real strike's ball is still at speed here and passes
+            # trivially.
+            time_left = candidate.t0 + cfg.strike_confirm_window_s - t
+            if displacement + raw * time_left < cfg.strike_confirm_displacement_mm:
+                self._candidate = None
             return []
         axis_dot = (dx * candidate.dir_x + dy * candidate.dir_y) / displacement
         if axis_dot < cfg.strike_axis_dot_min:

@@ -578,6 +578,75 @@ def test_parked_vote_hand_ramp_does_not_fire() -> None:
     assert ShotTaken not in map(type, sim.run(0.5))
 
 
+def test_address_chatter_does_not_close_own_rest_window() -> None:
+    # address_chatter_miss_0801 (2026-08-02 02:51 UTC): the replacement cue
+    # rested 13 s while the whiteness vote parked on another white-ish ball,
+    # but stick-address chatter kept refreshing its translation stamp — at a
+    # real 1396 mm/s impulse the own-rest dwell gate read ~0 rest and the
+    # stroke went unseen (settle-counts-the-shot patched the count 11 s
+    # later). Translation must ignore excursions shorter than the motion
+    # window (chatter <= 64 ms; genuine motion >= 371 ms —
+    # test_parked_vote_hand_ramp_does_not_fire is the sustained-motion
+    # control that must keep failing to fire).
+    sim = rack()
+    sim.run(3.0)
+    sim.cue_id = OBJ  # the vote parks on the wrong ball
+    sim.run(0.5)
+    for i in range(8):  # single-frame 8 mm mode flips through the address —
+        # alternating, so each excursion CLOSES at the far mode (8 mm from
+        # its base) exactly like the measured clip, not back at zero
+        sim.displace(CUE, 8.0 if i % 2 == 0 else -8.0)
+        sim.run(DT)
+        sim.run(0.2)
+    sim.occlude(CUE)  # stick hides the ball through contact, as measured
+    sim.run(0.05)
+    sim.place(CUE, 560.0, 500.0)
+    sim.velocity(CUE, 600.0, 0.0)
+    sim.reveal(CUE)
+    assert ShotTaken in map(type, sim.run(0.5))
+
+
+def test_occluded_push_does_not_open_own_rest() -> None:
+    # tip_bump's 3.5 s event: the stick tip rides the cue out of sight for
+    # 666 ms and the ball emerges at ~600 mm/s, 40+ mm out — kinematically a
+    # parked-vote strike's twin (which hides its ball only ~26 ms through
+    # contact). The own-rest dwell must be continuously witnessed: a dwell
+    # window holding an unobserved run longer than the motion window is a
+    # coasting memory, not a rest.
+    sim = rack()
+    sim.run(3.0)
+    sim.cue_id = OBJ  # vote parked elsewhere, own-rest is the only path
+    sim.run(0.5)
+    sim.displace(CUE, 8.0)  # chatter breaks the translate stamp first, so
+    sim.run(DT)  # the open must go through the witnessed-dwell fallback
+    sim.occlude(CUE)
+    sim.run(0.5)  # the push: ball rides under the stick, unseen
+    sim.place(CUE, 560.0, 500.0)
+    sim.velocity(CUE, 600.0, 0.0)
+    sim.reveal(CUE)
+    assert ShotTaken not in map(type, sim.run(0.5))
+
+
+def test_bump_candidate_dies_at_rest_not_at_expiry() -> None:
+    # tip_bump's phantom (2026-08-02): a stick bump moves the cue ~47 mm —
+    # short of the 60 mm confirm floor — and the ball rests. The candidate
+    # used to linger until window expiry, where a stick-merge centroid jump
+    # could fake the remaining distance and fire. A candidate that can no
+    # longer reach the confirm displacement in its remaining window
+    # (displacement + raw * time_left) must die at that moment, so the
+    # later corrupt jump lands on no candidate at all.
+    sim = rack()
+    sim.run(3.0)
+    sim.cue_id = OBJ  # vote parked elsewhere: the bump opens via own-rest
+    sim.run(0.5)
+    sim.velocity(CUE, 600.0, 0.0)
+    sim.run(0.08)  # ~48 mm of travel, then the ball stops short of 60 mm
+    sim.velocity(CUE, 0.0, 0.0)
+    sim.run(0.05)
+    sim.displace(CUE, 20.0)  # stick-merge centroid jump inside the window
+    assert ShotTaken not in map(type, sim.run(0.4))
+
+
 def test_fired_lone_roller_gets_a_settle() -> None:
     # lone_roller_0801: a birth-path strike whose only mover is the fired
     # track itself (nothing else disturbed). The track is not roster, and a
