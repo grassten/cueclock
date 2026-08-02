@@ -176,7 +176,9 @@ Delete items as they land (history lives in `CHANGELOG.md`).
   is by definition a vision failure, so dumping the ring as `flag_missed` would
   turn each annoyance into corpus evidence with no extra key and no extra
   press. Wants a rate limit or a `run` flag first: 3.6 GB a press.
-- **TV power via VIDAA network API** — only if the remote ever annoys.
+- ~~**TV power via VIDAA network API**~~ — **done 2026-08-02**, and not VIDAA:
+  the CanvasTV runs Google TV, so the Session key drives it over the Android TV
+  Remote protocol (long-press POWER off, Wake-on-LAN on). See `hardware.md` §E1.
 - **Foul/game-state handling**: v1 has none by decision (vision can't see
   whose visit it is — CHANGELOG 2026-07-27). If match-grade foul handling is
   ever wanted, the state comes from manual input (a "foul → ball in hand"

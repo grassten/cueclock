@@ -279,8 +279,8 @@ flash stops reading.
   buttons are data in a Python module. **Never install the Elgato Stream Deck
   app on this Mac** — it would claim exclusive HID access and starve the daemon.
 - **OBS control via obs-websocket** (built into OBS 28+); music via
-  `osascript`. TV power stays on its own remote (the CanvasTV VIDAA network
-  API is pairing-fussy).
+  `osascript`. **TV power over the Android TV Remote protocol** (`deck/tv.py`,
+  §E1) — the CanvasTV runs Google TV, not VIDAA as this line used to claim.
 - **Session toggle owns `run` AND OBS** (2026-07-31): the replay buffer keeps
   OBS continuously encoding, and active outputs hold macOS power assertions
   that block sleep — so OBS dies with the session and relaunches into
@@ -405,13 +405,22 @@ camera, OBS, or a deck) + the Session branch in `deck/daemon.py`. The machine
 is advanced by the daemon's existing 2 s poll, not a background thread: the
 deck keeps rendering and dispatching every other key while a session comes up.
 
-**Start** (tap while `OFF`): spawn the canonical `run` command (README, built
-by `session.run_command()`) and a `caffeinate -d` assertion → face reads
-`STARTING…` → on the first poll where `/api/rulesets` answers, launch OBS
+**Start** (tap while `OFF`): **wake the wall first**, because between sessions
+both halves of it are asleep — `caffeinate -u -t 2` asserts user activity to
+pull the Mac's display out of `displaysleep` (after 10 min idle the mini stops
+driving HDMI, so the wall reads "no signal" however awake the TV is), and a
+Wake-on-LAN magic packet starts the TV climbing out of standby (§E1). Both are
+fire-and-forget: the assertion expires by itself and the TV confirms on a later
+poll, so neither can hold up the camera. Then spawn the canonical `run` command
+(README, built by `session.run_command()`) and a `caffeinate -d` assertion →
+face reads `STARTING…` → on the first poll where `/api/rulesets` answers, launch OBS
 (`open -a OBS --args --startreplaybuffer --disable-shutdown-check`) and go
-`ON` → then set OBS up for this session over obs-websocket, retried on the
-poll until its WebSocket answers (~10 s after launch): **rebind the Syphon
-source** (`obsws.bind_syphon`) and **open the program projector on the TV**
+`ON` → then set the rig up for this session, retried on the poll (20 attempts,
+~40 s) because nothing is ready when first asked — the TV is still waking and
+OBS's WebSocket answers ~10 s after launch: **confirm the TV is on**
+(`tv.ensure_on`, which re-fires the magic packet each attempt so a TV that
+missed the first one still comes up), **rebind the Syphon source**
+(`obsws.bind_syphon`) and **open the program projector on the TV**
 (`obsws.open_projector`, monitor 0 — the mini drives one display). Opening the
 projector explicitly beats "Save projectors on exit", which only restores what
 was open at the last quit: a session that ended without one came back to a
@@ -453,6 +462,13 @@ tap does nothing), in this order — every step learned from live presses on
    began, the dialog caught the quit anyway, so the deck clicks its OK button
    itself. The grace matters — a clean quit takes 0.3–3 s, so checking
    immediately reads *every* healthy quit as stuck.
+
+5. **Long-press POWER on the TV, last of all** — once `run` has exited and OBS
+   is gone, so the wall keeps reading `STOPPING…` until the session really is
+   over rather than going black mid-shutdown. Long, not short: a tap lands in
+   art mode with the panel still lit (§E1). Only an *explicit* stop does this
+   — a `run` that crashed on its own leaves the TV on, because the wall is the
+   one place that failure is visible from the table.
 
 Then `STOPPING…` until the child actually exits, at which point the assertion
 is released. Measured after the fix: five cycles across the race window
@@ -564,8 +580,11 @@ always the safe state for a key pressed mid-session.
 
 ### C6. Bring-up checks (at the table, still open)
 
-- [ ] Does a deck keypress wake the sleeping mini? If not: `pmset` never-sleep
-      (an M2 mini idles ~5 W); display sleep stays enabled regardless.
+- [x] Does a deck keypress wake the sleeping mini? Settled 2026-08-02 without
+      depending on it: Start issues `caffeinate -u -t 2` itself, so the display
+      is woken explicitly rather than as a side effect of the keypress. Display
+      sleep stays enabled (an M2 mini idles ~5 W); Amphetamine holds system
+      sleep off, and screen lock is off so nothing covers the projector.
 - [ ] `pmset -g assertions` clean after session stop.
 - [ ] OBS relaunch restores projector + replay buffer, twice in a row.
 
@@ -643,7 +662,50 @@ away from the LED frame points their reflection field at the lit table.
 Install: ECHOGEAR tilting mount (VESA 400×200), screen center ~62–66" from
 the floor, Mac mini + T7 + power strip behind the panel, cable raceway down to
 the outlet. **TV settings: Game Mode ON for the Mac's HDMI input, motion
-smoothing OFF.** TV power stays on the TV remote.
+smoothing OFF.**
+
+#### TV power from the deck (built 2026-08-02)
+
+The set runs **Google TV** — not VIDAA, which earlier notes here assumed — so
+it speaks the **Android TV Remote** protocol: TLS + protobuf on 6466, pairing
+handshake on 6467. Code is `deck/tv.py`; the Session key drives it (§C4).
+
+Pairing is one-time: `uv run python scripts/pair_tv.py`. The TV shows a
+**6-character hex** code (`B195EF`, `410A85` — hex, so `O` is a zero), and the
+cert + key land in gitignored `config/tv_cert.pem` / `tv_key.pem` beside
+`config/tv.json`, which holds the host and MAC. Losing them just means pairing
+again.
+
+Four things were measured on the real set, and none are guessable:
+
+1. **A short POWER press only reaches art mode.** This is a CanvasTV: tapping
+   power drops it into the artwork screen, which keeps the panel lit *and the
+   whole network stack up*. Every early attempt to switch it off with short
+   presses read as "the key did nothing", because the TV never left the
+   network. **A long press (~2.5 s) is what reaches true standby.**
+2. **POWER is a toggle**, so it is only ever sent when the TV's own reported
+   state disagrees with the target — the same rule Home Assistant's
+   `androidtv_remote` uses. Retrying it undoes it; a probe that sent SLEEP then
+   POWER switched the TV off and straight back on.
+3. **In standby the TV leaves the network entirely** — 6466 dies ~4 s after
+   the long press — so nothing can be *told* to wake up. There is no
+   Quick Start / Screenless service toggle on this model to keep it alive.
+4. **Wake-on-LAN brings it back, screen included, in about a second.** The TV
+   reports MAC `…:97` over the protocol while ARP shows `…:98` carrying
+   traffic — two consecutively allocated NICs on one board — and which one
+   listens in standby isn't observable, so the packet goes to `…:96/:97/:98`
+   on ports 9 and 7, at both the subnet and global broadcast address.
+
+The Mac keeps its HDMI display through all of this: across a full off/on cycle
+the display list never emptied, briefly degrading to a generic
+`spdisplays_display` during the wake handshake before returning to `HISENSE`.
+So the mini never goes headless, OBS's projector window survives the night,
+and **no EDID holder is needed**. The TV also returns to the Mac's HDMI input
+by itself, so no input switching is required.
+
+**Screen lock must stay off** (System Settings → Lock Screen → "Require
+password after…" → **Never**). A locked Mac draws loginwindow *over* the OBS
+projector, so the morning press would light the wall up on a password prompt.
 
 ### E2. After any camera bump/move (~15 min)
 

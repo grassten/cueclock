@@ -30,7 +30,7 @@ from enum import Enum
 from pathlib import Path
 from typing import IO, Protocol
 
-from cueclock.deck import obsws
+from cueclock.deck import obsws, tv
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUN_LOG = Path.home() / "Library" / "Logs" / "cueclock-run.log"
@@ -56,10 +56,11 @@ STOP_ESCALATE_S = 20.0
 # How long a graceful OBS quit is given before "still running" is read as the
 # modal quit dialog holding it (a clean quit measured 0.3-3 s, 2026-08-02).
 OBS_QUIT_GRACE_S = 5.0
-# OBS needs ~10 s from launch before its WebSocket server answers, so the
-# post-launch setup (Syphon rebind + TV projector) is retried on the poll
-# rather than assumed. 20 ticks ~= 40 s.
-OBS_PREP_ATTEMPTS = 20
+# Nothing the session needs is ready the instant it is asked for: the TV is
+# waking out of standby, and OBS's WebSocket answers ~10 s after launch. So the
+# setup (TV on, Syphon rebind, TV projector) is retried on the poll rather than
+# assumed. 20 ticks ~= 40 s.
+PREP_ATTEMPTS = 20
 
 
 class SessionState(Enum):
@@ -190,6 +191,11 @@ OBS_DISMISS = (
 )
 # -d: display sleep is what kills a session mid-rack (the TV is the output).
 CAFFEINATE = ("/usr/bin/caffeinate", "-d")
+# Between sessions the display sleeps (pmset displaysleep = 10 min) and the Mac
+# stops driving HDMI, so the wall reads "no signal" even once the TV is awake.
+# `-u` asserts user activity, which wakes the display; `-t 2` lets the assertion
+# expire on its own, leaving the session's own `caffeinate -d` to hold it.
+WAKE_DISPLAY = ("/usr/bin/caffeinate", "-u", "-t", "2")
 
 
 def _spawn(cmd: Sequence[str]) -> Process:
@@ -234,6 +240,8 @@ class SessionManager:
     stop_outputs: Callable[[], bool] = obsws.stop_all_outputs
     bind_syphon: Callable[[], bool] = obsws.bind_syphon
     open_projector: Callable[[], bool] = obsws.open_projector
+    tv_on: Callable[[], bool] = tv.ensure_on
+    tv_off: Callable[[], bool] = tv.power_off
     pidfile: Path = PIDFILE
     process_for_pid: Callable[[int], Process] = PidProcess
 
@@ -246,16 +254,26 @@ class SessionManager:
     _obs_dismissed: bool = False
     _syphon_bound: bool = False
     _projector_open: bool = False
-    _obs_prep_tries: int = 0
+    _tv_ready: bool = False
+    _prep_tries: int = 0
 
     @property
     def owns_session(self) -> bool:
         return self._run is not None
 
     def start(self) -> None:
-        """Spawn `run` + the power assertion. OBS waits for the server (tick)."""
+        """Wake the wall, then spawn `run` + the power assertion.
+
+        The display and the TV go first because both are asleep between
+        sessions and both take seconds to come back — the TV out of standby,
+        the display out of `displaysleep`. Neither may hold up the camera, so
+        both are fire-and-forget: `caffeinate -u` expires by itself, and the TV
+        confirms itself on the poll. OBS still waits for the server (tick).
+        """
         if self._run is not None:
             return
+        self.spawn(WAKE_DISPLAY)  # self-terminating; nothing to hold on to
+        self.tv_on()  # fires the magic packet; standby has nothing to talk to
         self._run = self.spawn(run_command(self.reference))
         self._caffeinate = self.spawn(CAFFEINATE)
         self._started_at = self.now()
@@ -265,7 +283,8 @@ class SessionManager:
         self._obs_dismissed = False
         self._syphon_bound = False
         self._projector_open = False
-        self._obs_prep_tries = 0
+        self._tv_ready = False
+        self._prep_tries = 0
         self._write_pidfile()
         print(f"session: starting (log: {RUN_LOG})", flush=True)
 
@@ -303,7 +322,7 @@ class SessionManager:
             self._release()
             return SessionState.OFF
         if self._obs_launched:
-            self._prepare_obs_once()
+            self._prepare_once()
             return SessionState.ON
         if server_up:
             self.call(OBS_OPEN)  # server first, or the overlay loads blank
@@ -362,36 +381,44 @@ class SessionManager:
         self._obs_launched = True  # OBS came up with the session we're adopting
         self._syphon_bound = False  # cheap to redo, and it may have been missed
         self._projector_open = False
-        self._obs_prep_tries = 0
+        self._tv_ready = False
+        self._prep_tries = 0
         print(f"session: adopted the running session (run pid {run_pid})", flush=True)
         return True
 
-    def _prepare_obs_once(self) -> None:
-        """Make OBS show this session: table feed bound, program on the TV.
+    def _prepare_once(self) -> None:
+        """Make the wall show this session: TV awake, feed bound, program on it.
 
-        Both need OBS's WebSocket, which answers ~10 s after launch, so this
-        retries on the poll and then gives up loudly rather than silently
-        leaving a black table or a blank TV.
+        None of the three is ready when it is first asked for — the TV is
+        climbing out of standby, and OBS's WebSocket answers ~10 s after launch
+        — so each retries on the poll and then gives up loudly rather than
+        silently leaving a dark wall, a black table, or a blank TV.
         """
-        done = self._syphon_bound and self._projector_open
-        if done or self._obs_prep_tries >= OBS_PREP_ATTEMPTS:
+        done = self._tv_ready and self._syphon_bound and self._projector_open
+        if done or self._prep_tries >= PREP_ATTEMPTS:
             return
-        self._obs_prep_tries += 1
+        self._prep_tries += 1
+        # `tv_on` is idempotent and cheap while the TV is away: it re-fires the
+        # magic packet and returns, so a TV that missed the first one still
+        # comes up rather than leaving the wall dark for the whole session.
+        if not self._tv_ready and self.tv_on():
+            self._tv_ready = True
         if not self._syphon_bound and self.bind_syphon():
             self._syphon_bound = True
         if not self._projector_open and self.open_projector():
             self._projector_open = True
-        if self._obs_prep_tries == OBS_PREP_ATTEMPTS:
+        if self._prep_tries == PREP_ATTEMPTS:
             missing = [
                 name
                 for name, ok in (
+                    ("TV", self._tv_ready),
                     ("table feed", self._syphon_bound),
                     ("TV projector", self._projector_open),
                 )
                 if not ok
             ]
             if missing:
-                print(f"session: OBS setup incomplete — {', '.join(missing)}", flush=True)
+                print(f"session: setup incomplete — {', '.join(missing)}", flush=True)
 
     def _tick_stopping(self, stopping_since: float) -> SessionState:
         # A graceful OBS quit takes a couple of seconds, so "still alive" only
@@ -404,6 +431,11 @@ class SessionManager:
                 print("session: OBS still up — dismissing its quit dialog", flush=True)
                 self.call(OBS_DISMISS)
         if self._run is None or self._run.poll() is not None:
+            # The TV goes dark last, once the camera is closed and OBS is gone,
+            # so the wall keeps reading STOPPING… until the session really is
+            # over. Only an explicit stop does this: a crashed `run` leaves the
+            # TV on, because a dark wall is no way to find out something broke.
+            self.tv_off()
             self._release()
             print("session: stopped", flush=True)
             return SessionState.OFF
@@ -437,4 +469,5 @@ class SessionManager:
         self._obs_dismissed = False
         self._syphon_bound = False
         self._projector_open = False
-        self._obs_prep_tries = 0
+        self._tv_ready = False
+        self._prep_tries = 0

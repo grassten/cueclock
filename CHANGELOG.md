@@ -199,6 +199,51 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 47 — the Session key powers the wall TV):** the one
+  remaining manual step in "come down in the morning, press one button" was
+  picking up the TV remote. The key now does it, and the work was almost
+  entirely *measurement* — every plausible assumption about this TV was wrong.
+  `deck/tv.py`, `scripts/pair_tv.py`, +18 unit tests (280 total).
+  - **The TV is not what the docs said.** `hardware.md` §E1 and `BACKLOG.md`
+    both described a VIDAA set and a "pairing-fussy" VIDAA network API. A
+    subnet sweep found nothing on 36669 (the VIDAA MQTT port) and instead a
+    Google TV answering on 6466/6467: the CanvasTV runs **Google TV**, so it
+    speaks the **Android TV Remote** protocol. Both docs corrected.
+  - **A short POWER press only reaches art mode.** This is the finding the
+    whole afternoon hinged on. Tapping power on a CanvasTV drops it into the
+    artwork screen, which keeps the panel lit *and the whole network stack
+    up* — so probe after probe reported "the TV never left the network" and
+    read as a dead keypress. **A long press (~2.5 s) reaches true standby**,
+    and the port dies ~4 s later.
+  - **POWER is a toggle, so it is never retried.** An early probe sent SLEEP,
+    waited 25 s, decided it had failed, and sent POWER — switching the TV off
+    and straight back on. It is now sent only when the TV's own reported state
+    disagrees with the target, the same rule Home Assistant's
+    `androidtv_remote` uses.
+  - **Wake-on-LAN is the only way back.** In standby the TV leaves the network
+    entirely and there is no Quick Start / Screenless service toggle on this
+    model to keep it alive, so nothing can be *told* to wake. A magic packet
+    brings it back — screen included — in about a second. It goes to
+    `…:96/:97/:98` because the TV reports one MAC over the protocol while ARP
+    shows the next one carrying traffic (two NICs on one board), and which one
+    listens in standby isn't observable from the Mac.
+  - **The Mac never goes headless.** Across a full off/on cycle the display
+    list never emptied — it briefly degraded to a generic `spdisplays_display`
+    during the wake handshake, then returned to `HISENSE`. So OBS's projector
+    survives the night and **no EDID holder is needed**, which is what the
+    fallback plan (a ~$60 Pulse-Eight USB-CEC adapter) would have cost.
+  - **Two things outside the code.** Screen lock is now off — a locked Mac
+    draws loginwindow *over* the projector, so the morning press would have
+    lit the wall on a password prompt — and Start issues `caffeinate -u -t 2`
+    to wake the display, because after 10 min idle the mini stops driving HDMI
+    and the wall reads "no signal" however awake the TV is.
+  - Sequencing reuses the existing harness rather than adding one: `tv_on` is
+    idempotent and joins the OBS setup retry on the 2 s poll (renamed
+    `_prepare_once`, since it is no longer only about OBS), and `tv_off` runs
+    at the very end of the stop path so the wall reads `STOPPING…` until the
+    session is actually over. A crashed `run` deliberately leaves the TV on —
+    the wall is the one place that failure is visible from the table.
+
 - **2026-08-02 (checkpoint 46 — instant replay: the TV cuts to the last shot,
   seeked):** Stream Deck phase 3. The Replay key saved a file nobody watched;
   it now cuts the wall TV to that file, starting 1.5 s before the shot, and

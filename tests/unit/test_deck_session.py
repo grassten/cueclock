@@ -18,15 +18,21 @@ from cueclock.deck.session import (
     OBS_ALIVE,
     OBS_DISMISS,
     OBS_OPEN,
-    OBS_PREP_ATTEMPTS,
     OBS_QUIT,
     OBS_QUIT_GRACE_S,
+    PREP_ATTEMPTS,
     START_TIMEOUT_S,
     STOP_ESCALATE_S,
+    WAKE_DISPLAY,
     SessionManager,
     SessionState,
     run_command,
 )
+
+TV_ON = ("tv", "EnsureOn")
+TV_OFF = ("tv", "PowerOff")
+BIND = ("obsws", "BindSyphon")
+PROJECTOR = ("obsws", "OpenProjector")
 
 
 class FakeProcess:
@@ -59,6 +65,7 @@ class Harness:
         obs_survives_quit: bool = False,
         syphon_binds: bool = True,
         projector_opens: bool = True,
+        tv_wakes: bool = True,
         pidfile: Path | None = None,
     ) -> None:
         self.spawned: list[tuple[str, ...]] = []
@@ -69,6 +76,7 @@ class Harness:
         self.obs_survives_quit = obs_survives_quit
         self.syphon_binds = syphon_binds
         self.projector_opens = projector_opens
+        self.tv_wakes = tv_wakes
         self.adoptable: dict[int, FakeProcess] = {}
         self.manager = SessionManager(
             pidfile=pidfile or Path(mkdtemp()) / "session.json",
@@ -79,6 +87,8 @@ class Harness:
             stop_outputs=self._stop_outputs,
             bind_syphon=self._bind_syphon,
             open_projector=self._open_projector,
+            tv_on=self._tv_on,
+            tv_off=self._tv_off,
         )
 
     def _stop_outputs(self) -> bool:
@@ -92,6 +102,14 @@ class Harness:
     def _open_projector(self) -> bool:
         self.called.append(("obsws", "OpenProjector"))
         return self.projector_opens
+
+    def _tv_on(self) -> bool:
+        self.called.append(("tv", "EnsureOn"))
+        return self.tv_wakes
+
+    def _tv_off(self) -> bool:
+        self.called.append(("tv", "PowerOff"))
+        return True
 
     def _process_for_pid(self, pid: int) -> FakeProcess:
         return self.adoptable.get(pid, FakeProcess(pid=pid, log=self.called))
@@ -110,11 +128,11 @@ class Harness:
 
     @property
     def run_proc(self) -> FakeProcess:
-        return self.procs[0]
+        return self.procs[1]  # procs[0] is the display wake
 
     @property
     def caffeinate_proc(self) -> FakeProcess:
-        return self.procs[1]
+        return self.procs[2]
 
 
 def test_idle_daemon_reads_off_and_a_foreign_server_reads_dev() -> None:
@@ -129,21 +147,27 @@ def test_idle_daemon_reads_off_and_a_foreign_server_reads_dev() -> None:
 def test_start_spawns_run_and_caffeinate_then_launches_obs_when_the_server_answers() -> None:
     h = Harness()
     h.manager.start()
-    assert h.spawned == [run_command(), CAFFEINATE]
+    # The display wake leads: between sessions the Mac has stopped driving HDMI,
+    # so the wall reads "no signal" however awake the TV is.
+    assert h.spawned == [WAKE_DISPLAY, run_command(), CAFFEINATE]
     assert h.manager.owns_session
+    # And the TV is asked for immediately — it wakes from standby on its own
+    # clock, so the magic packet goes out well before OBS needs a display.
+    assert h.called == [TV_ON]
 
     # Server not up yet: STARTING, and OBS stays closed — launching it first
     # parks the overlay browser source on a blank error page (hardware.md §B3).
     assert h.manager.tick(server_up=False) is SessionState.STARTING
-    assert h.called == []
+    assert h.called == [TV_ON]
 
     assert h.manager.tick(server_up=True) is SessionState.ON
-    assert h.called == [OBS_OPEN]
+    assert h.called == [TV_ON, OBS_OPEN]
 
     # OBS is launched exactly once, however long the session runs; the ticks
-    # after it point OBS's Syphon source at this session's server.
+    # after it point OBS's Syphon source at this session's server and confirm
+    # the TV actually came up.
     assert h.manager.tick(server_up=True) is SessionState.ON
-    assert h.called == [OBS_OPEN, ("obsws", "BindSyphon"), ("obsws", "OpenProjector")]
+    assert h.called == [TV_ON, OBS_OPEN, TV_ON, BIND, PROJECTOR]
 
 
 def test_the_syphon_source_is_rebound_once_per_session() -> None:
@@ -157,11 +181,11 @@ def test_the_syphon_source_is_rebound_once_per_session() -> None:
     h.called.clear()
 
     h.manager.tick(server_up=True)
-    assert h.called == [("obsws", "BindSyphon"), ("obsws", "OpenProjector")]
+    assert h.called == [TV_ON, BIND, PROJECTOR]
 
-    for _ in range(5):  # both done: stop asking
+    for _ in range(5):  # all three done: stop asking
         h.manager.tick(server_up=True)
-    assert h.called == [("obsws", "BindSyphon"), ("obsws", "OpenProjector")]
+    assert h.called == [TV_ON, BIND, PROJECTOR]
 
 
 def test_a_syphon_rebind_that_never_takes_gives_up() -> None:
@@ -172,11 +196,11 @@ def test_a_syphon_rebind_that_never_takes_gives_up() -> None:
     h.manager.tick(server_up=True)
     h.called.clear()
 
-    for _ in range(OBS_PREP_ATTEMPTS + 10):
+    for _ in range(PREP_ATTEMPTS + 10):
         h.manager.tick(server_up=True)
     # The projector succeeds on the first pass; only the rebind keeps retrying.
-    assert h.called.count(("obsws", "BindSyphon")) == OBS_PREP_ATTEMPTS
-    assert h.called.count(("obsws", "OpenProjector")) == 1
+    assert h.called.count(BIND) == PREP_ATTEMPTS
+    assert h.called.count(PROJECTOR) == 1
 
 
 def test_a_restarted_daemon_adopts_the_session_it_started() -> None:
@@ -345,7 +369,14 @@ def test_restart_after_a_stop_spawns_a_fresh_pair() -> None:
     h.manager.tick(server_up=False)
 
     h.manager.start()
-    assert h.spawned == [run_command(), CAFFEINATE, run_command(), CAFFEINATE]
+    assert h.spawned == [
+        WAKE_DISPLAY,
+        run_command(),
+        CAFFEINATE,
+        WAKE_DISPLAY,
+        run_command(),
+        CAFFEINATE,
+    ]
     assert h.manager.tick(server_up=False) is SessionState.STARTING
 
 
@@ -353,15 +384,15 @@ def test_double_press_while_starting_does_not_spawn_a_second_session() -> None:
     h = Harness()
     h.manager.start()
     h.manager.start()
-    assert h.spawned == [run_command(), CAFFEINATE]
+    assert h.spawned == [WAKE_DISPLAY, run_command(), CAFFEINATE]
 
 
 def test_reference_override_reaches_the_run_command() -> None:
     h = Harness()
     h.manager.reference = "tests/clips/empty_table_9999"
     h.manager.start()
-    assert h.spawned[0] == run_command("tests/clips/empty_table_9999")
-    assert "--rectify" in h.spawned[0]
+    assert h.spawned[1] == run_command("tests/clips/empty_table_9999")
+    assert "--rectify" in h.spawned[1]
 
 
 def test_the_key_reads_as_the_action_not_the_state() -> None:
@@ -384,3 +415,48 @@ def test_the_key_reads_as_the_action_not_the_state() -> None:
     ]
     # Only the running state needs one — the rest already say what a tap does.
     assert [s.name for s in SessionState if s.sub is not None] == ["ON"]
+
+
+def test_stop_turns_the_tv_off_last_of_all() -> None:
+    h = Harness()
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.manager.stop()
+    h.called.clear()
+
+    # Mid-stop the TV stays lit: the wall should keep reading STOPPING… while
+    # the camera is still closing, not go black and leave you guessing.
+    assert h.manager.tick(server_up=True) is SessionState.STOPPING
+    assert TV_OFF not in h.called
+
+    h.run_proc.exit_code = 0
+    assert h.manager.tick(server_up=False) is SessionState.OFF
+    assert h.called[-1] == TV_OFF
+
+
+def test_a_crashed_run_leaves_the_tv_on() -> None:
+    # Only an explicit stop darkens the wall. If `run` fell over on its own,
+    # the TV is the one place the failure is visible — killing it would hide
+    # exactly what someone standing at the table needs to see.
+    h = Harness()
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.called.clear()
+
+    h.run_proc.exit_code = 1
+    assert h.manager.tick(server_up=True) is SessionState.OFF
+    assert TV_OFF not in h.called
+
+
+def test_a_tv_that_never_wakes_gives_up_instead_of_packeting_forever() -> None:
+    h = Harness(tv_wakes=False)
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.called.clear()
+
+    for _ in range(PREP_ATTEMPTS + 10):
+        h.manager.tick(server_up=True)
+    # Retried on the poll, because a TV climbing out of standby is not ready
+    # on the first ask — but bounded, and the session runs on regardless.
+    assert h.called.count(TV_ON) == PREP_ATTEMPTS
+    assert h.called.count(BIND) == 1
