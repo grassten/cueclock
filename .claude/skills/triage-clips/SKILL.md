@@ -131,6 +131,52 @@ detect/advance split touched `pipeline.py`, which `_vision_fingerprint()`
 hashes, so their snapshots are refused. Expected, not a bug. Cold replay is
 unaffected, and dumps taken since are fine.
 
+## Step 5b — Let Steven watch the clip
+
+Whenever a finding rests on what physically happened at the table — and
+always when he asks to see it — hand him a scrubable file rather than a
+description. Stills mislead (see the ground-truth note in Step 2); 22 s of
+video with a burned-in clock does not.
+
+```bash
+cat > .git/clipview.py <<'PY'
+import cv2, sys
+from pathlib import Path
+from cueclock.capture.clip import ClipReader
+clip = Path(sys.argv[1] if "/" in sys.argv[1] else f"tests/clips/{sys.argv[1]}")
+out = Path.home() / "Desktop" / f"{clip.name}.mp4"
+r = ClipReader(clip); t0 = float(r.timestamps[0])
+w = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"avc1"), 30.0, (r.meta.width, r.meta.height))
+for i in range(len(r)):
+    bgr = cv2.cvtColor(r.frame(i), cv2.COLOR_BayerBG2BGR)
+    cv2.putText(bgr, f"{float(r.timestamps[i]) - t0:6.2f}s", (30, 70),
+                cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 255, 255), 4, cv2.LINE_AA)
+    w.write(bgr)
+w.release(); r.close(); print("wrote", out)
+PY
+.venv/bin/python3 .git/clipview.py <scenario-or-path>   # ~20 s for a ring dump
+open ~/Desktop/<scenario>.mp4
+```
+
+- Takes a corpus scenario name or any path (`~/cueclock-dumps/flag_missed`).
+- **The burned-in seconds are replay-relative** — the same clock `analyze`
+  prints cold, so "shot at 13.04 s" lands on the right frame. Warm replay
+  prints *session* time instead; don't hand him one and cite the other.
+- `avc1` so QuickTime opens it directly. ~7 MB for a 22 s dump.
+- **Raw camera frames**: no undistort, no CCM. Straight lines bow and the
+  cloth reads wrong — that is what detection sees, which is the point, but
+  say so or it looks like a broken export.
+- It lives in `.git/` on purpose: a viewing convenience, not part of the app,
+  so it stays out of the repo, out of CI and out of `mypy --strict`. Recreate
+  it from the heredoc whenever it is missing.
+- Always quote the timestamps of the moments that matter alongside the file
+  (stroke, detected shot, settle), so he can jump straight there.
+- T7 must be mounted for anything under `tests/clips`.
+
+The rig path — real display pipeline, on the TV, but no frame-by-frame
+scrubbing — is `cueclock replay --clip <dir> --rectify --once`, with OBS up
+and the Syphon Client source selected.
+
 ## Step 6 — Read the warm/cold matrix
 
 | Warm | Cold | Reading |
