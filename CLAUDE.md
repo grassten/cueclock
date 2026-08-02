@@ -60,6 +60,12 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   at `/Volumes/T7/pool_room_clips/` (4 TB external SSD, ExFAT) with `tests/clips` as a
   local gitignored symlink — always use the symlink path in code and docs. T7 unmounted
   ⇒ symlink dangles ⇒ corpus tests skip; mount it before recording or corpus runs.
+- The corpus battery has **two tiers** (`tests/README.md`): `uv run pytest -n 4` is cold,
+  full-fidelity, ~5 min — **the gate, run it before every commit that touches detection**.
+  `--detect-cache` reuses stored detector output for a ~21 s run — the iteration loop for
+  `events.py`/`track.py`, which is where nearly all accuracy work happens. Editing
+  `detect.py` or `DetectConfig` invalidates every entry by design, so a cached run can
+  never grade stale detections.
 - Principles Steven has named explicitly: **KISS, YAGNI, DRY.** This repo will be
   open-sourced — write for a stranger reading it. v1 scope is clock + events + overlays
   (clock + scoreboard) + API + match mode (rack context, scores) + voice "extension";

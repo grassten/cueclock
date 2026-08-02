@@ -11,13 +11,21 @@ without frame-accurate ground truth (e.g. how many settles a racking
 session produces) only pin what matters.
 """
 
+import os
 from functools import cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
 
 from cueclock.vision.events import BallsSettled, Event, Scratch, ShotTaken
+
+if TYPE_CHECKING:
+    from cueclock.capture.clip import ClipReader
+    from cueclock.vision.calibration import TableCalibration
+    from cueclock.vision.detect import Detection
+    from cueclock.vision.pipeline import ReferenceModel, VisionPipeline
 
 CLIPS = Path("tests/clips")
 CALIBRATION = Path("config/table_calibration.json")
@@ -330,32 +338,68 @@ REFERENCES: dict[str, str] = {
 
 
 @cache
-def _reference_frames(name: str) -> list[np.ndarray]:
+def _reference_model(name: str) -> "ReferenceModel":
+    """Built once per reference clip per process — it costs ~0.3 s each."""
     from cueclock.capture.clip import ClipReader
+    from cueclock.vision.pipeline import ReferenceModel
 
     reader = ClipReader(CLIPS / name)
     indices = np.linspace(0, len(reader) - 1, num=15, dtype=int)
-    return [reader.frame(int(i)) for i in indices]
+    return ReferenceModel.build([reader.frame(int(i)) for i in indices])
 
 
-def _run_clip(name: str, reference_frames: list[np.ndarray]) -> list[Event]:
-    from cueclock.capture.clip import ClipReader
+@cache
+def _calibration() -> "TableCalibration":
     from cueclock.vision.calibration import TableCalibration
+
+    return TableCalibration.load(CALIBRATION)
+
+
+def _run_clip(name: str, reference: "ReferenceModel") -> list[Event]:
+    """Replay one clip at the live detect cadence and collect its events.
+
+    The two pipeline halves are run as two passes rather than interleaved:
+    `detect` is stateful only through the previous frame's gray and `advance`
+    only through the tracker/engine, so the split is behaviour-preserving —
+    and it is what lets the detector pass be served from disk when
+    `--detect-cache` is on (see `_detections`).
+    """
+    from cueclock.capture.clip import ClipReader
     from cueclock.vision.pipeline import VisionPipeline
 
-    pipeline = VisionPipeline(TableCalibration.load(CALIBRATION), reference_frames)
+    pipeline = VisionPipeline(_calibration(), reference)
     reader = ClipReader(CLIPS / name)
-    # Replay at the live detect cadence (~78 Hz): record-made clips store the
-    # full 156 fps camera stream, while ring-buffer dumps store only the
-    # detect-stride frames (78 fps) — one fixed stride would replay dumps at
-    # half the cadence the live session actually ran.
-    timestamps = reader.timestamps
-    fps = (len(reader) - 1) / float(timestamps[-1] - timestamps[0])
-    stride = max(1, round(fps / 78.0))
+    indices = reader.detect_indices()
+    frames = _detections(reader, CLIPS / name, pipeline, indices)
     events: list[Event] = []
-    for i in range(0, len(reader), stride):
-        events += pipeline.process(float(timestamps[i]), reader.frame(i))
+    for i, (detections, churn) in zip(indices, frames, strict=True):
+        events += pipeline.advance(float(reader.timestamps[i]), detections, churn)
     return events
+
+
+def _detections(
+    reader: "ClipReader", clip_dir: Path, pipeline: "VisionPipeline", indices: list[int]
+) -> list[tuple[list["Detection"], list[float | None]]]:
+    """Detector output for `indices` — from disk when `--detect-cache` is on.
+
+    Cold (the default) is the fidelity gate: it exercises the detector against
+    real pixels. Cached is the iteration path for event/tracker work, where
+    the detector provably cannot have changed — the key would differ if it had.
+    """
+    cache_dir = os.environ.get("CUECLOCK_DETECT_CACHE")
+    if not cache_dir:
+        return [pipeline.detect(reader.frame(i)) for i in indices]
+
+    from cueclock.capture.detect_cache import DetectionCache, cache_key
+
+    store = DetectionCache(Path(cache_dir))
+    key = cache_key(clip_dir, pipeline.reference, pipeline.detect_config)
+    hit = store.load(clip_dir, key, indices)
+    if hit is not None:
+        return hit
+    computed = [pipeline.detect(reader.frame(i)) for i in indices]
+    store.store(clip_dir, key, indices, computed)
+    return computed
 
 
 # Known defects, kept visible instead of loosening the expectation.
@@ -375,7 +419,7 @@ def test_corpus_clip(name: str) -> None:
     ref_name = REFERENCES.get(name, "empty_table")
     if not (CLIPS / ref_name).exists():
         pytest.skip(f"reference clip {ref_name} not recorded")
-    events = _run_clip(name, _reference_frames(ref_name))
+    events = _run_clip(name, _reference_model(ref_name))
     shots = sum(isinstance(e, ShotTaken) for e in events)
     scratches = sum(isinstance(e, Scratch) for e in events)
     settles = sum(isinstance(e, BallsSettled) for e in events)
@@ -395,6 +439,35 @@ def test_corpus_clip(name: str) -> None:
         assert settles <= max_settles, summary
 
 
+def test_detect_cache_replay_matches_cold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--detect-cache` must not move a single event, on real pixels.
+
+    tests/unit/test_detect_cache.py proves the container round-trips exactly;
+    only a real clip proves the *key* is complete and that splitting
+    `process()` into detect/advance is behaviour-preserving. spin_in_place is
+    the clip to do it with: its settle is gated on appearance churn, the one
+    cached field that is derived across frames rather than within one, so a
+    mis-packed churn column moves its settle instead of failing loudly.
+    """
+    clip = "spin_in_place"
+    if not (CLIPS / clip).exists():
+        pytest.skip(f"clip {clip} not recorded")
+    reference = _reference_model(REFERENCES.get(clip, "empty_table"))
+
+    # The cold leg must be genuinely cold even when the whole suite is run
+    # with --detect-cache, or this degenerates to comparing the cache to
+    # itself — which would pass while proving nothing.
+    monkeypatch.delenv("CUECLOCK_DETECT_CACHE", raising=False)
+    cold = _run_clip(clip, reference)
+    monkeypatch.setenv("CUECLOCK_DETECT_CACHE", str(tmp_path / "cache"))
+    built = _run_clip(clip, reference)  # miss: computes, then stores
+    cached = _run_clip(clip, reference)  # hit: served entirely from disk
+
+    assert list((tmp_path / "cache").glob("*.npz")), "nothing was cached"
+    assert built == cold, "the miss path diverged from a cold replay"
+    assert cached == cold, "the hit path diverged from a cold replay"
+
+
 def test_break_0801_speed_clears_the_idle_gate() -> None:
     """The IDLE break gate must never eat a real break — live, it did once.
 
@@ -409,7 +482,7 @@ def test_break_0801_speed_clears_the_idle_gate() -> None:
 
     if not (CLIPS / "break_0801").exists():
         pytest.skip("clip break_0801 not recorded")
-    events = _run_clip("break_0801", _reference_frames("empty_table_0729"))
+    events = _run_clip("break_0801", _reference_model("empty_table_0729"))
     shots = [e for e in events if isinstance(e, ShotTaken)]
     assert len(shots) == 1
     assert shots[0].speed_mms is not None
@@ -425,7 +498,7 @@ def test_spin_in_place_settle_waits_for_spin_stop() -> None:
     """
     if not (CLIPS / "spin_in_place").exists():
         pytest.skip("clip spin_in_place not recorded")
-    events = _run_clip("spin_in_place", _reference_frames("empty_table"))
+    events = _run_clip("spin_in_place", _reference_model("empty_table"))
     settles = [e.t for e in events if isinstance(e, BallsSettled)]
     assert settles, "spin_in_place must settle before the clip ends"
     assert settles[-1] >= 7.0, f"settled at {settles[-1]:.2f}s — before spin stopped"
@@ -446,7 +519,7 @@ def test_settle_stall_settle_is_prompt() -> None:
     """
     if not (CLIPS / "settle_stall_0801").exists():
         pytest.skip("clip settle_stall_0801 not recorded")
-    events = _run_clip("settle_stall_0801", _reference_frames("empty_table_0801"))
+    events = _run_clip("settle_stall_0801", _reference_model("empty_table_0801"))
     settles = [e.t for e in events if isinstance(e, BallsSettled)]
     post_shot = [t for t in settles if t > 6.9]
     assert post_shot, "the shot's settle never fired — the settle stall is back"
@@ -467,7 +540,7 @@ def test_address_chatter_shot_fires_at_impulse() -> None:
     """
     if not (CLIPS / "address_chatter_miss_0801").exists():
         pytest.skip("clip address_chatter_miss_0801 not recorded")
-    events = _run_clip("address_chatter_miss_0801", _reference_frames("empty_table_0801"))
+    events = _run_clip("address_chatter_miss_0801", _reference_model("empty_table_0801"))
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the address-chatter miss is back"
     assert 10.0 <= shots[0] <= 11.2, f"shot at {shots[0]:.2f}s — not anchored on the impulse"

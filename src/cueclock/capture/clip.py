@@ -10,11 +10,12 @@ Raw Bayer keeps clips bit-identical to the live feed (~2.2 MB/frame at
 """
 
 import json
+import os
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO
+from typing import BinaryIO, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -123,28 +124,90 @@ class ClipWriter:
 
 
 class ClipReader:
-    """Memory-mapped reader; iterates (frame, seconds-from-first-frame)."""
+    """Whole-frame reader; iterates (frame, seconds-from-first-frame).
+
+    Deliberately **not** `np.memmap`. The corpus lives on an external exFAT
+    SSD, where mapped reads fault in at 4 KB granularity with no useful
+    readahead: measured 2026-08-02 on cold clips (100 frames each, methods
+    alternated across six clips so neither warms the other's page cache),
+    memmap sustained **207 MB/s** against **958 MB/s** for one `pread` per
+    frame — 11.1 vs 2.4 ms per 1920x1200 frame. The corpus battery streams
+    ~130 GB per run, so the mapping cost ~9 ms/frame of pure wait against a
+    5.5 ms/frame detect budget.
+
+    `pread` keeps no shared file offset, so a reader stays safe to share
+    across threads. Frames are read-only, exactly as the `mode="r"` mapping's
+    views were.
+    """
 
     def __init__(self, clip_dir: Path) -> None:
+        self._fd: int | None = None  # set first: __del__ runs even if __init__ raises
         raw = json.loads((clip_dir / META_NAME).read_text())
         self.meta = ClipMeta(**raw)
         self.timestamps: npt.NDArray[np.float64] = np.load(clip_dir / TIMESTAMPS_NAME)
-        self._frames: npt.NDArray[np.uint8]
+        self._frame_bytes = self.meta.height * self.meta.width
         if self.meta.frame_count:
-            self._frames = np.memmap(
-                clip_dir / FRAMES_NAME,
-                dtype=np.uint8,
-                mode="r",
-                shape=(self.meta.frame_count, self.meta.height, self.meta.width),
-            )
-        else:
-            self._frames = np.empty((0, 0, 0), dtype=np.uint8)
+            self._fd = os.open(clip_dir / FRAMES_NAME, os.O_RDONLY)
 
     def __len__(self) -> int:
         return self.meta.frame_count
 
+    def detect_indices(
+        self, hz: float = 78.0, start: int = 0, stride: int | None = None
+    ) -> list[int]:
+        """Frame indices to replay at the live detect cadence (~78 Hz).
+
+        The stride has to adapt to the clip's stored rate: record-made clips
+        hold the full 156 fps camera stream (stride 2 reaches live cadence),
+        while ring dumps hold only the detect-stride frames already. A fixed
+        stride 2 silently replayed dumps at HALF the live cadence and produced
+        different events than the session under triage (checkpoint 33).
+
+        Pass ``stride`` to override the adaptive choice (`analyze --stride`),
+        ``start`` to skip a warm-replay prefix.
+        """
+        if stride is None:
+            span = (
+                float(self.timestamps[-1] - self.timestamps[0]) if len(self.timestamps) > 1 else 0.0
+            )
+            fps = (self.meta.frame_count - 1) / span if span > 0 else hz
+            stride = max(1, round(fps / hz))
+        return list(range(start, self.meta.frame_count, stride))
+
     def frame(self, index: int) -> npt.NDArray[np.uint8]:
-        return np.asarray(self._frames[index])
+        i = index + self.meta.frame_count if index < 0 else index
+        if self._fd is None or not 0 <= i < self.meta.frame_count:
+            raise IndexError(f"frame {index} out of range for a {self.meta.frame_count}-frame clip")
+        buf = os.pread(self._fd, self._frame_bytes, i * self._frame_bytes)
+        if len(buf) != self._frame_bytes:
+            # Truncated frames.raw — a half-written clip must fail loudly, not
+            # replay short and silently change what the corpus grades.
+            raise ValueError(
+                f"{FRAMES_NAME} is short at frame {i}: read {len(buf)} of {self._frame_bytes} bytes"
+            )
+        return cast(
+            npt.NDArray[np.uint8],
+            np.frombuffer(buf, dtype=np.uint8).reshape(self.meta.height, self.meta.width),
+        )
+
+    def close(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def __enter__(self) -> "ClipReader":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
 
     def __iter__(self) -> Iterator[tuple[npt.NDArray[np.uint8], float]]:
         for i in range(self.meta.frame_count):

@@ -81,6 +81,7 @@ uv run python -m cueclock.cli deck
 uv sync                      # venv + deps (incl. dev group)
 uv run pre-commit install    # one-time: git hooks
 uv run pytest                # unit tests everywhere; corpus tests need the T7
+uv run pytest -n 4           # full battery, ~5 min (add --detect-cache: ~21 s)
 uv run ruff check . && uv run mypy
 ```
 
@@ -89,7 +90,8 @@ uv run ruff check . && uv run mypy
   SSD behind the `tests/clips` symlink (see `tests/README.md`). Clip-based
   tests skip cleanly when the drive is absent; unit tests always run.
 - The corpus scoreboard (`tests/corpus/`) is the accuracy ground truth —
-  every detection change is graded against all recorded scenarios.
+  every detection change is graded against all recorded scenarios. Two tiers:
+  cold is the gate, `--detect-cache` is the iteration loop (`tests/README.md`).
 
 ## Documentation
 

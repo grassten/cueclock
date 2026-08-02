@@ -152,7 +152,8 @@ cueclock/
 ├── CLAUDE.md                    # fresh one, written for the new architecture
 ├── src/
 │   └── cueclock/
-│       ├── capture/             # pypylon grab loop, ring buffer, camera config/UserSet
+│       ├── capture/             # pypylon grab loop, ring buffer, camera config/UserSet,
+│       │                        #   clip container, offline detection cache
 │       ├── calib/               # ChArUco intrinsics, homography, image↔table transforms
 │       ├── vision/              # pure detection core: segmentation, tracker, events
 │       ├── clock/               # state machine + rulesets (port of state.py semantics)
@@ -168,7 +169,8 @@ cueclock/
 - **Pre-commit hooks** (`pre-commit` framework): `ruff` + `ruff-format`; `gitleaks` (secret scanning); `bandit` (Python security lint); standard hygiene hooks (end-of-file, trailing whitespace, `check-yaml`, `check-added-large-files` — the last one matters with video clips around). Dependency vulnerability audit (`pip-audit` or `osv-scanner`) belongs in **CI, not pre-commit** (network-dependent and slow; shift-left but not into every commit).
 - **CI:** GitHub Actions — ruff, mypy, pytest with the synthetic-track unit suite always; the clip-replay suite behind a cache/fetch step.
 - **Test videos:** raw Basler clips are huge (2.3 MB/frame uncompressed; even encoded, a corpus is GBs). **Decision: the corpus is not published.** Clips live in a local, gitignored `tests/clips/` directory (path configurable); the clip-replay test suite skips cleanly when fixtures are absent, so CI and outside cloners run the synthetic-track unit suite only. No fetch script, no LFS.
-- **Purity rule (the one dogma worth keeping from the old repo):** the vision core takes `(frame, timestamp)` and returns events/state — no I/O, no clocks, no threads — so the clip harness stays deterministic.
+- **Purity rule (the one dogma worth keeping from the old repo):** the vision core takes `(frame, timestamp)` and returns events/state — no I/O, no clocks, no threads — so the clip harness stays deterministic. `VisionPipeline.process()` is split into `detect()` (frame-bound, expensive, stable) and `advance()` (state-bound, cheap, the part under active tuning); both stay pure. Anything that persists the seam between them — the corpus battery's detection cache — lives in `capture/`, never in `vision/`.
+- **`ClipReader` reads with `os.pread`, never `np.memmap`** (2026-08-02). Mapped reads of the exFAT corpus drive fault in at 4 KB granularity with no readahead: 207 MB/s against 958 MB/s for whole-frame `pread`, which was ~65% of the battery's per-frame cost. Do not "simplify" it back to a mapping.
 - **KISS enforcement:** v1 scope = clock + events + overlay + API. No replay export, no break speed, no stats, no 16-ball identity until the clock is trustworthy.
 
 ## 6. Research appendix — sources behind §4

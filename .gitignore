@@ -24,6 +24,11 @@ models/
 tests/clips
 .env
 
+# Detector output cached for corpus replays (`pytest --detect-cache`).
+# Derived, machine-specific, and rebuildable from the clips. `.nosync` keeps
+# iCloud off it — see the note in capture/detect_cache.py.
+.detect-cache.nosync/
+
 # Mount-specific calibration artifacts (refit after every camera move)
 config/
 

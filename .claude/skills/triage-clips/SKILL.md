@@ -122,6 +122,11 @@ If warm replay refuses with a fingerprint/schema mismatch, the vision core
 changed since the dump. Either check out the recording commit to reproduce,
 or go cold and say so — never work around it silently.
 
+**Every dump recorded before 2026-08-02 is in exactly this state**: the
+detect/advance split touched `pipeline.py`, which `_vision_fingerprint()`
+hashes, so their snapshots are refused. Expected, not a bug. Cold replay is
+unaffected, and dumps taken since are fine.
+
 ## Step 6 — Read the warm/cold matrix
 
 | Warm | Cold | Reading |
@@ -158,12 +163,21 @@ Per clip, pick one and tell Steven which:
    all. Assert hard on §2.3 failure modes; only pin what's knowable elsewhere.
 4. **Add a bespoke test** when counts alone would stay green through the bug
    (e.g. a settle that fires but 12 s late — pin the *timing*).
-5. **Run the battery** (T7 mounted, no live session):
+5. **Run the battery** (T7 mounted, no live session). Iterate cached, commit
+   cold:
    ```bash
-   .venv/bin/python3 -m pytest -n 4
+   .venv/bin/python3 -m pytest -n 4 --detect-cache   # ~21 s — while tuning the pin
+   .venv/bin/python3 -m pytest -n 4                  # ~5 min — before committing
    ```
-   `-n 4` is the number — 4 workers hit the T7's sequential-read ceiling;
-   `-n auto` picks 8 here and is slower.
+   `--detect-cache` reuses stored detector output for clips it has already
+   seen; a **newly promoted clip is always computed from its real frames** on
+   the first run (nothing is cached for it yet), so the new pin is honest
+   either way. Cold is still the gate — run it once before the commit. If a
+   cached result ever looks impossible, `rm -rf .detect-cache.nosync`; it is
+   derived and rebuilds. Details in `tests/README.md`.
+
+   `-n 4` because the M2 has exactly 4 performance cores; `-n auto` picks 8
+   and spills onto the efficiency cores.
 6. **Append a CHANGELOG checkpoint** — newest first, in the established
    voice: mechanism, the measurement that anchors it, the fix, the scenarios
    added, test counts.

@@ -26,7 +26,8 @@ Ground rules that apply to every command:
   when triage promotes them. Writing them straight to the T7 was starving
   the live session that produced them (see `--dump-dir`).
 - **A live `run` session must have the machine to itself.** Corpus batteries
-  (`pytest tests/corpus -n 4`) and other CPU/T7-heavy jobs starve the detect
+  (`pytest -n 4`, even the cached tier — it still saturates four cores) and
+  other CPU/T7-heavy jobs starve the detect
   loop — measured 2026-08-01 evening: 78 Hz → 20 Hz (`flag_missed`'s "20 s"
   ring spans 78.4 s; a same-night dump with the machine quiet is a flawless
   12.8 ms cadence). At starved cadence a break streaks across in 2–3 detect
@@ -278,8 +279,10 @@ access and starve this daemon.
 
 ## Not in this CLI, but nearby
 
-- `uv run pytest` — unit tests; `uv run pytest -n 4` is the corpus
-  checkpoint battery (`tests/README.md`; needs the T7 mounted).
+- `uv run pytest -n 4` — the corpus checkpoint battery, ~5 min (needs the T7
+  mounted). Add `--detect-cache` for a ~21 s run while iterating on
+  `events.py`/`track.py`; cold is the gate before committing. Two-tier
+  rationale in `tests/README.md`.
 - `scripts/live_view.py` — camera bring-up viewer with focus/WB/grade
   hotkeys (`hardware.md` §A3); pylon Viewer doesn't exist on Apple Silicon.
 - `scripts/fetch_vosk_model.sh` — downloads the Vosk voice model.

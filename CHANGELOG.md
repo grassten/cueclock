@@ -199,6 +199,71 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 44 — the corpus battery gets two tiers):** the
+  battery is the accuracy gate, and at ~5 minutes it was also the reason
+  event-logic work happened in batches instead of in a loop. Three changes,
+  each anchored to a measurement rather than a hunch.
+  - **`ClipReader` reads with `os.pread`, not `np.memmap`.** Mapped reads of
+    the exFAT corpus drive fault in at 4 KB granularity with no useful
+    readahead: **207 MB/s against 958 MB/s** for one whole-frame `pread`
+    (11.1 vs 2.4 ms per 1920×1200 frame), measured on cold clips with the two
+    methods alternated across six clips so neither warmed the other's page
+    cache. That was ~65% of the per-frame cost. Battery, 51 scenarios, `-n 4`:
+    **7:48 → 5:05**. It also retires the 2026-08-01 note that "four workers hit
+    the T7's sequential-read ceiling" — that ceiling was our own mapping, and
+    a cold battery is now CPU-bound.
+  - **The reference model is built once, not once per scenario.**
+    `ReferenceModel` bundles the three static arrays `detect_balls` consumes
+    (median gray, the shadow-rejection Bayer frame, the dilated cloth mask),
+    ~0.30 s to build and previously paid 51 times over. **5:05 → 4:51.**
+  - **`VisionPipeline.process()` splits into `detect()` + `advance()`**, both
+    still pure. Per frame: raw read 2.4 ms, `detect_balls` 5.5 ms, churn
+    0.4 ms — against **0.08 ms** for the tracker and event engine, which is
+    where nearly all accuracy work happens. `pytest --detect-cache` stores the
+    seam between the halves, so ~21 MB of cached detections stand in for
+    ~134 GB of frames: **full suite 21 s, corpus alone 12 s.**
+  - **Correctness rests entirely on the cache key**, so it is built from
+    detection's *inputs*, not from a file list someone must remember to
+    extend: `detect.py`'s bytes, `DetectConfig`'s values, a content hash of
+    the three reference arrays (which covers the reference clip's pixels, the
+    sampling, `build_reference`, `cloth_mask` and the dilation at once), clip
+    identity, and the OpenCV/NumPy versions. Clip identity includes
+    `frames.raw`'s size and mtime because metadata does not pin pixels —
+    `medium_shot/meta.json` carries `"label": "soft_shot"` and every flag dump
+    shares `"label": "flagged"` at the same frame count. Deliberately *not*
+    keyed: `events.py` and `track.py` (the entire point), `pipeline.py`, and
+    the calibration (detection runs on distorted pixels and never sees it, so
+    a post-bump recalibration must not throw the cache away). Frame indices
+    are stored and validated on load, because churn couples each frame to its
+    predecessor *in the replayed sequence*.
+  - **Cold stays the gate.** The key cannot cover environment drift below
+    those library versions, and everything above the seam goes unexercised on
+    a cached run. `--detect-cache` is the iteration loop for
+    `events.py`/`track.py`; checkpoint batteries run cold. It buys nothing for
+    a `DetectConfig` sweep — every grid point is a new key.
+  - **`dump_state()` now refuses a cache-fed pipeline.** Churn differences
+    against the previous frame's gray, which a cache-served replay never
+    computes, so such a snapshot would resume with `prev_gray=None` and
+    silently mis-compute churn on its first frame — a wrong answer, not an
+    error. Consequence worth knowing during triage: every ring dump recorded
+    before today is refused by *warm* replay anyway, since `pipeline.py` is
+    part of the vision fingerprint. Cold replay is unaffected.
+  - Two DRY/hygiene fixes carried along. `detect_indices()` moved onto
+    `ClipReader` — the adaptive-stride rule from checkpoint 33 was duplicated
+    in the corpus harness and the warm-replay test, which is exactly the kind
+    of duplication that produced the half-cadence bug. And `tests/unit/` and
+    `tests/corpus/` became packages: `test_warm_replay.py` exists in both, and
+    under pytest's prepend import mode that basename collision has broken
+    *whole-suite* collection since checkpoint 36 — `pytest tests/corpus`
+    worked, plain `pytest` errored.
+  - **195 unit tests** (+7: exact round-trip including the `None`-vs-`0.0`
+    churn distinction and an empty frame, a key that moves for every keyed
+    input, loud failure on corrupt or mismatched entries) and **57 corpus
+    tests** (+1: cached replay must not move a single event against a cold one
+    on `spin_in_place`, chosen because its settle is gated on churn — the one
+    cached field derived *across* frames, so a mis-packed column would move
+    the settle rather than fail loudly). ruff + mypy --strict clean.
+
 - **2026-08-02 (checkpoint 43 — the key survives a deploy, and opens the TV
   itself):** two gaps the first real one-click sessions exposed.
   - **Adoption.** Shipping the `START` label meant a `launchctl kickstart`,

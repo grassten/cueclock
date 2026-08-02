@@ -40,9 +40,7 @@ def test_pipeline_warm_resume_matches_uninterrupted_replay() -> None:
 
     reader = ClipReader(CLIPS / CLIP)
     timestamps = reader.timestamps
-    fps = (len(reader) - 1) / float(timestamps[-1] - timestamps[0])
-    stride = max(1, round(fps / 78.0))  # live detect cadence, as analyze/corpus do
-    indices = list(range(0, len(reader), stride))
+    indices = reader.detect_indices()  # live detect cadence, as analyze/corpus do
     cut = len(indices) // 2
 
     live = VisionPipeline(calibration, refs)
