@@ -66,6 +66,12 @@ class Sim:
     def velocity(self, ball_id: int, vx: float, vy: float) -> None:
         self.balls[ball_id][2:] = [vx, vy]
 
+    def displace(self, ball_id: int, dx: float, dy: float = 0.0) -> None:
+        """Instant centroid excursion — a corrupt observation, not motion
+        (the ball's velocity is untouched; the position simply jumps)."""
+        self.balls[ball_id][0] += dx
+        self.balls[ball_id][1] += dy
+
     def run(self, seconds: float) -> list[Event]:
         events: list[Event] = []
         for _ in range(round(seconds / DT)):
@@ -186,6 +192,30 @@ def test_pocket_creep_blocks_settle() -> None:
     assert BallsSettled not in map(type, creep_events)
     sim.velocity(OBJ, 0.0, 0.0)
     assert types(sim.run(1.5)) == [BallsSettled]
+
+
+def test_observation_chatter_does_not_stall_settle() -> None:
+    # settle_stall_0801 (the 2026-08-01 12-16 s late-settle cluster): a
+    # parked ball under the stick throws brief centroid excursions past the
+    # creep gate — measured <= 64 ms per excursion, every ~0.2-0.3 s — and
+    # each one used to wipe the whole accumulated settle dwell, so a clean
+    # 0.5 s window never occurred and the clock stalled in MOTION. Dwell
+    # credit must survive un-still transients shorter than the motion
+    # window; genuine motion (>= 371 ms runs measured corpus-wide) still
+    # resets it — test_pocket_creep_blocks_settle is the control.
+    sim = rack()
+    sim.place(3, 900.0, 700.0)  # the parked ball with the corrupt blob
+    sim.run(1.0)
+    sim.velocity(CUE, 500.0, 0.0)
+    assert types(sim.run(0.5)) == [ShotTaken]
+    sim.velocity(CUE, 0.0, 0.0)
+    events: list[Event] = []
+    for _ in range(12):  # 8 mm single-frame mode flips at sub-dwell intervals
+        events += sim.run(0.2)
+        sim.displace(3, 8.0)
+        events += sim.run(DT)
+        sim.displace(3, -8.0)
+    assert BallsSettled in map(type, events)
 
 
 def test_settle_hysteresis_no_refire() -> None:

@@ -32,10 +32,15 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       carries `events.jsonl` with per-shot ball/speed/path detail. The
       14:00 UTC session validated 26–30 across two racks (11 + 11 shots,
       one flag); the 16:12 match-day flag became checkpoint 32
-      (`parked_vote_strike_0801`). Unexplained residual from that dump:
-      the live settle after the first shot came 9 s late (cold replay
-      settles in 3.1 s) — state divergence the ring can't reproduce; watch
-      for late settles live.
+      (`parked_vote_strike_0801`). The "9 s late settle / state divergence"
+      residual from that dump is EXPLAINED and closed: it was the
+      settle-dwell chatter wipe (`settle_stall_0801`, the dwell chatter
+      guard checkpoint) — one marginal blob's centroid flicker reset the
+      dwell every few tenths of a second and settle became a lottery; the
+      same mechanism is every session's latency tail (17.9/18.4 s,
+      17.3/50.0/47.6 s, 17.0/16.9 s) and the 21:30 session's 12.0–16.3 s
+      cluster. Live-validate the guard: settles should now land ~settle
+      dwell after rest with no long tail.
 - [ ] **Sub-impulse touch shots are now honestly invisible** (checkpoint 28
       finding): `soft_touch_0731`'s settle used to ride a stick-yank phantom
       latch; with the merge flag it produces no events — a touch shot leaves
@@ -252,6 +257,14 @@ awareness (§2), and MOLT-style re-spawn suppression after a pot.
   present and pointing at the cue ball". Costs line logic in distorted space,
   and every nudge provoker also has a stick present — only if hand-only false
   strikes appear.
+- **Chatter-robust translate stamps**: the dwell chatter guard
+  (`settle_stall_0801`) fixed settle, but `_last_translate` still refreshes
+  on corrupt sub-window excursions — a chattering ball keeps its own
+  spin-watch armed, defers pickup-discard judgment while latched, and cannot
+  open an own-rest strike (its dwell never completes). No live failure yet;
+  extend the persistence rule to the per-ball translate stamp if one appears.
+  The same clip is the measuring stick (excursions ≤ 64 ms vs genuine motion
+  ≥ 371 ms).
 
 ### §5. Corroborating signals (non-vision)
 

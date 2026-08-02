@@ -287,6 +287,31 @@ class EventEngine:
         self._history: dict[int, _BallHistory] = {}
         self._table_moving = False
         self._all_still_since: float | None = None
+        # Settle-dwell chatter guard (settle_stall_0801, the 2026-08-01
+        # evening 12-16 s late-settle cluster): a corrupt observation stream
+        # on ONE parked ball — the stick lying across it left a marginal
+        # half-ball diff blob whose centroid flipped between two modes
+        # 7-10 mm apart — trips the creep gate in brief bursts, and every
+        # single supra-gate frame used to wipe the whole table's accumulated
+        # dwell credit. With bursts every ~0.2-0.3 s a clean 0.5 s dwell
+        # window almost never occurs: the clip stalls with no settle for
+        # 10 s, and live settles became a lottery (12.0-16.3 s on 10 of that
+        # session's last shots; the same mechanism is the long tail in every
+        # session's latencies — 17.9/18.4 s, 17.3/50.0/47.6 s, 17.0/16.9 s).
+        # Measured discriminator: corrupt excursions persist <= 64 ms (40+
+        # runs on the clip's parked phase), while genuine motion holds the
+        # un-still verdict continuously — >= 371 ms across the corpus
+        # (hanger_pot_0801 pre-shot 371 ms, strike 794 ms, reborn roller
+        # 1434 ms; slow_creep's creep one unbroken 3469 ms run whose end
+        # + dwell IS the settle time). An un-still verdict therefore only
+        # erases dwell credit once it has persisted for a full
+        # moving_window_s (the existing displacement-evidence window,
+        # 3.1x the worst corrupt run, 1.9x under the shortest genuine one);
+        # this stamp tracks the current un-still run's start. Settle still
+        # fires only on a still-verdict frame, so a genuine mover blocks it
+        # from its very first frame exactly as before — the persistence
+        # window only decides whether dwell credit survives a transient.
+        self._unstill_since: float | None = None
         # Cue-ball rest memory: (t_still_start, x, y) of the current rest spot,
         # plus when the cue was last seen still. Survives the strike-time track
         # handoff (see EventConfig).
@@ -571,6 +596,7 @@ class EventEngine:
             self._episode_last.clear()
             self._episode_free_mover = False
         elif balls and self._is_still(t, balls):
+            self._unstill_since = None
             if self._all_still_since is None:
                 self._all_still_since = t
             if t - self._all_still_since >= cfg.settle_dwell_s:
@@ -590,8 +616,21 @@ class EventEngine:
                 self._episode_free_mover = False
                 self._fired_this_episode = False
                 events.append(BallsSettled(t))
+        elif balls:
+            # Un-still verdict on a populated table: dwell credit survives
+            # transients shorter than the motion-evidence window (see
+            # _unstill_since — corrupt-observation chatter measures <= 64 ms
+            # per excursion, genuine motion >= 371 ms). No settle can fire
+            # during the grace: the fire above sits in the still branch.
+            if self._unstill_since is None:
+                self._unstill_since = t
+            if t - self._unstill_since >= cfg.moving_window_s:
+                self._all_still_since = None
         else:
+            # Zero-ball frame: not stillness evidence (mid-scatter detection
+            # desert) — reset outright, exactly the pre-guard behavior.
             self._all_still_since = None
+            self._unstill_since = None
 
         # ---- scratch: cue track terminated near a pocket while balls were moving ----
         # Only *observed* positions count as "last seen". A sinking cue's final

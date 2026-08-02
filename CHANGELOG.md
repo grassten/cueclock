@@ -152,6 +152,60 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 35 — settle-dwell chatter guard: the SETTLE STALL
+  root-caused):** the 21:50 UTC flag (one dump, 20 s ring). Steven's shot
+  fired correctly (live and cold agree: 1507 mm/s, rest-anchored) and every
+  ball was at rest ~3 s later — then no settle for 11.6 s live, and the cold
+  replay is worse: **no settle at all** in 10 s of quiet. The session's last
+  two racks clustered shot→settle at 12.0–16.3 s (10 of the last ~16 shots)
+  vs the 3–8 s norm.
+  - **Mechanism — one corrupt blob's chatter wiped the settle dwell every
+    few tenths of a second:** the cue stick lay across a parked orange
+    ball; the thresholded diff kept only a marginal half-ball crescent
+    (area p50 676 px² vs ~1300+ nominal) whose centroid flips between two
+    modes 7–10 mm apart (raw deviation p95 10.6 mm; every other parked
+    ball ≤ 0.6 mm). Each flip is a 13–64 ms excursion past the 5 mm creep
+    gate, and a single supra-gate frame reset `_all_still_since` outright —
+    the §4.2 "hysteresis so it can't chatter" was one-sided, since the
+    original settle implementation. Settle became a wait for a lucky
+    excursion-free 0.5 s window: the measured chatter cadence (~0.2–0.3 s)
+    makes that window rare (the clip: never). The same lottery is the long
+    tail in EVERY session's latencies (17.9/18.4 s at 17:37, 17.3/50.0/
+    47.6/19.1 s at 19:22, 17.0/16.9 s at 20:40) and checkpoint 32's
+    "unexplained 9 s late settle / state divergence" — explained: not
+    state divergence, just different dice. Not a 32/33 regression; tonight's
+    drill posture (stick parked over a marginal ball) made it frequent and,
+    for the first time, cold-reproducible.
+  - **Fix — symmetric hysteresis, no new constant** (`vision/events.py`,
+    design prose `design.md` §4.2): an un-still verdict must persist for a
+    full `moving_window_s` (0.2 s, the existing displacement-evidence
+    window) before it erases dwell credit; BallsSettled still fires only on
+    a still-verdict frame with full credit, so genuine movers block settle
+    from their first frame exactly as before (hanger_pot's young-roller
+    protection untouched) and zero-ball frames keep the hard reset.
+    Anchors: corrupt excursions ≤ 64 ms (40+ runs measured on the clip),
+    genuine motion holds the verdict continuously ≥ 371 ms corpus-wide
+    (hanger_pot 371/794/1434 ms, slow_creep one 3469 ms run whose end +
+    dwell IS its settle time) — the window sits 3.1× above the worst
+    corrupt run, 1.9× under the shortest genuine one. The clip's settle:
+    none → 10.23 s (0.5 s after its creep-gate rest at 9.7; shot→settle
+    3.3 s, back in the norm).
+  - **Residual, BACKLOG'd:** `_last_translate` still refreshes on corrupt
+    excursions (a chattering ball keeps its spin-watch armed, defers
+    pickup-discard judgment, and cannot open own-rest strikes) — no live
+    failure observed; the persistence rule extends there if one appears.
+  - **Corpus:** `settle_stall_0801` promoted (ring dump renamed from
+    `flagged`), pinned (1, 0, 2, 2) — the second settle is the fix (red
+    before it: 0 settles), the 1.29 s one closes a cold-start warmup
+    episode (founding-window stick fragment; live was long settled) — plus
+    `test_settle_stall_settle_is_prompt` pinning the settle into
+    rest + two dwells (9.7–10.7 s), so a chatter-lottery regression reads
+    red even with counts intact. 46 scenarios, 53 corpus tests; 158 unit
+    tests (new:
+    `test_observation_chatter_does_not_stall_settle`, red on pre-guard
+    code; `test_pocket_creep_blocks_settle` is the sustained-motion
+    control); ruff + mypy clean.
+
 - **2026-08-01 (checkpoint 34 — reason-coded flag keys: triage starts from
   *why*):** tonight an OBS-side failure (the camera source died on the wall
   TV) was flagged and then chased as a vision bug through two triage passes —
@@ -179,6 +233,7 @@ survive unchanged in `design.md`.
   line is the reason, matching the clip name triage will see. `hardware.md`
   §C2/§C5, `README.md`, and `BACKLOG.md` updated in step. The running deck
   daemon renders the old layout until `cueclock deck` is relaunched.
+
 
 - **2026-08-01 (checkpoint 33 — episode closure: a fire is evidence; eight
   evening dumps triaged):** two drill sessions on the checkpoint-32 build

@@ -259,6 +259,23 @@ EXPECTED: dict[
     # this shot double-fired through two paths 0.05 s apart (rest-anchored
     # then newborn); the fire-latch closes the second path structurally.
     "drill_shot_0801": (1, 0, None),
+    # settle_stall: the SETTLE STALL evidence (21:50 UTC flag, late in the
+    # same evening session). One real shot at 6.90 s, every ball at rest
+    # from ~9.7 s — and before the dwell chatter guard, NO settle for the
+    # remaining 10 s of the clip: the stick lying across a parked orange
+    # ball leaves a marginal half-ball diff blob whose centroid flips
+    # between two modes 7-10 mm apart, and each 13-64 ms supra-creep-gate
+    # excursion wiped the whole table's settle-dwell credit (live: settle
+    # 13.7 s after the fire; 10 of that session's last shots clustered at
+    # 12.0-16.3 s, and the same lottery is every session's latency tail).
+    # Cold truth with the guard: the fire's settle lands at 10.23 s
+    # (~0.5 s dwell after the creep-gate rest at 9.7), plus one warmup
+    # settle at 1.29 s closing a cold-start episode (a founding-window
+    # stick fragment genuinely travels ~26 mm and latches; live state was
+    # long settled — ring-start artifact, same class as stroke_tug's
+    # prior-shot tail). The timing itself is pinned by
+    # test_settle_stall_settle_is_prompt below.
+    "settle_stall_0801": (1, 0, 2, 2),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -298,6 +315,7 @@ REFERENCES: dict[str, str] = {
     "cluster_shot_0801": "empty_table_0801",
     "pickup_snatch_0801": "empty_table_0801",
     "drill_shot_0801": "empty_table_0801",
+    "settle_stall_0801": "empty_table_0801",
 }
 
 
@@ -401,3 +419,25 @@ def test_spin_in_place_settle_waits_for_spin_stop() -> None:
     settles = [e.t for e in events if isinstance(e, BallsSettled)]
     assert settles, "spin_in_place must settle before the clip ends"
     assert settles[-1] >= 7.0, f"settled at {settles[-1]:.2f}s — before spin stopped"
+
+
+def test_settle_stall_settle_is_prompt() -> None:
+    """The shot's settle must land a dwell after rest, not a chatter lottery.
+
+    settle_stall_0801: the stroke fires at 6.90 s and the table is at rest by
+    the creep-gate measure at 9.7 s (last genuine supra-gate motion; all
+    velocities < 6 mm/s from ~10.1). A parked ball under the stick throws
+    5-10 mm single-mode-flip excursions every ~0.2-0.3 s for the rest of the
+    clip; before the dwell chatter guard each one wiped the accumulated
+    settle dwell and NO settle fired in 10 s of quiet (live: 13.7 s late,
+    session cluster 12.0-16.3 s). With the guard the settle lands at 10.23 s.
+    The window pinned here is rest (9.7) to rest + two dwells (10.7): late
+    means the chatter lottery is back, absent means the stall is back.
+    """
+    if not (CLIPS / "settle_stall_0801").exists():
+        pytest.skip("clip settle_stall_0801 not recorded")
+    events = _run_clip("settle_stall_0801", _reference_frames("empty_table_0801"))
+    settles = [e.t for e in events if isinstance(e, BallsSettled)]
+    post_shot = [t for t in settles if t > 6.9]
+    assert post_shot, "the shot's settle never fired — the settle stall is back"
+    assert 9.7 <= post_shot[0] <= 10.7, f"settle at {post_shot[0]:.2f}s — outside rest+2 dwells"
