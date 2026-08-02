@@ -286,3 +286,55 @@ def test_idle_break_gate_rejects_newborn_fires() -> None:
     assert hub.clock.state is State.RUNNING
     asyncio.run(hub.shot_taken(speed_mms=1500.0, newborn=True))  # occluded strike
     assert hub.clock.state is State.MOTION
+
+
+# ---------- session journal upgrades (frame_t + detect heartbeat, 2026-08-01) ----------
+
+
+def test_vision_events_journal_frame_t() -> None:
+    """Vision journal lines carry the confirming frame's capture timestamp.
+
+    `frame_t` names the frame-capture time unambiguously against the
+    record's emit-time `mono` stamp; `t` keeps the same value for old
+    readers (journal.py contract: additive fields only).
+    """
+    hub = Hub()
+    asyncio.run(hub.shot_taken(3.25, ball_id=7, speed_mms=5000.0))
+    asyncio.run(hub.balls_settled(4.5))
+    asyncio.run(hub.scratch_seen(5.75))
+    by_kind = {r["kind"]: r for r in hub.journal.tail(60.0)}
+    assert by_kind["vision_shot_taken"]["frame_t"] == 3.25
+    assert by_kind["vision_shot_taken"]["t"] == 3.25  # old readers keep working
+    assert by_kind["vision_balls_settled"]["frame_t"] == 4.5
+    assert by_kind["vision_scratch"]["frame_t"] == 5.75
+
+
+def test_detect_heartbeat_reports_hz_and_frame_age() -> None:
+    """`detect_heartbeat` journals effective detect Hz + newest-frame age.
+
+    This is what makes detect-loop starvation measurable (BACKLOG: a
+    flag-dump write halved the detect rate for ~10 s with no journal
+    trace). The first sighting of frames only establishes the baseline;
+    every interval after that emits a line.
+    """
+    import time
+
+    hub = Hub()
+    now = time.monotonic()
+    assert hub.journal.tail(60.0) == []
+    hub._maybe_heartbeat(now)  # no frames yet: silent (bare server stays quiet)
+    assert hub.journal.tail(60.0) == []
+    hub.note_frame(1.0)
+    hub._maybe_heartbeat(now)  # baseline only, no line yet
+    assert hub.journal.tail(60.0) == []
+    hub.note_frame(2.0)
+    hub.note_frame(3.0)
+    hub._maybe_heartbeat(now + 1.0)  # under the 5 s cadence: still silent
+    assert hub.journal.tail(60.0) == []
+    hub._maybe_heartbeat(now + 5.0)
+    (beat,) = hub.journal.tail(60.0)
+    assert beat["kind"] == "detect_heartbeat"
+    assert beat["hz"] == 0.4  # 2 frames over the 5 s interval
+    assert beat["frame_t"] == 3.0  # newest processed frame's capture time
+    age = beat["frame_age_s"]
+    assert isinstance(age, float) and age >= 0.0

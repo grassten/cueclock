@@ -7,8 +7,17 @@ no threads; replaying a recorded clip through it is deterministic.
 
 The empty-table reference and the table mask come from the corpus's own
 `empty_table` clip (or, live, from a capture taken at startup).
+
+Warm replay: the pipeline's mutable state (tracker, event engine, previous
+gray frame) can be captured with :meth:`VisionPipeline.dump_state` and
+restored with :meth:`VisionPipeline.load_state` — `cueclock run` snapshots
+it at ~1 Hz so a flag-key ring dump carries the live session's accumulated
+state (whiteness-vote position, roster, episode latches) and
+`analyze --warm` reproduces exactly what live computed instead of starting
+cold. Still pure: bytes in/out, no file I/O.
 """
 
+import pickle  # nosec B403 — state snapshots only; loaded blobs are our own dumps
 from typing import cast
 
 import cv2
@@ -86,3 +95,32 @@ class VisionPipeline:
         balls = self._tracker.update(t, observations)
         self.last_balls = balls
         return self._engine.update(t, balls)
+
+    def dump_state(self) -> bytes:
+        """Serialize the mutable state for warm replay (`analyze --warm`).
+
+        A whole-object pickle of the state-bearing stages — deliberately not
+        a field-by-field schema, so state added to the tracker or engine
+        later rides along automatically. The static stages (reference,
+        mask, configs) are rebuilt by the caller from the same inputs the
+        live session used. Restoring under *different* vision-core code is
+        guarded by the fingerprint stamp in the dump's `state.json` sidecar
+        (cli.py), not here.
+        """
+        return pickle.dumps(
+            {
+                "tracker": self._tracker,
+                "engine": self._engine,
+                "prev_gray": self._prev_gray,
+                "last_balls": self.last_balls,
+            },
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+
+    def load_state(self, blob: bytes) -> None:
+        """Restore :meth:`dump_state` output onto an identically built pipeline."""
+        state = pickle.loads(blob)  # nosec B301 — our own dump_state output
+        self._tracker = state["tracker"]
+        self._engine = state["engine"]
+        self._prev_gray = state["prev_gray"]
+        self.last_balls = state["last_balls"]

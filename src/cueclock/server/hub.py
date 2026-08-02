@@ -19,6 +19,11 @@ from cueclock.server.score import MatchScore
 
 BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
 
+# `detect_heartbeat` journal cadence: often enough to bracket a starvation
+# window (a flag-dump write measurably halved the detect rate for ~10 s —
+# BACKLOG, checkpoint 33), rare enough to be journal noise-free.
+HEARTBEAT_INTERVAL_SECONDS = 5.0
+
 # IDLE break gate (checkpoint 28): out of New Rack the only legal shot is a
 # break, and the one live phantom that ever started a rack came from racking
 # motion (2026-08-01 11:14:49, journal-pinned: the phantom started the clock
@@ -67,6 +72,14 @@ class Hub:
         # engine actually did (journal.py module docstring).
         self.journal = SessionJournal(path=journal_path)
         self._journal_state = self.clock.state.value
+        # Detect-loop telemetry: the `cueclock run` camera thread stamps each
+        # processed detect frame via note_frame(); the tick loop turns the
+        # stamps into `detect_heartbeat` journal lines. Plain attribute
+        # rebinding only on the camera thread (atomic under the GIL) — all
+        # journal writes stay on the asyncio loop (SessionJournal contract).
+        self._detect_frames = 0
+        self._detect_last: tuple[float, float] | None = None  # (frame_t, mono when processed)
+        self._heartbeat_prev: tuple[float, int] | None = None  # (mono, frames) at last line
 
     def _log(self, kind: str, **detail: object) -> None:
         state = self.clock.state.value
@@ -109,12 +122,55 @@ class Hub:
 
     async def tick_loop(self) -> None:
         while True:
-            snapshot = self.clock.tick(time.monotonic())
+            now = time.monotonic()
+            snapshot = self.clock.tick(now)
             if snapshot.state != self._journal_state:
                 # GRACE/EXPIRED/auto-restart transitions happen inside tick.
                 self._log("tick_transition")
+            self._maybe_heartbeat(now)
             await self.broadcast(snapshot)
             await asyncio.sleep(BROADCAST_INTERVAL_SECONDS)
+
+    # ---------- detect-loop telemetry (journal heartbeat) ----------
+
+    def note_frame(self, frame_t: float) -> None:
+        """Camera-thread stamp: one detect frame processed, captured at ``frame_t``.
+
+        ``frame_t`` is the frame's capture timestamp (camera clock, seconds
+        since the session's first frame — the same timeline vision events
+        carry). Attribute rebinding only; no journal I/O off the asyncio loop.
+        """
+        self._detect_frames += 1
+        self._detect_last = (frame_t, time.monotonic())
+
+    def _maybe_heartbeat(self, now: float) -> None:
+        """Journal a `detect_heartbeat` line every ~5 s while frames flow.
+
+        Fields: ``hz`` — effective detect rate since the previous line;
+        ``frame_age_s`` — how stale the newest *processed* frame is at emit
+        time (healthy: one detect period; a flag-dump write stalling the
+        grab loop shows up as seconds); ``frame_t`` — that frame's capture
+        timestamp, which paired with this record's ``mono`` anchors the
+        camera timeline to the journal clock, making per-event capture→emit
+        lag computable. Emitted from the tick loop, which keeps beating
+        while the camera thread is starved — exactly when it matters.
+        """
+        if self._detect_last is None:
+            return  # no vision feeding this hub (bare server): stay silent
+        if self._heartbeat_prev is None:
+            self._heartbeat_prev = (now, self._detect_frames)
+            return
+        prev_mono, prev_frames = self._heartbeat_prev
+        if now - prev_mono < HEARTBEAT_INTERVAL_SECONDS:
+            return
+        frame_t, frame_mono = self._detect_last
+        self._log(
+            "detect_heartbeat",
+            hz=round((self._detect_frames - prev_frames) / (now - prev_mono), 1),
+            frame_age_s=round(now - frame_mono, 3),
+            frame_t=round(frame_t, 3),
+        )
+        self._heartbeat_prev = (now, self._detect_frames)
 
     # ---------- commands (each also broadcasts, per the "on every event" rule) ----------
 
@@ -176,6 +232,15 @@ class Hub:
 
     # ---------- vision events (dispatched from the `cueclock run` camera thread) ----------
 
+    # Journal timestamp contract (2026-08-01): `frame_t` is the *confirming
+    # frame's capture timestamp* — camera clock, seconds since the session's
+    # first frame, the exact `t` the vision core was fed — named unambiguously
+    # against the record's own `mono` stamp, which is emit time. `t` carries
+    # the same value and is kept for old readers. Capture→emit lag per event =
+    # this record's `mono` minus the camera-to-mono anchor the nearest
+    # `detect_heartbeat` line provides (its `mono` minus `frame_age_s` ≈ the mono
+    # instant of its `frame_t`).
+
     async def shot_taken(
         self,
         t: float | None = None,
@@ -183,7 +248,7 @@ class Hub:
         speed_mms: float | None = None,
         newborn: bool = False,
     ) -> None:
-        detail: dict[str, object] = {"t": t, "ball": ball_id, "newborn": newborn}
+        detail: dict[str, object] = {"t": t, "frame_t": t, "ball": ball_id, "newborn": newborn}
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
         if not self.vision_enabled:
@@ -201,12 +266,12 @@ class Hub:
 
     async def balls_settled(self, t: float | None = None) -> None:
         if not self.vision_enabled:
-            self._log("vision_balls_settled_killed", t=t)
+            self._log("vision_balls_settled_killed", t=t, frame_t=t)
             return  # kill switch, as above
         self.clock.balls_settled(time.monotonic())
-        self._log("vision_balls_settled", t=t)
+        self._log("vision_balls_settled", t=t, frame_t=t)
         await self.broadcast(self.clock.snapshot())
 
     async def scratch_seen(self, t: float | None = None) -> None:
         # No clock action in v1 (CHANGELOG decision) — journal only.
-        self._log("vision_scratch", t=t)
+        self._log("vision_scratch", t=t, frame_t=t)

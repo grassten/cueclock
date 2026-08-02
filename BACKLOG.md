@@ -34,13 +34,14 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       one flag); the 16:12 match-day flag became checkpoint 32
       (`parked_vote_strike_0801`). The "9 s late settle / state divergence"
       residual from that dump is EXPLAINED and closed: it was the
-      settle-dwell chatter wipe (`settle_stall_0801`, the dwell chatter
-      guard checkpoint) — one marginal blob's centroid flicker reset the
+      settle-dwell chatter wipe (`settle_stall_0801`, checkpoint 35) — one marginal blob's centroid flicker reset the
       dwell every few tenths of a second and settle became a lottery; the
       same mechanism is every session's latency tail (17.9/18.4 s,
       17.3/50.0/47.6 s, 17.0/16.9 s) and the 21:30 session's 12.0–16.3 s
       cluster. Live-validate the guard: settles should now land ~settle
-      dwell after rest with no long tail.
+      dwell after rest with no long tail. If a genuinely state-dependent
+      case ever reappears, ring dumps now carry a live-state snapshot
+      (`analyze --warm`, checkpoint 36).
 - [ ] **Sub-impulse touch shots are now honestly invisible** (checkpoint 28
       finding): `soft_touch_0731`'s settle used to ride a stick-yank phantom
       latch; with the merge flag it produces no events — a touch shot leaves
@@ -81,14 +82,21 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       coherent, whiteness-eligible track at ~1 m/s and fired twice live
       (lone_roller's t=4064.9 fire; drill_shot's t=302.4 fire, which
       counted a rack shot). Cold replays never reproduce either (live
-      vote/roster state); unit-simulate if a gate is ever attempted.
+      vote/roster state) — but future occurrences will be warm-replayable
+      (ring dumps carry live state since checkpoint 36, `analyze --warm`);
+      unit-simulate if a gate is ever attempted before one recurs.
 - [ ] **Flag-dump writes starve the detect loop** (checkpoint 33 finding):
       `drill_shot_0801`'s ring spans 41 s for 1562 frames — detection ran
       at ~38 Hz while the previous dump was writing 3.6 GB to the T7, and
       the live stick-sweep phantom fired inside the degraded window.
       Candidate fixes: throttle the dump writer, lower ring seconds, or
-      accept (flags cluster at failures anyway). Measure first: timestamp
-      gaps in any dump recorded within ~15 s of a prior flag press.
+      accept (flags cluster at failures anyway). **Now measurable in every
+      session** (checkpoint 36): the journal's `detect_heartbeat` line
+      (every ~5 s: effective detect Hz + newest-processed-frame age,
+      emitted from the tick loop so it keeps beating through the stall)
+      brackets any starvation window — read the heartbeats around the next
+      flag press instead of staging a dump-within-15-s experiment. Decide
+      throttle-vs-accept from that data.
 - [ ] **IDLE break gate vs real breaks/openers** (checkpoint 33): the gate
       ate a real, frame-verified break that read 705 mm/s
       (`break_underread_0801` — the white streaked unobservably fast; the

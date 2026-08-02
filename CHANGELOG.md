@@ -152,6 +152,59 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 36 — warm replay: ring dumps carry live state;
+  journal heartbeat + frame timestamps):** two triage gaps closed, both paid
+  for the hard way this week. (1) Cold replay starts the pure core from
+  empty state, so live failures caused by *accumulated* state —
+  whiteness-vote position, roster membership, motion/episode latches — never
+  reproduce offline (checkpoint 32's shot-1 miss and 9 s-late settle,
+  checkpoint 33's white-shaft-sweep fires, all "cold-invisible"). (2) The
+  journal carried no unambiguous frame-capture stamp and nothing measured
+  detect-loop lag, so the flag-dump starvation (detection at ~38 Hz for
+  ~10 s, `drill_shot_0801`) left no journal trace.
+  - **State snapshots in `run`:** a rolling deque of the vision core's
+    pickled state at ~1 Hz spanning the ring
+    (`VisionPipeline.dump_state` — whole-object pickle of tracker + event
+    engine + prev-gray frame, deliberately schema-free so engine state
+    added later rides along automatically). Measured on real mid-shot
+    state: **2.33 MB, 0.9 ms mean / 2.4 ms max per snapshot** — negligible
+    against the 12.8 ms detect budget at 1 Hz (~58 MB resident for the
+    default 20 s ring's retention). A flag dump writes the oldest snapshot
+    inside the ring window as `state.pkl` + `state.json` (schema version +
+    a fingerprint of the state-bearing vision sources, so a stale pickle
+    fails loudly instead of rehydrating onto changed classes and mis-running
+    silently; `snapshot_t`/`snapshot_ns` locate it in both timelines).
+  - **`analyze --warm`:** restores the snapshot, skips the frames it
+    already contains, and replays the rest at session-relative timestamps
+    (matching the dump's `events.jsonl`) — reproducing exactly what the
+    live session computed. No snapshot → cold replay plus a printed note;
+    fingerprint/schema mismatch → loud refusal with the recovery options.
+    Cold replay stays the default: corpus grading wants current-code-from-
+    empty-state semantics.
+  - **Determinism acceptance (the point of the feature):** running the core
+    with a snapshot taken midway, then resuming from that snapshot, must
+    equal the uninterrupted run event-for-event. Pinned three ways:
+    engine-only over a scripted two-shot scenario at every 10th cut point;
+    tracker+engine over scripted observations (occlusion coasting,
+    whiteness vote) at every 20th; full VisionPipeline over `medium_shot`
+    split at the midpoint (corpus, skips without clips). Plus an
+    end-to-end CLI check: a synthesized ring dump warm-replayed to the
+    byte-identical event stream of its simulated live session.
+  - **Journal upgrades (strictly additive — old readers unaffected):**
+    vision-event records add `frame_t`, the confirming frame's capture
+    timestamp, named unambiguously against the record's emit-time `mono`
+    stamp (`t` keeps the same value for existing tools); a
+    `detect_heartbeat` record every ~5 s carries `hz` (effective detect
+    rate), `frame_age_s` (staleness of the newest processed frame), and
+    its `frame_t` (the camera→journal clock anchor, making per-event
+    capture→emit lag computable). Emitted from the Hub tick loop, which
+    keeps beating while the camera thread is starved — the starvation
+    BACKLOG item is now measurable from any session journal. `flag_dump`
+    records gain `warm: true/false`.
+  - Docs in the same commit: `docs/cli.md` (`--warm`, run/dump notes),
+    `design.md` §2.1 (dump + journal contract, appended). 161 unit tests
+    (4 new); corpus battery green; ruff + mypy --strict clean.
+
 - **2026-08-01 (checkpoint 35 — settle-dwell chatter guard: the SETTLE STALL
   root-caused):** the 21:50 UTC flag (one dump, 20 s ring). Steven's shot
   fired correctly (live and cold agree: 1507 mm/s, rest-anchored) and every

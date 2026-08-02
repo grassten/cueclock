@@ -11,6 +11,15 @@ copies the recent tail into each ring dump as ``events.jsonl``.
 Records carry both wall time (for humans) and ``time.monotonic()`` (the same
 clock the vision pipeline timestamps use), so journal lines align with dumped
 frame timestamps.
+
+Added 2026-08-01: vision-event records also carry ``frame_t`` — the
+confirming frame's *capture* timestamp (camera clock, seconds since the
+session's first frame), unambiguous against the record's emit-time ``mono``
+stamp — and a ``detect_heartbeat`` record every ~5 s reports the effective
+detect rate and the age of the newest processed frame (hub.py), so
+detect-loop starvation is measurable from the journal alone. New kinds and
+fields are strictly additive: journal readers must ignore what they don't
+recognize.
 """
 
 import json

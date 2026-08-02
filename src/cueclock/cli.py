@@ -11,10 +11,13 @@ Run via:  uv run python -m cueclock.cli run --rectify
 
 import argparse
 import contextlib
+import hashlib
+import json
 import shutil
 import signal
 import sys
 import time
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
@@ -38,6 +41,39 @@ from cueclock.display.pipeline import (
 BYTES_PER_FRAME = 1920 * 1200
 NOMINAL_FPS = 156.25
 DISK_HEADROOM = 5 * 1024**3  # never eat the last 5 GiB of the disk
+
+# Warm replay (state snapshots in ring dumps). Live failures caused by
+# accumulated vision-core state — whiteness-vote position, roster membership,
+# motion/episode latches — do not reproduce under a cold `analyze` (the
+# checkpoint-32 parked-vote miss and several checkpoint-33 residuals were
+# exactly this class). `run` therefore keeps a rolling deque of pickled core
+# state at ~1 Hz spanning the ring, and a flag dump writes the oldest
+# snapshot inside the ring window as `state.pkl` + a `state.json` sidecar;
+# `analyze --warm` restores it and replays the remaining frames — exactly
+# what live computed. Measured cost per snapshot (M2, mid-shot state):
+# ~0.9 ms and ~2.3 MB (dominated by the debayered prev-gray frame) against
+# the 12.8 ms detect budget — negligible at 1 Hz.
+STATE_SNAPSHOT_PERIOD_S = 1.0
+STATE_SCHEMA = 1
+STATE_PKL_NAME = "state.pkl"
+STATE_META_NAME = "state.json"
+
+
+def _vision_fingerprint() -> str:
+    """Identity stamp for state snapshots (`state.json`).
+
+    Warm replay unpickles live EventEngine/BallTracker objects; if their
+    classes changed since the dump, pickle would happily rehydrate a stale
+    attribute set onto new code and mis-run silently. Hash the state-bearing
+    sources so a stale snapshot fails loudly instead.
+    """
+    from cueclock import vision
+
+    root = Path(str(vision.__file__)).parent
+    digest = hashlib.sha256()
+    for name in ("events.py", "track.py", "pipeline.py"):
+        digest.update((root / name).read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def _unique_dir(root: Path, label: str) -> Path:
@@ -317,10 +353,57 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         span = float(reader.timestamps[-1] - reader.timestamps[0])
         fps = (len(reader) - 1) / span if span > 0 else NOMINAL_FPS
         stride = max(1, round(fps / 78.0))
+
+    # Warm replay: restore the live session's state snapshot (written into
+    # flag dumps by `run` — see STATE_SNAPSHOT_PERIOD_S), skip the frames it
+    # already contains, and feed session-relative timestamps so the printed
+    # events line up with the dump's events.jsonl. Cold replay (the default,
+    # and the fallback when a clip has no snapshot) starts from empty state:
+    # it shows what *current code* does, not what the live session did.
+    start = 0
+    t_offset = 0.0
+    if args.warm:
+        pkl_path = Path(args.clip) / STATE_PKL_NAME
+        meta_path = Path(args.clip) / STATE_META_NAME
+        if not (pkl_path.exists() and meta_path.exists()):
+            print("no state snapshot in this clip — cold replay (live state starts empty)")
+        else:
+            meta = json.loads(meta_path.read_text())
+            if meta.get("schema") != STATE_SCHEMA:
+                print(
+                    f"state.json schema {meta.get('schema')!r} != {STATE_SCHEMA} — snapshot "
+                    "from an incompatible cueclock version; rerun without --warm",
+                    file=sys.stderr,
+                )
+                return 1
+            fingerprint = _vision_fingerprint()
+            if meta.get("vision_fingerprint") != fingerprint:
+                print(
+                    f"state snapshot written by different vision-core code "
+                    f"({meta.get('vision_fingerprint')} vs current {fingerprint}) — "
+                    "restoring it could mis-run silently. Check out the commit that "
+                    "recorded the dump, or rerun without --warm (cold replay of "
+                    "current code).",
+                    file=sys.stderr,
+                )
+                return 1
+            # Locate the snapshot inside the clip: dump timestamps are stored
+            # relative to the clip's first frame, the snapshot's are session-
+            # relative — the camera-ns stamps tie the two timelines together.
+            snap_clip_t = (int(meta["snapshot_ns"]) - reader.meta.first_timestamp_ns) / 1e9
+            t_offset = float(meta["snapshot_t"]) - snap_clip_t
+            pipeline.load_state(pkl_path.read_bytes())
+            start = int(np.searchsorted(reader.timestamps, snap_clip_t, side="right"))
+            print(
+                f"warm replay: live state restored at session t={float(meta['snapshot_t']):.3f}s"
+                f" — skipping {start} of {len(reader)} frames; timestamps below are "
+                "session-relative (they match the dump's events.jsonl)"
+            )
+
     n_events = 0
-    next_status = 0.0
-    for i in range(0, len(reader), stride):
-        t = float(reader.timestamps[i])
+    next_status = t_offset
+    for i in range(start, len(reader), stride):
+        t = t_offset + float(reader.timestamps[i])
         for event in pipeline.process(t, reader.frame(i)):
             n_events += 1
             print(f"{t:7.3f}s  {type(event).__name__}")
@@ -416,6 +499,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     ring: FrameRing | None = None
     ring_capacity = int(args.ring_seconds * NOMINAL_FPS / args.stride)
     camera_serial = "unknown"
+    # Warm-replay snapshots (see STATE_SNAPSHOT_PERIOD_S): (frame t, camera
+    # ns, pickled core state) at ~1 Hz, retained a little longer than the
+    # ring spans. Appended by the camera thread, read by the dump thread
+    # (`/api/dump` runs via asyncio.to_thread) — hence the lock.
+    state_snaps: deque[tuple[float, int, bytes]] = deque(maxlen=int(args.ring_seconds) + 5)
+    state_lock = threading.Lock()
 
     def dump_ring(label: str) -> str:
         """Write the ring to a corpus-style clip (called from the server)."""
@@ -430,13 +519,40 @@ def _cmd_run(args: argparse.Namespace) -> int:
             gain=GAIN,
             recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
         )
-        for ts_ns, ring_frame in ring.snapshot():
+        frames = ring.snapshot()
+        for ts_ns, ring_frame in frames:
             writer.write(ring_frame, ts_ns)
         writer.close()
+        # Live state for warm replay (`analyze --warm`): the oldest snapshot
+        # inside the ring window. Restored, it replays into exactly what the
+        # live engine computed — accumulated whiteness-vote / roster /
+        # episode state included, the class of divergence a cold replay
+        # cannot reproduce.
+        with state_lock:
+            snaps = list(state_snaps)
+        snap = next((s for s in snaps if s[1] >= frames[0][0]), None)
+        if snap is None:
+            print("no state snapshot covers this ring — dump will replay cold only")
+        else:
+            snap_t, snap_ns, blob = snap
+            (clip_dir / STATE_PKL_NAME).write_bytes(blob)
+            (clip_dir / STATE_META_NAME).write_text(
+                json.dumps(
+                    {
+                        "schema": STATE_SCHEMA,
+                        "snapshot_t": snap_t,
+                        "snapshot_ns": snap_ns,
+                        "vision_fingerprint": _vision_fingerprint(),
+                        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
         # Journal the press itself (before the tail copy, so it appears in
         # it): the dump's own timestamp is what locates the ring inside the
         # session timeline when triaging.
-        hub.journal.log("flag_dump", label=label, path=str(clip_dir))
+        hub.journal.log("flag_dump", label=label, path=str(clip_dir), warm=snap is not None)
         # The other half of the story: what the live engine did during (and
         # around) these frames — events, commands, clock transitions.
         hub.journal.dump_tail(clip_dir / "events.jsonl", seconds=args.ring_seconds + 60.0)
@@ -550,6 +666,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     detect_s = 0.0
                     detect_max_s = 0.0
                     last_status_t = 0.0
+                    next_snap_t = 0.0
+                    first_snap = True
                     while True:
                         grab = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
                         try:
@@ -579,6 +697,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     detect_max_s = dt_proc
                                 for event in events:
                                     dispatch(event, t)
+                                # Detect-loop heartbeat stamp (attribute-only;
+                                # the Hub's tick loop journals it every ~5 s).
+                                hub.note_frame(t)
+                                if ring_capacity > 0 and t >= next_snap_t:
+                                    # Warm-replay snapshot (~1 Hz in camera
+                                    # time — see STATE_SNAPSHOT_PERIOD_S).
+                                    next_snap_t = t + STATE_SNAPSHOT_PERIOD_S
+                                    t_snap = time.perf_counter()
+                                    blob = vision.dump_state()
+                                    with state_lock:
+                                        state_snaps.append((t, ts_ns, blob))
+                                    if first_snap:
+                                        first_snap = False
+                                        print(
+                                            f"state snapshots on: {len(blob) / 1e6:.1f} MB, "
+                                            f"{(time.perf_counter() - t_snap) * 1e3:.1f} ms "
+                                            "each at 1 Hz (warm replay — analyze --warm)"
+                                        )
                             frame_i += 1
                             if t >= next_display:
                                 next_display = t + display_period
@@ -777,6 +913,13 @@ def main(argv: list[str] | None = None) -> int:
         help="detect every Nth frame (default: adapt to the clip's stored rate "
         "so replay runs at the live ~78 Hz cadence — record clips store "
         "156 fps, ring dumps store the detect stride already)",
+    )
+    p_an.add_argument(
+        "--warm",
+        action="store_true",
+        help="restore the live state snapshot a flag dump carries (state.pkl) and "
+        "replay from it — reproduces what the live session computed, accumulated "
+        "state included; without a snapshot, falls back to cold replay with a note",
     )
     p_an.add_argument("--verbose", action="store_true", help="per-second track status lines")
 

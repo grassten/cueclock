@@ -91,11 +91,27 @@ recording discipline: `design.md` §9.
 
 ```bash
 uv run python -m cueclock.cli analyze --clip tests/clips/<label> \
-    --reference tests/clips/empty_table_0801 [--verbose]
+    --reference tests/clips/empty_table_0801 [--warm] [--verbose]
 ```
 
-Deterministic replay of the pure vision core — the same events the live
-session would have emitted. `--verbose` adds per-second track status lines.
+Deterministic replay of the pure vision core. Two modes, and knowing which
+you're in matters for triage:
+
+- **Cold (default):** the core starts from empty state — this shows what
+  *current code* does with the frames, which is what corpus grading wants.
+- **Warm (`--warm`, flag dumps only):** restores the live session's state
+  snapshot the dump carries (`state.pkl`, written by `run` at ~1 Hz), skips
+  the frames the snapshot already contains, and replays the rest —
+  reproducing what the live session *actually computed*, accumulated state
+  included (whiteness-vote position, roster membership, motion/episode
+  latches: the divergence class cold replay can never show, e.g. the
+  checkpoint-32 parked-vote shot-1 miss). Timestamps print in session time,
+  matching the dump's `events.jsonl`. No snapshot in the clip → cold replay
+  plus a printed note. A snapshot written by different vision-core code is
+  refused loudly (check out the recording commit, or rerun cold) — never a
+  silent mis-run. Use the same `--reference` the live session ran with.
+
+`--verbose` adds per-second track status lines.
 
 ### Display-path checks
 
@@ -133,6 +149,17 @@ The model comes from `scripts/fetch_vosk_model.sh`. Full plan:
 | `--no-mic` | off | disable the voice-"extension" mic |
 
 Plus the shared display and mic args below.
+
+Flag dumps (`POST /api/dump`) carry, next to the frames and `events.jsonl`:
+`state.pkl` + `state.json` — the warm-replay snapshot `analyze --warm`
+consumes (the oldest of `run`'s ~1 Hz rolling state snapshots that falls
+inside the ring window; measured cost 2.3 MB / ~1 ms per snapshot —
+negligible at the detect cadence). The session journal additionally stamps
+vision events with `frame_t` (the confirming frame's capture timestamp,
+vs. the record's emit-time `mono`) and writes a `detect_heartbeat` line
+every ~5 s (effective detect Hz + age of the newest processed frame), so
+detect-loop starvation — e.g. a dump writing 3.6 GB to the T7 — is
+measurable from the journal alone.
 
 ### `record`
 
@@ -179,6 +206,7 @@ Shared display args only.
 | `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
 | `--calibration` | `config/table_calibration.json` | |
 | `--stride` | adaptive | detect every Nth frame. Default adapts to the clip's stored rate so replay always runs at the live ~78 Hz cadence: record clips store 156 fps (→ 2), **ring dumps store detect-stride frames already (→ 1)** — a fixed 2 used to replay dumps at half cadence and produce different events than the live session under triage (checkpoint 33) |
+| `--warm` | off | restore the flag dump's live-state snapshot (`state.pkl`) and replay from it — reproduces what the live session computed, accumulated state included. Without a snapshot: cold replay + a note. See the triage recipe above |
 | `--verbose` | off | per-second track status lines |
 
 ### `listen`
