@@ -232,6 +232,51 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 51 — a settle re-arms the birth paths; the disarm
+  could never clear):** the second, independent bug behind the same two
+  `flag_missed` dumps, and the one checkpoint 50 explicitly did not cover.
+  `stroke_gear_margin_0802` passed cold and failed warm, so only the live
+  snapshot could show it. `vision/events.py`, +1 unit test (41 in
+  `test_events.py`). No corpus change — cold replay cannot express this class.
+  - **A latch with no self-clearing path.** A birth-path fire sets
+    `_newborn_disarmed_at` — "one shot per rest cycle", so a single emergence
+    cannot mint repeat shots. It was cleared in exactly one place,
+    `_update_cue_rest`, and only once the **flagged** cue's own
+    `_last_translate` stamp advanced past the disarm time. Park the whiteness
+    vote on a ball that never moves again and that stamp never advances: the
+    latch is permanent, and **both** birth paths — newborn and own-rest — stay
+    dead for the rest of the session. This is the same failure shape as the v1
+    carom guard (checkpoint 22): persistent state that the player's presence
+    can starve, against which §2.3's answer has always been windowed,
+    self-clearing evidence.
+  - **The snapshot is the proof.** Unpickling `state.pkl` from the dump:
+    `_newborn_disarmed_at = 478.29464936` — to the frame, the timestamp of the
+    journal's `newborn: true` ShotTaken — captured at session t=491.486 with
+    `_table_moving` already `False`. The table had settled **13 s earlier** and
+    the latch was still set. Instrumenting every gate of `_maybe_open_rested`
+    over the warm replay: every impulse-fast ball in the strike window,
+    including the real struck cue running as non-cue track 100 at 990 mm/s,
+    was rejected with `newborn-disarmed` before any other gate was consulted.
+    The strike 25 s after the disarm had no path left to fire through.
+  - **The fix is one line and one concept.** The disarm is scoped to a rest
+    cycle, and a `BallsSettled` *is* that rest cycle — so it clears there, in
+    the episode-closure block beside `_fired_this_episode`, `_episode_origin`
+    and the roster reprune. Unlike one track's stamp, a settle cannot be parked
+    on the wrong ball. The `_update_cue_rest` clear stays: it re-arms earlier
+    when the cue does rest normally, and it is no longer the only way out.
+  - **Warm replay cannot demonstrate this fix, and that is not a caveat to
+    hide.** The snapshot was recorded by the pre-fix engine with the latch
+    *already* stuck, and no settle falls between t=491.486 and the strike at
+    503.07 — so warm still shows one BallsSettled and no shot. The fix acts at
+    the settle at 480.56, which is before the snapshot exists. The damaged
+    field read out of the pickle is the evidence; the pin is a unit test.
+  - **The pin.** `test_settle_rearms_the_birth_paths_when_the_vote_is_parked`
+    is `test_parked_vote_strike_fires_from_own_rest` extended: fire one
+    wrong-flag strike, settle, then fire a second with the vote still parked.
+    It fails on the checkpoint-50 engine and passes on this one, while all
+    three existing parked-vote tests pass on both. Full cold battery green:
+    357 passed.
+
 - **2026-08-02 (checkpoint 50 — the stroke's own gear was vetoing the strike):**
   two `flag_missed` dumps from the evening session, 2.5 min apart. Ground truth
   from the table: one real struck shot each. Live, neither fired a `ShotTaken`

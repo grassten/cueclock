@@ -1,13 +1,17 @@
 ---
 name: triage-clips
-description: Triage flagged cueclock ring dumps — the off-table half of the Stream Deck Flag keys. Use when Steven says "triage the clips", "process the flags", "what did I flag last night", after a live session that produced flag dumps, or when a clip in ~/cueclock-dumps needs to become a graded corpus scenario or be deleted. Covers warm/cold replay, journal correlation, and promotion to the T7 corpus.
+description: Triage flagged cueclock ring dumps and fix what they expose — the off-table half of the Stream Deck Flag keys. Use when Steven says "triage the clips", "process the flags", "what did I flag last night", after a live session that produced flag dumps, or when a clip in ~/cueclock-dumps needs to become a graded corpus scenario or be deleted. Covers warm/cold replay, journal correlation, promotion to the T7 corpus, and fixing every defect found.
 ---
 
 # Triage flagged clips
 
 At the table, a Flag key press dumps the ring buffer as a labeled clip. This
 skill is the other half: turn each dump into a **graded corpus scenario**,
-**kept evidence**, or a **deletion** — and drain the staging directory.
+**kept evidence**, or a **deletion**, **fix every defect it exposes**, and
+drain the staging directory.
+
+**Triage ends when the bugs are gone, not when they are named** — fix them
+all in the same pass, without asking permission (Step 7b).
 
 Flow spec: `docs/hardware.md` §C5. Clip conventions: `docs/design.md` §9.
 
@@ -132,7 +136,7 @@ unaffected, and dumps taken since are fine.
 | Warm | Cold | Reading |
 |---|---|---|
 | fails | fails | Reproducible with current code. Best case — promote it (Step 8). |
-| fails | passes | **Accumulated-state divergence.** Cold replay can never show this class. Valuable evidence; the cold pin won't capture the bug, so fix the state handling and note in the CHANGELOG what warm showed. |
+| fails | passes | **Accumulated-state divergence.** Cold replay can never show this class, so the cold pin won't capture the bug — fix the state handling anyway (Step 7b) and pin it with a unit test that reproduces the divergence, then note in the CHANGELOG what warm showed. Latches cleared by one specific track's state are the repeat offender: if the whiteness vote parks on the wrong ball, they never clear (checkpoint 51). |
 | passes | passes | Live-only. Suspect starvation (Step 4 `hz`) or the presentation path. Usually not a vision bug. |
 | n/a | either | No snapshot in the clip — cold only, plus a printed note. |
 
@@ -145,6 +149,59 @@ Per clip, pick one and tell Steven which:
   corroborator). Move to T7 under a descriptive name; do not add `EXPECTED`.
 - **Delete** — duplicate of a covered scenario, or explained as contention /
   presentation. Record the finding, drop the 3.6 GB.
+
+## Step 7b — Fix every defect the triage found. Do not ask first.
+
+**Triage is not done when the bug is named. It is done when the bug is
+gone.** Fix all of them, in this pass, without stopping for permission —
+Steven has said so explicitly, and a diagnosis handed back is a defect left
+live at the table. There is nobody else to pick it up.
+
+This holds when there is more than one bug in a batch, when they sit in
+different subsystems, and when a clip turns out to hide a second failure
+behind the first. Fix each one. Two clips have meant two independent bugs
+before (checkpoints 50 and 51 — a carom guard misreading the player's own
+stick, and a one-shot latch that could never clear).
+
+Specifically forbidden as an ending:
+
+- Parking a reproducible miss in `KNOWN_FAILURES` / `xfail` and calling the
+  triage complete. `KNOWN_FAILURES` is only for defects that are *understood
+  and unfixable today* (silent hand motion — the acoustic-corroborator
+  class), never a holding pen for work not yet attempted.
+- Filing the fix as a board card and stopping.
+- Stopping at "the measurement says this can't be a threshold." That is
+  where the work starts, not where it ends.
+
+When an anchor turns out to be falsified, **measure the candidate
+discriminators before writing any code**: instrument the engine over the
+clips that must keep passing as well as the one that must start passing,
+and implement whichever actually separates them. Reasoning from the source
+is not enough — checkpoint 50's obvious candidate (`merged`, the
+carried-ball flag §2.3 already trusted) read `False` on all three clips
+including the grab, and only instrumenting showed it.
+
+Prove each fix with a test that **fails on the pre-fix engine and passes on
+the post-fix one**, and say so. Mirror the scenario it must stay separable
+from, so the pin lands on the discriminator rather than a side effect. Clear
+`__pycache__` around any such before/after check (see the shell-gotchas note
+on 1-second mtime granularity).
+
+Two things that are genuinely allowed to be deferred — say plainly that you
+are deferring them and why:
+
+- Work the evidence cannot yet support (the acoustic-corroborator class).
+- A defect in a **different** subsystem that the flagged clip merely
+  revealed, once the flagged failure itself is fixed.
+
+A fix that changes the vision core invalidates every `state.pkl` recorded
+before it (`_vision_fingerprint()` hashes `events.py`, `track.py`,
+`pipeline.py`), so **warm-replay your evidence before you change the core**,
+not after. If you must confirm a warm hypothesis afterwards, unpickle the
+snapshot and read the fields directly rather than bypassing the fingerprint
+check — a snapshot recorded *before* the fix can still carry the damaged
+state the fix prevents, so warm replay may correctly still fail. That is
+evidence about the snapshot, not about the fix.
 
 ## Step 8 — Promote to the corpus
 

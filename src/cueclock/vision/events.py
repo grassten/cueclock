@@ -659,6 +659,23 @@ class EventEngine:
                 self._episode_last.clear()
                 self._episode_free_mover = False
                 self._fired_this_episode = False
+                # The birth paths' one-shot-per-rest-cycle disarm ends with the
+                # episode (stroke_gear_margin_0802, checkpoint 51). It used to
+                # be cleared only in _update_cue_rest, and only once the
+                # *flagged* cue's own translate stamp advanced past it — so
+                # when the whiteness vote parks on a ball that never moves
+                # again, the stamp never advances and the latch is permanent:
+                # both birth paths (newborn and own-rest) stay dead for the
+                # rest of the session. Live, a newborn strike at session
+                # 478.3 s disarmed them and the real strike 25 s later found
+                # every path shut — the wrong-flag own-rest path rejected it
+                # with the vote parked 578 mm away, no ShotTaken fired, and
+                # the clock counted down through the stroke. A settle is
+                # exactly the rest cycle the disarm is scoped to, and unlike
+                # one track's stamp it cannot be parked on the wrong ball.
+                # Cold replay starts undisarmed, so only warm replay of a live
+                # snapshot shows this class at all.
+                self._newborn_disarmed_at = None
                 events.append(BallsSettled(t))
         elif balls:
             # Un-still verdict on a populated table: dwell credit survives

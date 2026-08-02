@@ -547,6 +547,39 @@ def test_parked_vote_strike_fires_from_own_rest() -> None:
     assert ShotTaken in map(type, sim.run(0.5))
 
 
+def test_settle_rearms_the_birth_paths_when_the_vote_is_parked() -> None:
+    # stroke_gear_margin_0802 (warm): a birth-path fire disarms the newborn
+    # and own-rest paths for one rest cycle, but the disarm used to clear
+    # only once the *flagged* cue's own translate stamp advanced past it.
+    # Park the vote on a ball that never moves again and the stamp never
+    # advances: the latch is permanent and both birth paths stay dead for
+    # the rest of the session. The live snapshot proves it — captured 13 s
+    # after the table had settled (_table_moving False), it still carried
+    # _newborn_disarmed_at = 478.295, the exact timestamp of the journal's
+    # newborn shot, and the real strike 25 s later had no path left to fire
+    # through. A settle is the rest cycle the disarm is scoped to and cannot
+    # be parked on the wrong ball, so it re-arms them.
+    sim = rack()
+    sim.run(3.0)  # sustained quiet: both balls admitted to the roster
+    sim.cue_id = OBJ  # the vote parks on the wrong ball, and it stays parked
+    sim.run(0.5)
+    sim.occlude(CUE)
+    sim.run(0.05)
+    sim.place(CUE, 560.0, 500.0)  # first wrong-flag strike: arms the disarm
+    sim.velocity(CUE, 600.0, 0.0)
+    sim.reveal(CUE)
+    assert ShotTaken in map(type, sim.run(0.5))
+    sim.velocity(CUE, 0.0, 0.0)
+    assert BallsSettled in map(type, sim.run(1.5))  # the episode closes
+    sim.run(1.0)
+    sim.occlude(CUE)  # a second, equally real wrong-flag strike
+    sim.run(0.05)
+    sim.place(CUE, 620.0, 500.0)
+    sim.velocity(CUE, 600.0, 0.0)
+    sim.reveal(CUE)
+    assert ShotTaken in map(type, sim.run(0.5))
+
+
 def test_parked_vote_hand_carry_does_not_fire() -> None:
     # The same configuration, but a hand lifts the rested ball instead: a
     # ball in a hand is inseparable from the hand, so every confirm
