@@ -319,17 +319,32 @@ output appends to `~/Library/Logs/cueclock-run.log`. If no server answers
 within 60 s the start is called failed: SIGINT, release, back to `OFF`.
 
 **Stop** (hold 1 s while `ON`; the face reads `HOLD…` while held, and a short
-tap does nothing), in this order — both halves learned from a live press on
-2026-08-02: (1) SIGINT `run` **first** (closes the pylon device — the camera
-stops streaming and cools); nothing OBS does may delay the camera. (2) **Stop
-the replay buffer over obs-websocket**, because quitting OBS with any output
-active raises a modal *"OBS is still currently active"* dialog — and there is
-no keyboard at the table to dismiss it. Left unhandled it blocked the quit for
-its full 20 s timeout and burned SIGINT's entire grace window before the
-signal was even sent, forcing a pointless SIGTERM. (3) Quit OBS gracefully by
-AppleScript (never `kill` — a killed OBS reopens in safe mode and drops the
-projector, which is exactly what a headless rig can't fix). Then `STOPPING…`
-until the child actually exits, at which point the assertion is released. A wedged `run` gets one escalation
+tap does nothing), in this order — every step learned from live presses on
+2026-08-02:
+
+1. **SIGINT `run` first** (closes the pylon device — the camera stops
+   streaming and cools). Nothing OBS does may delay the camera: a blocked quit
+   once held the signal for 20 s and burned its whole grace window, forcing a
+   pointless SIGTERM.
+2. **Drive every OBS output to stopped over obs-websocket** (replay buffer,
+   record, stream, virtual cam). Quitting OBS with *any* output active raises
+   a modal *"OBS is still currently active"* dialog, and there is no keyboard
+   at the table to click it. This **loops** rather than checking once, because
+   `--startreplaybuffer` arms the buffer asynchronously — a stop pressed a few
+   seconds after launch sees "not active", skips, and the buffer starts
+   anyway. It also distinguishes *"nothing running"* from *"couldn't ask"*
+   (OBS gone, WebSocket off): unknown is reported, never assumed quiet.
+3. **Quit OBS gracefully** by AppleScript — never `kill`, which reopens it in
+   safe mode without the projector, exactly what a headless rig can't fix.
+4. **Backstop:** if OBS is still alive `OBS_QUIT_GRACE_S` (5 s) after the stop
+   began, the dialog caught the quit anyway, so the deck clicks its OK button
+   itself. The grace matters — a clean quit takes 0.3–3 s, so checking
+   immediately reads *every* healthy quit as stuck.
+
+Then `STOPPING…` until the child actually exits, at which point the assertion
+is released. Measured after the fix: five cycles across the race window
+(3/6/8/12/20 s of uptime), stop returning in 0.7 s, OBS exiting clean every
+time with the backstop never firing. A wedged `run` gets one escalation
 to SIGTERM after 20 s (`cli.py` maps it to KeyboardInterrupt, so it takes the
 same shutdown path) — never SIGKILL.
 

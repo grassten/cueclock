@@ -188,8 +188,27 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
-- **2026-08-02 (checkpoint 40 — the Session key's stop path, fixed by its
-  first real press):** Steven held the key and got a modal OBS dialog on the
+- **2026-08-02 (checkpoint 41 — the quit dialog, actually fixed):** checkpoint
+  40's fix did not work, and the way it failed is the lesson. Two bugs, both
+  in the checking rather than the doing. (1) **A single status check raced the
+  buffer.** `--startreplaybuffer` arms asynchronously, so a stop a few seconds
+  after launch saw `outputActive: false`, skipped the stop, and the buffer
+  started anyway — dialog. `stop_all_outputs()` now loops until OBS reports
+  every output (replay buffer, record, stream, virtual cam) stopped, and
+  `active_outputs()` returns `None` for *unknown* so a failed request can
+  never be mistaken for "nothing is running". (2) **The dialog detector was a
+  false positive.** It ran `pgrep` immediately after the quit, but a graceful
+  OBS quit takes 0.3–3 s, so every clean quit looked stuck and the deck
+  clicked a dialog that wasn't there — which is exactly why the first fix
+  looked like it was working when it wasn't. The check moved to the STOPPING
+  tick, 5 s after the stop begins, and clicks at most once. Isolating the two
+  (launch → inspect outputs → stop → quit, no session involved) is what
+  separated them; the session-level test could only ever say "dialog again".
+  Verified: five full cycles across the arming race window (3/6/8/12/20 s of
+  uptime), stop returning in 0.7 s, OBS exiting clean, backstop never firing.
+  190 unit tests, ruff + mypy --strict clean.
+
+- **2026-08-02 (checkpoint 40 — the Session key's stop path, first attempt):** Steven held the key and got a modal OBS dialog on the
   TV: *"OBS is still currently active. All streams/recordings will be shut
   down."* It fires whenever OBS quits with an output running — the replay
   buffer, enabled the same morning — and there is no keyboard at the table to

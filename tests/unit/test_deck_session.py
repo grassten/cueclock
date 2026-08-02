@@ -13,8 +13,11 @@ from collections.abc import Sequence
 
 from cueclock.deck.session import (
     CAFFEINATE,
+    OBS_ALIVE,
+    OBS_DISMISS,
     OBS_OPEN,
     OBS_QUIT,
+    OBS_QUIT_GRACE_S,
     START_TIMEOUT_S,
     STOP_ESCALATE_S,
     SessionManager,
@@ -46,22 +49,23 @@ class FakeProcess:
 class Harness:
     """A manager wired to fakes, plus the transcript of what it ran."""
 
-    def __init__(self, replay_stops: bool = True) -> None:
+    def __init__(self, outputs_stop: bool = True, obs_survives_quit: bool = False) -> None:
         self.spawned: list[tuple[str, ...]] = []
         self.called: list[tuple[str, ...]] = []
         self.procs: list[FakeProcess] = []
         self.clock = 0.0
-        self.replay_stops = replay_stops
+        self.outputs_stop = outputs_stop
+        self.obs_survives_quit = obs_survives_quit
         self.manager = SessionManager(
             spawn=self._spawn,
             call=self._call,
             now=lambda: self.clock,
-            stop_replay=self._stop_replay,
+            stop_outputs=self._stop_outputs,
         )
 
-    def _stop_replay(self) -> bool:
-        self.called.append(("obsws", "StopReplayBuffer"))
-        return self.replay_stops
+    def _stop_outputs(self) -> bool:
+        self.called.append(("obsws", "StopOutputs"))
+        return self.outputs_stop
 
     def _spawn(self, cmd: Sequence[str]) -> FakeProcess:
         self.spawned.append(tuple(cmd))
@@ -71,6 +75,8 @@ class Harness:
 
     def _call(self, cmd: Sequence[str]) -> int:
         self.called.append(tuple(cmd))
+        if tuple(cmd) == OBS_ALIVE:  # pgrep: 0 = still running
+            return 0 if self.obs_survives_quit else 1
         return 0
 
     @property
@@ -127,12 +133,12 @@ def test_stop_quits_obs_then_interrupts_run_and_settles_on_off() -> None:
     h.called.clear()
 
     h.manager.stop()
-    # Order matters, both halves measured the hard way (2026-08-02):
-    # `run` is signalled first so nothing OBS does can delay the camera
-    # shutdown, and the replay buffer is stopped before the quit because OBS
-    # with any output active raises a modal dialog no one can click at the
-    # table — which blocked the quit for its full 20 s timeout.
-    assert h.called == [("signal", "SIGINT"), ("obsws", "StopReplayBuffer"), OBS_QUIT]
+    # Order matters, every step measured the hard way (2026-08-02): `run` is
+    # signalled first so nothing OBS does can delay the camera shutdown, OBS's
+    # outputs are stopped before the quit because any active output raises a
+    # modal dialog no one can click at the table, and the quit is verified
+    # because that dialog blocks it silently.
+    assert h.called == [("signal", "SIGINT"), ("obsws", "StopOutputs"), OBS_QUIT]
 
     # `run` closes the camera on its way out, so OFF waits for the exit.
     assert h.manager.tick(server_up=True) is SessionState.STOPPING
@@ -144,10 +150,46 @@ def test_stop_quits_obs_then_interrupts_run_and_settles_on_off() -> None:
     assert not h.manager.owns_session
 
 
-def test_stop_still_quits_obs_when_the_replay_buffer_cannot_be_stopped() -> None:
+def test_a_clean_quit_is_never_mistaken_for_the_dialog() -> None:
+    h = Harness(obs_survives_quit=False)
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.manager.stop()
+    h.called.clear()
+
+    h.clock = OBS_QUIT_GRACE_S + 1.0
+    h.manager.tick(server_up=False)
+    # It looked, found OBS gone, and clicked nothing. Checking any sooner
+    # fires on every clean quit — OBS takes seconds to actually exit, which
+    # is exactly the false positive that made the first fix look broken.
+    assert h.called == [OBS_ALIVE]
+
+
+def test_a_quit_caught_by_the_dialog_gets_clicked_once() -> None:
+    h = Harness(obs_survives_quit=True)
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.manager.stop()
+    h.called.clear()
+
+    h.manager.tick(server_up=False)  # inside the grace: hands off
+    assert h.called == []
+
+    h.clock = OBS_QUIT_GRACE_S + 1.0
+    h.manager.tick(server_up=False)
+    # Still alive past the grace means the modal caught the quit; with no
+    # keyboard at the table the deck clicks OK itself — once.
+    assert h.called == [OBS_ALIVE, OBS_DISMISS]
+
+    h.clock += 5.0  # still short of the SIGTERM escalation
+    h.manager.tick(server_up=False)
+    assert h.called == [OBS_ALIVE, OBS_DISMISS]
+
+
+def test_stop_still_quits_obs_when_the_outputs_cannot_be_stopped() -> None:
     # obs-websocket disabled or OBS already gone: the quit must still happen —
     # a possible dialog beats leaving the session up.
-    h = Harness(replay_stops=False)
+    h = Harness(outputs_stop=False)
     h.manager.start()
     h.manager.tick(server_up=True)
     h.called.clear()

@@ -48,6 +48,9 @@ START_TIMEOUT_S = 60.0
 # cools). If the process is wedged past this, escalate once to SIGTERM — which
 # cli.py maps to KeyboardInterrupt, so it takes the same shutdown path.
 STOP_ESCALATE_S = 20.0
+# How long a graceful OBS quit is given before "still running" is read as the
+# modal quit dialog holding it (a clean quit measured 0.3-3 s, 2026-08-02).
+OBS_QUIT_GRACE_S = 5.0
 
 
 class SessionState(Enum):
@@ -107,6 +110,17 @@ OBS_OPEN = (
 # Graceful quit only — never kill(1). A killed OBS reopens in safe mode and
 # drops the projector, which is exactly the state a headless rig can't fix.
 OBS_QUIT = ("/usr/bin/osascript", "-e", 'tell application "OBS" to quit')
+# Is OBS still there? (`pgrep` exit status: 0 = running.)
+OBS_ALIVE = ("/usr/bin/pgrep", "-x", "OBS")
+# Last resort. If an output was still winding down, the quit parks on a modal
+# "OBS is still currently active" dialog and AppleScript's quit blocks until
+# someone clicks it — with no keyboard at the table, that someone has to be
+# us. Verified to clear it 2026-08-02.
+OBS_DISMISS = (
+    "/usr/bin/osascript",
+    "-e",
+    'tell application "System Events" to tell process "OBS" to click button "OK" of window 1',
+)
 # -d: display sleep is what kills a session mid-rack (the TV is the output).
 CAFFEINATE = ("/usr/bin/caffeinate", "-d")
 
@@ -124,7 +138,13 @@ def _call(cmd: Sequence[str]) -> int:
     """Run a short command to completion; never raise into the deck loop."""
     try:
         return subprocess.run(  # nosec B603: fixed argv, shell=False
-            list(cmd), cwd=REPO_ROOT, capture_output=True, timeout=20.0, check=False
+            # 8 s, not 20: a quit caught by the modal dialog blocks until the
+            # timeout, and that wait is dead time before we can dismiss it.
+            list(cmd),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            timeout=8.0,
+            check=False,
         ).returncode
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"session: {cmd[0]} failed: {exc}", flush=True)
@@ -144,7 +164,7 @@ class SessionManager:
     spawn: Callable[[Sequence[str]], Process] = _spawn
     call: Callable[[Sequence[str]], int] = _call
     now: Callable[[], float] = time.monotonic
-    stop_replay: Callable[[], bool] = obsws.stop_replay_buffer
+    stop_outputs: Callable[[], bool] = obsws.stop_all_outputs
 
     _run: Process | None = None
     _caffeinate: Process | None = None
@@ -152,6 +172,7 @@ class SessionManager:
     _stopping_since: float | None = None
     _escalated: bool = False
     _obs_launched: bool = False
+    _obs_dismissed: bool = False
 
     @property
     def owns_session(self) -> bool:
@@ -167,10 +188,11 @@ class SessionManager:
         self._stopping_since = None
         self._escalated = False
         self._obs_launched = False
+        self._obs_dismissed = False
         print(f"session: starting (log: {RUN_LOG})", flush=True)
 
     def stop(self) -> None:
-        """Quit OBS, then SIGINT `run`; `tick` finishes when the child exits."""
+        """SIGINT `run`, then take OBS down; `tick` finishes when both are gone."""
         if self._run is None or self._stopping_since is not None:
             return
         self._stopping_since = self.now()
@@ -181,12 +203,11 @@ class SessionManager:
         # shutdown and burned SIGINT's entire grace window before it was even
         # sent, forcing a pointless SIGTERM.
         self._signal_run(signal.SIGINT)
-        # Then OBS. Quitting it with any output active raises a modal "OBS is
-        # still currently active" dialog, and there is no keyboard at the
-        # table to dismiss it — so stop the replay buffer over obs-websocket
-        # first. If that fails, quit anyway and say so.
-        if not self.stop_replay():
-            print("session: replay buffer not stopped — OBS may prompt on quit", flush=True)
+        # Then OBS, in three steps because each one alone has been seen to
+        # fail (2026-08-02): drive every output to stopped over obs-websocket,
+        # quit gracefully, and — if a dialog caught the quit anyway — click it.
+        if not self.stop_outputs():
+            print("session: OBS outputs not confirmed stopped — may prompt on quit", flush=True)
         self.call(OBS_QUIT)
         print("session: stopping (SIGINT run, OBS quit)", flush=True)
 
@@ -216,6 +237,15 @@ class SessionManager:
         return SessionState.STARTING
 
     def _tick_stopping(self, stopping_since: float) -> SessionState:
+        # A graceful OBS quit takes a couple of seconds, so "still alive" only
+        # means the modal dialog caught it once that grace has passed — check
+        # any sooner and every clean quit looks like a stuck one. Checking
+        # here rather than inside stop() also keeps the deck loop responsive.
+        if not self._obs_dismissed and self.now() - stopping_since > OBS_QUIT_GRACE_S:
+            self._obs_dismissed = True
+            if self.call(OBS_ALIVE) == 0:
+                print("session: OBS still up — dismissing its quit dialog", flush=True)
+                self.call(OBS_DISMISS)
         if self._run is None or self._run.poll() is not None:
             self._release()
             print("session: stopped", flush=True)
@@ -246,3 +276,4 @@ class SessionManager:
         self._stopping_since = None
         self._escalated = False
         self._obs_launched = False
+        self._obs_dismissed = False

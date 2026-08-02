@@ -19,6 +19,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -131,16 +132,51 @@ def request(
         return None
 
 
-def stop_replay_buffer() -> bool:
-    """Stop the replay buffer if it is running. True when it is now stopped.
+# Every output whose being active makes OBS raise the modal quit dialog.
+_OUTPUTS: tuple[tuple[str, str], ...] = (
+    ("GetReplayBufferStatus", "StopReplayBuffer"),
+    ("GetRecordStatus", "StopRecord"),
+    ("GetStreamStatus", "StopStream"),
+    ("GetVirtualCamStatus", "StopVirtualCam"),
+)
+
+
+def active_outputs() -> list[str] | None:
+    """Stop-requests for the outputs currently running.
+
+    Empty list = OBS is quiet. **None = unknown** (OBS unreachable, WebSocket
+    server off, bad password) — deliberately not the same thing as empty, so
+    a caller can't mistake "couldn't ask" for "nothing is running".
+    """
+    running = []
+    for status_request, stop_request in _OUTPUTS:
+        data = request(status_request)
+        if data is None:
+            return None
+        if data.get("outputActive"):
+            running.append(stop_request)
+    return running
+
+
+def stop_all_outputs(attempts: int = 6, settle_s: float = 0.4) -> bool:
+    """Drive OBS to zero active outputs. True when it got there.
 
     This is what keeps the Session key's stop path headless: quitting OBS with
     any output active raises a modal "OBS is still currently active" dialog,
     and there is no keyboard at the table to dismiss it.
+
+    It loops rather than checking once, because `--startreplaybuffer` arms the
+    buffer *asynchronously*: a stop pressed a few seconds after launch sees
+    "not active", skips the stop, and then the buffer starts anyway — measured
+    2026-08-02, and the reason the first fix for this didn't take.
     """
-    status = request("GetReplayBufferStatus")
-    if status is None:
-        return False
-    if not status.get("outputActive"):
-        return True
-    return request("StopReplayBuffer") is not None
+    for _ in range(attempts):
+        running = active_outputs()
+        if running is None:
+            return False  # can't ask — say so rather than assume it's quiet
+        if not running:
+            return True
+        for stop_request in running:
+            request(stop_request)
+        time.sleep(settle_s)
+    return active_outputs() == []
