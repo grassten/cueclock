@@ -85,7 +85,7 @@ EXPECTED: dict[
     # that its track dies; the strike surfaces as a track born at 1572 mm/s.
     # Pins the newborn-cue strike path (was a 0-shot miss + a 60 s replay).
     "occluded_address_0731": (1, 0, 1, 1),
-    # rack_gather: racking after New Rack (the live "clock started while I
+    # rack_gather: racking after Set up (the live "clock started while I
     # racked" trigger; the clock-side IDLE gate is the real fix — no shot may
     # be minted from racking motion).
     "rack_gather_0731": (0, 0, None),
@@ -130,7 +130,7 @@ EXPECTED: dict[
     "triage_0801b": (1, 0, 1, 1),
     "triage_0801c": (1, 0, 1, 1),
     # 2026-08-01 morning flags (new-engine session, journal-correlated).
-    # rack_place: the tail of a racking sequence after New Rack. The live
+    # rack_place: the tail of a racking sequence after Set up. The live
     # phantom ShotTaken fired 12.7 s before the Flag press — outside the
     # then-12 s ring (which is why the ring is 20 s now) — so this pins only
     # that racking/placement motion stays event-silent. The phantom's clock

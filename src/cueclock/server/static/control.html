@@ -78,13 +78,15 @@
         <button class="danger" onclick="post('/api/reset')">Reset</button>
     </div>
     <div class="row">
-        <!-- New Rack: the between-games button (rack-scope reset, refills
-             extensions). Push: 9-ball push-out call — restarts at the 60 s
-             first-shot time. Force 30: mid-rack recovery when an auto-reset
-             was missed — restarts the countdown immediately. -->
-        <button class="primary" onclick="post('/api/rack')">New Rack</button>
+        <!-- Same vocabulary as the deck (hardware.md §C2), so the fallback
+             surface and the buttons under your hand can't disagree.
+             Set up: you're racking or throwing balls back up — clock parks,
+             extensions refill, shot count zeroes. Push: 9-ball push-out call.
+             Start N: the clock is wrong and you're about to shoot — fresh
+             countdown running now, labelled with the time it will hand you. -->
+        <button class="primary" onclick="post('/api/rack')">Set up</button>
         <button onclick="post('/api/push')">Push</button>
-        <button onclick="post('/api/restart')">Force 30</button>
+        <button id="start-n" onclick="post('/api/restart')">Start</button>
     </div>
     <div class="row">
         <button class="warn" onclick="post('/api/extension')">Extension</button>
@@ -209,6 +211,11 @@
             document.getElementById('state').innerText = s.state;
             document.getElementById('extensions').innerText =
                 `extensions: ${s.extensions_used}/${s.extensions_allowed}`;
+            // Same trick as the deck's START key: name the countdown the press
+            // will hand you, straight off the server's rack-aware `base`.
+            if (typeof s.base === 'number') {
+                document.getElementById('start-n').innerText = `Start ${s.base}`;
+            }
             // re-sync the dropdowns if either axis changed elsewhere (the deck)
             for (const [id, active] of [['ruleset', s.ruleset], ['mode', s.mode]]) {
                 const sel = document.getElementById(id);

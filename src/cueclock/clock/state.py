@@ -207,7 +207,7 @@ class ShotClock:
     def shot_taken(self) -> None:
         """Freeze the clock while balls are moving; count the rack shot.
 
-        IDLE→MOTION makes the untimed break count: New Rack leaves IDLE, the
+        IDLE→MOTION makes the untimed break count: Set up leaves IDLE, the
         break's ShotTaken lands in IDLE, and the following settle starts the
         WNT 60 s first-shot clock (§5 — the break itself is not clocked).
         """
@@ -221,7 +221,7 @@ class ShotClock:
     def balls_settled(self, now: float) -> None:
         """Balls at rest — start a fresh shot clock for the next shot.
 
-        Ignored in IDLE: IDLE means the operator said hold (New Rack, pause),
+        Ignored in IDLE: IDLE means the operator said hold (Set up, pause),
         and racking motion produces genuine settles — a settle with no
         detected shot must not start the clock (2026-07-31 live failure: New
         Rack, rack the balls, countdown starts). The untimed break is

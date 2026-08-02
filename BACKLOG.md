@@ -17,7 +17,7 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       prerequisite for the acoustic click corroborator (top of the
       accuracy queue).
 - [ ] **Live-validate match mode** during the first real match: rack flow,
-      Push, Force 30, per-rack extensions (deck keys; voice waits on the
+      Push, Start N, per-rack extensions (deck keys; voice waits on the
       mic) — Flag anything wrong.
 - [ ] **Live-validate checkpoints 26–32** (occluded-address strikes, roster
       latch rule, settle-counts-the-shot, merge flag, pickup discard, IDLE
@@ -41,7 +41,7 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 - [ ] **Sub-impulse touch shots are now honestly invisible** (checkpoint 28
       finding): `soft_touch_0731`'s settle used to ride a stick-yank phantom
       latch; with the merge flag it produces no events — a touch shot leaves
-      the clock counting (Reset recovers). No displacement latch can fix it
+      the clock counting (Start N recovers). No displacement latch can fix it
       (`shaft_adjust` measures 59 mm/0.5 s while judgeable, worse than the
       touch's 43): this is the acoustic click corroborator's job (idea bank
       §5, `hardware.md` Part D mic), promoted from "if live play leaks
@@ -145,9 +145,9 @@ Delete items as they land (history lives in `CHANGELOG.md`).
 
 ## Queued features (build when asked)
 
-- **Auto game-end detection (auto New Rack)**: in 9-ball the rack ends when
+- **Auto game-end detection (auto Set up)**: in 9-ball the rack ends when
   the 9 ball leaves the table (8 ball in 8-ball) — detecting that requires
-  ball *identity*, a standing v1 exclusion. The deck **New Rack** key is the
+  ball *identity*, a standing v1 exclusion. The deck **Set up** key is the
   decided interface; revisit only if 16-ball identity ever ships. (Ball-count
   proxies don't work: object balls leave the table all rack long.)
 - **Per-player extension tracking**: WNT is one extension per player per rack;
@@ -330,7 +330,9 @@ injecting timestamp gaps — the observed 544 ms iCloud stall as a profile).
   auto-dumps the ring on every disagreement. Every practice session becomes
   corpus growth with zero extra table time — the single highest-leverage
   accuracy investment on this list. (The Flag key + ring dump built 2026-07-29
-  are its first half; reason-coded since 2026-08-01.)
+  are its first half; reason-coded since 2026-08-01, and since checkpoint 45
+  the reason is chosen on a page *after* the press rather than by picking one
+  of three keys under the clock.)
 - **Pocket ground truth for ~$10**: IR break-beams in the pockets as a
   *labeling* instrument (detection stays vision-only — settled).
 - **Latency grading**: a frame-accurate contact label per shot clip upgrades

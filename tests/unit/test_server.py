@@ -97,7 +97,7 @@ def test_html_pages_served() -> None:
 def test_vision_events_drive_clock() -> None:
     """The `cueclock run` wiring: a shot freezes the clock, its settle restarts it.
 
-    A settle in IDLE is a no-op — racking after New Rack produces genuine
+    A settle in IDLE is a no-op — racking after Set up produces genuine
     settles and must not start the countdown; the untimed break enters via
     ShotTaken (IDLE → MOTION) instead.
     """
@@ -255,7 +255,7 @@ def test_score_corrupt_file_falls_back_to_defaults(tmp_path: Path) -> None:
 
 
 def test_idle_break_gate() -> None:
-    """Out of New Rack, only a break-speed shot starts the rack (checkpoint 28).
+    """Out of a fresh rack, only a break-speed shot starts it (checkpoint 28).
 
     The 2026-08-01 rack-gather phantom started the clock 19 s before the real
     break; sub-break impulses in IDLE are racking/placement motion. The gate
