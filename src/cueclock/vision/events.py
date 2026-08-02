@@ -537,8 +537,7 @@ class EventEngine:
                     start_t, base_x, base_y, prev_stamp = excursion
                     if (
                         t - start_t < cfg.moving_window_s
-                        and hypot(ball.x_mm - base_x, ball.y_mm - base_y)
-                        < cfg.moving_enter_mm
+                        and hypot(ball.x_mm - base_x, ball.y_mm - base_y) < cfg.moving_enter_mm
                     ):
                         # The excursion failed the table's own motion-evidence
                         # bar (moving_enter_mm over moving_window_s): chatter,
@@ -887,11 +886,7 @@ class EventEngine:
             # pass — reaching impulse speed through the ramp puts it
             # >= moving_enter_mm out (120 mm/s for the 0.3 s ramp control is
             # 36 mm of real travel); chatter's net stays <= 10.6 mm (p95).
-            recent = [
-                p
-                for p in history.positions
-                if p[0] >= t - cfg.pre_strike_dwell_s and p[3]
-            ]
+            recent = [p for p in history.positions if p[0] >= t - cfg.pre_strike_dwell_s and p[3]]
             if not recent or any(
                 hypot(px - rest_x, py - rest_y) >= cfg.moving_enter_mm
                 for _pt, px, py, *_rest_fields in recent
