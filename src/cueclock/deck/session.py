@@ -51,6 +51,9 @@ STOP_ESCALATE_S = 20.0
 # How long a graceful OBS quit is given before "still running" is read as the
 # modal quit dialog holding it (a clean quit measured 0.3-3 s, 2026-08-02).
 OBS_QUIT_GRACE_S = 5.0
+# OBS needs ~10 s from launch before its WebSocket server answers, so the
+# Syphon rebind is retried on the poll rather than assumed. 20 ticks ~= 40 s.
+SYPHON_BIND_ATTEMPTS = 20
 
 
 class SessionState(Enum):
@@ -165,6 +168,7 @@ class SessionManager:
     call: Callable[[Sequence[str]], int] = _call
     now: Callable[[], float] = time.monotonic
     stop_outputs: Callable[[], bool] = obsws.stop_all_outputs
+    bind_syphon: Callable[[], bool] = obsws.bind_syphon
 
     _run: Process | None = None
     _caffeinate: Process | None = None
@@ -173,6 +177,8 @@ class SessionManager:
     _escalated: bool = False
     _obs_launched: bool = False
     _obs_dismissed: bool = False
+    _syphon_bound: bool = False
+    _syphon_tries: int = 0
 
     @property
     def owns_session(self) -> bool:
@@ -189,6 +195,8 @@ class SessionManager:
         self._escalated = False
         self._obs_launched = False
         self._obs_dismissed = False
+        self._syphon_bound = False
+        self._syphon_tries = 0
         print(f"session: starting (log: {RUN_LOG})", flush=True)
 
     def stop(self) -> None:
@@ -223,6 +231,7 @@ class SessionManager:
             self._release()
             return SessionState.OFF
         if self._obs_launched:
+            self._bind_syphon_once()
             return SessionState.ON
         if server_up:
             self.call(OBS_OPEN)  # server first, or the overlay loads blank
@@ -235,6 +244,21 @@ class SessionManager:
             self._release()
             return SessionState.OFF
         return SessionState.STARTING
+
+    def _bind_syphon_once(self) -> None:
+        """Re-point OBS at this session's Syphon server; give up loudly.
+
+        Without this the table feed is black whenever the session was started
+        by a different launcher than the one that last configured the source —
+        the UUID and the advertised app name both move (see `obsws.bind_syphon`).
+        """
+        if self._syphon_bound or self._syphon_tries >= SYPHON_BIND_ATTEMPTS:
+            return
+        self._syphon_tries += 1
+        if self.bind_syphon():
+            self._syphon_bound = True
+        elif self._syphon_tries == SYPHON_BIND_ATTEMPTS:
+            print("session: OBS Syphon source unbound — table feed may be black", flush=True)
 
     def _tick_stopping(self, stopping_since: float) -> SessionState:
         # A graceful OBS quit takes a couple of seconds, so "still alive" only
@@ -277,3 +301,5 @@ class SessionManager:
         self._escalated = False
         self._obs_launched = False
         self._obs_dismissed = False
+        self._syphon_bound = False
+        self._syphon_tries = 0

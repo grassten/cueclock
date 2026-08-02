@@ -312,7 +312,16 @@ deck keeps rendering and dispatching every other key while a session comes up.
 by `session.run_command()`) and a `caffeinate -d` assertion → face reads
 `STARTING…` → on the first poll where `/api/rulesets` answers, launch OBS
 (`open -a OBS --args --startreplaybuffer --disable-shutdown-check`) and go
-`ON`. Server first, always: a browser source that loads while the server is
+`ON` → then **rebind OBS's Syphon source** to this session's server
+(`obsws.bind_syphon`, retried on the poll until OBS's WebSocket answers).
+That rebind is not optional: every `run` publishes a **new Syphon UUID**, and
+the server is advertised under whatever launched it — `[python] cueclock` from
+the deck daemon's interpreter versus `[python3] cueclock` from a terminal
+`uv run`. OBS stores uuid + name + app_name, so a source last configured by
+one launcher renders **black** under the other. That is exactly what "the
+overhead isn't making it into OBS" looked like on 2026-08-02: server healthy,
+clock and scoreboard fine, table feed black, and perfect again as soon as the
+session was started from a terminal. Server first, always: a browser source that loads while the server is
 down parks on a silent error page (§B3). `run` is spawned with the venv's own
 `sys.executable`, never `uv run` — the daemon must not block on uv's lock. Its
 output appends to `~/Library/Logs/cueclock-run.log`. If no server answers

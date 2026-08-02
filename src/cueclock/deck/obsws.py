@@ -158,6 +158,48 @@ def active_outputs() -> list[str] | None:
     return running
 
 
+SYPHON_SOURCE = "Syphon Client"  # the OBS source name — must match §B3
+SYPHON_SERVER = "cueclock"  # the Syphon server name `run` publishes
+
+
+def bind_syphon(source: str = SYPHON_SOURCE, server: str = SYPHON_SERVER) -> bool:
+    """Point the OBS Syphon source at the cueclock server running *now*.
+
+    Two things move underneath that source and both black the table feed:
+    every `run` publishes a **new Syphon UUID**, and the advertised app name
+    is whatever launched it — `[python] cueclock` from the deck daemon's
+    interpreter versus `[python3] cueclock` from a terminal `uv run`. OBS
+    stores uuid + name + app_name, so a source bound by one launcher silently
+    shows black under the other (measured 2026-08-02: the overhead vanished
+    from OBS only when the Session key started the session).
+
+    Asking OBS for its own property list — rather than guessing an identity —
+    keeps this correct whoever started the session.
+    """
+    data = request(
+        "GetInputPropertiesListPropertyItems",
+        {"inputName": source, "propertyName": "uuid"},
+    )
+    if data is None:
+        return False
+    live = [
+        item
+        for item in data.get("propertyItems", [])
+        if item.get("itemEnabled") and server in str(item.get("itemName", ""))
+    ]
+    if not live:
+        return False
+    item = live[0]
+    label = str(item["itemName"])  # "[python] cueclock"
+    app_name = label.split("]")[0].lstrip("[")
+    name = label.split("] ", 1)[1] if "] " in label else server
+    settings = {"uuid": item["itemValue"], "name": name, "app_name": app_name}
+    if request("SetInputSettings", {"inputName": source, "inputSettings": settings}) is None:
+        return False
+    print(f"obsws: {source} bound to {label}", flush=True)
+    return True
+
+
 def stop_all_outputs(attempts: int = 6, settle_s: float = 0.4) -> bool:
     """Drive OBS to zero active outputs. True when it got there.
 

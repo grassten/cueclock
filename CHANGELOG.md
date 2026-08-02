@@ -188,6 +188,25 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 42 — the black table feed: Syphon identity moves
+  with the launcher):** first real one-click standup worked — server up, clock
+  and scoreboard on the TV — except the overhead table feed was black, and
+  Steven's own terminal launches showed it perfectly. OBS's own property list
+  named the culprit: the source was bound to `[python3] cueclock`
+  (`itemEnabled: false` — gone), while the live server was `[python] cueclock`.
+  A `uv run python …` session advertises as **python3**; the deck daemon
+  spawns `sys.executable` (`.venv/bin/python`), which advertises as
+  **python**. OBS stores uuid + name + app_name, so a source configured by one
+  launcher renders black under the other — and the UUID changes every run
+  regardless. `obsws.bind_syphon()` now asks OBS which cueclock servers it can
+  actually see and repoints the source at the live one; the session retries it
+  on the poll until OBS's WebSocket answers (~10 s after launch), then stops.
+  Asking OBS rather than guessing an identity is the point — it stays correct
+  whoever started the session. Verified end to end: fresh cycle, source
+  rebound with no human step, `GetSourceScreenshot` mean luma 128 (table
+  visible, not black), stop clean in 0.7 s. 192 unit tests, ruff + mypy
+  --strict clean.
+
 - **2026-08-02 (checkpoint 41 — the quit dialog, actually fixed):** checkpoint
   40's fix did not work, and the way it failed is the lesson. Two bugs, both
   in the checking rather than the doing. (1) **A single status check raced the

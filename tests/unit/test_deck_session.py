@@ -20,6 +20,7 @@ from cueclock.deck.session import (
     OBS_QUIT_GRACE_S,
     START_TIMEOUT_S,
     STOP_ESCALATE_S,
+    SYPHON_BIND_ATTEMPTS,
     SessionManager,
     SessionState,
     run_command,
@@ -49,23 +50,34 @@ class FakeProcess:
 class Harness:
     """A manager wired to fakes, plus the transcript of what it ran."""
 
-    def __init__(self, outputs_stop: bool = True, obs_survives_quit: bool = False) -> None:
+    def __init__(
+        self,
+        outputs_stop: bool = True,
+        obs_survives_quit: bool = False,
+        syphon_binds: bool = True,
+    ) -> None:
         self.spawned: list[tuple[str, ...]] = []
         self.called: list[tuple[str, ...]] = []
         self.procs: list[FakeProcess] = []
         self.clock = 0.0
         self.outputs_stop = outputs_stop
         self.obs_survives_quit = obs_survives_quit
+        self.syphon_binds = syphon_binds
         self.manager = SessionManager(
             spawn=self._spawn,
             call=self._call,
             now=lambda: self.clock,
             stop_outputs=self._stop_outputs,
+            bind_syphon=self._bind_syphon,
         )
 
     def _stop_outputs(self) -> bool:
         self.called.append(("obsws", "StopOutputs"))
         return self.outputs_stop
+
+    def _bind_syphon(self) -> bool:
+        self.called.append(("obsws", "BindSyphon"))
+        return self.syphon_binds
 
     def _spawn(self, cmd: Sequence[str]) -> FakeProcess:
         self.spawned.append(tuple(cmd))
@@ -111,9 +123,41 @@ def test_start_spawns_run_and_caffeinate_then_launches_obs_when_the_server_answe
     assert h.manager.tick(server_up=True) is SessionState.ON
     assert h.called == [OBS_OPEN]
 
-    # OBS is launched exactly once, however long the session runs.
+    # OBS is launched exactly once, however long the session runs; the ticks
+    # after it point OBS's Syphon source at this session's server.
     assert h.manager.tick(server_up=True) is SessionState.ON
-    assert h.called == [OBS_OPEN]
+    assert h.called == [OBS_OPEN, ("obsws", "BindSyphon")]
+
+
+def test_the_syphon_source_is_rebound_once_per_session() -> None:
+    # Every `run` publishes a new Syphon UUID under whatever app name launched
+    # it, so a source bound by a terminal session shows black under a deck
+    # session (2026-08-02). The key repoints it rather than leaving a black
+    # table on the TV.
+    h = Harness()
+    h.manager.start()
+    h.manager.tick(server_up=True)  # launches OBS
+    h.called.clear()
+
+    h.manager.tick(server_up=True)
+    assert h.called == [("obsws", "BindSyphon")]
+
+    for _ in range(5):  # bound: stop asking
+        h.manager.tick(server_up=True)
+    assert h.called == [("obsws", "BindSyphon")]
+
+
+def test_a_syphon_rebind_that_never_takes_gives_up() -> None:
+    # OBS's WebSocket server needs ~10 s after launch, so failures are normal
+    # at first — but they must not retry forever.
+    h = Harness(syphon_binds=False)
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.called.clear()
+
+    for _ in range(SYPHON_BIND_ATTEMPTS + 10):
+        h.manager.tick(server_up=True)
+    assert h.called == [("obsws", "BindSyphon")] * SYPHON_BIND_ATTEMPTS
 
 
 def test_start_that_never_serves_gives_up_and_cleans_up() -> None:
