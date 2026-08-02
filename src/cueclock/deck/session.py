@@ -18,6 +18,8 @@ nothing but a lock.
 
 from __future__ import annotations
 
+import json
+import os
 import signal
 import subprocess  # nosec B404: fixed argv lists, no shell, no user input
 import sys
@@ -32,6 +34,9 @@ from cueclock.deck import obsws
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUN_LOG = Path.home() / "Library" / "Logs" / "cueclock-run.log"
+# Which processes this daemon owns, so a restarted daemon can re-adopt them
+# instead of staring at its own session as if it were a stranger's.
+PIDFILE = Path.home() / ".cueclock-session.json"
 
 # The empty-table reference the canonical launch command carries (README).
 # Refreshed after any camera bump — recipe in hardware.md §E2, which is also
@@ -52,8 +57,9 @@ STOP_ESCALATE_S = 20.0
 # modal quit dialog holding it (a clean quit measured 0.3-3 s, 2026-08-02).
 OBS_QUIT_GRACE_S = 5.0
 # OBS needs ~10 s from launch before its WebSocket server answers, so the
-# Syphon rebind is retried on the poll rather than assumed. 20 ticks ~= 40 s.
-SYPHON_BIND_ATTEMPTS = 20
+# post-launch setup (Syphon rebind + TV projector) is retried on the poll
+# rather than assumed. 20 ticks ~= 40 s.
+OBS_PREP_ATTEMPTS = 20
 
 
 class SessionState(Enum):
@@ -90,9 +96,41 @@ _FACES = {
 class Process(Protocol):
     """The slice of `subprocess.Popen` this module uses (so fakes stay small)."""
 
+    @property
+    def pid(self) -> int: ...
     def poll(self) -> int | None: ...
     def send_signal(self, sig: int) -> None: ...
     def terminate(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class PidProcess:
+    """A child this daemon started but no longer holds a handle to.
+
+    The deck daemon gets relaunched constantly (every layout deploy is a
+    `launchctl kickstart`), and a session must survive that — killing a live
+    practice session to ship a label change would be absurd. But the restarted
+    daemon then had no handle, so its own session read `DEV` and the key went
+    dead (2026-08-02, mid-session). Re-attaching by pid closes that: same
+    ownership rule, just recovered from disk.
+    """
+
+    pid: int
+
+    def poll(self) -> int | None:
+        try:
+            os.kill(self.pid, 0)  # signal 0: liveness probe, changes nothing
+        except ProcessLookupError:
+            return 0
+        except PermissionError:  # alive, just not ours to signal
+            return None
+        return None
+
+    def send_signal(self, sig: int) -> None:
+        os.kill(self.pid, sig)
+
+    def terminate(self) -> None:
+        self.send_signal(signal.SIGTERM)
 
 
 def run_command(reference: str = DEFAULT_REFERENCE) -> tuple[str, ...]:
@@ -186,6 +224,9 @@ class SessionManager:
     now: Callable[[], float] = time.monotonic
     stop_outputs: Callable[[], bool] = obsws.stop_all_outputs
     bind_syphon: Callable[[], bool] = obsws.bind_syphon
+    open_projector: Callable[[], bool] = obsws.open_projector
+    pidfile: Path = PIDFILE
+    process_for_pid: Callable[[int], Process] = PidProcess
 
     _run: Process | None = None
     _caffeinate: Process | None = None
@@ -195,7 +236,8 @@ class SessionManager:
     _obs_launched: bool = False
     _obs_dismissed: bool = False
     _syphon_bound: bool = False
-    _syphon_tries: int = 0
+    _projector_open: bool = False
+    _obs_prep_tries: int = 0
 
     @property
     def owns_session(self) -> bool:
@@ -213,7 +255,9 @@ class SessionManager:
         self._obs_launched = False
         self._obs_dismissed = False
         self._syphon_bound = False
-        self._syphon_tries = 0
+        self._projector_open = False
+        self._obs_prep_tries = 0
+        self._write_pidfile()
         print(f"session: starting (log: {RUN_LOG})", flush=True)
 
     def stop(self) -> None:
@@ -241,6 +285,8 @@ class SessionManager:
         if self._stopping_since is not None:
             return self._tick_stopping(self._stopping_since)
         if self._run is None:
+            if server_up and self._adopt():
+                return SessionState.ON
             # Someone else's session (a terminal `run`) or nothing at all.
             return SessionState.DEV if server_up else SessionState.OFF
         if self._run.poll() is not None:
@@ -248,7 +294,7 @@ class SessionManager:
             self._release()
             return SessionState.OFF
         if self._obs_launched:
-            self._bind_syphon_once()
+            self._prepare_obs_once()
             return SessionState.ON
         if server_up:
             self.call(OBS_OPEN)  # server first, or the overlay loads blank
@@ -262,20 +308,81 @@ class SessionManager:
             return SessionState.OFF
         return SessionState.STARTING
 
-    def _bind_syphon_once(self) -> None:
-        """Re-point OBS at this session's Syphon server; give up loudly.
-
-        Without this the table feed is black whenever the session was started
-        by a different launcher than the one that last configured the source —
-        the UUID and the advertised app name both move (see `obsws.bind_syphon`).
-        """
-        if self._syphon_bound or self._syphon_tries >= SYPHON_BIND_ATTEMPTS:
+    def _write_pidfile(self) -> None:
+        """Record what we own, so a restarted daemon can pick it back up."""
+        if self._run is None:
             return
-        self._syphon_tries += 1
-        if self.bind_syphon():
+        payload = {"run": self._run.pid}
+        if self._caffeinate is not None:
+            payload["caffeinate"] = self._caffeinate.pid
+        try:
+            self.pidfile.write_text(json.dumps(payload))
+        except OSError as exc:
+            print(f"session: could not write {self.pidfile.name} ({exc})", flush=True)
+
+    def _clear_pidfile(self) -> None:
+        try:
+            self.pidfile.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"session: could not clear {self.pidfile.name} ({exc})", flush=True)
+
+    def _adopt(self) -> bool:
+        """Re-attach to a session this daemon started before it was restarted.
+
+        Only ever adopts pids *we* wrote down: a terminal `run` leaves no
+        pidfile and still reads `DEV`, so the ownership rule is unchanged —
+        this just stops a `launchctl kickstart` from disowning our own work.
+        """
+        try:
+            payload = json.loads(self.pidfile.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        run_pid = payload.get("run")
+        if not isinstance(run_pid, int):
+            return False
+        run = self.process_for_pid(run_pid)
+        if run.poll() is not None:  # stale file from a session that ended
+            self._clear_pidfile()
+            return False
+        self._run = run
+        caffeinate_pid = payload.get("caffeinate")
+        if isinstance(caffeinate_pid, int):
+            caffeinate = self.process_for_pid(caffeinate_pid)
+            self._caffeinate = caffeinate if caffeinate.poll() is None else None
+        self._started_at = self.now()
+        self._obs_launched = True  # OBS came up with the session we're adopting
+        self._syphon_bound = False  # cheap to redo, and it may have been missed
+        self._projector_open = False
+        self._obs_prep_tries = 0
+        print(f"session: adopted the running session (run pid {run_pid})", flush=True)
+        return True
+
+    def _prepare_obs_once(self) -> None:
+        """Make OBS show this session: table feed bound, program on the TV.
+
+        Both need OBS's WebSocket, which answers ~10 s after launch, so this
+        retries on the poll and then gives up loudly rather than silently
+        leaving a black table or a blank TV.
+        """
+        done = self._syphon_bound and self._projector_open
+        if done or self._obs_prep_tries >= OBS_PREP_ATTEMPTS:
+            return
+        self._obs_prep_tries += 1
+        if not self._syphon_bound and self.bind_syphon():
             self._syphon_bound = True
-        elif self._syphon_tries == SYPHON_BIND_ATTEMPTS:
-            print("session: OBS Syphon source unbound — table feed may be black", flush=True)
+        if not self._projector_open and self.open_projector():
+            self._projector_open = True
+        if self._obs_prep_tries == OBS_PREP_ATTEMPTS:
+            missing = [
+                name
+                for name, ok in (
+                    ("table feed", self._syphon_bound),
+                    ("TV projector", self._projector_open),
+                )
+                if not ok
+            ]
+            if missing:
+                print(f"session: OBS setup incomplete — {', '.join(missing)}", flush=True)
 
     def _tick_stopping(self, stopping_since: float) -> SessionState:
         # A graceful OBS quit takes a couple of seconds, so "still alive" only
@@ -312,6 +419,7 @@ class SessionManager:
                 self._caffeinate.terminate()
             except (OSError, ValueError) as exc:
                 print(f"session: caffeinate release failed: {exc}", flush=True)
+        self._clear_pidfile()
         self._run = None
         self._caffeinate = None
         self._stopping_since = None
@@ -319,4 +427,5 @@ class SessionManager:
         self._obs_launched = False
         self._obs_dismissed = False
         self._syphon_bound = False
-        self._syphon_tries = 0
+        self._projector_open = False
+        self._obs_prep_tries = 0

@@ -312,8 +312,15 @@ deck keeps rendering and dispatching every other key while a session comes up.
 by `session.run_command()`) and a `caffeinate -d` assertion → face reads
 `STARTING…` → on the first poll where `/api/rulesets` answers, launch OBS
 (`open -a OBS --args --startreplaybuffer --disable-shutdown-check`) and go
-`ON` → then **rebind OBS's Syphon source** to this session's server
-(`obsws.bind_syphon`, retried on the poll until OBS's WebSocket answers).
+`ON` → then set OBS up for this session over obs-websocket, retried on the
+poll until its WebSocket answers (~10 s after launch): **rebind the Syphon
+source** (`obsws.bind_syphon`) and **open the program projector on the TV**
+(`obsws.open_projector`, monitor 0 — the mini drives one display). Opening the
+projector explicitly beats "Save projectors on exit", which only restores what
+was open at the last quit: a session that ended without one came back to a
+blank TV, and the key's promise is that the last session's state doesn't
+matter. Verified idempotent — calling it with a projector already up reuses
+that window rather than stacking another.
 That rebind is not optional: every `run` publishes a **new Syphon UUID**, and
 the server is advertised under whatever launched it — `[python] cueclock` from
 the deck daemon's interpreter versus `[python3] cueclock` from a terminal
@@ -358,11 +365,17 @@ to SIGTERM after 20 s (`cli.py` maps it to KeyboardInterrupt, so it takes the
 same shutdown path) — never SIGKILL.
 
 **`DEV`**: the API answers but this daemon has no handle on it — a terminal
-`run`, or a session that outlived a daemon restart. The key refuses to touch
-it and flashes `DEV`. Ownership is deliberate: a session the daemon spawned
-**survives** the daemon's own exit, so a `launchctl kickstart` after a layout
-merge can never kill a live practice session. The trade is that the survivor
-reads `DEV` afterwards — stop it from a terminal, or leave it up.
+`run`. The key refuses to touch it and flashes `DEV`; it only ever signals
+processes it started itself.
+
+**Surviving a daemon restart.** A session the daemon spawned survives the
+daemon's own exit — a `launchctl kickstart` after a layout merge must never
+kill a live practice session. The daemon records what it owns in
+`~/.cueclock-session.json` and **re-adopts** it on startup, so the restart is
+invisible: the key comes back reading `ON` and can still stop it. Before
+adoption existed the restarted daemon disowned its own session mid-practice
+and the key went dead (2026-08-02). A terminal `run` writes no pidfile, so it
+still reads `DEV` — the ownership rule is unchanged, only recovered from disk.
 
 **The empty-table reference** the toggle launches with is
 `deck --reference` (default `tests/clips/empty_table_0801`) — update it after

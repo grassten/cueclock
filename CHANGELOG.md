@@ -199,6 +199,31 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 43 — the key survives a deploy, and opens the TV
+  itself):** two gaps the first real one-click sessions exposed.
+  - **Adoption.** Shipping the `START` label meant a `launchctl kickstart`,
+    which orphaned Steven's *live* session: the restarted daemon had no
+    handle, read its own work as `DEV`, and the key went dead mid-practice.
+    Killing sessions on deploy was never an option, so the daemon now records
+    what it owns in `~/.cueclock-session.json` and re-adopts it on startup —
+    `PidProcess` steers by pid (signal 0 for liveness). The ownership rule is
+    unchanged, just recovered from disk: a terminal `run` writes no pidfile
+    and still reads `DEV`, asserted by a test. It also plugs a leak the same
+    orphaning caused — a `caffeinate -d` left holding a display assertion
+    after its session was stopped by hand.
+  - **The projector.** "Save projectors on exit" only restores what was open
+    at the last quit, so any session that ended without one came back to a
+    blank TV — which is exactly the state the key is supposed to make
+    impossible. `obsws.open_projector()` now opens the program projector on
+    monitor 0 explicitly, alongside the Syphon rebind, in one retried
+    post-launch step. Verified idempotent: a second call reuses the existing
+    projector window rather than stacking another.
+  - Verified live on Steven's running session: the deploy adopted it without
+    disruption, rebound the feed, and put the program on the TV — deck log
+    `adopted the running session (run pid 25510)` → `Syphon Client bound` →
+    `program projector on monitor 0`. 195 unit tests, ruff + mypy --strict
+    clean.
+
 - **2026-08-02 (checkpoint 42 — the black table feed: Syphon identity moves
   with the launcher):** first real one-click standup worked — server up, clock
   and scoreboard on the TV — except the overhead table feed was black, and

@@ -10,17 +10,19 @@ from __future__ import annotations
 
 import signal
 from collections.abc import Sequence
+from pathlib import Path
+from tempfile import mkdtemp
 
 from cueclock.deck.session import (
     CAFFEINATE,
     OBS_ALIVE,
     OBS_DISMISS,
     OBS_OPEN,
+    OBS_PREP_ATTEMPTS,
     OBS_QUIT,
     OBS_QUIT_GRACE_S,
     START_TIMEOUT_S,
     STOP_ESCALATE_S,
-    SYPHON_BIND_ATTEMPTS,
     SessionManager,
     SessionState,
     run_command,
@@ -30,7 +32,8 @@ from cueclock.deck.session import (
 class FakeProcess:
     """A child that exits only when the test says so."""
 
-    def __init__(self, log: list[tuple[str, ...]] | None = None) -> None:
+    def __init__(self, log: list[tuple[str, ...]] | None = None, pid: int = 4242) -> None:
+        self.pid = pid
         self.signals: list[int] = []
         self.terminated = False
         self.exit_code: int | None = None
@@ -55,6 +58,8 @@ class Harness:
         outputs_stop: bool = True,
         obs_survives_quit: bool = False,
         syphon_binds: bool = True,
+        projector_opens: bool = True,
+        pidfile: Path | None = None,
     ) -> None:
         self.spawned: list[tuple[str, ...]] = []
         self.called: list[tuple[str, ...]] = []
@@ -63,12 +68,17 @@ class Harness:
         self.outputs_stop = outputs_stop
         self.obs_survives_quit = obs_survives_quit
         self.syphon_binds = syphon_binds
+        self.projector_opens = projector_opens
+        self.adoptable: dict[int, FakeProcess] = {}
         self.manager = SessionManager(
+            pidfile=pidfile or Path(mkdtemp()) / "session.json",
+            process_for_pid=self._process_for_pid,
             spawn=self._spawn,
             call=self._call,
             now=lambda: self.clock,
             stop_outputs=self._stop_outputs,
             bind_syphon=self._bind_syphon,
+            open_projector=self._open_projector,
         )
 
     def _stop_outputs(self) -> bool:
@@ -78,6 +88,13 @@ class Harness:
     def _bind_syphon(self) -> bool:
         self.called.append(("obsws", "BindSyphon"))
         return self.syphon_binds
+
+    def _open_projector(self) -> bool:
+        self.called.append(("obsws", "OpenProjector"))
+        return self.projector_opens
+
+    def _process_for_pid(self, pid: int) -> FakeProcess:
+        return self.adoptable.get(pid, FakeProcess(pid=pid, log=self.called))
 
     def _spawn(self, cmd: Sequence[str]) -> FakeProcess:
         self.spawned.append(tuple(cmd))
@@ -126,7 +143,7 @@ def test_start_spawns_run_and_caffeinate_then_launches_obs_when_the_server_answe
     # OBS is launched exactly once, however long the session runs; the ticks
     # after it point OBS's Syphon source at this session's server.
     assert h.manager.tick(server_up=True) is SessionState.ON
-    assert h.called == [OBS_OPEN, ("obsws", "BindSyphon")]
+    assert h.called == [OBS_OPEN, ("obsws", "BindSyphon"), ("obsws", "OpenProjector")]
 
 
 def test_the_syphon_source_is_rebound_once_per_session() -> None:
@@ -140,11 +157,11 @@ def test_the_syphon_source_is_rebound_once_per_session() -> None:
     h.called.clear()
 
     h.manager.tick(server_up=True)
-    assert h.called == [("obsws", "BindSyphon")]
+    assert h.called == [("obsws", "BindSyphon"), ("obsws", "OpenProjector")]
 
-    for _ in range(5):  # bound: stop asking
+    for _ in range(5):  # both done: stop asking
         h.manager.tick(server_up=True)
-    assert h.called == [("obsws", "BindSyphon")]
+    assert h.called == [("obsws", "BindSyphon"), ("obsws", "OpenProjector")]
 
 
 def test_a_syphon_rebind_that_never_takes_gives_up() -> None:
@@ -155,9 +172,57 @@ def test_a_syphon_rebind_that_never_takes_gives_up() -> None:
     h.manager.tick(server_up=True)
     h.called.clear()
 
-    for _ in range(SYPHON_BIND_ATTEMPTS + 10):
+    for _ in range(OBS_PREP_ATTEMPTS + 10):
         h.manager.tick(server_up=True)
-    assert h.called == [("obsws", "BindSyphon")] * SYPHON_BIND_ATTEMPTS
+    # The projector succeeds on the first pass; only the rebind keeps retrying.
+    assert h.called.count(("obsws", "BindSyphon")) == OBS_PREP_ATTEMPTS
+    assert h.called.count(("obsws", "OpenProjector")) == 1
+
+
+def test_a_restarted_daemon_adopts_the_session_it_started() -> None:
+    # Every layout deploy is a `launchctl kickstart`, and a live session must
+    # survive it. Before adoption the restarted daemon disowned its own work
+    # and the key went dead mid-session (2026-08-02).
+    pidfile = Path(mkdtemp()) / "session.json"
+    first = Harness(pidfile=pidfile)
+    first.manager.start()
+    first.manager.tick(server_up=True)
+    run_pid, caffeinate_pid = first.run_proc.pid, first.caffeinate_proc.pid
+
+    reborn = Harness(pidfile=pidfile)  # the daemon comes back with no handles
+    reborn.adoptable = {
+        run_pid: FakeProcess(pid=run_pid),
+        caffeinate_pid: FakeProcess(pid=caffeinate_pid),
+    }
+    assert reborn.manager.tick(server_up=True) is SessionState.ON
+    assert reborn.manager.owns_session
+
+    # And it can stop what it adopted — that is the whole point.
+    reborn.manager.stop()
+    assert reborn.adoptable[run_pid].signals == [signal.SIGINT]
+    assert reborn.called.count(OBS_OPEN) == 0  # OBS is already up; don't relaunch
+
+
+def test_a_dead_session_is_not_adopted_and_its_pidfile_is_cleared() -> None:
+    pidfile = Path(mkdtemp()) / "session.json"
+    first = Harness(pidfile=pidfile)
+    first.manager.start()
+    run_pid = first.run_proc.pid
+
+    reborn = Harness(pidfile=pidfile)
+    dead = FakeProcess(pid=run_pid)
+    dead.exit_code = 0
+    reborn.adoptable = {run_pid: dead}
+    # Server up but our pid is gone: someone else's server, hands off.
+    assert reborn.manager.tick(server_up=True) is SessionState.DEV
+    assert not pidfile.exists()
+
+
+def test_a_terminal_session_is_still_never_adopted() -> None:
+    # No pidfile means we did not start it — the ownership rule is unchanged.
+    h = Harness()
+    assert h.manager.tick(server_up=True) is SessionState.DEV
+    assert not h.manager.owns_session
 
 
 def test_start_that_never_serves_gives_up_and_cleans_up() -> None:

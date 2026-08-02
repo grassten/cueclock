@@ -160,6 +160,30 @@ def active_outputs() -> list[str] | None:
 
 SYPHON_SOURCE = "Syphon Client"  # the OBS source name — must match §B3
 SYPHON_SERVER = "cueclock"  # the Syphon server name `run` publishes
+TV_MONITOR_INDEX = 0  # the mini drives exactly one display: the wall TV
+
+
+def open_projector(monitor_index: int = TV_MONITOR_INDEX) -> bool:
+    """Put the program output fullscreen on the TV.
+
+    Asking OBS directly beats relying on "Save projectors on exit", which only
+    restores what happened to be open at the last quit — so a session that
+    ended without one comes back with a blank TV, and the key's whole promise
+    is that it doesn't matter what the last session did. Verified idempotent
+    2026-08-02: calling it with a projector already up reuses that window
+    rather than stacking a second one.
+    """
+    ok = request(
+        "OpenVideoMixProjector",
+        {
+            "videoMixType": "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PROGRAM",
+            "monitorIndex": monitor_index,
+        },
+    )
+    if ok is None:
+        return False
+    print(f"obsws: program projector on monitor {monitor_index}", flush=True)
+    return True
 
 
 def bind_syphon(source: str = SYPHON_SOURCE, server: str = SYPHON_SERVER) -> bool:
