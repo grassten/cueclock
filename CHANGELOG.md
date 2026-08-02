@@ -188,6 +188,86 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 40 — the Session key's stop path, fixed by its
+  first real press):** Steven held the key and got a modal OBS dialog on the
+  TV: *"OBS is still currently active. All streams/recordings will be shut
+  down."* It fires whenever OBS quits with an output running — the replay
+  buffer, enabled the same morning — and there is no keyboard at the table to
+  click it. The deck log shows both consequences: `osascript ... to quit`
+  blocked for its full 20 s timeout, and because the stop clock starts before
+  that call, SIGINT's entire 20 s grace was gone before the signal was sent,
+  so `run` got a pointless SIGTERM escalation. Two fixes, both ordering:
+  **`run` is signalled first** (it owns the camera; nothing OBS does may delay
+  it), and **the replay buffer is stopped over obs-websocket before the
+  quit**, so no output is active and no dialog appears. New `deck/obsws.py` is
+  a minimal obs-websocket v5 client — one request per connection (open,
+  authenticate with the v5 sha256 challenge, send, read, close), every call
+  best-effort so a closed OBS or a disabled WebSocket server can never raise
+  into the deck loop; verified against the live server before wiring. There is
+  no OBS setting that suppresses that dialog — stopping the output is the
+  only fix. 188 unit tests (the stop test now asserts the full call order),
+  ruff + mypy --strict clean.
+
+- **2026-08-02 (checkpoint 40 — the corpus battery: 7:48 → 12 s):** accuracy
+  work was rate-limited by the scoreboard. 51 pinned scenarios, ~58,000
+  replayed frames, ~134 GB off the T7 per run, and every flagged clip made it
+  permanently worse. Two independent fixes, measured end to end.
+  - **`ClipReader` reads with `os.pread`, not `np.memmap`.** Mapped reads of
+    the exFAT corpus drive fault in at 4 KB granularity with no readahead:
+    measured on six cold clips with the methods alternated (so neither warms
+    the other's page cache), **207 MB/s vs 958 MB/s** — 11.10 vs 2.40 ms per
+    1920×1200 frame, ~65% of the old per-frame cost. Battery `-n 4`:
+    **7:48 → 5:05**, with user CPU identical to 0.5% and system time falling
+    442 s → 127 s. That split is the proof it was page-fault overhead and
+    nothing else moved. The 2026-08-01 note below claiming four workers "hit
+    the T7's sequential-read ceiling" was wrong: the ceiling was ours.
+  - **Detection cache (`capture/detect_cache.py`, `pytest --detect-cache`).**
+    `VisionPipeline.process()` split into `detect()` (frame-bound, 5.9 ms/frame,
+    stable) and `advance()` (state-bound, **0.08 ms/frame**, the half under
+    active tuning); both stay pure, and the two halves share no state, so a
+    whole clip's detections can be computed or loaded up front. Cached, the
+    battery skips both the T7 read and the detector: **18 MB of detections
+    stand in for 134 GB of frames.** Full suite `-n 4`: **21 s**, corpus alone
+    **12 s**.
+  - **The key is built from detection's *inputs*, not a list of source files.**
+    New `ReferenceModel` bundles the three arrays `detect_balls` consumes and
+    content-hashes them, so the reference clip's pixels, the 15-frame sampling,
+    `build_reference`, `cloth_mask` and the dilation are all covered at once —
+    four holes a file-list key would have had. Plus `detect.py`'s bytes,
+    `DetectConfig`, clip identity including `frames.raw` size+mtime (metadata
+    alone does not pin pixels: `medium_shot/meta.json` says
+    `"label": "soft_shot"`), and the cv2/numpy versions. Deliberately absent:
+    `events.py`/`track.py` (the entire point), `pipeline.py` (would
+    self-invalidate on cache-glue edits), and the calibration — detection runs
+    on distorted pixels, so a post-bump recalibration must not throw it away.
+    Frame indices are stored and validated, never re-derived: churn couples
+    each frame to the previous one *in the replayed sequence*.
+  - **Efficacy is unchanged, and that is tested.** Cold remains the default
+    and the gate; `--detect-cache` is opt-in. `test_detect_cache_replay_matches_cold`
+    replays `spin_in_place` — chosen because its settle is gated on churn, the
+    one cached field derived *across* frames — and requires cold, miss and hit
+    to produce identical event lists. Seven unit tests pin exact round-tripping
+    (including the None-vs-0.0 churn distinction, empty frames, and detection
+    order, which the greedy tracker depends on), key completeness as a
+    collision test, and loud failure on corrupt or mismatched entries.
+    float64 throughout: the corpus turns on margins like a 12.04 mm tug
+    against a 12 mm floor. `dump_state()` now refuses a cache-fed pipeline —
+    `prev_gray` is never computed, so such a snapshot would silently
+    mis-compute churn on the first frame after a warm resume.
+  - **Also fixed: `uv run pytest` has been erroring at collection since
+    checkpoint 36** — `tests/unit/test_warm_replay.py` and
+    `tests/corpus/test_warm_replay.py` share a basename with no package
+    markers, so pytest's prepend import mode collided them. That is the exact
+    command CI runs, so CI has been red. Added `__init__.py` to `tests/unit/`
+    and `tests/corpus/`; bare `pytest` now collects and passes 244 tests.
+  - Reference/calibration construction is now `@cache`d per worker (was rebuilt
+    per test at ~0.30 s): −16% user CPU on the cold run, and it would have been
+    the floor of the cached tier otherwise.
+  - Sequencing note for anyone repeating this: the first measurement of the
+    memmap cost came from a subagent that benchmarked *while a battery was
+    running* and reported 35 MB/s — 6× off, and it inverted the expected
+    payoff. Contended micro-benchmarks are worse than none. Re-measured quiet.
+
 - **2026-08-02 (checkpoint 39 — the Session key: one press owns the whole
   session):** Stream Deck phase 2, the top-left key that makes the rig
   keyboard-free (`hardware.md` §C4, BACKLOG since 2026-07-31).

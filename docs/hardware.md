@@ -319,11 +319,17 @@ output appends to `~/Library/Logs/cueclock-run.log`. If no server answers
 within 60 s the start is called failed: SIGINT, release, back to `OFF`.
 
 **Stop** (hold 1 s while `ON`; the face reads `HOLD…` while held, and a short
-tap does nothing): quit OBS gracefully by AppleScript (never `kill` — a killed
-OBS reopens in safe mode and drops the projector, which is exactly what a
-headless rig can't fix), SIGINT `run` (closes the pylon device — the camera
-stops streaming and cools), then `STOPPING…` until the child actually exits,
-at which point the assertion is released. A wedged `run` gets one escalation
+tap does nothing), in this order — both halves learned from a live press on
+2026-08-02: (1) SIGINT `run` **first** (closes the pylon device — the camera
+stops streaming and cools); nothing OBS does may delay the camera. (2) **Stop
+the replay buffer over obs-websocket**, because quitting OBS with any output
+active raises a modal *"OBS is still currently active"* dialog — and there is
+no keyboard at the table to dismiss it. Left unhandled it blocked the quit for
+its full 20 s timeout and burned SIGINT's entire grace window before the
+signal was even sent, forcing a pointless SIGTERM. (3) Quit OBS gracefully by
+AppleScript (never `kill` — a killed OBS reopens in safe mode and drops the
+projector, which is exactly what a headless rig can't fix). Then `STOPPING…`
+until the child actually exits, at which point the assertion is released. A wedged `run` gets one escalation
 to SIGTERM after 20 s (`cli.py` maps it to KeyboardInterrupt, so it takes the
 same shutdown path) — never SIGKILL.
 
@@ -338,13 +344,15 @@ reads `DEV` afterwards — stop it from a terminal, or leave it up.
 `deck --reference` (default `tests/clips/empty_table_0801`) — update it after
 a camera bump alongside the README command (§E2).
 
-**Still manual, one-time, in the OBS UI:** enable the WebSocket server
-(Tools → WebSocket Server Settings; password → gitignored
-`config/obs_websocket.json`), enable the replay buffer, "Save projectors on
-exit", and remove OBS from Login Items (the toggle owns its lifecycle).
-obs-websocket is **disabled on this machine today**, so phase 2 ships without
-the "verify projector + replay buffer" step the original spec listed — that
-verification lands with phase 3's Replay key, which needs the same client.
+**OBS one-time settings — all done 2026-08-02:** WebSocket server enabled
+(Tools → WebSocket Server Settings; credentials copied to gitignored
+`config/obs_websocket.json`), replay buffer enabled (20 s), "Save projectors
+on exit" on, and OBS was never in Login Items. The client is
+`deck/obsws.py` — one request per connection (open, authenticate, send, read,
+close), every call best-effort so OBS being closed or the WebSocket server
+being off can never raise into the deck loop. Phase 2 uses it only to stop the
+replay buffer; the spec's "verify projector + replay buffer" check lands with
+phase 3's Replay key, which builds on the same client.
 
 ### C5. Corpus-clip flow (Flag → triage)
 

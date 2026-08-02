@@ -26,16 +26,18 @@ from cueclock.deck.session import (
 class FakeProcess:
     """A child that exits only when the test says so."""
 
-    def __init__(self) -> None:
+    def __init__(self, log: list[tuple[str, ...]] | None = None) -> None:
         self.signals: list[int] = []
         self.terminated = False
         self.exit_code: int | None = None
+        self._log = log if log is not None else []
 
     def poll(self) -> int | None:
         return self.exit_code
 
     def send_signal(self, sig: int) -> None:
         self.signals.append(sig)
+        self._log.append(("signal", signal.Signals(sig).name))
 
     def terminate(self) -> None:
         self.terminated = True
@@ -44,16 +46,26 @@ class FakeProcess:
 class Harness:
     """A manager wired to fakes, plus the transcript of what it ran."""
 
-    def __init__(self) -> None:
+    def __init__(self, replay_stops: bool = True) -> None:
         self.spawned: list[tuple[str, ...]] = []
         self.called: list[tuple[str, ...]] = []
         self.procs: list[FakeProcess] = []
         self.clock = 0.0
-        self.manager = SessionManager(spawn=self._spawn, call=self._call, now=lambda: self.clock)
+        self.replay_stops = replay_stops
+        self.manager = SessionManager(
+            spawn=self._spawn,
+            call=self._call,
+            now=lambda: self.clock,
+            stop_replay=self._stop_replay,
+        )
+
+    def _stop_replay(self) -> bool:
+        self.called.append(("obsws", "StopReplayBuffer"))
+        return self.replay_stops
 
     def _spawn(self, cmd: Sequence[str]) -> FakeProcess:
         self.spawned.append(tuple(cmd))
-        proc = FakeProcess()
+        proc = FakeProcess(self.called)
         self.procs.append(proc)
         return proc
 
@@ -115,8 +127,12 @@ def test_stop_quits_obs_then_interrupts_run_and_settles_on_off() -> None:
     h.called.clear()
 
     h.manager.stop()
-    assert h.called == [OBS_QUIT]  # graceful quit; a kill would reopen in safe mode
-    assert h.run_proc.signals == [signal.SIGINT]
+    # Order matters, both halves measured the hard way (2026-08-02):
+    # `run` is signalled first so nothing OBS does can delay the camera
+    # shutdown, and the replay buffer is stopped before the quit because OBS
+    # with any output active raises a modal dialog no one can click at the
+    # table — which blocked the quit for its full 20 s timeout.
+    assert h.called == [("signal", "SIGINT"), ("obsws", "StopReplayBuffer"), OBS_QUIT]
 
     # `run` closes the camera on its way out, so OFF waits for the exit.
     assert h.manager.tick(server_up=True) is SessionState.STOPPING
@@ -126,6 +142,19 @@ def test_stop_quits_obs_then_interrupts_run_and_settles_on_off() -> None:
     assert h.manager.tick(server_up=False) is SessionState.OFF
     assert h.caffeinate_proc.terminated
     assert not h.manager.owns_session
+
+
+def test_stop_still_quits_obs_when_the_replay_buffer_cannot_be_stopped() -> None:
+    # obs-websocket disabled or OBS already gone: the quit must still happen —
+    # a possible dialog beats leaving the session up.
+    h = Harness(replay_stops=False)
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.called.clear()
+
+    h.manager.stop()
+    assert OBS_QUIT in h.called
+    assert h.run_proc.signals == [signal.SIGINT]
 
 
 def test_a_wedged_run_escalates_to_sigterm_once() -> None:

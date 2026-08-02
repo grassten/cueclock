@@ -28,6 +28,8 @@ from enum import Enum
 from pathlib import Path
 from typing import IO, Protocol
 
+from cueclock.deck import obsws
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUN_LOG = Path.home() / "Library" / "Logs" / "cueclock-run.log"
 
@@ -142,6 +144,7 @@ class SessionManager:
     spawn: Callable[[Sequence[str]], Process] = _spawn
     call: Callable[[Sequence[str]], int] = _call
     now: Callable[[], float] = time.monotonic
+    stop_replay: Callable[[], bool] = obsws.stop_replay_buffer
 
     _run: Process | None = None
     _caffeinate: Process | None = None
@@ -172,9 +175,20 @@ class SessionManager:
             return
         self._stopping_since = self.now()
         self._escalated = False
-        self.call(OBS_QUIT)
+        # `run` first, always: it owns the camera, and it must not wait on
+        # anything OBS does. Measured 2026-08-02 — a modal OBS dialog blocked
+        # the quit for the full 20 s timeout, which both delayed the camera
+        # shutdown and burned SIGINT's entire grace window before it was even
+        # sent, forcing a pointless SIGTERM.
         self._signal_run(signal.SIGINT)
-        print("session: stopping (OBS quit, SIGINT run)", flush=True)
+        # Then OBS. Quitting it with any output active raises a modal "OBS is
+        # still currently active" dialog, and there is no keyboard at the
+        # table to dismiss it — so stop the replay buffer over obs-websocket
+        # first. If that fails, quit anyway and say so.
+        if not self.stop_replay():
+            print("session: replay buffer not stopped — OBS may prompt on quit", flush=True)
+        self.call(OBS_QUIT)
+        print("session: stopping (SIGINT run, OBS quit)", flush=True)
 
     def tick(self, server_up: bool) -> SessionState:
         """Advance the machine one step and report what the key should show."""
