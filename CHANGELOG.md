@@ -188,6 +188,46 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 39 — the Session key: one press owns the whole
+  session):** Stream Deck phase 2, the top-left key that makes the rig
+  keyboard-free (`hardware.md` §C4, BACKLOG since 2026-07-31).
+  - **Tap while `OFF`** spawns the canonical `run` (README) plus a
+    `caffeinate -d` assertion, shows `STARTING…`, and launches OBS on the
+    first poll where the server answers — server first, always, because a
+    browser source that loads against a dead server parks on a silent error
+    page and never retries (§B3, the checkbox that heals it is the same
+    finding). **Hold 1 s while `ON`** quits OBS by AppleScript, SIGINTs `run`,
+    and shows `STOPPING…` until the child actually exits, then releases the
+    assertion. A tap while `ON` does nothing on purpose: a stray press that
+    killed the camera mid-rack would be the worst key on the deck.
+  - **`sys.executable`, not `uv run`** — the daemon must never block on uv's
+    lock while another cueclock command holds it (the contention that has bit
+    live sessions all week). Output appends to `~/Library/Logs/cueclock-run.log`.
+  - **Ownership is the whole design.** The manager only ever signals children
+    it spawned itself, so a terminal `run` reads `DEV` and is left alone —
+    and a session the daemon spawned **survives the daemon's own exit**, so
+    the `launchctl kickstart` ritual after a layout merge can never kill a
+    live practice session. The trade, accepted: the survivor reads `DEV`
+    afterwards and has to be stopped from a terminal.
+  - **Failure paths all land somewhere honest**: no server within 60 s ⇒
+    SIGINT + `OFF` (with the log path printed); `run` crashing on its own ⇒
+    `OFF` and the assertion released; a wedged `run` ⇒ one escalation to
+    SIGTERM at 20 s, never SIGKILL, and never `kill` for OBS (a killed OBS
+    reopens in safe mode without the projector — unfixable headless).
+  - **Shape:** `deck/session.py` is a pure state machine over injected
+    `spawn`/`call`/`now`, advanced by the daemon's existing 2 s poll rather
+    than a thread, so the deck keeps rendering every other key while a
+    session comes up — and the entire start/stop sequence is unit-tested with
+    fakes (10 new tests; 187 total, ruff + mypy --strict clean). The Session
+    key is also the one key that stays lit when the server is down: dimming
+    the key that starts the server would hide the way back up.
+  - **Deferred with a reason:** the spec's "verify projector + replay buffer
+    via obs-websocket" step. obs-websocket is disabled on this machine
+    (`server_enabled: false`), so there is nothing to verify against; it
+    lands with phase 3's Replay key, which needs the same client. Enabling
+    the WebSocket server, the replay buffer, "Save projectors on exit", and
+    removing OBS from Login Items stay one-time manual steps in the OBS UI.
+
 - **2026-08-02 (checkpoint 38 — the missed ball-in-hand stroke: witnessed
   dwell, chatter-revised stamps, feasibility confirm):** first reason-coded
   flag of the post-36 era (`FLAG MISSED`, 02:51 UTC) and the first warm

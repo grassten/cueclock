@@ -43,7 +43,20 @@ class RulesetCycle:
     """Advance to the next ruleset; the face tracks the active one."""
 
 
-Action = ApiPost | RulesetCycle
+@dataclass(frozen=True)
+class SessionToggle:
+    """Start the whole session on press; stop it on a deliberate hold.
+
+    The one key that must work while the server is down — it is what starts the
+    server. Held (not tapped) to stop, because a stray press mid-rack that
+    killed the camera would be the worst key on the deck. State, faces, and the
+    process lifecycle live in `session.py`.
+    """
+
+    hold_s: float = 1.0
+
+
+Action = ApiPost | RulesetCycle | SessionToggle
 
 
 @dataclass(frozen=True)
@@ -93,6 +106,9 @@ def _flag(label: str) -> ApiPost:
 
 
 LAYOUT: tuple[Key, ...] = (
+    # Top-left, the first key a hand lands on: tap to bring the whole session
+    # up, hold 1 s to take it down (hardware.md §C4).
+    Key(1, 1, "session", "OFF", SessionToggle()),
     Key(1, 3, "ruleset", "RULESET", RulesetCycle()),
     # Push-out call: clock restarts at the 60 s first-shot time (WNT §5) and the
     # window re-arms for a pass-back. Push outs exist only in 9-ball, so the

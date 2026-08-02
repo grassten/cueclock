@@ -122,9 +122,17 @@ Delete items as they land (history lives in `CHANGELOG.md`).
       planted, slide the bridge hand deliberately, never shoot): measures
       the planted-glove-slide residual the roster rule cannot cover, and
       whether admission needs an appearance gate.
-- [ ] **Stream Deck phase 2 — session toggle**: daemon owns `run` + OBS
-      lifecycles; one-time OBS settings. Spec: `hardware.md` §C4.
-- [ ] **Stream Deck phase 3 — Replay key** (obs-websocket).
+- [ ] **Live-validate the session toggle** (phase 2, built 2026-08-02): tap
+      Session at the table and watch `run` + OBS come up, hold 1 s to take
+      them down. Two things only the rig can judge — whether 60 s is enough
+      start budget on a cold camera, and whether OBS restores the projector
+      by itself on launch. Still one-time manual in the OBS UI: enable the
+      WebSocket server, replay buffer, "Save projectors on exit", and remove
+      OBS from Login Items (`hardware.md` §C4).
+- [ ] **Stream Deck phase 3 — Replay key** (obs-websocket). Carries phase 2's
+      deferred half: obs-websocket is disabled on this machine, so the toggle
+      ships without the "verify projector + replay buffer" step — it lands
+      with the client this key needs anyway.
 - [ ] **Deck bring-up checks** at the table: `hardware.md` §C6 (HID wake,
       power assertions, OBS restore).
 - [ ] Deck placement: desk stand first; break-end wall mount later if it
@@ -322,6 +330,16 @@ injecting timestamp gaps — the observed 544 ms iCloud stall as a profile).
   never saw.
 - **Threshold sensitivity sweeps**: re-grade the corpus across a grid around
   each config value; narrow passing plateau = overfit = fragile live.
+  Affordable for `TrackConfig`/`EventConfig` now that `pytest --detect-cache`
+  makes a battery run cheap (2026-08-02) — but **not** for `DetectConfig`:
+  every detector threshold is part of the cache key, so each grid point is a
+  full cold run. Sweep the event/tracker side first.
+- **Corpus value grading**: with a cheap battery, measure which clips actually
+  discriminate — perturb one `EventConfig` constant at a time and record which
+  pins go red. A clip that never flips under any mutation is paying for
+  runtime it does not earn. Candidates to check first: `break_underread_0801`
+  (shots unasserted by design), `soft_touch_0731` and `walk_around_settle`
+  (both assert only `scratches == 0`) — 3,281 frames between them.
 - **Synthetic clip perturbation**: replay clips through gain/gamma shifts,
   noise, and frame drops — a corpus multiplier that costs no table time.
 - **Detector-level metrics**: hand-label ~20 scattered frames once; per-frame

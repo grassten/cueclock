@@ -247,6 +247,14 @@ Plus the shared mic args below.
 |---|---|---|
 | `--server` | `http://127.0.0.1:8000` | cueclock server base URL |
 | `--brightness` | `60` | key backlight 0–100 |
+| `--reference` | `tests/clips/empty_table_0801` | empty-table reference the **Session** key launches `run` with. Refresh it after a camera bump, same as the README command (`hardware.md` §E2) |
+
+The Session key (1,1) owns a whole session: tap to spawn `run` + a
+`caffeinate -d` assertion and launch OBS once the server answers, hold 1 s to
+quit OBS and SIGINT `run`. It only ever signals children it spawned itself — a
+`run` started from a terminal reads `DEV` and is left alone. `run`'s output
+goes to `~/Library/Logs/cueclock-run.log`; the daemon's own log stays at
+`~/Library/Logs/cueclock-deck.log`. Full behavior: `hardware.md` §C4.
 
 Never install the Elgato Stream Deck app — it would claim exclusive HID
 access and starve this daemon.

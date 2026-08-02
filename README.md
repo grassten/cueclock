@@ -55,11 +55,15 @@ uv run python -m cueclock.cli run --rectify \
 uv run python -m cueclock.cli deck
 ```
 
+- At the table there is no keyboard: the deck's **Session** key (top-left)
+  runs that first command for you and launches OBS behind it — tap to start,
+  hold 1 s to stop (`docs/hardware.md` §C4).
 - After any camera bump: record a fresh empty-table reference and point
-  `--reference` at it — recipe in `docs/hardware.md` §E2. The startup drift
-  check warns loudly if the reference has gone stale.
+  `--reference` at it — recipe in `docs/hardware.md` §E2 (the deck daemon
+  takes the same path via `deck --reference`). The startup drift check warns
+  loudly if the reference has gone stale.
 - OBS browser sources: `http://localhost:8000/shotclock` (corner overlay,
-  220×220, "Control audio via OBS"),
+  ~200×200, "Control audio via OBS"),
   `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
   broadcast-style clock scene), and `http://localhost:8000/score`
   (1920×1080 bottom-bar scoreboard, driven by the Stream Deck score keys).

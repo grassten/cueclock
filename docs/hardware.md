@@ -244,7 +244,7 @@ Page 1 (only page). 5 columns × 3 rows; unlisted keys stay dark.
 
 | Pos (row,col) | Key | Action | Face | Status |
 |---|---|---|---|---|
-| 1,1 | **Session** | Toggle: start/stop `run` + OBS (hold 1 s to stop) | `OFF` / `STARTING…` / `ON` / `DEV` | planned (phase 2) |
+| 1,1 | **Session** | Tap while `OFF`: spawn `run` + a `caffeinate -d` assertion, then launch OBS as soon as the server answers. **Hold 1 s** while `ON`: quit OBS (AppleScript), SIGINT `run`, release the assertion. The face is the state, and it stays lit with the server down — it is what starts the server | `OFF` / `STARTING…` / `ON` / `STOPPING…` / `DEV`; `HOLD…` while held | **live** |
 | 1,2 | **Replay** | obs-websocket: save replay buffer → replay scene → back | `REPLAY` | planned (phase 3; displaced from 2,2 by the flag reorg) |
 | 1,3 | **Ruleset** | Cycle rulesets via `POST /api/ruleset/{next}` | `8-BALL` / `FINAL 10` / `9-BALL` | **live** |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back (9-ball only, so the face stays static) | `PUSH`, flashes `60 s` / `ERROR` | **live** |
@@ -300,25 +300,51 @@ Stream Deck MK.2 ── USB HID ── cueclock deck (launchd agent, always on)
 - Resilience: USB unplug → reconnect loop; daemon crash → launchd restarts;
   server restart → faces recover on the next poll (2 s).
 
-### C4. The session toggle (phase 2 spec)
+### C4. The session toggle (phase 2 — built 2026-08-02)
 
-**Start** (press while `OFF`): spawn the canonical `run` command (README) →
-poll `GET /api/state` until it answers (`STARTING…`) → launch OBS
-(`open -a OBS --args --startreplaybuffer --disable-shutdown-check`; server
-first or the overlay browser source loads blank) → verify projector +
-replay buffer via obs-websocket → hold `caffeinate -d` for the session.
+Code: `deck/session.py` (the state machine, pure over injected callables —
+`spawn`, `call`, `now` — so the whole sequence is unit-tested without a
+camera, OBS, or a deck) + the Session branch in `deck/daemon.py`. The machine
+is advanced by the daemon's existing 2 s poll, not a background thread: the
+deck keeps rendering and dispatching every other key while a session comes up.
 
-**Stop** (hold 1 s while `ON`): quit OBS gracefully (never `kill -9` — that
-triggers the safe-mode nag), SIGINT `run` (closes the pylon device — the
-camera stops streaming and cools), release the assertion.
+**Start** (tap while `OFF`): spawn the canonical `run` command (README, built
+by `session.run_command()`) and a `caffeinate -d` assertion → face reads
+`STARTING…` → on the first poll where `/api/rulesets` answers, launch OBS
+(`open -a OBS --args --startreplaybuffer --disable-shutdown-check`) and go
+`ON`. Server first, always: a browser source that loads while the server is
+down parks on a silent error page (§B3). `run` is spawned with the venv's own
+`sys.executable`, never `uv run` — the daemon must not block on uv's lock. Its
+output appends to `~/Library/Logs/cueclock-run.log`. If no server answers
+within 60 s the start is called failed: SIGINT, release, back to `OFF`.
 
-**`DEV`**: the API answers but the daemon didn't spawn it (a terminal
-session) — the toggle refuses to touch it.
+**Stop** (hold 1 s while `ON`; the face reads `HOLD…` while held, and a short
+tap does nothing): quit OBS gracefully by AppleScript (never `kill` — a killed
+OBS reopens in safe mode and drops the projector, which is exactly what a
+headless rig can't fix), SIGINT `run` (closes the pylon device — the camera
+stops streaming and cools), then `STOPPING…` until the child actually exits,
+at which point the assertion is released. A wedged `run` gets one escalation
+to SIGTERM after 20 s (`cli.py` maps it to KeyboardInterrupt, so it takes the
+same shutdown path) — never SIGKILL.
 
-One-time OBS settings for phase 2: enable the WebSocket server (password →
-gitignored `config/obs_websocket.json`), enable the replay buffer, "Save
-projectors on exit", and remove OBS from Login Items (the toggle owns its
-lifecycle).
+**`DEV`**: the API answers but this daemon has no handle on it — a terminal
+`run`, or a session that outlived a daemon restart. The key refuses to touch
+it and flashes `DEV`. Ownership is deliberate: a session the daemon spawned
+**survives** the daemon's own exit, so a `launchctl kickstart` after a layout
+merge can never kill a live practice session. The trade is that the survivor
+reads `DEV` afterwards — stop it from a terminal, or leave it up.
+
+**The empty-table reference** the toggle launches with is
+`deck --reference` (default `tests/clips/empty_table_0801`) — update it after
+a camera bump alongside the README command (§E2).
+
+**Still manual, one-time, in the OBS UI:** enable the WebSocket server
+(Tools → WebSocket Server Settings; password → gitignored
+`config/obs_websocket.json`), enable the replay buffer, "Save projectors on
+exit", and remove OBS from Login Items (the toggle owns its lifecycle).
+obs-websocket is **disabled on this machine today**, so phase 2 ships without
+the "verify projector + replay buffer" step the original spec listed — that
+verification lands with phase 3's Replay key, which needs the same client.
 
 ### C5. Corpus-clip flow (Flag → triage)
 

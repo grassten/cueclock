@@ -16,9 +16,13 @@ from cueclock.deck.layout import (
     ApiPost,
     Key,
     RulesetCycle,
+    SessionToggle,
     next_ruleset,
     ruleset_face,
 )
+from cueclock.deck.session import SessionState
+
+OFF = SessionState.OFF  # face selection for non-Session keys ignores this
 
 # --- layout ---
 
@@ -240,21 +244,31 @@ def test_dispatch_ruleset_cycle_server_down(monkeypatch) -> None:  # type: ignor
 
 
 def test_faces_dim_when_server_down() -> None:
-    assert _face_for(FLAG, False, None).tobytes() == faces.dimmed(FLAG.face).tobytes()
-    assert _face_for(FLAG, True, None).tobytes() == faces.render(FLAG.face).tobytes()
+    assert _face_for(FLAG, False, None, OFF).tobytes() == faces.dimmed(FLAG.face).tobytes()
+    assert _face_for(FLAG, True, None, OFF).tobytes() == faces.render(FLAG.face).tobytes()
+
+
+def test_session_key_stays_lit_with_the_server_down_and_shows_its_state() -> None:
+    session = next(k for k in LAYOUT if isinstance(k.action, SessionToggle))
+    # It is the key that *starts* the server, so dimming it would hide the way
+    # back up — it renders its own state, lit, either way.
+    for up in (False, True):
+        for state in SessionState:
+            face = _face_for(session, up, None, state)
+            assert face.tobytes() == faces.render(state.face).tobytes()
 
 
 def test_ruleset_face_tracks_active_when_up() -> None:
     name = next(iter(RULESETS))
-    rendered = _face_for(RULESET_KEY, True, name)
+    rendered = _face_for(RULESET_KEY, True, name, OFF)
     assert rendered.tobytes() == faces.render(ruleset_face(name)).tobytes()
-    dim = _face_for(RULESET_KEY, False, None)
+    dim = _face_for(RULESET_KEY, False, None, OFF)
     assert dim.tobytes() == faces.dimmed(RULESET_KEY.face).tobytes()
 
 
 def test_extension_face_and_flash_render_the_wnt_values(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    assert _face_for(EXT, True, "wnt_9ball").tobytes() == faces.render("EXT\n+30").tobytes()
-    assert _face_for(EXT, False, None).tobytes() == faces.dimmed("EXT\n+15").tobytes()
+    assert _face_for(EXT, True, "wnt_9ball", OFF).tobytes() == faces.render("EXT\n+30").tobytes()
+    assert _face_for(EXT, False, None, OFF).tobytes() == faces.dimmed("EXT\n+15").tobytes()
     monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "{}"))
     image, changed = _dispatch(EXT, "http://x", "wnt_9ball")
     assert image.tobytes() == faces.flash_ok("+30 s").tobytes()

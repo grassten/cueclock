@@ -31,6 +31,7 @@ import numpy as np
 import numpy.typing as npt
 
 from cueclock.capture.clip import ClipReader, ClipWriter
+from cueclock.deck.session import DEFAULT_REFERENCE  # pure stdlib; no HID import
 from cueclock.display.pipeline import (
     DEFAULT_UNDISTORT_PATH,
     DisplayPipeline,
@@ -358,16 +359,6 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
     pipeline = VisionPipeline(calibration, [ref_reader.frame(int(i)) for i in ref_indices])
 
     reader = ClipReader(Path(args.clip))
-    # Adapt the default stride to the clip's stored rate: record-made clips
-    # hold the full 156 fps stream (stride 2 → live cadence), while ring
-    # dumps hold only detect-stride frames — a fixed stride 2 silently
-    # replayed dumps at HALF the live cadence and produced different events
-    # than the session under triage (2026-08-01, checkpoint 33).
-    stride = args.stride
-    if stride is None:
-        span = float(reader.timestamps[-1] - reader.timestamps[0])
-        fps = (len(reader) - 1) / span if span > 0 else NOMINAL_FPS
-        stride = max(1, round(fps / 78.0))
 
     # Warm replay: restore the live session's state snapshot (written into
     # flag dumps by `run` — see STATE_SNAPSHOT_PERIOD_S), skip the frames it
@@ -417,7 +408,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 
     n_events = 0
     next_status = t_offset
-    for i in range(start, len(reader), stride):
+    for i in reader.detect_indices(start=start, stride=args.stride):
         t = t_offset + float(reader.timestamps[i])
         for event in pipeline.process(t, reader.frame(i)):
             n_events += 1
@@ -808,7 +799,7 @@ def _add_display_args(p: argparse.ArgumentParser) -> None:
 def _cmd_deck(args: argparse.Namespace) -> int:
     from cueclock.deck.daemon import run_deck
 
-    return run_deck(args.server, args.brightness)
+    return run_deck(args.server, args.brightness, args.reference)
 
 
 def _cmd_listen(args: argparse.Namespace) -> int:
@@ -1008,6 +999,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_deck.add_argument(
         "--brightness", type=int, default=60, help="key backlight 0-100 (default 60)"
+    )
+    p_deck.add_argument(
+        "--reference",
+        default=DEFAULT_REFERENCE,
+        help=(
+            "empty-table reference the Session key launches `run` with "
+            f"(default {DEFAULT_REFERENCE}); refresh it after a camera bump"
+        ),
     )
 
     args = parser.parse_args(argv)

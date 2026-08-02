@@ -17,16 +17,30 @@ from typing import Any
 from PIL import Image
 
 from cueclock.deck import client, faces
-from cueclock.deck.layout import LAYOUT, ApiPost, Key, RulesetCycle, next_ruleset, ruleset_face
+from cueclock.deck.layout import (
+    LAYOUT,
+    ApiPost,
+    Key,
+    RulesetCycle,
+    SessionToggle,
+    next_ruleset,
+    ruleset_face,
+)
+from cueclock.deck.session import SessionManager, SessionState
 
 POLL_S = 2.0  # server/ruleset poll cadence
 FLASH_S = 1.2  # how long a press outcome stays on the key
 RETRY_S = 3.0  # device reconnect cadence
+HOLD_FACE = "HOLD…"  # shown while the Session key is held toward a stop
 
 _BY_INDEX: dict[int, Key] = {key.index: key for key in LAYOUT}
 
 
-def _face_for(key: Key, up: bool, active: str | None) -> Image.Image:
+def _face_for(key: Key, up: bool, active: str | None, state: SessionState) -> Image.Image:
+    # The Session key is the one key that stays lit with the server down — it
+    # is what starts the server, so dimming it would hide the way back up.
+    if isinstance(key.action, SessionToggle):
+        return faces.render(state.face)
     if isinstance(key.action, RulesetCycle) and up and active is not None:
         return faces.render(ruleset_face(active))
     face = key.face_for(active)  # ruleset-aware keys (Extension) track the poll
@@ -72,41 +86,80 @@ def _set_key(deck: Any, index: int, image: Image.Image) -> None:
         deck.set_key_image(index, PILHelper.to_native_key_format(deck, image))
 
 
-def _draw_all(deck: Any, up: bool, active: str | None, skip: frozenset[int] = frozenset()) -> None:
+def _draw_all(
+    deck: Any,
+    up: bool,
+    active: str | None,
+    state: SessionState,
+    skip: frozenset[int] = frozenset(),
+) -> None:
     blank = faces.render("")
     for i in range(deck.key_count()):
         if i in skip:
             continue
         key = _BY_INDEX.get(i)
-        _set_key(deck, i, _face_for(key, up, active) if key else blank)
+        _set_key(deck, i, _face_for(key, up, active, state) if key else blank)
 
 
-def _loop(deck: Any, base: str) -> None:
+def _loop(deck: Any, base: str, session: SessionManager) -> None:
     """Poll + dispatch forever; raises TransportError on unplug, KeyboardInterrupt on stop."""
     events: queue.Queue[tuple[int, bool]] = queue.Queue()
     deck.set_key_callback(lambda _deck, k, pressed: events.put((int(k), bool(pressed))))
     up, active = _poll(base)
-    _draw_all(deck, up, active)
+    state = session.tick(up)
+    _draw_all(deck, up, active, state)
     flashes: dict[int, float] = {}
+    holds: dict[int, float] = {}  # Session key index -> monotonic stop deadline
     next_poll = time.monotonic() + POLL_S
     while True:
         now = time.monotonic()
         if now >= next_poll:
             polled = _poll(base)
-            if polled != (up, active):
+            # The session machine advances on this same poll: STARTING becomes
+            # ON the moment the server answers (that is when OBS is launched),
+            # and STOPPING becomes OFF when `run` finally exits.
+            polled_state = session.tick(polled[0])
+            if (polled, polled_state) != ((up, active), state):
                 up, active = polled
-                _draw_all(deck, up, active, skip=frozenset(flashes))
+                state = polled_state
+                _draw_all(deck, up, active, state, skip=frozenset(flashes))
             next_poll = now + POLL_S
+        for index, deadline in list(holds.items()):
+            if now >= deadline:
+                del holds[index]
+                session.stop()
+                state = session.tick(up)
+                _set_key(deck, index, _face_for(_BY_INDEX[index], up, active, state))
         for index, deadline in list(flashes.items()):
             if now >= deadline:
                 del flashes[index]
-                _set_key(deck, index, _face_for(_BY_INDEX[index], up, active))
+                _set_key(deck, index, _face_for(_BY_INDEX[index], up, active, state))
         try:
             index, pressed = events.get(timeout=0.25)
         except queue.Empty:
             continue
         key = _BY_INDEX.get(index)
-        if not pressed or key is None:
+        if key is None:
+            continue
+        if isinstance(key.action, SessionToggle):
+            if not pressed:
+                # Released before the hold matured: a tap while ON means
+                # nothing, so put the honest state back.
+                if holds.pop(index, None) is not None:
+                    _set_key(deck, index, _face_for(key, up, active, state))
+            elif state is SessionState.ON:
+                holds[index] = time.monotonic() + key.action.hold_s
+                _set_key(deck, index, faces.render(HOLD_FACE))
+            elif state is SessionState.OFF:
+                session.start()
+                state = session.tick(up)
+                _set_key(deck, index, _face_for(key, up, active, state))
+            else:  # DEV (not ours to touch) or mid-transition — refuse, say why
+                print(f"session: press ignored in {state.name}", flush=True)
+                _set_key(deck, index, faces.flash_err(state.face))
+                flashes[index] = time.monotonic() + FLASH_S
+            continue
+        if not pressed:
             continue
         if not up:
             print(f"{key.name}: ignored — server down", flush=True)
@@ -118,16 +171,20 @@ def _loop(deck: Any, base: str) -> None:
             active = changed
             # Ruleset-aware faces must follow right away — the next poll can't
             # catch this change because `active` already moved.
-            _draw_all(deck, up, active, skip=frozenset(flashes) | {index})
+            _draw_all(deck, up, active, state, skip=frozenset(flashes) | {index})
         _set_key(deck, index, image)
         flashes[index] = time.monotonic() + FLASH_S
 
 
-def run_deck(base: str, brightness: int) -> int:
+def run_deck(base: str, brightness: int, reference: str) -> int:
     """Open the deck (waiting for one if absent) and run the control loop forever.
 
     Returns only on SIGINT/SIGTERM (cli maps SIGTERM to KeyboardInterrupt, so
-    `launchctl bootout` unwinds cleanly and blanks the keys).
+    `launchctl bootout` unwinds cleanly and blanks the keys). A session this
+    daemon spawned deliberately **survives** its exit — a launchd restart or a
+    layout reinstall must never kill a live practice session. The running
+    session then reads DEV (no handle to it any more), so stop it from a
+    terminal or leave it up.
     """
     from StreamDeck.DeviceManager import DeviceManager
     from StreamDeck.Transport.Transport import TransportError
@@ -137,6 +194,8 @@ def run_deck(base: str, brightness: int) -> int:
     except TransportError as exc:  # missing libhidapi is fatal, not transient
         print(f"HID transport unavailable ({exc}) — `brew install hidapi`?", flush=True)
         return 1
+
+    session = SessionManager(reference=reference)
 
     while True:
         try:
@@ -151,7 +210,7 @@ def run_deck(base: str, brightness: int) -> int:
                 deck.reset()
                 deck.set_brightness(brightness)
                 print(f"deck open: {deck.deck_type()} ({deck.key_count()} keys)", flush=True)
-                _loop(deck, base)
+                _loop(deck, base, session)
             finally:
                 with contextlib.suppress(Exception):
                     deck.reset()  # blank the keys on the way out
