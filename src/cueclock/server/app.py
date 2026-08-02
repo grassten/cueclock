@@ -158,7 +158,7 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
 
     @app.post("/api/dump")
     async def api_dump(label: str = "flagged") -> JSONResponse:
-        """Save the last ~12 s of raw frames as a labeled clip.
+        """Save the ring buffer's raw frames as a labeled clip (~20 s default).
 
         Only live under `cueclock run` (which wires `app.state.dump` to its
         ring buffer). This is the "that was wrong / that was interesting"
@@ -175,9 +175,10 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
         try:
             path = await asyncio.to_thread(dump, safe)
         except (RuntimeError, OSError) as exc:
-            return JSONResponse(
-                {"error": f"dump failed: {exc} (is the T7 mounted?)"}, status_code=503
-            )
+            # Dumps stage on the internal SSD since 2026-08-01, so the old
+            # "is the T7 mounted?" hint is wrong — the writer's own message
+            # names the staging root and the disk-space remedy.
+            return JSONResponse({"error": f"dump failed: {exc}"}, status_code=503)
         return JSONResponse({"saved": path})
 
     return app

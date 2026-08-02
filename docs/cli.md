@@ -21,6 +21,10 @@ Ground rules that apply to every command:
   instead.
 - **`tests/clips` is a symlink to the T7** (`/Volumes/T7/pool_room_clips`).
   Unmounted ⇒ the symlink dangles: `record` fails fast, corpus tests skip.
+  **Flag dumps do not land here** — they stage on the internal SSD
+  (`run --dump-dir`, default `~/cueclock-dumps`) and reach the corpus only
+  when triage promotes them. Writing them straight to the T7 was starving
+  the live session that produced them (see `--dump-dir`).
 - **A live `run` session must have the machine to itself.** Corpus batteries
   (`pytest tests/corpus -n 4`) and other CPU/T7-heavy jobs starve the detect
   loop — measured 2026-08-01 evening: 78 Hz → 20 Hz (`flag_missed`'s "20 s"
@@ -103,6 +107,12 @@ uv run python -m cueclock.cli analyze --clip tests/clips/<label> \
     --reference tests/clips/empty_table_0801 [--warm] [--verbose]
 ```
 
+Flag dumps live in `~/cueclock-dumps/` until triage promotes them
+(`--clip ~/cueclock-dumps/<label>`). The full flag→corpus workflow — ground
+truth, journal correlation, warm/cold matrix, promotion, draining staging —
+is the **`/triage-clips` skill** (`.claude/skills/triage-clips/`); the flow it
+implements is `hardware.md` §C5.
+
 Deterministic replay of the pure vision core. Two modes, and knowing which
 you're in matters for triage:
 
@@ -154,12 +164,14 @@ The model comes from `scripts/fetch_vosk_model.sh`. Full plan:
 | `--calibration` | `config/table_calibration.json` | |
 | `--stride` | `2` | detect every Nth frame (2 ≈ 78 Hz) |
 | `--ring-seconds` | `20.0` | in-RAM rolling buffer that `POST /api/dump` saves as a labeled clip (~3.6 GB at 20 s; `0` disables). 20 s because a measured live Flag press came 12.7 s after the phantom it reacted to |
+| `--dump-dir` | `~/cueclock-dumps` | where `POST /api/dump` stages flag clips. **Internal SSD on purpose, not the T7:** the T7 is USB, and a 3.6 GB dump saturates the bus it shares with every peer — one measured press (2026-08-01) dropped the detect loop 75 → 45 Hz and froze the Camo side-angle source in OBS for ~1 s, still blipping 20 s later. Flagging a failure was degrading the session being flagged. In-repo staging is out too: the Desktop is iCloud-synced. Refuses to eat the last 5 GiB |
 | `--verbose` | off | per-second track status lines |
 | `--no-mic` | off | disable the voice-"extension" mic |
 
 Plus the shared display and mic args below.
 
-Flag dumps (`POST /api/dump`) carry, next to the frames and `events.jsonl`:
+Flag dumps (`POST /api/dump`) land in `--dump-dir` as `<label>_N` and carry,
+next to the frames and `events.jsonl`:
 `state.pkl` + `state.json` — the warm-replay snapshot `analyze --warm`
 consumes (the oldest of `run`'s ~1 Hz rolling state snapshots that falls
 inside the ring window; measured cost 2.3 MB / ~1 ms per snapshot —
@@ -167,8 +179,10 @@ negligible at the detect cadence). The session journal additionally stamps
 vision events with `frame_t` (the confirming frame's capture timestamp,
 vs. the record's emit-time `mono`) and writes a `detect_heartbeat` line
 every ~5 s (effective detect Hz + age of the newest processed frame), so
-detect-loop starvation — e.g. a dump writing 3.6 GB to the T7 — is
-measurable from the journal alone.
+detect-loop starvation is measurable from the journal alone. That is what
+convicted the T7 as the dump target: the heartbeat around a flag press read
+75 → 45 Hz, and the same seconds froze the Camo source in OBS. Dumps stage
+locally now (`--dump-dir`), so a flag press no longer costs the session.
 
 ### `record`
 

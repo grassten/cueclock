@@ -314,18 +314,24 @@ lifecycle).
    that names why, within ~20 s: **PHANTOM** (an event was counted that
    shouldn't have been), **MISSED** (a real shot/settle wasn't detected, or
    came late), **OTHER** (display problems, anything else — when in doubt).
-   The ring buffer lands as a clip on the T7 named for the reason. (Window
-   was 12 s: a measured live press came 12.7 s after the phantom it reacted
-   to and the evidence frames were already gone — checkpoint 28. Reasons
-   added after an OBS-side failure spent two triage passes being chased as
-   a vision bug — 2026-08-01.)
+   The ring buffer lands as a clip named for the reason in `~/cueclock-dumps`
+   — the internal SSD, **not** the T7. Dumping 3.6 GB over USB saturated the
+   bus it shares with every peer and starved the very session being flagged:
+   detect 75 → 45 Hz, and the Camo side-angle source frozen ~1 s in OBS,
+   visible as a stutter on the wall TV (2026-08-01). (Window was 12 s: a
+   measured live press came 12.7 s after the phantom it reacted to and the
+   evidence frames were already gone — checkpoint 28. Reasons added after an
+   OBS-side failure spent two triage passes being chased as a vision bug —
+   2026-08-01.)
 2. **Off the table:** Screen Sharing/SSH into the mini, open Claude Code, run
-   the triage workflow (a `/triage-clips` skill is phase 4): replay each new
-   clip through the vision core, diagnose → fix → re-grade. Each clip ends as
-   a graded corpus scenario, kept evidence, or deleted. The reason in the
+   **`/triage-clips`** (`.claude/skills/triage-clips/`): replay each new clip
+   through the vision core, diagnose → fix → re-grade. Each clip ends as a
+   graded corpus scenario, kept evidence, or deleted — and staging is drained
+   either way, since it is neither backed up nor synced. The reason in the
    clip name sets the starting point: `flag_phantom`/`flag_missed` go
    straight to vision replay; `flag_other` checks the presentation side
-   first (OBS logs, overlay, journal) before assuming a vision bug.
+   first (OBS logs, overlay, journal) before assuming a vision bug. The skill
+   takes ground truth from Steven before naming or pinning anything.
 
 ### C6. Bring-up checks (at the table, still open)
 

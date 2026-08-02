@@ -169,6 +169,54 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-01 (checkpoint 37 — flag dumps stage locally; `/triage-clips`
+  skill):** the flag-dump starvation BACKLOG item, decided from data and
+  closed — and the off-table half of the Flag keys finally built.
+  - **The measurement.** Steven reported the OBS wall-TV display stuttering
+    and, at 22:55, cutting out entirely. It was not OBS and not the M2:
+    across that whole 7:28 recording OBS output 13,447 frames with **5
+    lagged (0.0%)**, and through every freeze the Syphon overhead pane kept
+    updating and the clock browser source kept ticking. Only the Camo
+    side-angle source stalled — 9 freezes ≥ 0.2 s, worst run 0.80 s. Per-pane
+    frame differencing on the recording, correlated against the session
+    journal's `detect_heartbeat`, put the worst cluster on the flag press at
+    22:51:34: **`hz` 75 → 45.3**, `frame_age` spiking, 28 frozen Camo frames
+    in one 5 s interval and blips for 20 s after. The dump was 3.6 GB
+    (`frames.raw` 3,598,848,000 B) written to `tests/clips` — the T7, a
+    **USB** SSD sharing its bus with the phone feeding Camo. Flagging a
+    failure was degrading the session being flagged, and visibly stuttering
+    the TV. (Checkpoint 36's heartbeat is what made this readable at all —
+    exactly the "decide throttle-vs-accept from that data" the item asked
+    for. Neither: move the write.)
+  - **`run --dump-dir`** (default `~/cueclock-dumps`): dumps stage on the
+    internal SSD. Off the USB bus, and outside iCloud's scope — in-repo
+    staging was never an option since the Desktop is synced (the same sync
+    that stamps `UF_HIDDEN` and forced `.venv.nosync`, checkpoint 13). The
+    root is created at startup, not at flag time, so a bad path fails at
+    launch rather than at the table with evidence expiring; the writer
+    carries `record`'s 5 GiB headroom guard and names the drain remedy in
+    its error. `/api/dump`'s stale "(is the T7 mounted?)" hint is gone — the
+    T7 is no longer in that path.
+  - **`/triage-clips` skill** (`.claude/skills/triage-clips/`, BACKLOG deck
+    phase 4; flow spec `hardware.md` §C5): inventory staging → **ground
+    truth from Steven first** (sparse stills mislead; a wrong pin is worse
+    than no pin) → route on the reason code (`flag_other` checks the
+    presentation side before any vision replay — that mistake cost two
+    triage passes on 2026-08-01) → correlate the session journal, reading
+    `detect_heartbeat` `hz` before believing any detection bug → **warm then
+    cold** `analyze`, with a matrix for what the pair means (warm-fails/
+    cold-passes = accumulated-state divergence, the class cold replay cannot
+    show; both-pass = starvation or presentation, not a vision bug) →
+    promote / keep / delete → drain. Promotion covers scenario naming
+    (`<scenario>_MMDD`, behavior not reason code), the move to the T7, the
+    `EXPECTED` entry with its ground-truth comment, when counts alone need a
+    bespoke timing test, `pytest -n 4`, and a CHANGELOG entry.
+  - Docs in the same commit: `docs/cli.md` (`--dump-dir`, ground rules,
+    triage recipe), `hardware.md` §C5. 167 unit tests; ruff + mypy --strict
+    clean. **Not** updated here: the BACKLOG item for deck phase 4 and the
+    starvation item both want checking off, but `BACKLOG.md` had concurrent
+    edits in the working tree and was left alone.
+
 - **2026-08-01 (checkpoint 36 — warm replay: ring dumps carry live state;
   journal heartbeat + frame timestamps):** two triage gaps closed, both paid
   for the hard way this week. (1) Cold replay starts the pure core from

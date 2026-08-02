@@ -42,6 +42,21 @@ BYTES_PER_FRAME = 1920 * 1200
 NOMINAL_FPS = 156.25
 DISK_HEADROOM = 5 * 1024**3  # never eat the last 5 GiB of the disk
 
+# Flag dumps stage on the internal SSD, NOT on the T7 (`tests/clips`), and not
+# anywhere under the repo. Two measured reasons, both from 2026-08-01:
+#   - The T7 is a USB SSD, so a ~3.6 GB dump saturates the USB bus it shares
+#     with every other peer. One press dropped the detect loop 75 -> 45 Hz and
+#     froze the Camo side-angle feed in OBS for ~1 s (28 frames), still
+#     blipping 20 s later. Flagging a failure was degrading the session being
+#     flagged, and visibly stuttering the wall TV.
+#   - The repo lives on an iCloud-synced Desktop, so a dump written inside it
+#     lands in `bird`/`cloudd`'s path (the same sync that stamps UF_HIDDEN and
+#     forced `.venv.nosync` — checkpoint 13).
+# `~` is neither: internal, fast, off the USB bus, outside iCloud's scope
+# (iCloud Drive syncs Desktop and Documents only). `/triage-clips` drains it —
+# promoted clips move to the T7, the rest are deleted.
+DEFAULT_DUMP_DIR = "~/cueclock-dumps"
+
 # Warm replay (state snapshots in ring dumps). Live failures caused by
 # accumulated vision-core state — whiteness-vote position, roster membership,
 # motion/episode latches — do not reproduce under a cold `analyze` (the
@@ -498,6 +513,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     ring: FrameRing | None = None
     ring_capacity = int(args.ring_seconds * NOMINAL_FPS / args.stride)
+    # Made at startup, not at flag time: a bad --dump-dir must fail here, not
+    # when Steven presses Flag at the table with the evidence expiring.
+    dump_root = Path(args.dump_dir).expanduser()
+    if ring_capacity > 0:
+        dump_root.mkdir(parents=True, exist_ok=True)
     camera_serial = "unknown"
     # Warm-replay snapshots (see STATE_SNAPSHOT_PERIOD_S): (frame t, camera
     # ns, pickled core state) at ~1 Hz, retained a little longer than the
@@ -510,7 +530,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         """Write the ring to a corpus-style clip (called from the server)."""
         if ring is None or len(ring) == 0:
             raise RuntimeError("ring buffer is empty — no frames grabbed yet")
-        clip_dir = _unique_dir(Path("tests/clips"), label)
+        # Staging root, not the T7 — see DEFAULT_DUMP_DIR for why.
+        needed = int(len(ring) * BYTES_PER_FRAME * 1.1)
+        free = shutil.disk_usage(dump_root).free
+        if free < needed + DISK_HEADROOM:
+            raise RuntimeError(
+                f"not enough disk at {dump_root}: need ~{needed / 1e9:.1f} GB "
+                f"+ headroom, {free / 1e9:.1f} GB free — run /triage-clips to drain it"
+            )
+        clip_dir = _unique_dir(dump_root, label)
         writer = ClipWriter(
             clip_dir,
             label=label,
@@ -949,6 +977,14 @@ def main(argv: list[str] | None = None) -> int:
         "(~3.6 GB at the default 20 s; 0 disables). 20 s because a measured "
         "live flag press came 12.7 s after the phantom it reacted to — the "
         "12 s ring had already dropped the evidence frames (2026-08-01)",
+    )
+    p_run.add_argument(
+        "--dump-dir",
+        default=DEFAULT_DUMP_DIR,
+        help=f"where POST /api/dump stages flag clips (default {DEFAULT_DUMP_DIR}). "
+        "Internal SSD on purpose: dumping to the T7 saturates the USB bus "
+        "(measured: detect 75 -> 45 Hz, Camo frozen ~1 s in OBS), and the repo "
+        "is on an iCloud-synced Desktop. /triage-clips drains it to the corpus",
     )
     p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
     p_run.add_argument("--no-mic", action="store_true", help='disable the voice "extension" mic')
