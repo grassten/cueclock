@@ -83,16 +83,22 @@ def _font(px: int) -> _Font:
 
 def _fit(
     draw: ImageDraw.ImageDraw,
-    lines: list[str],
+    text: str,
     sizes: tuple[int, ...],
     max_w: int,
     max_h: int,
-) -> tuple[_Font, list[float], int]:
+) -> tuple[_Font, list[str], list[float], int]:
     """Largest listed size where the widest line and the stack both fit.
+
+    Splits on '\\n' here rather than at the call sites: Pillow's `textlength`
+    raises on a string containing a newline, and *every* face field can carry
+    one — `FINAL\\n10` reaches a cycle key's `sub` as the next ruleset. Doing it
+    once is what keeps that from being a per-field trap.
 
     Falls through to the smallest size rather than failing: a clipped face is
     still a face, and a key that renders nothing is worse than a tight one.
     """
+    lines = text.split("\n")
     font, widths, line_h = _font(sizes[-1]), [0.0], sizes[-1] + 4
     for px in sizes:
         font = _font(px)
@@ -100,7 +106,7 @@ def _fit(
         line_h = px + 4
         if max(widths) <= max_w and line_h * len(lines) <= max_h:
             break
-    return font, widths, line_h
+    return font, lines, widths, line_h
 
 
 _MAIN_SIZES = (22, 18, 15, 12, 10)
@@ -121,15 +127,14 @@ def render(face: Face) -> Image.Image:
 
     blocks: list[tuple[_Font, list[str], list[float], int, Rgb]] = []
     if face.text:
-        lines = face.text.split("\n")
-        font, widths, line_h = _fit(draw, lines, _MAIN_SIZES, max_w, SIZE - _MARGIN)
+        font, lines, widths, line_h = _fit(draw, face.text, _MAIN_SIZES, max_w, SIZE - _MARGIN)
         blocks.append((font, lines, widths, line_h, face.fg))
     if face.big is not None:
-        font, widths, line_h = _fit(draw, [face.big], _BIG_SIZES, max_w, SIZE)
-        blocks.append((font, [face.big], widths, line_h, face.fg))
+        font, lines, widths, line_h = _fit(draw, face.big, _BIG_SIZES, max_w, SIZE)
+        blocks.append((font, lines, widths, line_h, face.fg))
     if face.sub is not None:
-        font, widths, line_h = _fit(draw, [face.sub], _SUB_SIZES, max_w, SIZE)
-        blocks.append((font, [face.sub], widths, line_h, FG_DIM))
+        font, lines, widths, line_h = _fit(draw, face.sub, _SUB_SIZES, max_w, SIZE)
+        blocks.append((font, lines, widths, line_h, FG_DIM))
 
     total_h = sum(line_h * len(lines) for _, lines, _, line_h, _ in blocks)
     y = (SIZE - reserved_bottom - total_h) / 2

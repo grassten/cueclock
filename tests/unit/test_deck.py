@@ -315,6 +315,32 @@ def test_an_unanswered_flag_page_files_itself_as_a_reason_that_exists() -> None:
 # --- faces ---
 
 
+def test_every_key_actually_renders_in_every_mode_and_rulebook() -> None:
+    """Draw the whole deck, not just inspect the Face data.
+
+    The data-level tests all passed while the daemon crash-looped on launch
+    (2026-08-02): Pillow's `textlength` raises on a string containing a
+    newline, and `FINAL\\n10` reaches the ruleset cycle key's `sub` as the next
+    value. Nothing rendered a multi-line sub-line, so nothing caught it.
+    """
+    for mode in MODES:
+        for ruleset in RULESETS:
+            state = replace(MATCH, mode=mode, ruleset=ruleset)
+            for key in (*LAYOUT, *REASON_KEYS):
+                image = faces.render(key.face(state))
+                assert image.size == (faces.SIZE, faces.SIZE), (key.name, mode, ruleset)
+
+
+def test_render_survives_a_newline_in_every_field() -> None:
+    for face in (
+        faces.Face("A\nB"),
+        faces.Face("A", sub="FINAL\n10"),
+        faces.Face("A", big="1\n2"),
+        faces.Face("A\nB", sub="C\nD", big="E\nF", stripe=faces.STRIPE_MATCH, pips=(1, 2)),
+    ):
+        assert faces.render(face).size == (faces.SIZE, faces.SIZE)
+
+
 def test_render_is_key_sized_and_draws_something() -> None:
     img = faces.render(faces.Face("EXT", pips=(1, 2), stripe=faces.STRIPE_CLOCK))
     assert img.size == (faces.SIZE, faces.SIZE)
