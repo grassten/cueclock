@@ -53,13 +53,14 @@ a new key and a full cold run. It accelerates event/tracker work only.
 
 ### Measured
 
-All `-n 4`, same machine. 51 scenarios except where noted.
+All `-n 4`, same machine. 53 scenarios except where noted.
 
 | | wall |
 |---|---|
 | 2026-08-01, 36 scenarios, memmap reader (serial 6:40) | 3:57 |
 | 2026-08-02, memmap reader | 7:48 |
 | 2026-08-02, `pread` reader | 5:05 |
+| 2026-08-02, checkpoint 52 baseline (358 tests) | 3:50 |
 | 2026-08-02, + reference/calibration reuse — **cold, the gate** | **4:51** |
 | 2026-08-02, `--detect-cache` warm, corpus only | **12 s** |
 | 2026-08-02, `--detect-cache` warm, full suite | **21 s** |

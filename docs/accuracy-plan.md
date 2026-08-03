@@ -325,20 +325,49 @@ Note also that #11, the hand-rolled-phantom class this gate guarded, is closed
 **invalid**, and the other IDLE fire in `flagged_14` (458 mm/s) was rejected by
 the **speed floor**, not this gate.
 
-### The one run that decides it
+### Two gates — only one is in question
 
-Replay the good corpus — 50+ clips including four real breaks (`break_0801`,
-`break_0801b`, `break_underread_0801`, `cluster_shot_0801`'s session break) —
-and count newborn `ShotTaken` fires in IDLE above the 3000 mm/s break floor.
+| Gate | What it does | Status |
+|---|---|---|
+| **Speed floor**, 3000 mm/s (checkpoint 28, a `match` mode field) | in IDLE, ignore any shot below break speed | **Not in question. Keep it.** |
+| **Newborn gate** (checkpoint 33) | in IDLE, ignore newborn fires **regardless of speed** | This item. |
 
-- **Only breaks appear** → the gate catches nothing the speed floor does not.
-  Delete it, keep the floor, close #10.
-- **A genuine newborn non-shot appears above the floor** → the gate earns its
-  place; re-anchor the `hub.py` comment on that clip.
+Steven's caveat, 2026-08-02: the floor exists so that racking, placing the cue
+ball and gathering balls after Set up cannot start the clock. It is anchored on
+measurement — `design.md` records racking/placement lookalikes **below
+1000 mm/s** against breaks at 5845–7361 — and it is what fixed the live
+rack-gather phantom that "started the clock 19 s early and swallowed the real
+break." **Deleting the floor would re-admit that whole class.** Nothing here
+proposes touching it.
 
-**Do not revert blind.** Run the instrumentation first — removing the gate
-without knowing what checkpoint 33 was reacting to trades a known failure for
-an unknown one.
+### The run that decides it — and its precondition
+
+Naively: count newborn `ShotTaken` fires in IDLE above the floor; if only
+breaks appear, delete the newborn gate. **That is a false negative if the
+corpus under-represents rack setup** — silence would read as "dead code" when
+it means "never exercised."
+
+Coverage checked 2026-08-02 and it is adequate: `rack_gather_0731` (the live
+"clock started while I racked" trigger), `rack_balls`, `ball_in_hand_place`,
+`ball_in_hand_nudge`, `ball_in_hand_pickup_0801`, `scratch_replace`.
+
+So the run must report **both halves**:
+
+1. **Positive control** — confirm those rack-setup scenarios produce IDLE-state
+   vision events at all. If they produce nothing, the test proves nothing and
+   stops there.
+2. **The question** — among IDLE newborn fires, how many clear the 3000 mm/s
+   floor, and what are they?
+
+Only if the control passes *and* nothing but real breaks clears the floor is
+the newborn gate redundant. Anything else: it stays, re-anchored on whatever
+clip actually justifies it.
+
+The measured separation (racking below 1000, floor at 3000) is reason to
+*suspect* redundancy, not to assume it.
+
+**Do not revert blind.** Removing the gate without knowing what checkpoint 33
+was reacting to trades a known failure for an unknown one.
 
 ## 6. Phantom Scratch in the pocket jaw (#6)
 
@@ -509,11 +538,13 @@ interchangeably.
 |---|---|---|---|
 | `hanger_pot_0801` | `empty_table_0729` | 11.59 ShotTaken · **12.34 Scratch** · 14.56 BallsSettled | **#6 CONFIRMED.** Steven's ground truth: a legal shot. The Scratch fires 0.75 s after the strike while the cue is still rolling to the jaw, stops on the lip, never drops. |
 | `pickup_snatch_0801` | `empty_table_0801` | **12.28 ShotTaken** · 17.79 + 29.65 BallsSettled | **#8.1 CONFIRMED.** Steven's ground truth: the cue ball is picked up and placed at the far end for a 9-ball break. No shot exists in the clip; the ShotTaken fires ~1 s into the pickup. |
-| `flagged_9` | `empty_table_0801` | 22.19 ShotTaken · 29.63 BallsSettled | **DISPUTED** — see the #11 evidence problem. |
-| `flagged_14` | `empty_table_0801` | 3.39 BallsSettled · 30.42 ShotTaken · 37.84 BallsSettled | **DISPUTED** — same. |
 
-The two confirmed clips reproduce cold and are directly gradeable: a working
-fix removes the bolded event and the corpus catches it.
+Both reproduce cold and are directly gradeable: a working fix removes the
+bolded event and the corpus catches it.
+
+`flagged_9` and `flagged_14` were listed here as disputed; they have since been
+**deleted** (item 5). Their cold-replay events were ShotTaken at 22.19 s and
+30.42 s respectively — both real 9-ball breaks, recorded at 41.9 and 34.0 Hz.
 
 > **Never cite a timestamp from a clip you have not converted correctly.**
 > The ring stores non-uniform frame gaps; the earlier `clipview` wrote them at
