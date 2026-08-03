@@ -54,6 +54,7 @@ Ground rules that apply to every command:
 | `fit-undistort` | Fit display undistort params from the table's rails | no |
 | `calibrate` | Fit the px→mm table homography from the rails | no |
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
+| `report` | Ground-truth report: press stream vs. detected shots, from a session journal | no |
 | `deck` | Stream Deck control-surface daemon | no |
 
 ## Recipes
@@ -242,6 +243,42 @@ Shared display args only.
 | `--post` | — | URL to POST on accepted hits (e.g. `http://localhost:8000/api/extension`) |
 
 Plus the shared mic args below.
+
+### `report`
+
+Reads a session journal and diffs the ground-truth key's presses (#19) against
+the `ShotTaken` events vision actually emitted. Offline, read-only, no camera
+— run it on any journal, any time, including one copied off the machine.
+
+| Flag | Default | What |
+|---|---|---|
+| `--journal PATH` | *(required)* | session journal `.jsonl` — `run` writes one per session to `logs/session-<stamp>.jsonl` |
+| `--pair-window SECS` | `5.0` | how far apart a press and its shot may be and still pair |
+| `--idle-split SECS` | `180.0` | gap between presses that ends an armed window |
+
+```bash
+uv run python -m cueclock.cli report --journal logs/session-20260802-1930.jsonl
+```
+
+Output: presses, shots, armed windows, pairs, **MISSED** (pressed, nothing
+detected), **PHANTOM** (detected, never pressed), the detection rate, and the
+press→detection delay distribution.
+
+Three things about reading it:
+
+- **A disagreement is a review candidate, not a label.** The press stream has
+  its own error rate — a forgotten press reads as a phantom, a double tap as a
+  miss.
+- **Both defaults are provisional**, not measurements. `--pair-window` should
+  be re-derived from the delay distribution the report prints, once a real
+  session exists. Nothing auto-flags a "late" verdict against a guessed number.
+- **Shots outside an armed window are ignored entirely.** The key is always
+  live but Steven will not always press it, so presses arm the diff themselves:
+  they are grouped into runs (split at `--idle-split`) and each run's window
+  spans its first press to its last, with **no trailing extension**. A genuine
+  phantom just after the final press of a run therefore goes uncounted — the
+  deliberate bias is to under-report phantoms rather than manufacture them out
+  of a stretch he simply was not marking.
 
 ### `deck`
 

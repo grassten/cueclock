@@ -38,6 +38,8 @@ from cueclock.display.pipeline import (
     UndistortParams,
     build_undistort_maps,
 )
+from cueclock.server.report import IDLE_SPLIT_S as REPORT_IDLE_SPLIT_S
+from cueclock.server.report import PAIR_WINDOW_S as REPORT_PAIR_WINDOW_S
 
 BYTES_PER_FRAME = 1920 * 1200
 NOMINAL_FPS = 156.25
@@ -871,6 +873,18 @@ def _add_mic_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _cmd_report(args: argparse.Namespace) -> int:
+    """Ground truth vs. detection, offline from a session journal (#19)."""
+    from cueclock.server.report import build, format_report
+
+    if not args.journal.exists():
+        print(f"no such journal: {args.journal}", file=sys.stderr)
+        return 2
+    report = build(args.journal, args.pair_window, args.idle_split)
+    print(format_report(report, args.pair_window))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # `kill <pid>` unwinds like Ctrl-C: clips close cleanly, Syphon servers
     # post their retire notification instead of leaving a stale entry.
@@ -991,6 +1005,31 @@ def main(argv: list[str] | None = None) -> int:
     )
     _add_mic_args(p_listen)
 
+    p_report = sub.add_parser(
+        "report",
+        help="ground-truth report: press stream vs. detected shots, from a session journal",
+    )
+    p_report.add_argument("--journal", type=Path, required=True, help="session journal .jsonl")
+    p_report.add_argument(
+        "--pair-window",
+        type=float,
+        default=REPORT_PAIR_WINDOW_S,
+        help=(
+            "seconds a press and its ShotTaken may differ by and still pair "
+            f"(default {REPORT_PAIR_WINDOW_S}) — provisional, re-derive it from the "
+            "delay distribution this command prints"
+        ),
+    )
+    p_report.add_argument(
+        "--idle-split",
+        type=float,
+        default=REPORT_IDLE_SPLIT_S,
+        help=(
+            "gap between presses that ends an armed window "
+            f"(default {REPORT_IDLE_SPLIT_S}); shots outside a window are ignored"
+        ),
+    )
+
     p_deck = sub.add_parser(
         "deck", help="Stream Deck control-surface daemon (docs/hardware.md Part C)"
     )
@@ -1024,6 +1063,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_analyze(args)
     if args.command == "listen":
         return _cmd_listen(args)
+    if args.command == "report":
+        return _cmd_report(args)
     if args.command == "deck":
         return _cmd_deck(args)
     return _cmd_run(args)

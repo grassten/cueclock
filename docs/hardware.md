@@ -304,8 +304,8 @@ row 1   SESSION      MODE         START 30     PUSH         EXT ••
 row 2   REPLAY       FLAG         (·)          (·)          (·)
         ▁▁grey▁▁     ▁purple▁      ← the reason page unfolds here →
 
-row 3   RULESET      SET UP       P1  3        P2  2        (·)
-        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+row 3   RULESET      SET UP       P1  3        P2  2        I SHOT
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁     ▁purple▁
 ```
 
 | Pos | Key | Action | Face | Present in |
@@ -322,6 +322,7 @@ row 3   RULESET      SET UP       P1  3        P2  2        (·)
 | 3,2 | **Set up** | `POST /api/rack` — you're not shooting, you're setting up: clock parks, extensions refill, shot count zeroes. One word for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `SET UP`, flashes `SET` / `ERROR` | match, run out |
 | 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
 | 3,4 | **P2** | as P1 | `P2` over the score | match |
+| 3,5 | **I shot** | `POST /api/groundtruth` — ground truth (#19). Pressed **every shot**, with no judgement attached: it records that a shot happened and never touches the clock. The server derives missed / phantom / late offline by diffing presses against emitted `ShotTaken` events (`cueclock report`). Bottom-right corner so it can be found by feel, like Extension | `I SHOT`, flashes `✓` / `ERROR` | **always** — not a mode |
 
 Press outcomes flash as background colour (green ok / red error) for 1.2 s —
 words only, no decorative glyphs. The only graphics are *data*: extension pips,
@@ -337,6 +338,34 @@ to full, both rack-aware, both leaving extensions and shot count alone; one
 landed `IDLE`, the other `RUNNING`. Parking the clock moved to No clock mode,
 where it's visible. *Force 30* was misnamed anyway: it gives 60 s inside the
 first-shot window, which is exactly what `START 60` now says out loud.
+
+**The ground-truth key (#19, 2026-08-02).** The one key that produces a
+*denominator*. Everything else on the accuracy board was ranked by argument,
+because "the clock missed a shot" was only ever observed when Steven happened
+to notice and hit Flag; pressing one key on every shot turns detection accuracy
+into a number.
+
+**Its governing rule: the player never classifies a failure.** One key, "I
+shot", pressed every shot, always available, no judgement attached — that is
+the only fact a human holds which the machine does not. Missed / phantom /
+late / recovery are all diffs the server computes. An intermediate design had
+Steven choosing between Start, Flag and this key depending on *how* the clock
+had misbehaved; he rejected it, correctly — every branch existed because the
+design was asking him to classify failures at the table, which is exactly the
+work the key exists to remove. **If a future change adds a case the player must
+recognise, the change is wrong.** Push the branch into the server.
+
+It is therefore not a mode and never goes dark: once the only remaining cost is
+the press itself, a toggle saves nothing and adds one more thing to remember.
+Arming is inferred offline instead — presses are grouped into runs and only
+those windows are judged, so a session he did not mark is ignored rather than
+reported as all-phantom.
+
+**Where Flag still fits:** problems that are *not* about shots — overlay wrong,
+replay broken, OBS dead, scoreboard stuck. The ground-truth diff is
+structurally blind to those, and the two never overlap, so there is still no
+decision: *did you shoot? press the shot key. is something broken that isn't a
+shot? press Flag.*
 
 **The flag reason page.** One Flag key became three reason-coded keys on
 2026-08-01, after an OBS-side failure (a dead camera source) masqueraded as a

@@ -69,6 +69,9 @@ def test_key_index_is_row_major_from_top_left() -> None:
 # --- the spine: top-left 2x2, present in every mode, never moves ---
 
 SPINE = {"session", "mode", "replay", "flag"}
+# Ground truth (#19) is not spine — it sits bottom-right — but it is the other
+# key with no mode condition at all, so it survives everywhere the spine does.
+ALWAYS_ON = SPINE | {"groundtruth"}
 
 
 def test_spine_holds_the_top_left_block() -> None:
@@ -101,7 +104,21 @@ def test_run_out_drops_the_rack_only_keys() -> None:
 
 def test_no_clock_collapses_to_the_spine() -> None:
     # Everything that exists to shape a countdown leaves with the countdown.
-    assert visible_names(NO_CLOCK) == SPINE
+    # Ground truth stays: a drill is still a shot, and vision still emits a
+    # ShotTaken in no_clock (journaled `vision_shot_taken_no_clock`), so the
+    # press still measures detection — which is the point of the key.
+    assert visible_names(NO_CLOCK) == ALWAYS_ON
+
+
+def test_ground_truth_is_never_dark() -> None:
+    """It is not a mode, so no mode may take it away (#19).
+
+    The design collapsed to a single unconditional key precisely so there is
+    nothing to remember at the table. A mode that hid it would put the
+    remembering back.
+    """
+    for state in (MATCH, RUN_OUT, NO_CLOCK):
+        assert "groundtruth" in visible_names(state)
 
 
 def test_push_is_absent_under_the_eight_ball_rulebooks() -> None:
@@ -475,7 +492,7 @@ def test_dispatch_cycle_moving_mode_takes_keys_off_the_deck(
     monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "{}"))
     _, moved = _dispatch(BY_NAME["mode"], "http://x", replace(MATCH, mode="run_out"))
     assert moved is not None
-    assert visible_names(moved) == SPINE
+    assert visible_names(moved) == ALWAYS_ON
 
 
 def test_dispatch_cycle_server_down(monkeypatch: pytest.MonkeyPatch) -> None:

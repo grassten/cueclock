@@ -185,6 +185,19 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
         await hub.set_vision(False)
         return {"ok": True, "vision": False}
 
+    @app.post("/api/groundtruth")
+    async def api_ground_truth() -> dict[str, bool]:
+        """Record that a shot was actually taken (#19). Never moves the clock.
+
+        Always live — not a mode, no toggle, no flag. Once the design
+        collapsed to a single unconditional key the only remaining cost is the
+        press itself, so there is no reason to hide it behind state the player
+        has to remember. Arming is inferred offline from the press runs
+        themselves; see `cueclock report`.
+        """
+        hub.ground_truth_press()
+        return {"ok": True}
+
     @app.post("/api/dump")
     async def api_dump(label: str = "flagged") -> JSONResponse:
         """Save the ring buffer's raw frames as a labeled clip (~20 s default).

@@ -232,6 +232,55 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 58 — the ground-truth key; accuracy finally has a
+  denominator):** one deck key, `POST /api/groundtruth`, and
+  `cueclock report`. Closes #19.
+  - **Why it leads the board:** every other accuracy item was ranked by
+    argument, because "the clock missed a shot" was only ever observed when
+    Steven happened to notice and hit Flag. Pressing one key on every shot
+    turns detection accuracy into a number, and turns a disagreement into a
+    review candidate with a timestamp.
+  - **The governing rule, which is a constraint and not a nicety: the player
+    never classifies a failure.** One key, "I shot", pressed every shot, no
+    judgement attached — the only fact a human holds that the machine does
+    not. Missed / phantom / late are all diffs the server computes. *If a
+    future change adds a case the player must recognise, the change is wrong.*
+    Recorded in `hardware.md` §C2 and `design.md` §2.1 so it outlives this
+    entry.
+  - **Not a mode, never dark.** Once the design collapsed to a single
+    unconditional key the only remaining cost is the press, so a toggle saves
+    nothing and adds one more thing to remember. Arming is inferred offline
+    instead: presses group into runs (split at 3 min) and only those windows
+    are judged, so a session he did not mark is ignored rather than reported
+    as all-phantom.
+  - **The window is deliberately asymmetric**, and getting it wrong was the
+    one real bug in the build. Pairing reaches back a pair-window *before* the
+    first press, because a press always lands after its stroke — without that,
+    the opening shot of every run sat outside the window and its press read as
+    a miss. Phantom judgement uses the strict window and never reaches past the
+    last press: a shot after Steven stopped pressing is evidence he stopped
+    pressing, not evidence vision invented anything.
+  - Presses are stamped on the **capture** clock by extrapolating from the
+    newest processed frame, so alignment never crosses the emit/capture
+    boundary — which is exactly where detect-loop starvation hides. With no
+    vision running there is no capture clock, and the record is `null`: the
+    reader counts those as unanchored rather than guessing.
+  - The report separates **gated** shots (`vision_shot_taken_ignored_idle` and
+    friends) from misses. "Vision saw it, the clock declined it" is a
+    clock-policy bug; "vision never saw it" is a detection bug. Conflating them
+    would send the next investigation to the wrong module.
+  - **Both constants are provisional and say so.** `--pair-window` (5 s) wants
+    re-deriving from the delay distribution the report prints, once a real
+    session exists; nothing auto-flags a "late" verdict against a guessed
+    number. Auto-dumping on disagreement is deliberately not built yet — the
+    press path plus the key already yield the denominator, and the dump
+    trigger should wait for a measured window.
+  - Key at 3,5 (bottom-right corner, findable by feel like Extension), face
+    `I SHOT` — two lines because "SHOT" alone is a noun a command-key reader
+    would take as an instruction. `deck/layout.py`, `hardware.md` Part C,
+    `cli.py` and `docs/cli.md` all changed in this commit, per the standing
+    same-commit rules.
+
 - **2026-08-02 (checkpoint 57 — the IDLE gate reads speed, not birth):** the
   newborn half of the IDLE gate (checkpoint 33) is removed. The **speed floor
   is untouched** — it was never in question. Closes #10.
