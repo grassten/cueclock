@@ -538,7 +538,7 @@ becomes 0.5 and the setup script's `speed_percent` follows it. The camera's 160
 fps never reaches the recording — it only reaches detection.
 
 **No cue-stick detection, deliberately.** The detector discards the stick/arm
-blob by design (it is the oversized occluder — `BACKLOG.md` idea bank §2), so
+blob by design (it is the oversized occluder), so
 finding it would be new detection work with no ground truth, to answer a
 question the shot timestamp already answers. It would also answer the wrong
 question: the stick appears at *address*, which can be ten seconds of standing
@@ -667,10 +667,12 @@ always the safe state for a key pressed mid-session.
    `--no-mic`, `--mic-device NAME`, `--mic-model PATH`. Model:
    `scripts/fetch_vosk_model.sh` fetches `vosk-model-small-en-us-0.15`
    (~40 MB) into gitignored `models/` — idempotent.
-2. **Backlog — acoustic strike-click corroborator** (`design.md` §4.2): a
-   broadband transient detector coincident within ~100 ms of the cue-ball
-   velocity impulse; resolves slow tip-nudge vs. soft shot. Build **only if**
-   live play shows nudges leaking through.
+2. **Rejected 2026-08-02 — acoustic strike-click corroborator.** A broadband
+   transient detector coincident with the cue-ball velocity impulse was the
+   long-standing designed answer for slow tip-nudge vs. soft shot. Steven is
+   not committing to a mic for shot detection, so it is not backlog — it is
+   off the table. The cases it covered (issues #5, #8, #11) now stand on
+   vision levers or, for #5, on no known path at all.
 3. Nothing else. Overlay chimes come from the browser page via OBS; OBS owns
    the Camo side-angle camera and its audio — cueclock must never grab it.
 

@@ -89,7 +89,8 @@ moves meaningfully, the camera itself shifted: do the full §E2 (level,
 focus, WB) before continuing. Both fits write into `config/` where `run`
 picks them up by default. Relaunch with the new `--reference`, confirm the
 drift check is green, update the README launch command, and keep the old
-reference clip (end-of-session drift comparisons, idea bank §7D).
+reference clip — an end-of-session re-record compared against it is how
+reference drift gets measured.
 
 ### Record a corpus clip
 

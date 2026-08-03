@@ -140,23 +140,41 @@ video with a burned-in clock does not.
 
 ```bash
 cat > .git/clipview.py <<'PY'
-import cv2, sys
+"""Render a clip as a real-time mp4: video position == elapsed clip seconds."""
+import cv2, sys, numpy as np
 from pathlib import Path
 from cueclock.capture.clip import ClipReader
+
+FPS = 30.0
 clip = Path(sys.argv[1] if "/" in sys.argv[1] else f"tests/clips/{sys.argv[1]}")
 out = Path.home() / "Desktop" / f"{clip.name}.mp4"
-r = ClipReader(clip); t0 = float(r.timestamps[0])
-w = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"avc1"), 30.0, (r.meta.width, r.meta.height))
-for i in range(len(r)):
+r = ClipReader(clip)
+ts = np.asarray(r.timestamps, dtype=float)
+t0 = float(ts[0]); span = float(ts[-1]) - t0
+n_out = max(1, int(round(span * FPS)))
+w = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"avc1"), FPS, (r.meta.width, r.meta.height))
+for k in range(n_out):
+    t = k / FPS
+    i = int(np.clip(np.searchsorted(ts, t0 + t), 0, len(ts) - 1))
     bgr = cv2.cvtColor(r.frame(i), cv2.COLOR_BayerBG2BGR)
-    cv2.putText(bgr, f"{float(r.timestamps[i]) - t0:6.2f}s", (30, 70),
-                cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 255, 255), 4, cv2.LINE_AA)
+    cv2.putText(bgr, f"{t:6.2f}s", (30, 70), cv2.FONT_HERSHEY_SIMPLEX, 2.0,
+                (0, 255, 255), 4, cv2.LINE_AA)
     w.write(bgr)
-w.release(); r.close(); print("wrote", out)
+w.release(); r.close()
+print(f"wrote {out}  ({span:.2f}s real, {len(ts)} src frames -> {n_out} @ {FPS:g}fps)")
 PY
 .venv/bin/python3 .git/clipview.py <scenario-or-path>   # ~20 s for a ring dump
 open ~/Desktop/<scenario>.mp4
 ```
+
+**It MUST resample onto a real-time grid** (2026-08-02 lesson). Ring dumps have
+non-uniform frame gaps — starvation swings the detect rate, measured 13–115 ms
+between frames on `flagged_14` — so writing stored frames straight out at a
+fixed fps desynchronises the scrub bar from the burned-in clock, by different
+factors per clip (2.6x on `hanger_pot_0801`, 1.1x on `flagged_14`). An earlier
+version of this recipe did exactly that, and Steven was sent to timestamps
+where nothing happens. With the resample, **scrub position = burned-in clock =
+`analyze` timestamp**, so all three can be cited interchangeably.
 
 - Takes a corpus scenario name or any path (`~/cueclock-dumps/flag_missed`).
 - **The burned-in seconds are replay-relative** — the same clock `analyze`

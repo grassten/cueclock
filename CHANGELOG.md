@@ -232,6 +232,71 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 52 — the accuracy backlog cut to evidence; three
+  standing decisions reversed):** no detection code changed. A planning and
+  cleanup pass that ended with a smaller board, one new plan doc, and three
+  reversals that later work depends on. 299 unit tests green; the corpus
+  battery was not run because nothing under `vision/` changed.
+  - **The acoustic click corroborator is rejected.** Since 2026-07-27 it had
+    been the designed answer for the whole sub-impulse class, and three open
+    issues were parked on buying a mic. Steven's call: different tips
+    (phenolic vs leather), stroke power, and room noise make a "click"
+    unreliable, and he is not committing to a mic for shot detection.
+    Issues #5/#8/#11 lost the dependency and the `needs:purchase` label;
+    `hardware.md` Part D records it as rejected, not backlog. Mic hardware is
+    still wanted for the shipped voice "extension" (#2), which is a separate
+    use and was not rejected — #2 was rescoped to that alone rather than
+    closed, because it gates a v1 feature whose code already ships.
+  - **A shaft/tip bump is a foul, and a foul resets the clock** — reversing
+    "v1 detects shots, not fouls" (2026-07-27). That decision reasoned that a
+    legal ball-in-hand nudge and a foul bump are the same pixels, so detect
+    neither; it stopped one step short of the *outcomes*, where two of the
+    three cases (soft shot, foul bump) reset and only legal ball-in-hand
+    placement does not. The consequence is large: `strike_confirm_displacement_mm
+    = 60.0` exists to reject `shaft_adjust`'s 59 mm (the code comment says so),
+    and `strike_impulse_mms = 250.0` sits just above `soft_touch_0731`'s
+    225 mm/s. **#5 was never mic-blocked — it was policy-blocked by a corpus
+    expectation.** Ball-in-hand stays keyless by decision: fire on both and eat
+    the rare wrong reset, since the annoyance is the evidence that would
+    justify a key.
+  - **#19 collapsed to one unconditional key.** An intermediate draft had
+    Steven choosing between Start, Flag and the ground-truth key depending on
+    how the clock had misbehaved; he rejected it — every branch existed because
+    the design asked him to classify failures at the table, which is the work
+    the button exists to remove. Now: one key, "I shot", pressed every shot,
+    always available, no mode toggle. The server derives miss / phantom / late
+    / recovery, and arming is inferred from the press runs themselves. Auto-flag
+    on Start, Start-implies-a-press, and inter-trigger dedup were all patches on
+    the branching design and are recorded as rejected so they are not
+    reinvented.
+  - **The idea bank is gone** (`docs/accuracy-ideas.md`, deleted). A list of
+    maybes competes with the board for attention. Its still-load-bearing
+    content was inlined into #6 and #19 first, and six citations were
+    de-pointered — three of which already named the wrong file. `CHANGELOG`
+    references were deliberately left dangling: they are dated history.
+    Replaced by `docs/accuracy-plan.md`, which is explicitly temporary and to
+    be deleted once implemented.
+  - **Board: 11 accuracy issues to 4.** Closed #14/#20 (decided against),
+    #1/#4/#10 (absorbed by #19 — their method was "play sessions and Flag
+    anything wrong"), #12 (staged clip for an unevidenced problem), #7 (never
+    observed), #9 (structural cause removed at checkpoint 37).
+  - **Two clips verified against Steven's ground truth, two disputed.**
+    `hanger_pot_0801` is a legal shot that fires a Scratch at 12.34 s (#6
+    confirmed, priority raised off journal-only); `pickup_snatch_0801` fires a
+    ShotTaken at 12.28 s on a pickup-and-place with no shot in the clip (#8.1
+    confirmed). But `flagged_9`/`flagged_14` — #11's entire evidence base and
+    the source of the 3489/3926 mm/s anchor in `hub.py` — are 9-ball racks and
+    breaks per Steven, with no hand-rolls visible. #11 is now marked evidence-
+    disputed and unbuildable until re-derived.
+  - **The clip-preview recipe was silently lying.** Ring dumps have
+    non-uniform frame gaps (13-115 ms measured), and `clipview` wrote them at a
+    flat 30 fps, desynchronising the scrub bar from the burned-in clock by up
+    to 2.6x — different per clip. Two rounds of wrong timestamps reached Steven
+    before it was caught. Fixed to resample onto a real-time grid, so scrub
+    position, burned-in clock and `analyze` output are now interchangeable;
+    the `triage-clips` skill carries the fix and the lesson.
+  - Terminology: **hand-rolled**, never "bowled" — this is pool.
+
 - **2026-08-02 (checkpoint 51 — a settle re-arms the birth paths; the disarm
   could never clear):** the second, independent bug behind the same two
   `flag_missed` dumps, and the one checkpoint 50 explicitly did not cover.

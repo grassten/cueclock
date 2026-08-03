@@ -1,9 +1,9 @@
 """Rolling in-memory buffer of recent raw frames.
 
-Backs the `/api/dump` endpoint (BACKLOG.md idea bank §8, deck plan build
-item 1): when a live event disagrees with what actually happened on the
-table, the last few seconds become a labeled corpus clip without stopping
-the session — every miss turns into replayable evidence.
+Backs the `/api/dump` endpoint (deck plan build item 1): when a live event
+disagrees with what actually happened on the table, the last few seconds
+become a labeled corpus clip without stopping the session — every miss
+turns into replayable evidence.
 """
 
 from __future__ import annotations

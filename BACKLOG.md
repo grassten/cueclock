@@ -40,9 +40,11 @@ gh issue list --label needs:table-time       # what needs a cue in hand
 
 ## What is not on the board
 
-- **The accuracy idea bank** — `docs/accuracy-ideas.md`. Exploratory research
-  notes (§1–§9), not work. An idea graduates to an issue when a live failure
-  implicates it; that promotion is the only way a card gets created from it.
+- **Speculative accuracy ideas.** Retired 2026-08-02 with
+  `docs/accuracy-ideas.md`. Accuracy work is now derived from evidence:
+  a flagged clip or a ground-truth disagreement (issue #19) implicates a
+  specific failure, and that becomes a card. Nothing gets worked on the
+  strength of a hypothesis alone.
 - **v1 scope exclusions** — `docs/design.md` §5 holds the standing YAGNI list
   (replay export from the ring buffer, break-speed measurement, match stats,
   16-ball identity, config hot-reload, auto-switch to final-10, match timer).

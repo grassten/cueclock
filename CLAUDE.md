@@ -29,7 +29,7 @@ by `area:*` / `needs:*` labels; `BACKLOG.md` explains the layout.
 | `docs/design.md` | Architecture, detection design, event logic, engineering standards, build order, resolved decisions, corpus checklist. **§ numbers are cited from code — never renumber; append.** |
 | `docs/hardware.md` | Camera assembly/bring-up/locked settings (Part A) · display path debayer → undistort → Syphon → OBS → TV (Part B) · Stream Deck (Part C — **living button map: must match `deck/layout.py` in the same commit**) · mic plan (Part D) · TV + post-bump recalibration recipes (Part E) |
 | `docs/cli.md` | CLI reference: commands, flags, recipes — **must match `cli.py` in the same commit** |
-| `docs/accuracy-ideas.md` | Exploratory accuracy idea bank. **§ numbers cited from issues/commits — never renumber; append.** Nothing here is committed work; an idea graduates to a board issue only when a live failure implicates it. |
+| `docs/accuracy-plan.md` | Scoped accuracy work + the decisions behind it (mic rejected, foul reversal, per-item validation clips). **Not an idea bank** — every entry has a gradeable clip or is a recorded decision. |
 | `BACKLOG.md` | Pointer to the work board + how it's organised (columns, labels, views). Not a task list — don't add items here, open an issue. |
 | `CHANGELOG.md` | Append-only dated checkpoints + build decisions (pre-2026-07-31 entries cite the old doc layout; originals archived in `~/Documents/cueclock-docs-archive/`) |
 | `README.md` | Public-facing overview, launch commands, OBS sources — keep the launch command here current |

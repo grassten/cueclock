@@ -191,8 +191,7 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
 
         Only live under `cueclock run` (which wires `app.state.dump` to its
         ring buffer). This is the "that was wrong / that was interesting"
-        button: every disagreement becomes replayable corpus evidence
-        (BACKLOG.md idea bank §8).
+        button: every disagreement becomes replayable corpus evidence.
         """
         dump: Callable[[str], str] | None = getattr(app.state, "dump", None)
         if dump is None:

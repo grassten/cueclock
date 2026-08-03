@@ -52,12 +52,12 @@ HEARTBEAT_INTERVAL_SECONDS = 5.0
 # right failure direction. Events without a speed (manual/synthetic) pass.
 #
 # Newborn fires are ignored in IDLE regardless of speed (checkpoint 33): hard
-# bowled returns during rack setup measured 3489 and 3926 mm/s — above the
+# hand-rolled returns during rack setup measured 3489 and 3926 mm/s — above the
 # floor — and each started the rack as "shot 1" while Steven was still placing
 # balls (flagged_9/flagged_14, 19:33 and 19:51 UTC). Measured discriminator:
 # every real break in the corpus fires rest-anchored (newborn=False — a break
 # is struck from an openly addressed white: break_0801, break_0801b,
-# break_underread_0801, cluster_shot_0801's session break), while a bowled ball
+# break_underread_0801, cluster_shot_0801's session break), while a hand-rolled ball
 # is always a newborn track, materializing as it leaves a hand. Residual: a
 # break from a fully occluded address fires newborn and is eaten — the Start
 # key recovers, same as a missed break.
