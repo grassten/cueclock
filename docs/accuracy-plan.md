@@ -285,102 +285,87 @@ assertions will not show the collateral.
 **Catches a class the ground-truth button structurally cannot:** silent
 regression on clips already recorded. The button only sees live play.
 
-## 4. Carried-ball height cue (#8 part 1, #11)
+## 4. Carried-ball height cue (#8)
 
-**Status: lever identified, untested.**
+**Status: lever identified, untested. Cleanest fix target on the board.**
 
 A carried ball is closer to the overhead camera — chest height is roughly
 **1.9x** the blob area of a ball on the cloth. Apparent size is therefore a
 height cue, and it would also merge-flag the carry.
 
-Covers two failures with one mechanism:
+Covers **#8, the bare-hand snatch**: a snatch-and-carry beats all three
+carried-ball gates because bare fingers from above never oversize the blob.
 
-- **#11 quiet-table hand-rolls/placements** — **evidence under review, do not
-  build a fix yet.** See "The #11 evidence problem" below. Secondary lever if
-  it survives review: release-point arm-blob escort analysis (a hand-rolled
-  ball is escorted by an arm right up to release; a struck ball is not).
+**Validation:** `pickup_snatch_0801` is **pinned known-wrong** at
+`(1, 0, 2, 2)` — that 1 shot *is* the phantom, and it reproduces cold at
+12.28 s. A working fix flips the pin to 0 shots.
 
 > **Terminology:** say **hand-rolled** (or hand-roll), never "bowled" — this is
 > pool. `hand-rolled` also disambiguates from a ball merely rolling.
-- **#8.1 the bare-hand snatch** — beats all three carried-ball gates because
-  bare fingers from above never oversize the blob.
 
-**Validation:** `pickup_snatch_0801` is **pinned known-wrong** at
-`(1, 0, 2, 2)` — that 1 shot *is* the phantom, and it reproduces cold. A
-working fix flips the pin to 0 shots. This is the cleanest validation target on
-the board.
+## 5. The IDLE break gate eats real breaks (#10)
 
-### The #11 evidence problem (opened 2026-08-02)
+**Status: newly evidenced 2026-08-02, and the gate's justification is
+falsified. Nothing here is safe to fix blind — read all of it.**
 
-`#11`'s headline claim — "hand-rolled returns and placements counted rack shots
-live" — rests on `flagged_9` and `flagged_14`. **Steven watched both on
-2026-08-02 and says they are 9-ball racks and breaks, with no hand-rolls
-visible.** That contradicts the claim the issue was built on.
+`hub.py` ignores newborn `ShotTaken` fires in IDLE regardless of speed
+(checkpoint 33). The comment justifies that with `flagged_9` and `flagged_14`,
+described as hard hand-rolled returns during rack setup at 3489 and
+3926 mm/s.
 
-What the journals actually record:
+**Steven watched both on 2026-08-02: they are 9-ball breaks.** Both fired
+`newborn=true`. So:
 
-| Clip | Live event | Ball | Speed | State |
-|---|---|---|---|---|
-| `flagged_9` | `vision_shot_taken` | 231 | **3926 mm/s** | newborn, IDLE→MOTION, rack_shots 0→1 |
-| `flagged_14` | `vision_shot_taken_ignored_idle` | 626 | 458 mm/s | newborn, eaten by the IDLE gate |
-| `flagged_14` | `vision_shot_taken` | 648 | **3489 mm/s** | newborn, IDLE→MOTION, rack_shots 0→1 |
+1. **The discriminator does not separate the classes.** The claim was "every
+   real break fires rest-anchored, every hand-rolled ball is a newborn." Both
+   of these breaks fired newborn.
+2. **The gate rejects the events it was built from.** Pre-checkpoint-33 they
+   started the rack, which is correct for a break. The gate added afterwards
+   would eat both. The residual the comment names — "a break from a fully
+   occluded address fires newborn and is eaten" — is the gate's own evidence,
+   not a hypothetical.
+3. **Both breaks underread badly**: 3489/3926 against a corpus break range of
+   5845–7361. Same family as `break_underread_0801`.
 
-Those two speeds are the exact numbers `hub.py` cites as the measured
-hand-rolled-return anchor for the IDLE newborn gate. **If they are not
-hand-rolls, that anchor is wrong** and the gate is justified by a
-misreading.
+**Do not revert the gate blind.** Removing it reopens whatever checkpoint 33
+was actually reacting to, which is now unknown — the clips that supposedly
+showed it are gone or reinterpreted. Work out what genuinely separates a
+newborn break from a newborn non-shot, given that neither speed nor birth path
+does.
 
-The competing explanation, which fits Steven's account: 3489–3926 mm/s sits
-*between* every ordinary shot (≤ 2868) and every real break (5845–7361). A
-scatter ball reborn mid-break lands in exactly that band — `break_0801b` has a
-documented case of a scatter ball reborn at 906 mm/s firing a newborn
-ShotTaken 2.2 s into the scatter. If that is what these are, `#11` is not a
-hand-roll bug at all; it is the break being detected through the wrong ball.
+**Do not re-derive constants from `flagged_9`/`flagged_14`.** Both were
+recorded during detect-loop starvation — 41.9 Hz and 34.0 Hz against ~78 Hz
+nominal, gaps to 115 ms, roughly half the frames missing. They demonstrate the
+class; they are not threshold anchors. A clean recording of a break from an
+occluded address is what this needs.
 
-**Reliability caveat, independently:** both clips were recorded during
-detect-loop starvation — `flagged_9` averaged 41.9 Hz and `flagged_14`
-**34.0 Hz** against a ~78 Hz nominal, with frame gaps to 115 ms. Roughly half
-the frames are missing. Whatever they show, they are weak evidence, and
-Steven has raised whether to keep them at all.
+### How this issue came back
 
-**Do this before any #11 work:**
+It was closed 2026-08-02 as absorbed by #19, then reopened the same day when
+the clips were finally examined. The lesson is in `clip-triage-ground-truth`:
+a clip's label is not evidence. #11 ("hand-rolled returns fire phantom shots")
+was closed as **invalid** in the same pass — its entire evidence base was
+these two clips plus `flagged_10/11/13`, which were never examined at all and
+have been deleted. Nothing in the corpus demonstrates a hand-rolled-ball
+phantom.
 
-1. Re-render both with the fixed `clipview` (real-time grid — see
-   `triage-clips` skill) and have Steven confirm what is at the cold-replay
-   event times: `flagged_9` 22.19 s, `flagged_14` 30.42 s.
-2. If they are breaks, rewrite `#11` around what actually misfires, re-anchor
-   or remove the `hub.py` IDLE-gate comment citing 3489/3926, and re-check
-   `flagged_10/11/13` the same way rather than inheriting their labels.
-3. If they are unusable, delete them and say so — a half-rate clip that
-   nobody can interpret is not corpus.
+## 6. Phantom Scratch in the pocket jaw (#6)
 
-Only after that does `#11` need the promotion pass in item 6.
-
-## 5. Phantom Scratch in the pocket jaw (#6)
-
-**Status: journal-only, five levers inlined on the issue.**
+**Status: confirmed by ground truth, priority raised.**
 
 A follow-to-the-jaw stop is indistinguishable from a pot at track-death time.
 Levers: exit prediction, speed-at-loss gate, occluder awareness, re-spawn
-suppression after a pot, per-pocket scratch zones.
+suppression after a pot, per-pocket scratch zones. Details on the issue.
 
 **Validation:** `hanger_pot_0801` is pinned `(1, 1, 1, 1)` — the scratch=1 *is*
-the phantom, cold-reproducible. A fix flips it to 0. `jaw_strike_0801` guards
-the regression that removing the scratch disarm already closed.
+the phantom, cold-reproducible at 12.34 s, 0.75 s after a legal shot Steven
+confirmed. A fix flips it to 0. `jaw_strike_0801` guards the regression that
+removing the scratch disarm already closed.
 
-**Priority raised 2026-08-02 — Steven's call: this is a real bug, work it.**
-He watched `hanger_pot_0801` and confirmed the ground truth: it is a **legal
-shot**, not a scratch. The event is wrong on its own terms, independent of
-whether Scratch drives the clock today. The earlier "journal-only, fix only if
-Scratch drives the clock" posture is superseded.
-
-## 6. Promote the flagged dumps (#11's evidence)
-
-`flagged_9/10/11/13/14` are all on T7 (3.4 GB each) but **none is in the graded
-corpus** — they are raw ring dumps. Until they are promoted (assign a reference
-clip, write expectations) they cannot validate anything.
-
-Standard triage path, roughly an hour. Prerequisite for item 4's #11 half.
+**Steven's call 2026-08-02: this is a real bug, work it.** The event is wrong
+on its own terms, independent of whether Scratch drives the clock today. The
+earlier "journal-only, fix only if Scratch drives the clock" posture is
+superseded.
 
 ## No known path
 
@@ -398,19 +383,16 @@ checkpoint 36).
 
 | Issue | Closed by | Condition |
 |---|---|---|
-| **#5** sub-impulse touch shots | item 1 | The foul reversal lowers `strike_confirm_displacement_mm` / `strike_impulse_mms` below 43 mm / 225 mm/s. `soft_touch_0731` fires a shot. |
-| **#6** phantom jaw Scratch | item 5 | `hanger_pot_0801` grades to 0 scratches, 1 shot. Steven confirmed the ground truth. |
-| **#8** silent hand motion | item 4, **after splitting** | `pickup_snatch_0801` grades to 0 shots. |
-| **#19** ground-truth button | item 2 | Mode ships, a session produces a report, dumps land on disagreement. |
-| **#11** phantom shots mid-rack | re-derivation | Resolves to a rewritten issue, or closes as invalid. Not closeable as written. |
+| **#5** sub-impulse touch shots | item 1 | Foul reversal drops the two constants below 43 mm / 225 mm/s; `soft_touch_0731` fires a shot. |
+| **#22** golden timelines | item 3 | Goldens committed; a perturbed constant turns them red. **Must land before item 1.** |
+| **#8** bare-hand snatch | item 4 | `pickup_snatch_0801` grades to 0 shots. |
+| **#6** phantom jaw Scratch | item 6 | `hanger_pot_0801` grades to 0 scratches, 1 shot. |
+| **#19** ground-truth mode | item 2 | Key ships, a session produces a report, dumps land on disagreement. |
+| **#10** IDLE break gate | item 5 | **Not closeable from the desk.** Needs a clean recording of a break from an occluded address. |
 
-**Split #8 first.** It bundles two failures with very different prospects: the
-bare-hand snatch (height cue, gradeable, closeable) and the white-shaft sweep
-(no lever, not cold-reproducible). As one issue it can never close. Split it,
-close the snatch half, and let the shaft half sit open honestly.
-
-**Not closed by this plan:** #2 (mic for voice "extension" — parked on
-hardware, Steven wants it eventually) and the shaft-sweep half of #8.
+**Not closed:** #21 (white-shaft sweep — no lever, waiting on a warm-replayable
+recurrence) and #2 (mic for voice "extension" — parked on hardware Steven
+still wants).
 
 ## Parallel execution (worktrees + subagents)
 
@@ -430,9 +412,12 @@ Neither touches `vision/`. They can merge in any order.
 
 | Agent | Item | Primary file |
 |---|---|---|
-| B1 | Foul reversal (item 1) | `vision/events.py` thresholds + corpus expectations |
-| B2 | Phantom jaw Scratch (item 5) | `vision/events.py` scratch path |
-| B3 | Carried-ball height cue (item 4) | `vision/detect.py` + `vision/track.py` + `events.py` gates |
+| B1 | Foul reversal (item 1, closes #5) | `vision/events.py` thresholds + corpus expectations |
+| B2 | Phantom jaw Scratch (item 6, closes #6) | `vision/events.py` scratch path |
+| B3 | Carried-ball height cue (item 4, closes #8) | `vision/detect.py` + `vision/track.py` + `events.py` gates |
+
+Item 5 (#10, the IDLE break gate) is **not** in this fan-out — it needs a clean
+recording, not code. Item 2 (#19) is A1. #21 has no fix to write.
 
 All three touch `vision/events.py` and `tests/corpus/test_corpus_events.py`.
 Work them in parallel worktrees, but **merge one at a time and re-run the full
@@ -545,3 +530,25 @@ fix removes the bolded event and the corpus catches it.
 > a flat 30 fps and desynchronised the scrub bar by up to 2.6x. Two rounds of
 > wrong timestamps were handed to Steven before this was caught. Ground truth
 > comes from him watching the right frame — see `clip-triage-ground-truth`.
+
+## Retiring this document
+
+**This file is temporary.** Steven does not want it living in the repo once
+the work lands. It is committed so the reasoning is in git history
+(checkpoint 52 onward); after implementation, delete it and add it to
+`.gitignore` if a working copy is still wanted locally.
+
+**Before deleting, these must be relocated or they evaporate:**
+
+| What | Where it belongs | Done? |
+|---|---|---|
+| The foul reversal rule and its rationale | `docs/design.md`, appended dated decision — never renumber | ☐ |
+| Ball-in-hand: keyless, fire on both, eat the error | same appended decision | ☐ |
+| The #19 governing rule (no table-side judgement) | `docs/design.md` §2.1 area + issue #19 | partly — issue only |
+| Worktree gotchas (missing `tests/clips` / `.venv` / cache symlinks) | `CLAUDE.md` dev-workflow section | ☐ |
+| Per-agent test costs and the shared cache root | `tests/README.md` | ☐ |
+| Everything else | already in issues, `hardware.md`, `hub.py`, or the CHANGELOG | ✔ |
+
+The CHANGELOG entry for checkpoint 52 is the backstop for all of it, but a
+CHANGELOG is history — the *rules* belong in `design.md` where someone will
+look for them.

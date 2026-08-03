@@ -51,14 +51,28 @@ HEARTBEAT_INTERVAL_SECONDS = 5.0
 # pre-33 margins — a real shot passing the gate starts the clock, which is the
 # right failure direction. Events without a speed (manual/synthetic) pass.
 #
-# Newborn fires are ignored in IDLE regardless of speed (checkpoint 33): hard
-# hand-rolled returns during rack setup measured 3489 and 3926 mm/s — above the
-# floor — and each started the rack as "shot 1" while Steven was still placing
-# balls (flagged_9/flagged_14, 19:33 and 19:51 UTC). Measured discriminator:
-# every real break in the corpus fires rest-anchored (newborn=False — a break
-# is struck from an openly addressed white: break_0801, break_0801b,
-# break_underread_0801, cluster_shot_0801's session break), while a hand-rolled ball
-# is always a newborn track, materializing as it leaves a hand. Residual: a
+# Newborn fires are ignored in IDLE regardless of speed (checkpoint 33).
+#
+# !! THE ANCHOR FOR THIS GATE IS FALSIFIED — see issue #10. !!
+#
+# It was justified by flagged_9/flagged_14 (3489 and 3926 mm/s, 19:33 and
+# 19:51 UTC), read at the time as hard hand-rolled returns that started the
+# rack as "shot 1" while Steven was still placing balls. On 2026-08-02 he
+# watched both at the cold-replay event times: **they are 9-ball breaks.**
+# Both fired newborn, so the stated discriminator — every real break fires
+# rest-anchored (newborn=False), every hand-rolled ball is a newborn — does
+# not separate the two classes. The residual named below is therefore not
+# hypothetical: this gate rejects real breaks, and the events it was built
+# from are the proof.
+#
+# Left in place pending #10 rather than reverted blind: removing it reopens
+# whatever checkpoint 33 was actually seeing, which is now unknown. Do not
+# re-derive constants from those two clips — both were recorded during
+# detect-loop starvation (41.9 and 34.0 Hz against ~78 nominal).
+#
+# Historical rationale, retained for context: breaks in the corpus fire
+# rest-anchored from an openly addressed white (break_0801, break_0801b,
+# break_underread_0801, cluster_shot_0801's session break). Residual: a
 # break from a fully occluded address fires newborn and is eaten — the Start
 # key recovers, same as a missed break.
 

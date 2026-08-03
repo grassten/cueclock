@@ -295,6 +295,26 @@ survive unchanged in `design.md`.
     before it was caught. Fixed to resample onto a real-time grid, so scrub
     position, burned-in clock and `analyze` output are now interchangeable;
     the `triage-clips` skill carries the fix and the lesson.
+  - **#11 closed invalid; #10 reopened in its place — the same two clips.**
+    Steven watched `flagged_9` and `flagged_14` at the cold-replay event times
+    (22.19 s / 30.42 s): **both are 9-ball breaks**, not hand-rolled returns.
+    That kills #11 outright — `flagged_10/11/13` were never examined, their
+    labels inherited rather than verified, and all four unexamined dumps were
+    deleted (~13.6 GB). Nothing in the corpus now demonstrates a
+    hand-rolled-ball phantom. But both breaks fired `newborn=true`, which is
+    exactly what the checkpoint-33 IDLE gate rejects, and `hub.py` cites these
+    two events as its justification — so **the gate's discriminator is
+    falsified and it eats real breaks.** #10 reopened with them as evidence;
+    the `hub.py` comment now says so at the top. Not reverted blind: removing
+    the gate reopens whatever checkpoint 33 was reacting to, which is no longer
+    known. Neither clip is a threshold anchor — both were recorded at 41.9 and
+    34.0 Hz against ~78 nominal.
+  - #8 split: the bare-hand snatch (gradeable, closeable, `pickup_snatch_0801`
+    pinned known-wrong) stays #8; the white-shaft sweep, which has no lever and
+    is not cold-reproducible, became #21 so the pair could stop blocking each
+    other. Golden event timelines filed as #22 — the corpus asserts counts
+    only, so a settle sliding 300 ms passes green, and that is the regression
+    net the foul reversal needs before it moves any threshold.
   - Terminology: **hand-rolled**, never "bowled" — this is pool.
 
 - **2026-08-02 (checkpoint 51 — a settle re-arms the birth paths; the disarm
