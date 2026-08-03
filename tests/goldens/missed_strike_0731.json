@@ -1,0 +1,17 @@
+{
+  "scenario": "missed_strike_0731",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 3.6739,
+      "ball_id": 3,
+      "speed_mms": 1216.813,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 7.7063
+    }
+  ]
+}

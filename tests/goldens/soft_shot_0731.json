@@ -1,0 +1,17 @@
+{
+  "scenario": "soft_shot_0731",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 6.4582,
+      "ball_id": 1,
+      "speed_mms": 1973.8499,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 8.6344
+    }
+  ]
+}

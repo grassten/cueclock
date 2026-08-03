@@ -1,0 +1,21 @@
+{
+  "scenario": "address_chatter_miss_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "BallsSettled",
+      "t": 3.6547
+    },
+    {
+      "type": "ShotTaken",
+      "t": 10.1385,
+      "ball_id": 4,
+      "speed_mms": 2774.9026,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 15.1565
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "scenario": "jaw_strike_0801",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 10.2473,
+      "ball_id": 2,
+      "speed_mms": 1605.9292,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 16.123
+    }
+  ]
+}

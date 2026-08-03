@@ -1,0 +1,17 @@
+{
+  "scenario": "cue_grab_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 3.1235,
+      "ball_id": 0,
+      "speed_mms": 4889.2792,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 9.6584
+    }
+  ]
+}

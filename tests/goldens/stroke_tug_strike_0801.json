@@ -1,0 +1,21 @@
+{
+  "scenario": "stroke_tug_strike_0801",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "BallsSettled",
+      "t": 2.477
+    },
+    {
+      "type": "ShotTaken",
+      "t": 13.1852,
+      "ball_id": 1,
+      "speed_mms": 6061.1907,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 18.8817
+    }
+  ]
+}

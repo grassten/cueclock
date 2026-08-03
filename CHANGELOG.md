@@ -232,6 +232,40 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 53 — golden event timelines; the corpus now pins
+  *when*, not just how many):** `tests/goldens/<scenario>.json`, one committed
+  timeline per corpus clip, asserted inside the existing `test_corpus_clip` so
+  they cost no extra replay. Closes #22. Cold battery **374 passed, 3:54**
+  (up from 358 — the new tests are the comparator's own unit coverage).
+  - **The blindness was measured, not argued.** Perturbing `settle_dwell_s`
+    0.5 → 0.6 — one 100 ms tuning nudge — moved **33 of 53** corpus timelines.
+    The `EXPECTED` count assertions caught **one**. That ratio is why threshold
+    work here has historically been unmeasured: the collateral of a change did
+    not surface until a live session, days later, as a flagged clip.
+  - **Asserted:** the event type sequence (exact), `t` (±20 ms ≈ 1.5 detect
+    frames), `speed_mms` (±2%, 5 mm/s floor — the IDLE break gate reads it, so
+    drift past `MATCH_BREAK_FLOOR_MMS` is a live failure), and `newborn`
+    (which strike path fired is a design-level fact).
+  - **Not asserted: `ball_id`.** It is a tracker birth counter, so any change
+    to track birth order renumbers every id and would turn a harmless refactor
+    into 50 red goldens. Reds that are routinely fixed by regenerating teach
+    the reader to regenerate reflexively, and then the net catches nothing. The
+    id is still written to the file — it is what makes a diff readable, and
+    `parked_vote_strike_0801` exists because the *wrong ball* fired.
+  - **Goldens are committed though clips are not.** They are small text, and a
+    fresh clone keeps the record of what the engine did on 2026-08-02 even with
+    no pixels on disk.
+  - Generated cached, then verified cold: the committed timelines reproduce
+    against real pixels, which is also an independent confirmation of the two
+    reproductions the plan recorded (`hanger_pot_0801` Scratch at 12.34 s,
+    `pickup_snatch_0801` ShotTaken at 12.28 s).
+  - `tests/__init__.py` added — `tests/corpus/` and `tests/unit/` were already
+    packages but the root was not, so the comparator was not importable from a
+    unit test.
+  - **This had to land before the foul reversal (#5)**, which moves thresholds
+    across the whole sub-impulse region. Without goldens that change would have
+    been unmeasurable by construction.
+
 - **2026-08-02 (checkpoint 52 — the accuracy backlog cut to evidence; three
   standing decisions reversed):** no detection code changed. A planning and
   cleanup pass that ended with a smaller board, one new plan doc, and three

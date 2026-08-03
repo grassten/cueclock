@@ -1,0 +1,17 @@
+{
+  "scenario": "walk_around_settle",
+  "reference": "empty_table",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 3.3411,
+      "ball_id": 10,
+      "speed_mms": 2934.6487,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 9.9209
+    }
+  ]
+}

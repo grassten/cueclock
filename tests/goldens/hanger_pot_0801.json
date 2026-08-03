@@ -1,0 +1,21 @@
+{
+  "scenario": "hanger_pot_0801",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 11.585,
+      "ball_id": 0,
+      "speed_mms": 3250.6171,
+      "newborn": false
+    },
+    {
+      "type": "Scratch",
+      "t": 12.3403
+    },
+    {
+      "type": "BallsSettled",
+      "t": 14.5613
+    }
+  ]
+}

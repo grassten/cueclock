@@ -8,6 +8,10 @@
 - `clips` — a local, gitignored symlink to wherever the clip corpus lives.
   **Clips are local fixtures, never published.** Code and docs always use the
   `tests/clips` path, so relocating the corpus only means repointing the symlink.
+- `goldens/` — one committed JSON timeline per corpus clip. Unlike the clips
+  they grade, goldens **are** committed: they are small text, and they keep the
+  record of what the engine did even in a clone with no pixels. See
+  [Golden timelines](#golden-timelines).
 
 On Steven's machine the corpus lives on the T7 external drive:
 
@@ -50,6 +54,32 @@ default and checkpoint batteries run cold**. Cache dir `.detect-cache.nosync/`
 
 `--detect-cache` does nothing for a `DetectConfig` sweep — every grid point is
 a new key and a full cold run. It accelerates event/tracker work only.
+
+## Golden timelines
+
+`EXPECTED` in `corpus/test_corpus_events.py` asserts event *counts*. Counts are
+blind to timing — and that blindness was measured, not assumed:
+
+> **Perturbing `settle_dwell_s` from 0.5 to 0.6 moved 33 of 53 corpus
+> timelines. The count assertions caught one.** (2026-08-02)
+
+So every clip also carries a golden: its full event list (type, timestamp,
+speed, strike path) committed as `goldens/<scenario>.json`. The comparison runs
+inside `test_corpus_clip`, on the events that test already replayed — goldens
+cost no extra wall time.
+
+```sh
+uv run pytest tests/corpus -n 4 --update-goldens   # rewrite from this run
+```
+
+**Then read the diff.** A golden diff is the measurement: it is the only place
+that shows what a threshold move did to the rest of the corpus. Regenerating
+without reading it is the same as not having goldens, and a CHANGELOG entry for
+a detection change should cite which timelines moved.
+
+Tolerances and the rationale for *not* asserting `ball_id` are in
+`corpus/goldens.py`; `unit/test_goldens.py` covers the comparator itself, so it
+runs everywhere including CI.
 
 ### Measured
 

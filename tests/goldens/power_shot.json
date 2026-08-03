@@ -1,0 +1,13 @@
+{
+  "scenario": "power_shot",
+  "reference": "empty_table",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 4.6084,
+      "ball_id": 9,
+      "speed_mms": 5853.9139,
+      "newborn": false
+    }
+  ]
+}

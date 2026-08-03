@@ -1,0 +1,17 @@
+{
+  "scenario": "slow_creep",
+  "reference": "empty_table",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 4.0452,
+      "ball_id": 8,
+      "speed_mms": 1343.5942,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 7.9623
+    }
+  ]
+}

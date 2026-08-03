@@ -1,0 +1,17 @@
+{
+  "scenario": "cluster_shot_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 10.7977,
+      "ball_id": 2,
+      "speed_mms": 3076.9038,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 14.9069
+    }
+  ]
+}

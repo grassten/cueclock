@@ -1,0 +1,17 @@
+{
+  "scenario": "spin_in_place",
+  "reference": "empty_table",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 3.4563,
+      "ball_id": 8,
+      "speed_mms": 2723.2935,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 7.207
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "scenario": "shot_debug",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 6.375,
+      "ball_id": 4,
+      "speed_mms": 1738.7674,
+      "newborn": false
+    },
+    {
+      "type": "Scratch",
+      "t": 8.5255
+    },
+    {
+      "type": "BallsSettled",
+      "t": 11.9178
+    }
+  ]
+}

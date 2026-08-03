@@ -1,0 +1,5 @@
+{
+  "scenario": "static_spread",
+  "reference": "empty_table",
+  "events": []
+}

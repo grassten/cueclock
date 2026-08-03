@@ -1,0 +1,17 @@
+{
+  "scenario": "merge_yank_0731",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 5.7605,
+      "ball_id": 1,
+      "speed_mms": 3070.2553,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 10.0873
+    }
+  ]
+}

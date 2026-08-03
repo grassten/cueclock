@@ -1,0 +1,17 @@
+{
+  "scenario": "triage_0801b",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 6.4774,
+      "ball_id": 5,
+      "speed_mms": 1373.7289,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 8.5639
+    }
+  ]
+}

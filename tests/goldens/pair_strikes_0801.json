@@ -1,0 +1,28 @@
+{
+  "scenario": "pair_strikes_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 7.2454,
+      "ball_id": 3,
+      "speed_mms": 2445.3175,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 11.5722
+    },
+    {
+      "type": "ShotTaken",
+      "t": 16.3598,
+      "ball_id": 10,
+      "speed_mms": 1311.0487,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 21.4163
+    }
+  ]
+}

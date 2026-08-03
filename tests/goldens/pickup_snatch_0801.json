@@ -1,0 +1,21 @@
+{
+  "scenario": "pickup_snatch_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 12.2827,
+      "ball_id": 2,
+      "speed_mms": 1143.3089,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 17.7936
+    },
+    {
+      "type": "BallsSettled",
+      "t": 29.6538
+    }
+  ]
+}

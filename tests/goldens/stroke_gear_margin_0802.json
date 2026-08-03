@@ -1,0 +1,17 @@
+{
+  "scenario": "stroke_gear_margin_0802",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 12.1867,
+      "ball_id": 6,
+      "speed_mms": 988.1583,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 15.643
+    }
+  ]
+}

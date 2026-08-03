@@ -1,0 +1,17 @@
+{
+  "scenario": "occluded_address_0731",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 1.9458,
+      "ball_id": 6,
+      "speed_mms": 1967.2142,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 7.5975
+    }
+  ]
+}

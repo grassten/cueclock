@@ -1,0 +1,21 @@
+{
+  "scenario": "settle_stall_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "BallsSettled",
+      "t": 1.2929
+    },
+    {
+      "type": "ShotTaken",
+      "t": 6.8998,
+      "ball_id": 3,
+      "speed_mms": 1506.8064,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 10.2281
+    }
+  ]
+}

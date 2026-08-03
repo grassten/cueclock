@@ -1,0 +1,17 @@
+{
+  "scenario": "live_divergence_0731a",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 3.5843,
+      "ball_id": 3,
+      "speed_mms": 2220.4101,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 8.7432
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "scenario": "break_0801b",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 14.5741,
+      "ball_id": 0,
+      "speed_mms": 7104.4082,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 17.1599
+    }
+  ]
+}

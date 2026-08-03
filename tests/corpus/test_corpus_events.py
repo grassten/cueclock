@@ -21,6 +21,8 @@ import pytest
 
 from cueclock.vision.events import BallsSettled, Event, Scratch, ShotTaken
 
+from . import goldens
+
 if TYPE_CHECKING:
     from cueclock.capture.clip import ClipReader
     from cueclock.vision.calibration import TableCalibration
@@ -466,6 +468,16 @@ def test_corpus_clip(name: str) -> None:
     settles = sum(isinstance(e, BallsSettled) for e in events)
     summary = f"{name}: {[f'{type(e).__name__}@{e.t:.2f}' for e in events]}"
     print(summary)
+
+    # The golden runs in the same test as the counts on purpose: the replay is
+    # the whole cost (~5 min cold for the battery), so a separate parametrized
+    # golden test would double it to grade the same events twice.
+    #
+    # Before the count assertions, not after — so that `--update-goldens`
+    # records the timeline even for a clip whose counts are currently red.
+    # That is exactly the case during a deliberate expectation change, when
+    # seeing what actually fired is the whole point.
+    goldens.check(name, ref_name, events)
 
     expected = EXPECTED[name]
     exp_shots, exp_scratches, min_settles = expected[:3]

@@ -1,0 +1,13 @@
+{
+  "scenario": "break_shot",
+  "reference": "empty_table",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 5.1973,
+      "ball_id": 0,
+      "speed_mms": 6748.7863,
+      "newborn": false
+    }
+  ]
+}

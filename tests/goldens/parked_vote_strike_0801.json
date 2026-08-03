@@ -1,0 +1,28 @@
+{
+  "scenario": "parked_vote_strike_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 0.6913,
+      "ball_id": 1,
+      "speed_mms": 881.4528,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 3.1363
+    },
+    {
+      "type": "ShotTaken",
+      "t": 12.5387,
+      "ball_id": 8,
+      "speed_mms": 1594.1174,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 17.9728
+    }
+  ]
+}

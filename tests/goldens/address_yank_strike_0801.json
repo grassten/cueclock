@@ -1,0 +1,13 @@
+{
+  "scenario": "address_yank_strike_0801",
+  "reference": "empty_table_0729",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 6.1957,
+      "ball_id": 2,
+      "speed_mms": 3428.3724,
+      "newborn": false
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "scenario": "lone_roller_0801",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 7.1046,
+      "ball_id": 4,
+      "speed_mms": 1276.4904,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 12.0715
+    }
+  ]
+}

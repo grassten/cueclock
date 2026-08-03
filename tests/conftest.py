@@ -23,6 +23,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "checkpoint batteries run WITHOUT it. See tests/README.md."
         ),
     )
+    parser.addoption(
+        "--update-goldens",
+        action="store_true",
+        default=False,
+        help=(
+            "rewrite tests/goldens/*.json from this run instead of asserting against "
+            "them. Read the resulting diff — it is the measurement of what a threshold "
+            "move did to the rest of the corpus. See tests/corpus/goldens.py."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -34,3 +44,8 @@ def pytest_configure(config: pytest.Config) -> None:
         from cueclock.capture.detect_cache import DEFAULT_CACHE_DIR
 
         os.environ["CUECLOCK_DETECT_CACHE"] = value or str(DEFAULT_CACHE_DIR)
+
+    if config.getoption("--update-goldens"):
+        os.environ["CUECLOCK_UPDATE_GOLDENS"] = "1"
+    else:
+        os.environ.pop("CUECLOCK_UPDATE_GOLDENS", None)
