@@ -661,23 +661,101 @@ def test_occluded_push_does_not_open_own_rest() -> None:
 
 
 def test_bump_candidate_dies_at_rest_not_at_expiry() -> None:
-    # tip_bump's phantom (2026-08-02): a stick bump moves the cue ~47 mm —
-    # short of the 60 mm confirm floor — and the ball rests. The candidate
-    # used to linger until window expiry, where a stick-merge centroid jump
-    # could fake the remaining distance and fire. A candidate that can no
-    # longer reach the confirm displacement in its remaining window
-    # (displacement + raw * time_left) must die at that moment, so the
-    # later corrupt jump lands on no candidate at all.
+    # A candidate that can no longer reach the confirm displacement in its
+    # remaining window (displacement + raw * time_left) must die at that
+    # moment, not linger to expiry where a stick-merge centroid jump could
+    # fake the remaining distance and fire.
+    #
+    # The reachable target is the *slow* floor (22 mm) since the foul
+    # reversal — before it, this test used a ~47 mm bump against the 60 mm
+    # floor, which is now a legal fire (see the tip_bump test below). A
+    # ~9 mm nudge is the equivalent case now: too small to confirm on its
+    # own, and the later 20 mm jump must land on no candidate at all.
     sim = rack()
     sim.run(3.0)
     sim.cue_id = OBJ  # vote parked elsewhere: the bump opens via own-rest
     sim.run(0.5)
     sim.velocity(CUE, 600.0, 0.0)
-    sim.run(0.08)  # ~48 mm of travel, then the ball stops short of 60 mm
+    sim.run(0.015)  # ~9 mm of travel, then the ball stops short of 22 mm
     sim.velocity(CUE, 0.0, 0.0)
     sim.run(0.05)
     sim.displace(CUE, 20.0)  # stick-merge centroid jump inside the window
     assert ShotTaken not in map(type, sim.run(0.4))
+
+
+def test_sub_impulse_tip_bump_fires() -> None:
+    # THE FOUL REVERSAL (2026-08-02, design.md §8). A tip bump is a foul, a
+    # foul ends the visit, and the incoming player gets a fresh clock — so it
+    # must fire exactly like the soft shot it is indistinguishable from.
+    # design.md §9 calls tip_bump "the hardest case in the corpus".
+    #
+    # Corpus measurement: the bumped ball peaks at 124 mm/s and covers
+    # ~30 mm. Both are under the pre-reversal floors (250 mm/s, 60 mm), and
+    # both of those were anchored on keeping this silent.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 150.0, 0.0)  # under the old 250 impulse floor
+    assert ShotTaken in map(type, sim.run(0.35))  # ~52 mm, confirmed slow
+
+
+def test_practice_stroke_scale_excursion_still_rejected() -> None:
+    # The other side of the same threshold move. The worst false provoker in
+    # the corpus is a stick fragment covering 14.5 mm over the confirm window
+    # (practice_strokes) — the slow floor sits at 22 mm, 1.5x above it.
+    # A shot that never travels that far is not a shot.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 150.0, 0.0)
+    sim.run(0.09)  # ~13.5 mm, practice-stroke scale
+    sim.velocity(CUE, 0.0, 0.0)
+    assert ShotTaken not in map(type, sim.run(0.5))
+
+
+def test_candidate_must_watch_the_ball_move() -> None:
+    # triage_0801b (2026-08-02): a candidate opened 180.6 mm from the rest
+    # anchor and fired 19 ms later having travelled 0.5 mm — the confirm
+    # displacement is measured from the anchor, so it was satisfied entirely
+    # by travel that happened before the candidate existed. It reported
+    # 9434 mm/s (anchor displacement over the candidate's short life).
+    #
+    # Here the ball drifts well past the confirm floor while the vote is
+    # parked elsewhere, then the vote returns and the ball stops. Any
+    # candidate opening now inherits a large anchor displacement with no
+    # motion of its own, and must not fire.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 700.0, 0.0)
+    sim.run(0.25)  # ~175 mm from the rest spot
+    sim.velocity(CUE, 0.0, 0.0)
+    assert ShotTaken not in map(type, sim.run(0.6))
+
+
+def test_slow_newborn_is_not_a_strike() -> None:
+    # cue_grab_0801: a gloved hand lifts the resting cue at 130 mm/s and,
+    # once the impulse floor dropped for the sub-impulse class, confirmed as
+    # a birth-path strike. The relaxation is justified by chain of custody —
+    # the tracker watched that ball sit still and then move — and a newborn
+    # track has none, so the birth path keeps the original 250 mm/s floor.
+    # Every real birth-path strike in the corpus is fast (1294+ mm/s).
+    sim = rack()
+    sim.run(1.0)
+    sim.occlude(CUE)  # no observed ball holds the vote
+    sim.run(0.2)
+    sim.place(7, 800.0, 300.0)
+    sim.velocity(7, 150.0, 0.0)  # slow birth: carried, not struck
+    assert ShotTaken not in map(type, sim.run(0.5))
+
+
+def test_fast_newborn_strike_still_fires() -> None:
+    # The positive control for the floor above: the occluded-address strike
+    # the birth path exists for (measured 1572 mm/s) must be unaffected.
+    sim = rack()
+    sim.run(1.0)
+    sim.occlude(CUE)
+    sim.run(0.2)
+    sim.place(7, 800.0, 300.0)
+    sim.velocity(7, 1500.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.4))
 
 
 def test_fired_lone_roller_gets_a_settle() -> None:

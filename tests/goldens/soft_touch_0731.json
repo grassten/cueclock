@@ -1,5 +1,17 @@
 {
   "scenario": "soft_touch_0731",
   "reference": "empty_table_0729",
-  "events": []
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 6.3238,
+      "ball_id": 1,
+      "speed_mms": 590.6509,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 7.9111
+    }
+  ]
 }

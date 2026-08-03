@@ -121,12 +121,88 @@ class EventConfig:
 
     # Strike = conjunction: stationary dwell + velocity impulse + coherent trajectory
     pre_strike_dwell_s: float = 0.4
-    strike_impulse_mms: float = 250.0
-    # Confirm = real travel: a shaft adjustment can leave the ball at shot-like
-    # speed but it stops within ~4 cm (measured on the corpus); any deliberate
-    # shot covers 60 mm quickly (even the softest, 450 mm/s, in 0.13 s).
-    strike_confirm_window_s: float = 0.25
+    # 110, not the original 250 (foul reversal, 2026-08-02 — see design.md §8).
+    # A shaft/tip bump is a foul, a foul ends the visit, and the incoming
+    # player gets a fresh clock — so a bump must fire exactly like a soft shot.
+    # That deleted the reason the floor sat where it did: 250 was placed just
+    # above soft_touch_0731's 225 mm/s peak specifically to keep the
+    # sub-impulse class out.
+    #
+    # Measured across the class (peak observed raw speed of the ball that
+    # actually moved): tip_bump 124, soft_touch_0731 225, shaft_adjust 881.
+    # 110 clears the weakest by 11% and still sits 5x over the §4.3 velocity
+    # noise ceiling (22 mm/s).
+    #
+    # **Speed is not what separates a shot from a provoker** — this is the
+    # measurement that matters here and it inverts the original design's
+    # assumption. practice_strokes' stick fragment peaks at 1576 mm/s, higher
+    # than every true event in the class; chalk_near and ball_in_hand_place
+    # carry still balls whose noise blips reach 600 mm/s. The floor only
+    # decides which candidates *open*. The confirm displacement below is what
+    # rejects them, and it is where the real separation lives.
+    strike_impulse_mms: float = 110.0
+    # Confirm = real travel, in two stages. A shot is confirmed the moment it
+    # covers `strike_confirm_displacement_mm`; failing that, it gets one late
+    # look at `strike_slow_confirm_mm` once the window has nearly run out.
+    #
+    # 60 mm stays exactly where it was. It was originally placed to reject
+    # shaft_adjust's ~59 mm — which is now a shot — so the foul reversal does
+    # invalidate that anchor, but 60 turned out to be load-bearing for a second
+    # reason nobody had written down: **it forces the speed measurement to span
+    # enough real travel.** `ShotTaken.speed_mms` is
+    # max(fastest observed, displacement / candidate lifetime), and both terms
+    # are truncated by an early confirm. Dropping the single threshold to 22
+    # made break_0801 confirm 0.18 s sooner and report **2068 mm/s instead of
+    # 7371** — under `MATCH_BREAK_FLOOR_MMS`, so the IDLE gate would eat the
+    # break. That is the exact live failure checkpoint 45 fixed, reintroduced.
+    # (Cause: at impact the cue's blob merges with the stick, so the centroid
+    # lags and early displacement underreads. A break needs distance, not time,
+    # before its speed is honest.)
+    #
+    # So the fast path is untouched and every real shot fires on the same frame
+    # with the same speed as before. Only balls that *never* reach 60 mm — the
+    # entire sub-impulse class — reach the slow gate, and by then the full
+    # window has been observed, so their speed is as measured as it will get.
+    #
+    # Measured displacement over the window, well-observed unmerged tracks:
+    #
+    #   must fire     tip_bump 29.7 · soft_touch_0731 29.0 · shaft_adjust 36.8
+    #   must not      practice_strokes 14.5 · ball_in_hand_place 6.8
+    #                 chalk_near 6.6 · rack_balls 2.3
+    #
+    # 14.5 (a stick fragment at 80% observed — the worst false provoker in the
+    # corpus) against 29.0 is a clean 2x. 22 is the geometric middle: 1.5x over
+    # the provoker, 24% under the weakest true event.
+    strike_confirm_window_s: float = 0.30  # was 0.25; the extra 50 ms is where
+    # the slow gate is judged, so the fast path keeps its original 0.25 s of
+    # travel budget rather than giving frames up to the new gate.
     strike_confirm_displacement_mm: float = 60.0
+    strike_slow_confirm_mm: float = 22.0
+    strike_slow_confirm_after_s: float = 0.25  # must stay < the window above
+    # The candidate must watch the ball move — travel measured from where the
+    # ball was when the candidate *opened*, not from the rest/birth anchor it
+    # may already have left. Without this, confirm displacement can be
+    # satisfied entirely by pre-open history: triage_0801b opened 180.6 mm
+    # from the rest spot and fired 19 ms later having travelled **0.5 mm**,
+    # reporting 9434 mm/s (displacement-from-rest over the candidate's short
+    # life). Measured travel-during-candidate: 12.1 mm (tip_bump, the weakest
+    # real event) up to ~45 mm on ordinary shots, against that 0.5 mm — a 24x
+    # gap, so 10 sits an order of magnitude clear of the artifact and 20%
+    # under the weakest true one.
+    #
+    # Only reachable because the impulse floor came down: at 250 mm/s that
+    # candidate never opened. It is a pre-existing hole, not a new one.
+    strike_min_travel_mm: float = 10.0
+    # The birth path does NOT get the lowered impulse floor. The whole
+    # justification for admitting a 124 mm/s event is chain of custody — the
+    # tracker watched that ball sit still and then move. A newborn track has
+    # none by definition, and a slow ball appearing from nowhere is far more
+    # likely carried than struck: cue_grab_0801's gloved hand lifts the
+    # resting cue at 130 mm/s and confirmed as a newborn strike once the floor
+    # dropped. Every real birth-path strike in the corpus is fast — 1294 mm/s
+    # (jaw_strike_0801) and 1572 (occluded_address_0731) — so this floor keeps
+    # its original value with 5x of headroom under the slowest real one.
+    newborn_impulse_mms: float = 250.0
     strike_axis_dot_min: float = 0.7
     # The impact itself disrupts the cue's own track (the stick merges with the
     # ball's blob), so the impulse often arrives on a *reborn* track shortly
@@ -270,6 +346,12 @@ class _StrikeCandidate:
     # averaged across the address-occlusion gap and reads far low (the
     # 2026-08-01 gated break opened at 2072 mm/s while the cue measurably
     # flew 5300-5500 — the confirm frames carry the honest speed).
+    # Where the ball actually was when the candidate opened. (x0, y0) is the
+    # rest/birth *anchor*, which the ball may already have left — so confirm
+    # displacement measured from it can be satisfied by travel that happened
+    # before this candidate existed. See strike_min_travel_mm.
+    x_open: float = 0.0
+    y_open: float = 0.0
 
 
 @dataclass
@@ -813,7 +895,14 @@ class EventEngine:
         # (e.g. the impact yanking the old track's centroid) then fails the
         # axis check and the real impulse can still re-open from the same rest.
         self._candidate = _StrikeCandidate(
-            t0=t, x0=rest_x, y0=rest_y, dir_x=dx / norm, dir_y=dy / norm, impulse_raw=raw
+            t0=t,
+            x0=rest_x,
+            y0=rest_y,
+            dir_x=dx / norm,
+            dir_y=dy / norm,
+            impulse_raw=raw,
+            x_open=cue.x_mm,
+            y_open=cue.y_mm,
         )
 
     def _maybe_open_newborn(
@@ -831,6 +920,10 @@ class EventEngine:
         carried-ball gates (full observation, smooth raw speed).
         """
         cfg = self._cfg
+        if raw < cfg.newborn_impulse_mms:
+            # The birth path keeps the original impulse floor — see
+            # newborn_impulse_mms. No chain of custody, so no relaxation.
+            return
         if self._newborn_disarmed_at is not None:
             return
         if self._table_moving:
@@ -871,6 +964,8 @@ class EventEngine:
             last_raw=raw,
             ball_id=cue.ball_id if follow_ball else None,
             impulse_raw=raw,
+            x_open=cue.x_mm,
+            y_open=cue.y_mm,
         )
 
     def _maybe_open_rested(self, t: float, ball: BallState, raw: float) -> None:
@@ -975,6 +1070,8 @@ class EventEngine:
             last_raw=raw,
             ball_id=ball.ball_id,
             impulse_raw=raw,
+            x_open=ball.x_mm,
+            y_open=ball.y_mm,
         )
 
     def _advance_candidate(self, t: float, cue: BallState) -> list[Event]:
@@ -1001,18 +1098,34 @@ class EventEngine:
                 return []
         dx, dy = cue.x_mm - candidate.x0, cue.y_mm - candidate.y0
         displacement = hypot(dx, dy)
-        if displacement < cfg.strike_confirm_displacement_mm:
+        # Two-stage confirm (foul reversal, 2026-08-02). Fast: 60 mm, any time
+        # in the window — unchanged, and this is the path every ordinary shot
+        # takes. Slow: 22 mm, but only once the window has nearly expired, so
+        # a sub-impulse touch has to have spent the whole window travelling
+        # rather than jumped 22 mm on one merged-centroid frame.
+        late = t - candidate.t0 >= cfg.strike_slow_confirm_after_s
+        needed = cfg.strike_slow_confirm_mm if late else cfg.strike_confirm_displacement_mm
+        if displacement < needed:
             # Feasibility: a candidate that can no longer reach the confirm
             # displacement in the window it has left is dead now, not at
-            # expiry. Physics, no new constants — a tip bump travels ~47 mm
-            # and rests short of the 60 mm floor, and before this check its
-            # candidate lingered at rest until a stick-merge centroid jump
-            # could fake the remaining distance (tip_bump's phantom fire).
-            # A real strike's ball is still at speed here and passes
-            # trivially.
+            # expiry. Physics, no new constants — before this check a tip
+            # bump's candidate lingered at rest until a stick-merge centroid
+            # jump could fake the remaining distance (tip_bump's phantom
+            # fire). A real strike's ball is still at speed here and passes
+            # trivially. The reachable target is the *slow* threshold: that is
+            # the least a candidate could still fire on.
             time_left = candidate.t0 + cfg.strike_confirm_window_s - t
-            if displacement + raw * time_left < cfg.strike_confirm_displacement_mm:
+            if displacement + raw * time_left < cfg.strike_slow_confirm_mm:
                 self._candidate = None
+            return []
+        if hypot(cue.x_mm - candidate.x_open, cue.y_mm - candidate.y_open) < (
+            cfg.strike_min_travel_mm
+        ):
+            # Confirmed on inherited displacement: the ball had already left
+            # the anchor before this candidate opened and has barely moved
+            # since. Not a strike — see strike_min_travel_mm. Kept as a
+            # non-fatal wait rather than a kill: the honest impulse may still
+            # arrive inside the window.
             return []
         axis_dot = (dx * candidate.dir_x + dy * candidate.dir_y) / displacement
         if axis_dot < cfg.strike_axis_dot_min:

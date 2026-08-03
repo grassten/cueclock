@@ -1,5 +1,13 @@
 {
   "scenario": "shaft_adjust",
   "reference": "empty_table",
-  "events": []
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 6.6182,
+      "ball_id": 7,
+      "speed_mms": 881.0904,
+      "newborn": false
+    }
+  ]
 }

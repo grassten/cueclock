@@ -1,5 +1,17 @@
 {
   "scenario": "tip_bump",
   "reference": "empty_table",
-  "events": []
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 2.7778,
+      "ball_id": 5,
+      "speed_mms": 258.1227,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 3.8787
+    }
+  ]
 }

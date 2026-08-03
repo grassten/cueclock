@@ -199,6 +199,56 @@ cueclock/
 - **Acoustic click corroborator:** backlog. Ship per-ball tracking first; build it only if the corpus shows slow nudges still leaking through.
 - **Test clips:** not published — local gitignored fixtures, tests skip when absent (§5).
 
+- **2026-08-02 — A shaft/tip bump is a foul, and a foul resets the clock.**
+  Reverses the 2026-07-27 "no game-state awareness / v1 detects shots, not
+  fouls" decision above, which is superseded on this point only (the wider
+  rule — no rules engine in v1 — still holds).
+
+  That decision was right that a legal ball-in-hand shaft nudge and a foul
+  shaft bump are the same pixels. It stopped one step short of the *clock
+  outcomes*:
+
+  | Event | Correct clock outcome |
+  |---|---|
+  | Soft legal shot | **reset** |
+  | Foul shaft/tip bump | **reset** — the visit ends |
+  | Legal ball-in-hand nudge | keep running — still your visit |
+
+  Two of the three reset, so the detector never needed to tell a soft shot
+  from a foul: they do the same thing. Only legal ball-in-hand placement
+  differs, and that is not spontaneous — it follows a *called* foul, which is
+  already human input.
+
+  **Ball-in-hand stays keyless (Steven's call): fire on both and eat the rare
+  wrong reset.** In solo practice ball-in-hand is uncommon and a wrong reset
+  is recoverable. Do not add a ball-in-hand key speculatively — if those
+  phantom resets turn out to be annoying in real sessions, that annoyance is
+  the evidence that would justify building one.
+
+  **What it cost in code** (checkpoint 54): the two constants that made
+  sub-impulse touch shots invisible were both anchored on this rule, not on
+  any measurement of real shots — `strike_impulse_mms` 250 sat just above
+  `soft_touch_0731`'s 225 mm/s peak, and `strike_confirm_displacement_mm` 60
+  existed to reject `shaft_adjust`'s ~59 mm. **#5 was never mic-blocked; it
+  was policy-blocked by a corpus expectation.**
+
+  Two measurements from that work are worth carrying forward:
+
+  1. **Speed does not separate a shot from a provoker.** `practice_strokes`'
+     stick fragment peaks at 1576 mm/s — faster than every true event in the
+     sub-impulse class (`tip_bump` 124, `soft_touch_0731` 225). The impulse
+     floor only decides which candidates *open*; the confirm displacement is
+     what rejects them.
+  2. **60 mm was load-bearing for an undocumented second reason** — it forced
+     the speed measurement to span enough real travel. `ShotTaken.speed_mms`
+     is max(fastest observed, displacement / candidate lifetime), and an early
+     confirm truncates both terms: dropping it outright made `break_0801`
+     report 2068 mm/s instead of 7371, under `MATCH_BREAK_FLOOR_MMS`, which
+     would hand the IDLE gate the exact live failure checkpoint 45 fixed.
+     Hence the two-stage confirm — 60 mm at any time, or 22 mm once the window
+     has run — which leaves every ordinary shot firing on the same frame at
+     the same speed.
+
 ## 9. Test-corpus recording checklist
 
 One session at the table (~30–40 min). These clips are the ground truth every
@@ -249,13 +299,18 @@ False-strike provokers (the old app's failure modes — act them out honestly):
   short coherent trajectory — only the impulse's low speed separates it from a shot
 - `practice_strokes` · 8 s — address the ball, several practice strokes, never touching
 - `shaft_adjust` · 8 s — accidentally graze the cue ball with the shaft while
-  settling into aim (a foul in play, but it happens by accident and must not
-  count as the shot — foul-calling stays human; v1 detects shots, not fouls)
+  settling into aim (a foul in play). **Since 2026-08-02 this must fire** — a
+  foul ends the visit, so the clock resets exactly as for a shot. See the
+  dated foul-reversal decision in §8; the parenthetical this line used to
+  carry ("must not count as the shot — v1 detects shots, not fouls") is the
+  rule that was reversed.
 - `tip_bump` · 8 s — bump the cue ball with the **tip** while feathering, so it
-  rolls an inch or two. **The hardest case in the corpus**: dwell + small
-  impulse along the cue line is nearly a real soft shot's signature (§4.2 calls
-  this the one genuinely ambiguous pair; the backlog audio click corroborator
-  exists for exactly this)
+  rolls an inch or two. Was **the hardest case in the corpus** while it had to
+  be told apart from a soft shot — dwell + small impulse along the cue line is
+  nearly a real soft shot's signature. The foul reversal dissolved the problem
+  rather than solving it: both are fouls-or-shots that reset the clock, so
+  **this must now fire too**, and no acoustic corroborator is needed to split
+  the pair (that idea is rejected — `hardware.md` Part D)
 - `chalk_near` · 8 s — chalk the cue directly above the table surface
 - `rack_balls` · 12 s — gather balls from the ball return and rack them (this
   table's stand-in for the drop-pocket "reach in and retrieve" provoker)

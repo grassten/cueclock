@@ -56,9 +56,29 @@ EXPECTED: dict[
     "practice_strokes": (0, 0, None),
     "chalk_near": (0, 0, None),
     "ball_in_hand_place": (0, 0, None),
-    "ball_in_hand_nudge": (0, 0, None),
-    "shaft_adjust": (0, 0, None),
-    "tip_bump": (0, 0, None),
+    # THE FOUL REVERSAL (2026-08-02, design.md §8). shaft_adjust and tip_bump
+    # were pinned at 0 shots under the 2026-07-27 "v1 detects shots, not
+    # fouls" rule. Both are fouls; a foul ends the visit; the incoming player
+    # gets a fresh clock — so both must fire, exactly like the soft shot they
+    # are indistinguishable from. That reversal is what unblocked #5: the two
+    # constants making sub-impulse touches invisible were anchored on keeping
+    # these two silent, not on any measurement of real shots.
+    #
+    # ball_in_hand_nudge is §9's "place by hand, then fine-tune a few inches
+    # *with the shaft* (the legal way)" — the same physical act as
+    # shaft_adjust, but legal, so its correct clock outcome is the opposite.
+    # Vision cannot separate them (no ball-in-hand state), and Steven's call
+    # was to fire on both and eat the rare wrong reset rather than add a key.
+    # So **shots are deliberately unasserted here**: this clip happens not to
+    # fire today, but only because the whiteness vote is parked on another
+    # ball (the parked_vote_strike_0801 identity bug) — not because anything
+    # separates it from shaft_adjust. Pinning 0 would claim a discriminator
+    # that does not exist; pinning 1 would demand fixing an unrelated bug to
+    # satisfy an outcome Steven already said he does not need either way.
+    # The golden timeline still pins it exactly, so drift here stays visible.
+    "ball_in_hand_nudge": (None, 0, None),
+    "shaft_adjust": (1, 0, None),
+    "tip_bump": (1, 0, 1),
     "spin_in_place": (1, 0, 1),
     "slow_creep": (1, 0, 1),
     "walk_around_settle": (None, 0, None),
@@ -91,17 +111,15 @@ EXPECTED: dict[
     # racked" trigger; the clock-side IDLE gate is the real fix — no shot may
     # be minted from racking motion).
     "rack_gather_0731": (0, 0, None),
-    # soft_touch: a deliberate touch shot whose cue peaks at 225 mm/s raw —
-    # below any impulse floor that still rejects ball-in-hand nudges (§2.3
-    # lesson 6; the acoustic corroborator is the real answer). This clip used
-    # to pin min 1 settle, but that settle was measured (2026-08-01) to be
-    # phantom-latched by the STICK YANK on another blob — the touched ball
-    # itself peaks at 25-28 mm per 0.2 s window, under the 30 mm latch, and
-    # every honest slower latch also fires on shaft_adjust (59 mm/0.5 s
-    # while judgeable). With the merge flag the phantom is gone and so is
-    # the lucky settle: the whole sub-impulse class (shot AND settle) waits
-    # on the acoustic corroborator (BACKLOG).
-    "soft_touch_0731": (None, 0, None),
+    # soft_touch: a deliberate touch shot whose cue peaks at 225 mm/s raw.
+    # This was the corpus's standing proof that the sub-impulse class was
+    # unreachable — "waits on the acoustic corroborator", per the pin it
+    # carried until 2026-08-02. It was never an acoustic problem: the impulse
+    # floor sat at 250 solely to stay above this clip, because shaft_adjust
+    # was pinned silent and the two are the same order of magnitude. With the
+    # foul reversal (above) that anchor is gone, and the shot AND its settle
+    # both land. This pin closes #5.
+    "soft_touch_0731": (1, 0, 1),
     "soft_shot_0731": (1, 0, 1),
     # glove_address: bridge glove + watch on the cloth through an address; a
     # gear track reached 87% observed (past the flicker filter). The roster

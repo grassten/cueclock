@@ -232,6 +232,72 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 54 — the foul reversal; the sub-impulse class is
+  detectable):** `shaft_adjust`, `tip_bump` and `soft_touch_0731` all fire a
+  ShotTaken for the first time. Closes #5. Cold battery **379 passed, 3:51**.
+  The design decision is appended to `design.md` §8 (never renumbered).
+  - **#5 was never mic-blocked — it was policy-blocked by a corpus
+    expectation.** Both constants that made touch shots invisible were
+    anchored on keeping a foul bump silent, not on any measurement of a real
+    shot: `strike_impulse_mms` 250 sat just above `soft_touch_0731`'s 225 mm/s
+    peak, and `strike_confirm_displacement_mm` 60 existed to reject
+    `shaft_adjust`'s ~59 mm — the code comment said so outright. Reversing the
+    rule dissolved both anchors. `tip_bump`, which §9 called **the hardest
+    case in the corpus**, stopped being hard rather than getting solved: it is
+    a foul, a foul resets the clock, and so does the soft shot it could never
+    be told apart from.
+  - **Measurement that inverts the original design's assumption: speed does
+    not separate a shot from a provoker.** `practice_strokes`' stick fragment
+    peaks at **1576 mm/s** — faster than every true event in the class
+    (`tip_bump` 124, `soft_touch_0731` 225, `shaft_adjust` 881). The impulse
+    floor only decides which candidates open; the confirm *displacement* is
+    what rejects them, and there the separation is clean: 14.5 mm worst
+    provoker against 29.0 mm weakest true event.
+  - **60 mm was load-bearing for a second reason nobody had written down** —
+    it forced the speed measurement to span enough real travel.
+    `ShotTaken.speed_mms` is max(fastest observed, displacement / candidate
+    lifetime) and an early confirm truncates both terms. Dropping it to a
+    single 22 mm threshold made `break_0801` confirm 0.18 s sooner and report
+    **2068 mm/s instead of 7371** — under `MATCH_BREAK_FLOOR_MMS`, handing the
+    IDLE gate the exact live failure checkpoint 45 fixed. (At impact the cue's
+    blob merges with the stick, so the centroid lags and early displacement
+    underreads: a break needs distance, not time, before its speed is honest.)
+    Hence a **two-stage confirm** — 60 mm at any time, or 22 mm once the window
+    has run — so every ordinary shot still fires on the same frame at the same
+    speed. 47 of 53 golden timelines are byte-identical across this change.
+  - **Two pre-existing holes surfaced when the floor came down**, both found by
+    the goldens and both fixed rather than tuned around:
+    - `strike_min_travel_mm` (new, 10 mm). Confirm displacement is measured
+      from the rest/birth *anchor*, which the ball may already have left, so it
+      could be satisfied entirely by pre-open history: `triage_0801b` opened
+      180.6 mm from the rest spot and fired 19 ms later having travelled
+      **0.5 mm**, reporting 9434 mm/s. Real candidates gain 12.1–45 mm — a 24x
+      gap. This also deleted a 13882 mm/s "shot" from `break_underread_0801`,
+      a speed no cue ball reaches (a break is ~7000).
+    - `newborn_impulse_mms` (new, 250 mm/s — the original floor, kept). The
+      relaxation is justified by **chain of custody**: the tracker watched that
+      ball sit still and then move. A newborn track has none by definition, and
+      a slow ball appearing from nowhere is likelier carried than struck —
+      `cue_grab_0801`'s gloved hand lifts the resting cue at 130 mm/s and
+      confirmed as a strike once the floor dropped. Every real birth-path
+      strike in the corpus is fast (1294, 1572 mm/s), so this costs nothing.
+  - **`ball_in_hand_nudge` is now unasserted for shots, deliberately.** §9
+    defines it as fine-tuning a placement *with the shaft* — the same physical
+    act as `shaft_adjust`, but legal, so the opposite clock outcome is correct,
+    and vision has no ball-in-hand state to tell them apart. Steven's call
+    stands (fire on both, eat the rare wrong reset, no key). It happens not to
+    fire today, but only because the whiteness vote is parked on another ball
+    — the `parked_vote_strike_0801` identity bug, **not** a discriminator.
+    Pinning 0 would claim a separation that does not exist; pinning 1 would
+    demand fixing an unrelated bug to satisfy an outcome Steven said he does
+    not need either way. The golden still pins the timeline exactly.
+  - Two real shots report lower speeds (`stroke_gear_veto_0802` 1732 → 866,
+    `stroke_tug_strike_0801` 6061 → 3239): a lower floor opens their candidate
+    earlier in the acceleration, so the kinematic term divides by a longer
+    life. Both stay far from any gate that reads speed, and every break is
+    unchanged — `test_break_0801_speed_clears_the_idle_gate` still passes at
+    7371.
+
 - **2026-08-02 (checkpoint 53 — golden event timelines; the corpus now pins
   *when*, not just how many):** `tests/goldens/<scenario>.json`, one committed
   timeline per corpus clip, asserted inside the existing `test_corpus_clip` so
