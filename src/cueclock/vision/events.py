@@ -276,6 +276,48 @@ class EventConfig:
     # outlier (no_cue_strike_0801, non-newborn). 0.5 sits 4x above the
     # worst real strike and 2x below the measured carry (100%).
     newborn_merged_frac_max: float = 0.5
+    # Minimum confirm time for birth-path candidates (#8, pickup_snatch_0801,
+    # 2026-08-02). The three gates above are all *fractions over the confirm
+    # window*, and a fast confirm can close that window in three observations
+    # — at which point they are a lottery rather than a measurement. The
+    # bare-hand snatch fired with merged_frac exactly **0.00** over 0.070 s
+    # while reading 71% merged across the whole carry.
+    #
+    # Nothing was wrong with the gates. `newborn_raw_step_ratio_max` is the
+    # documented carried-ball discriminator (a carry's raw speed is erratic;
+    # a struck ball's is smooth within +/-5%) and it *does* catch this snatch:
+    # traced frame by frame, the ratio runs 1.01, 1.00, 1.07 and then **2.24**
+    # at age 0.096 s. The candidate simply confirmed at age 0.070 — one frame
+    # before the evidence arrived. All this constant does is make a birth-path
+    # candidate wait for it.
+    #
+    # The cost lands only on birth-path strikes — the occluded-address class,
+    # which live sessions were missing outright — where a tenth of a second is
+    # irrelevant to a 30 s clock. Rest-anchored strikes, which is nearly all
+    # of them, are untouched. Measured: 0.06 s is too short (the snatch still
+    # fires), 0.08 s works; 0.10 keeps a frame of margin over that cliff and
+    # still leaves two thirds of the confirm window.
+    #
+    # MEASURED AND REJECTED — do not re-derive. The plan for #8 proposed an
+    # apparent-size height cue: the camera looks straight down (§4.3), so a
+    # carried ball images larger. Both forms were built and measured against
+    # the corpus, and neither can fire on this clip:
+    #
+    #   * Ratio against balls resting on the cloth. Real newborn strikes read
+    #     0.82-1.22, the carry reads 2.45 — a clean 2x split. But **at the
+    #     instant the phantom confirms the ball reads 1.14**, mid-band: it has
+    #     only just been touched and has not risen yet. It passes 2.0 about
+    #     25 ms later. A gate cannot use evidence that does not exist yet.
+    #     (It also misjudges no_cue_strike_0801, a real strike at 2.62, where
+    #     the cue is merged with the stick through the impact.)
+    #   * Growth during the confirm window. Strictly worse: a ball
+    #     accelerating out of a strike blurs and streaks, so break_0801b grows
+    #     1.58x against the snatch's 1.27x. It also resets every time the
+    #     carried ball is reborn as a fresh track, which it does repeatedly.
+    #
+    # The measurements are kept here because they are real and were expensive;
+    # the gate is not, because no clip exercises it and untested gates rot.
+    newborn_confirm_min_s: float = 0.10
     # Flicker filter: hand/stick fragments pass the detector's geometry gates
     # only intermittently, so their tracks are mostly coasted — measured 7-43%
     # observed on the flagged live captures (missed_strike_0731,
@@ -1174,6 +1216,10 @@ class EventEngine:
             if not candidate.newborn:
                 self._axis_killed_t = t
             self._candidate = None
+            return []
+        if candidate.newborn and t - candidate.t0 < cfg.newborn_confirm_min_s:
+            # Confirmed on too little evidence to judge a carry. Hold — the
+            # gates below need frames, not luck. See newborn_confirm_min_s.
             return []
         if candidate.newborn and not self._observed_since(cue, candidate.t0):
             # A carried ball coasts through finger occlusions; a struck cue on

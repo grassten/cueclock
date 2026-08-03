@@ -821,6 +821,38 @@ def test_fast_newborn_strike_still_fires() -> None:
     assert ShotTaken in map(type, sim.run(0.4))
 
 
+def test_newborn_confirm_cannot_beat_its_own_gates() -> None:
+    # #8, pickup_snatch_0801: a bare-hand snatch confirmed on the fast path
+    # in 0.070 s / 3 observations, with merged_frac exactly 0.00 — while
+    # reading 71% merged across the whole carry. The carried-ball gates are
+    # fractions over the confirm window, so a window that short makes them a
+    # lottery. newborn_raw_step_ratio_max does catch this carry (ratio 2.24 at
+    # age 0.096 s); the candidate just fired one frame before it could.
+    #
+    # Here the birth-path ball travels far enough to satisfy the fast confirm
+    # immediately, then its raw speed lurches the way a carried ball's does.
+    # The lurch must still be seen.
+    sim = rack()
+    sim.run(1.0)
+    sim.occlude(CUE)
+    sim.run(0.2)
+    sim.place(7, 800.0, 300.0)
+    sim.velocity(7, 1400.0, 0.0)
+    sim.run(0.06)  # past 60 mm: the old fast confirm would have fired here
+    sim.velocity(7, 200.0, 0.0)  # erratic, the way a hand is
+    assert ShotTaken not in map(type, sim.run(0.5))
+
+
+def test_the_confirm_delay_lands_only_on_the_birth_path() -> None:
+    # The delay is justified by a newborn's missing chain of custody, so it
+    # must not tax ordinary shots — which is nearly all of them. A
+    # rest-anchored strike still fires inside the old fast-confirm window.
+    sim = rack()
+    sim.run(1.0)
+    sim.velocity(CUE, 1400.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.06))
+
+
 def test_fired_lone_roller_gets_a_settle() -> None:
     # lone_roller_0801: a birth-path strike whose only mover is the fired
     # track itself (nothing else disturbed). The track is not roster, and a

@@ -4,9 +4,9 @@
   "events": [
     {
       "type": "ShotTaken",
-      "t": 40.7844,
+      "t": 40.8868,
       "ball_id": 9,
-      "speed_mms": 3844.3542,
+      "speed_mms": 2013.0175,
       "newborn": true
     }
   ]

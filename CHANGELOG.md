@@ -232,6 +232,46 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 56 — the bare-hand snatch; a fraction gate needs a
+  sample floor):** `pickup_snatch_0801` flips from its known-wrong
+  `(1, 0, 2, 2)` pin to **0 shots**. Closes #8. Cold battery **384 passed,
+  4:02**.
+  - **The carried-ball gates were never wrong — the confirm was too fast to
+    use them.** All three are *fractions over the confirm window*, and a fast
+    confirm can close that window in three observations. The snatch fired with
+    `merged_frac` exactly **0.00** over 0.070 s while reading 71% merged across
+    the whole carry. Traced frame by frame,
+    `newborn_raw_step_ratio_max` — the documented discriminator, a carry's raw
+    speed being erratic — runs 1.01, 1.00, 1.07 and then **2.24 at age
+    0.096 s**. The candidate confirmed at 0.070 s, one frame early.
+  - The whole fix is `newborn_confirm_min_s` (0.10 s): a birth-path candidate
+    must observe that long before it may confirm. Measured cliff — 0.06 s
+    still fires, 0.08 s works; 0.10 keeps a frame of margin and still leaves
+    two thirds of the window. Cost falls only on the birth path (the
+    occluded-address class, where a tenth of a second is nothing against a
+    30 s clock); six newborn strikes shift +0.06 to +0.18 s and every count
+    holds. The phantom *settle* went with the phantom shot — a snatch no
+    longer resets the clock either.
+  - **Generalisable lesson, worth more than the fix:** a gate expressed as a
+    fraction needs a floor on how many samples it may be computed from, or a
+    short window silently disables it. Nothing in the corpus counts would have
+    shown this; it took tracing the gate that was supposed to fire.
+  - **The plan's proposed lever does not work, and the measurements are
+    recorded so nobody re-derives it.** The apparent-size height cue (camera
+    looks straight down, so a carried ball images larger) is real — real
+    newborn strikes read 0.82–1.22 against balls resting on the cloth, the
+    carry reads 2.45, a clean 2x split — but **at the instant the phantom
+    confirms the ball reads 1.14**, mid-band. It has only just been touched
+    and has not risen yet; it passes 2.0 about 25 ms later. A gate cannot use
+    evidence that does not exist yet. It also misjudges `no_cue_strike_0801`,
+    a *real* strike at 2.62 where the cue is merged with the stick through
+    impact. Area *growth* is strictly worse: an accelerating ball blurs and
+    streaks, so `break_0801b` grows 1.58x against the snatch's 1.27x, and
+    growth resets each time the carried ball is reborn as a fresh track.
+    Both forms were built, measured, and reverted — an unexercised gate is
+    untested code that rots. The numbers live in `events.py` and `design.md`
+    §4.2.
+
 - **2026-08-02 (checkpoint 55 — Scratch becomes a deferred verdict; the jaw
   phantom is gone):** `hanger_pot_0801` grades 0 scratches with its shot and
   settle unmoved to the millisecond. Closes #6. Cold battery **382 passed,

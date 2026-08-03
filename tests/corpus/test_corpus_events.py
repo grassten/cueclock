@@ -273,14 +273,19 @@ EXPECTED: dict[
     # flagged it live; nothing wrong is visible in journal or frames
     # (ground-truth question pending), so it pins the healthy behavior.
     "cluster_shot_0801": (1, 0, 1, 1),
-    # pickup_snatch: PINNED KNOWN-WRONG (hand_roll precedent). A bare-hand
-    # snatch of the resting white — Steven walks the top rail carrying it,
-    # frame-verified — births a track that beats all three carried-ball
-    # gates (observed, smooth, unmerged: bare fingers from above never
-    # oversize the blob) and fires a phantom newborn shot. Silent hand
-    # motion is the acoustic-corroborator class (BACKLOG); the settles are
-    # real closures (post-snatch and post-placement quiet).
-    "pickup_snatch_0801": (1, 0, 2, 2),
+    # pickup_snatch: a bare-hand snatch of the resting white — Steven walks
+    # the top rail carrying it, frame-verified. It birthed a track that beat
+    # all three carried-ball gates and fired a phantom newborn shot, plus the
+    # phantom settle closing that phantom's episode. It was pinned KNOWN-WRONG
+    # at (1, 0, 2, 2) and written off as the acoustic-corroborator class.
+    #
+    # FIXED 2026-08-02 (#8). The gates were never wrong — the confirm was too
+    # fast to use them. `newborn_raw_step_ratio_max` catches this carry
+    # outright (ratio 2.24 at age 0.096 s) but the candidate confirmed at
+    # 0.070 s, one frame earlier. A minimum confirm time for birth-path
+    # candidates is the entire fix. Now 0 shots, and the phantom settle goes
+    # with it: only the genuine post-placement quiet at 29.65 remains.
+    "pickup_snatch_0801": (0, 0, 1, 1),
     # drill_shot: one real drill shot, fired late in a 41 s ring window —
     # the ring's frame rate halved while the previous flag dump was
     # writing (dump I/O starves the detect loop; see checkpoint 33). Live
