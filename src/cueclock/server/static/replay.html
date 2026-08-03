@@ -13,10 +13,17 @@
            the live shot clock is burned into every replayed frame and keeps
            counting down on the TV. Without a badge the wall is showing a clock
            that isn't real — the exact failure Steven is trained to distrust
-           (same reasoning as the no_clock label in shotclock.html).
+           (same reasoning as the no_clock label in shotclock.html). Saying
+           REPLAY is what makes the countdown underneath it not a lie.
+
+           This page also used to *cover* that countdown, with opaque `?mask=`
+           patches measured from OBS at each press. Removed in checkpoint 60:
+           the black rectangle looked worse on the wall than the stale clock it
+           hid (`deck/replay.py`, module docstring — the real fix is upstream,
+           in what the live scene burns in).
 
            The page draws three things, in this order:
-             scrim + masks   dim the footage, and paint the burned-in clock out
+             scrim           dim the footage, so it reads as not-live
              mark + drain    say REPLAY, and how long until the table is back
              blackout        fade to black just before the deck cuts to live */
         html, body {
@@ -35,16 +42,6 @@
             inset: 0;
             background: #000;
             opacity: 0.22;
-        }
-
-        /* Opaque patches over whatever the live scene had the shot clock in,
-           measured from OBS at the press and handed over as `?mask=` (see
-           `deck/replay.py`). Black rather than blurred: a browser source
-           composites in OBS, so nothing on this page can see — let alone
-           blur — the video underneath it. */
-        .mask {
-            position: fixed;
-            background: #000;
         }
 
         /* A hairline across the very top, not a full-width band. It answers the
@@ -149,7 +146,6 @@
 </head>
 <body>
     <div class="scrim"></div>
-    <div id="masks"></div>
     <div class="drain"><div class="drain-fill" id="fill"></div></div>
     <div class="mark">
         <span class="dot"></span>
@@ -165,19 +161,6 @@
         const BLACKOUT_S = 0.45;
 
         const params = new URLSearchParams(location.search);
-
-        // ?mask=x,y,w,h;… — rectangles of the frame the live shot clock was
-        // burned into, in percent of the canvas, measured from OBS at the
-        // press. Percent because the recording may be a rescaled output of the
-        // canvas the transforms were read from; the fraction survives that.
-        for (const spec of (params.get('mask') || '').split(';')) {
-            const [x, y, w, h] = spec.split(',').map(Number);
-            if (![x, y, w, h].every(Number.isFinite)) continue;
-            const patch = document.createElement('div');
-            patch.className = 'mask';
-            patch.style.cssText = `left:${x}%;top:${y}%;width:${w}%;height:${h}%`;
-            document.getElementById('masks').appendChild(patch);
-        }
 
         // ?s=<seconds> — how long this replay runs, so the bar drains in step
         // with it. The deck rewrites this URL on every press (which reloads the

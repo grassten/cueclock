@@ -81,133 +81,11 @@ def test_slow_motion_stretches_the_airtime_not_the_footage() -> None:
     assert half.play_s == pytest.approx(full.play_s * 2)
 
 
-# --- masking the burned-in shot clock ---
-
-# The corner clock as OBS reports it on the rig (probed 2026-08-02 against the
-# live `Stream Detail` scene): top-left aligned, unrotated, 193x193 at 1141,0.
-CORNER_CLOCK: dict[str, Any] = {
-    "positionX": 1141.0,
-    "positionY": 0.0,
-    "width": 193.0,
-    "height": 193.0,
-    "alignment": 5,  # left | top
-    "rotation": 0.0,
-}
+# --- the badge's URL ---
 
 
-def full_canvas() -> dict[str, Any]:
-    return {
-        "positionX": 0.0,
-        "positionY": 0.0,
-        "width": 1920.0,
-        "height": 1080.0,
-        "alignment": 5,
-        "rotation": 0.0,
-    }
-
-
-def browser_item(name: str, transform: dict[str, Any], *, enabled: bool = True) -> dict[str, Any]:
-    return {
-        "sourceName": name,
-        "inputKind": "browser_source",
-        "sceneItemEnabled": enabled,
-        "sceneItemTransform": transform,
-    }
-
-
-def clock_page(name: str) -> str | None:
-    return "http://localhost:8000/shotclock" if name == "clock" else None
-
-
-def test_the_mask_covers_the_clock_rect_as_a_fraction_of_the_canvas() -> None:
-    masks = replay.clock_masks([browser_item("clock", CORNER_CLOCK)], (1920, 1080), clock_page)
-    assert len(masks) == 1
-    # 1141/1920 = 59.43%, 193/1080 = 17.87%, plus the 2 px pad on every side.
-    assert masks[0].x == pytest.approx(100 * 1139 / 1920, abs=0.01)
-    assert masks[0].y == 0.0  # clamped: the clock starts at the canvas edge
-    assert masks[0].w == pytest.approx(100 * 197 / 1920, abs=0.01)
-    assert masks[0].h == pytest.approx(100 * 195 / 1080, abs=0.01)
-
-
-def test_the_mask_is_never_smaller_than_the_thing_it_hides() -> None:
-    """A seam of live countdown on the wall is the whole failure being fixed."""
-    mask = replay.clock_masks([browser_item("clock", CORNER_CLOCK)], (1920, 1080), clock_page)[0]
-    assert mask.x <= 100 * 1141 / 1920
-    assert mask.x + mask.w >= 100 * (1141 + 193) / 1920
-    assert mask.y + mask.h >= 100 * 193 / 1080
-
-
-def test_only_the_clock_page_is_masked() -> None:
-    """The scoreboard is a full-canvas browser source too — masking it by
-    source kind alone would black out the entire replay."""
-    items = [browser_item("score", full_canvas()), browser_item("clock", CORNER_CLOCK)]
-    masks = replay.clock_masks(items, (1920, 1080), clock_page)
-    assert len(masks) == 1
-    assert masks[0].w < 20.0
-
-
-def test_a_hidden_clock_is_not_masked() -> None:
-    # It was never burned into the recording, so there is nothing to cover.
-    items = [browser_item("clock", CORNER_CLOCK, enabled=False)]
-    assert replay.clock_masks(items, (1920, 1080), clock_page) == []
-
-
-def test_a_second_copy_of_the_clock_gets_its_own_mask() -> None:
-    """Identity is the page, not the source name — that is what stops the mask
-    drifting from the overlay the way a hardcoded rect would."""
-    items = [
-        browser_item("clock", CORNER_CLOCK),
-        browser_item("clock", {**CORNER_CLOCK, "positionX": 10.0, "positionY": 400.0}),
-    ]
-    assert len(replay.clock_masks(items, (1920, 1080), clock_page)) == 2
-
-
-def test_a_centred_item_is_measured_from_its_middle() -> None:
-    centred = {**CORNER_CLOCK, "positionX": 960.0, "positionY": 540.0, "alignment": 0}
-    mask = replay.clock_masks([browser_item("clock", centred)], (1920, 1080), clock_page)[0]
-    assert mask.x == pytest.approx(100 * (960 - 193 / 2 - 2) / 1920, abs=0.01)
-    assert mask.y == pytest.approx(100 * (540 - 193 / 2 - 2) / 1080, abs=0.01)
-
-
-def test_a_rotated_item_is_covered_by_its_bounding_box() -> None:
-    """The overhead strip's own transform: rotated 270 about a top-left anchor.
-
-    Nothing rotates the clock today; getting this wrong would show up as a mask
-    in the wrong place entirely, so it is pinned against a rect measured off
-    the live scene rather than derived the same way twice.
-    """
-    strip = {
-        "positionX": 1334.0,
-        "positionY": 1083.0,
-        "width": 1094.0,
-        "height": 594.0,
-        "alignment": 5,
-        "rotation": 270.0,
-    }
-    mask = replay.item_mask(strip, 1920.0, 1080.0)
-    assert mask is not None
-    assert mask.x == pytest.approx(100 * 1332 / 1920, abs=0.01)  # 1334 - pad
-    assert mask.y == 0.0  # the strip starts 11 px above the canvas
-    assert mask.x + mask.w == 100.0  # and runs off its right edge
-
-
-def test_an_item_entirely_off_canvas_is_not_masked() -> None:
-    offscreen = {**CORNER_CLOCK, "positionX": -400.0}
-    assert replay.item_mask(offscreen, 1920.0, 1080.0) is None
-
-
-def test_a_zero_sized_item_is_not_masked() -> None:
-    assert replay.item_mask({**CORNER_CLOCK, "width": 0.0}, 1920.0, 1080.0) is None
-
-
-def test_the_badge_url_carries_no_mask_when_there_is_nothing_to_cover() -> None:
-    assert replay.badge_url("http://x", 5.4, []) == "http://x/replay?s=5.4"
-
-
-def test_the_badge_url_separates_masks_with_semicolons() -> None:
-    masks = [replay.Mask(1.0, 2.0, 3.0, 4.0), replay.Mask(5.0, 6.0, 7.0, 8.0)]
-    url = replay.badge_url("http://x", 5.4, masks)
-    assert url == "http://x/replay?s=5.4&mask=1.00,2.00,3.00,4.00;5.00,6.00,7.00,8.00"
+def test_the_badge_url_carries_the_pages_own_timeline() -> None:
+    assert replay.badge_url("http://x", 5.4) == "http://x/replay?s=5.4"
 
 
 # --- show() / stop() ---
@@ -226,31 +104,6 @@ class FakeObs:
         self.cursor_s: float = 0.0
         self.drop_seeks = 0  # how many seeks OBS swallows before honouring one
         self.snap_s = 0.3  # keyframe snap: a seek always lands slightly early
-        self.canvas: tuple[int, int] | None = (1920, 1080)
-        # The live scene as the rig actually has it (probed 2026-08-02): the
-        # corner clock at 1141,0 sized 193x193, the scoreboard filling the
-        # canvas, and the overhead strip rotated 270 down the right.
-        self.items: list[dict[str, Any]] | None = [
-            browser_item("Browser 2", CORNER_CLOCK),
-            browser_item("Browser 3", full_canvas()),
-            {
-                "sourceName": "Syphon Client",
-                "inputKind": "syphon-input",
-                "sceneItemEnabled": True,
-                "sceneItemTransform": {
-                    "positionX": 1334.0,
-                    "positionY": 1083.0,
-                    "width": 1094.0,
-                    "height": 594.0,
-                    "alignment": 5,
-                    "rotation": 270.0,
-                },
-            },
-        ]
-        self.urls = {
-            "Browser 2": "http://localhost:8000/shotclock",
-            "Browser 3": "http://localhost:8000/score",
-        }
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def log(name: str, value: Any) -> Any:
@@ -258,9 +111,6 @@ class FakeObs:
             return value
 
         monkeypatch.setattr(obsws, "current_scene", lambda: log("current_scene", self.scene))
-        monkeypatch.setattr(obsws, "canvas_size", lambda: log("canvas", self.canvas))
-        monkeypatch.setattr(obsws, "scene_items", lambda name: log("items", self.items))
-        monkeypatch.setattr(obsws, "input_url", lambda name: self.urls.get(name))
         monkeypatch.setattr(obsws, "save_replay_buffer", lambda: log("save", True))
         monkeypatch.setattr(
             obsws,
@@ -356,7 +206,7 @@ def test_the_badge_timeline_covers_its_own_invisible_head_start(
 
     assert playing is not None
     assert playing.until == pytest.approx(105.4)  # the airtime is unchanged
-    assert fake.settings[replay.BADGE_INPUT]["url"].startswith("http://x/replay?s=6.0&")
+    assert fake.settings[replay.BADGE_INPUT]["url"] == "http://x/replay?s=6.0"
 
 
 def test_the_badge_is_loaded_and_refreshed_before_the_cut(
@@ -455,7 +305,7 @@ def test_show_loads_the_file_that_was_just_saved(
     assert fake.settings[replay.MEDIA_INPUT]["local_file"] == "/Users/steven/Movies/Replay 02.mov"
 
 
-def test_show_hands_the_badge_its_own_duration_and_the_clock_to_cover(
+def test_show_hands_the_badge_its_own_duration(
     monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
 ) -> None:
     fake = FakeObs()
@@ -463,52 +313,6 @@ def test_show_hands_the_badge_its_own_duration_and_the_clock_to_cover(
 
     replay.show("http://x")
 
-    url = fake.settings[replay.BADGE_INPUT]["url"]
-    assert url == "http://x/replay?s=5.4&mask=59.32,0.00,10.26,18.06"
-
-
-def test_show_measures_the_live_scene_not_the_replay_scene(
-    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
-) -> None:
-    """The mask describes what was burned into the buffer — the live layout."""
-    fake = FakeObs()
-    fake.install(monkeypatch)
-    seen: list[str] = []
-    monkeypatch.setattr(obsws, "scene_items", lambda name: seen.append(name) or fake.items)
-
-    replay.show("http://x")
-
-    assert seen == ["Stream Detail"]
-
-
-def test_show_measures_the_scene_before_reading_the_shot_anchor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Nothing may sit between the anchor read and the save it is measured
-    against — three extra OBS round trips there would age every cue point."""
-    fake = FakeObs()
-    fake.install(monkeypatch)
-    monkeypatch.setattr(
-        client, "get_json", lambda *a, **k: fake.calls.append("age") or {"age_s": 4.0}
-    )
-
-    replay.show("http://x")
-
-    assert fake.calls.index("items") < fake.calls.index("age")
-
-
-def test_a_replay_still_plays_when_obs_cannot_say_where_the_clock_is(
-    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
-) -> None:
-    # Degrading to checkpoint 46's visible-clock behaviour beats refusing the
-    # cut: that was the old bug, not a new one.
-    fake = FakeObs()
-    fake.install(monkeypatch)
-    fake.items = None
-
-    playing = replay.show("http://x")
-
-    assert playing is not None
     assert fake.settings[replay.BADGE_INPUT]["url"] == "http://x/replay?s=5.4"
 
 

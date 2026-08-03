@@ -232,6 +232,59 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-03 (checkpoint 60 — the replay clock mask is withdrawn; a black
+  rectangle over live footage was worse than the stale clock it hid):**
+  checkpoint 49's `?mask=` is removed from `deck/replay.py` and the `/replay`
+  page. Nothing replaces it yet — this is a retreat to a known state, chosen
+  deliberately over shipping a second cosmetic patch on top of the first.
+  - **What it looked like, which is the whole reason.** On the rig the corner
+    clock is a **193×193 browser source at (1141, 0)** (probed live), sitting
+    on the Camo side angle rather than on any backdrop — so the mask was a
+    197×195 black rectangle punched into live footage. The live element at
+    that rect is *already* a black square: `shotclock.html` draws black with a
+    4 px white border and a 90 px numeral. The mask reproduced the black and
+    dropped the border and the digits, which is why it read as damage rather
+    than as an overlay (Steven, 2026-08-03: *the black square over the clock
+    in replay view looks bad*).
+  - **The mechanism was never wrong**, and that is worth recording so it isn't
+    re-derived: identity was the *page* (`/shotclock`), measured from the same
+    OBS that composed the recorded frame, so a renamed, moved, resized or
+    duplicated overlay stayed covered and a hidden one was skipped. It is
+    removed for how it looks, not for what it does.
+  - **The accepted cost is checkpoint 46's bug, back.** A replay again shows a
+    countdown that isn't real, under a badge that says REPLAY. The scrim and
+    the wordmark are the only things now saying "not live".
+  - **Why not "record a clean scene instead", which was the first instinct:**
+    the replay buffer is an output fed by the **program mix**, and stock OBS
+    32.1.1 has no per-scene or per-source recording (verified against the
+    installed plugin set — bundled only). That path needs Exeldro's
+    `obs-source-record`, plus `TriggerHotkeyByName` and newest-file discovery,
+    because obs-websocket cannot save a filter-owned buffer. A third-party
+    plugin and a second continuous encoder on the machine doing 160 fps vision
+    is not the price for a cosmetic defect.
+  - **The real fix is a live-scene layout change**, deferred by Steven ("we'll
+    figure the rest out later"): put the clock on flat backdrop — a broadcast
+    top bar holding clock + score — so a mask would be black on black and the
+    corner clock stops floating over the picture, or move it out of OBS
+    entirely and accept losing the chime routing. Options recorded in
+    `hardware.md` §C4a so the analysis isn't repeated.
+  - **A tail that argues against masking as a strategy, not just this mask:**
+    pressing Replay from the full-screen **Shot Clock** scene produced a mask
+    over **69.6% × 69.8%** of the canvas, since that scene's clock *is* the
+    canvas. Found while measuring the live rig for this change; it dies with
+    the mask.
+  - Also gone, because they existed only to serve it: `obsws.canvas_size`,
+    `scene_items`, `input_url` (`GetVideoSettings` / `GetSceneItemList` /
+    `GetInputSettings`), and `replay.Mask` / `item_mask` / `clock_masks` /
+    `_live_masks`. `badge_url` takes `(base, badge_s)`. A press now makes
+    **three fewer OBS round trips** before the anchor read, so the comment
+    about keeping nothing between that read and the save goes too.
+  - Tests: `tests/unit/test_replay.py` 351 → 338 unit tests; the cue-point
+    arithmetic and the whole show/stop ordering suite are untouched. No
+    detection code touched, so the corpus battery is unaffected and was not
+    re-run. `docs/design.md` §2.1 and `hardware.md` §B3/§C4a updated in this
+    commit, per the standing rule.
+
 - **2026-08-03 (checkpoint 59 — the press follows the settle, not the stroke;
   the pair window was measuring the roll-out):** checkpoint 58's provisional
   `PAIR_WINDOW_S = 5.0` is replaced by two measured, asymmetric reaches. The

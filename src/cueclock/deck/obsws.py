@@ -289,49 +289,6 @@ def refresh_browser(name: str) -> bool:
     return request("PressInputPropertiesButton", payload) is not None
 
 
-def canvas_size() -> tuple[int, int] | None:
-    """OBS's base canvas — the coordinate space every scene transform is in.
-
-    Asked rather than assumed: `replay.py` turns scene-item rectangles into
-    percentages of this, and a hardcoded 1920x1080 would silently misplace them
-    the day the canvas changes (§B3 settled it in 2026, not forever).
-    """
-    data = request("GetVideoSettings")
-    if data is None:
-        return None
-    width, height = data.get("baseWidth"), data.get("baseHeight")
-    if not isinstance(width, int) or not isinstance(height, int):
-        return None
-    if width <= 0 or height <= 0:
-        return None
-    return width, height
-
-
-def scene_items(scene: str) -> list[dict[str, Any]] | None:
-    """Every item in a scene, each with its `sceneItemTransform`.
-
-    None means "couldn't ask"; an empty list means the scene is empty — the
-    same distinction `active_outputs` draws, and for the same reason.
-    """
-    data = request("GetSceneItemList", {"sceneName": scene})
-    if data is None:
-        return None
-    items = data.get("sceneItems")
-    if not isinstance(items, list):
-        return []
-    return [item for item in items if isinstance(item, dict)]
-
-
-def input_url(name: str) -> str | None:
-    """The page a browser source is showing, or None if it has no `url`."""
-    data = request("GetInputSettings", {"inputName": name})
-    if data is None:
-        return None
-    settings = data.get("inputSettings")
-    url = settings.get("url") if isinstance(settings, dict) else None
-    return url if isinstance(url, str) else None
-
-
 def media_status(name: str) -> tuple[float, float] | None:
     """``(cursor_s, duration_s)`` for a media source, or None until it is ready.
 

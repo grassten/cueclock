@@ -155,13 +155,14 @@ grab thread (BayerRG8 @ 156 fps)
   (transparent, ~200×200; enable **"Control audio via OBS"** so the chimes
   reach the TV speakers).
 - Browser source `http://localhost:8000/replay` — the REPLAY badge: scrim,
-  clock mask, wordmark, countdown, drain bar, closing fade to black. Lives only
-  in the Replay scene; the deck rewrites its URL on every press with
-  `?s=<seconds>` (that replay's own length) and `?mask=<x,y,w,h;…>` (the
-  rectangles the burned-in shot clock occupies, in percent of the canvas,
-  measured from OBS at the press). It exists because the buffer records program
+  wordmark, countdown, drain bar, closing fade to black. Lives only in the
+  Replay scene; the deck rewrites its URL on every press with `?s=<seconds>`
+  (that replay's own length). It exists because the buffer records program
   output, so the live shot clock is burned into every replayed frame and keeps
-  counting on the TV — same reasoning as the `no_clock` label (§C2a).
+  counting on the TV; saying REPLAY over it is what keeps that from reading as
+  a real countdown — same reasoning as the `no_clock` label (§C2a). It also
+  used to *cover* the burned-in clock with `?mask=` rectangles; that was
+  removed 2026-08-03 (§C4a) and the countdown is visible again.
 - Browser source `http://localhost:8000/score` — the match scoreboard
   (transparent 1920×1080; the bar sits bottom-center, broadcast lower-third
   style). No audio of its own. Names/race-to are set from `/control`; scores
@@ -597,20 +598,36 @@ so it always lands early; the recordings carry keyframes every **1.90–1.97 s**
 cannot tighten the framing past the keyframe grid — that needs a shorter
 keyframe interval in OBS's encoder settings.
 
-**The shot clock is painted out, and the rect comes from OBS** (added
-2026-08-02, from live validation — issue #13's third question answered "no").
-A scrim and a badge were not enough: the burned-in countdown still read as live
-on the wall. The badge now covers it. What made the patch acceptable this time
-is that nothing about it is hardcoded — at each press the deck asks OBS for the
-live scene's items, keeps the *enabled browser sources whose URL contains
-`/shotclock`*, converts each transform to a percentage rect of the canvas
-(`GetVideoSettings`, so even the canvas size isn't assumed) and hands them to
-the badge as `?mask=`. Identity is the page, so a renamed, moved, resized or
-duplicated overlay stays covered; a hidden one is skipped, because it was never
-burned in. Rotated items are covered by their bounding box and every rect gets
-2 px of slop — over-covering is the harmless direction, a surviving seam of
-live countdown is not. If OBS can't answer, the replay still plays with the
-clock visible (the old behaviour) rather than being refused.
+**The burned-in shot clock is visible again — the mask is gone** (removed
+2026-08-03, checkpoint 60; added 2026-08-02, checkpoint 49). For one day the
+badge painted the countdown out with opaque `?mask=` rectangles it measured
+from OBS at each press. The mechanism was sound and never misfired: identity
+was the *page*, so a renamed, moved or duplicated overlay stayed covered and a
+hidden one was skipped. It was removed for how it looked, not for what it did.
+On the rig the clock is a **193×193 browser source at (1141, 0)**, sitting on
+the Camo side angle — so the mask was a 197×195 black rectangle punched into
+live footage, which is the clock's own black square with its white border and
+its digits deleted. That reads as damage (Steven, 2026-08-03: *the black square
+over the clock in replay view looks bad*).
+
+Removing it restores the checkpoint-46 problem: a replay shows a countdown that
+isn't real, under a badge that says REPLAY. That is the accepted interim state.
+
+**The fix is upstream, and it is not a mask.** The buffer records program
+output, so a clean replay requires a clean *program*; stock OBS 32.1.1 has no
+per-scene or per-source recording (checked — the bundled plugin set only; a
+"record a different scene" path needs Exeldro's `obs-source-record`, plus
+hotkey-triggered saves and file discovery, because obs-websocket cannot save a
+filter-owned buffer). The cheap structural answer is to stop burning the clock
+over live video: put a flat backdrop under it in `Stream Detail` (a top bar
+holding clock + score, broadcast style) so a future mask would be black on
+black, or take the clock out of OBS entirely and float it over the projector —
+which also costs the chime routing (§B3, "Control audio via OBS"). Undecided;
+`Stream Detail`'s corner clock is due a redesign either way.
+
+One tail worth knowing, and the reason a mask is a bad strategy rather than
+just an ugly one: pressing Replay from the **Shot Clock** scene used to mask
+69.6% × 69.8% of the canvas, because that scene's clock *is* the canvas.
 
 **The return to live is a fade to black, not a transition.** OBS's Fade is
 already set and it is invisible here by construction: a replay is a pixel-exact
