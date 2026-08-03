@@ -327,17 +327,35 @@ described as hard hand-rolled returns during rack setup at 3489 and
 3. **Both breaks underread badly**: 3489/3926 against a corpus break range of
    5845–7361. Same family as `break_underread_0801`.
 
-**Do not revert the gate blind.** Removing it reopens whatever checkpoint 33
-was actually reacting to, which is now unknown — the clips that supposedly
-showed it are gone or reinterpreted. Work out what genuinely separates a
-newborn break from a newborn non-shot, given that neither speed nor birth path
-does.
+### Desk-workable first step — this may close the issue outright
+
+Ask what the gate protects against **now**:
+
+- Its only cited evidence was `flagged_9`/`flagged_14`, which are breaks.
+- #11, the hand-rolled-phantom class it guarded, is closed invalid.
+- The other IDLE fire in `flagged_14` (ball 626, 458 mm/s) was rejected by the
+  **speed floor**, not the newborn gate.
+
+So the gate may protect against nothing the 3000 mm/s break floor already
+catches. **Instrument a corpus replay for newborn `ShotTaken` fires in IDLE
+above the break floor, across every scenario.** If real breaks are all that
+appears, delete the gate — the speed floor stands alone and #10 closes with no
+recording needed.
+
+Only if a genuine newborn non-shot turns up above the floor does this need a
+fresh recording of a break from an occluded address.
+
+**Do not revert the gate blind** — run that instrumentation first. Removing it
+without knowing what checkpoint 33 was reacting to trades a known failure for
+an unknown one.
 
 **Do not re-derive constants from `flagged_9`/`flagged_14`.** Both were
 recorded during detect-loop starvation — 41.9 Hz and 34.0 Hz against ~78 Hz
-nominal, gaps to 115 ms, roughly half the frames missing. They demonstrate the
-class; they are not threshold anchors. A clean recording of a break from an
-occluded address is what this needs.
+nominal, gaps to 115 ms, roughly half the frames missing.
+
+They *are* usable as **count pins**: "this clip contains a real break, so the
+clock must not stay IDLE" survives a halved frame rate. Promoting them on that
+basis is fine. Deriving a threshold from them is not.
 
 ### How this issue came back
 
@@ -388,7 +406,7 @@ checkpoint 36).
 | **#8** bare-hand snatch | item 4 | `pickup_snatch_0801` grades to 0 shots. |
 | **#6** phantom jaw Scratch | item 6 | `hanger_pot_0801` grades to 0 scratches, 1 shot. |
 | **#19** ground-truth mode | item 2 | Key ships, a session produces a report, dumps land on disagreement. |
-| **#10** IDLE break gate | item 5 | **Not closeable from the desk.** Needs a clean recording of a break from an occluded address. |
+| **#10** IDLE break gate | item 5 | Possibly closeable at the desk — instrument IDLE newborn fires above the break floor first; if only breaks appear, delete the gate. |
 
 **Not closed:** #21 (white-shaft sweep — no lever, waiting on a warm-replayable
 recurrence) and #2 (mic for voice "extension" — parked on hardware Steven
@@ -416,8 +434,10 @@ Neither touches `vision/`. They can merge in any order.
 | B2 | Phantom jaw Scratch (item 6, closes #6) | `vision/events.py` scratch path |
 | B3 | Carried-ball height cue (item 4, closes #8) | `vision/detect.py` + `vision/track.py` + `events.py` gates |
 
-Item 5 (#10, the IDLE break gate) is **not** in this fan-out — it needs a clean
-recording, not code. Item 2 (#19) is A1. #21 has no fix to write.
+Item 5 (#10) can join as B4 — it touches `server/hub.py`, disjoint from the
+`vision/` trio — but run its instrumentation step before writing any change.
+#21 is measurement-first too; it can run as a read-only investigation
+alongside anything. Item 2 (#19) is A1.
 
 All three touch `vision/events.py` and `tests/corpus/test_corpus_events.py`.
 Work them in parallel worktrees, but **merge one at a time and re-run the full
