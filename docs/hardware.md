@@ -155,9 +155,10 @@ grab thread (BayerRG8 @ 156 fps)
   transparent **1334×1080** source at (0, 0) carrying the clock *and* the
   scoreboard, drawn as a 160 px plinth along the bottom of the side-angle
   column with the clock in its right-hand cell (issue #23, 2026-08-03). Enable
-  **"Control audio via OBS"** *and* set its Audio Monitoring to **"Monitor and
-  Output"** — this is the source that sounds the cues, and either half alone
-  gets you a silent TV or a silent recording (Part D). 1334 is the seam where the overhead strip
+  **"Control audio via OBS"** *and* set its Audio Monitoring to **"Monitor Only
+  (mute output)"** — this is the source that sounds the cues on the TV, while
+  what gets *recorded* is the room, from Mic/Aux. Every other pairing of those
+  two switches fails somewhere (Part D). 1334 is the seam where the overhead strip
   begins, so nothing it draws can reach the table.
   Clock and score come from one page because the drain runs the full width of
   the bar, crossing from the score area into the clock cell, and no overlay can
@@ -758,22 +759,26 @@ always the safe state for a key pressed mid-session.
    silence there is indistinguishable from a mic that never heard the shout,
    which is the one thing it must not be confusable with.
 
-   **How it reaches the TV *and* the recording** (settled 2026-08-03; this
-   section previously described the opposite and the rig was set up that way).
-   The bar source has **"Control audio via OBS" on** (`reroute_audio: true`),
-   so page audio goes into the OBS mixer on track 1 rather than straight out
-   of CEF. Two consequences, and both are the point:
+   **How it reaches the TV** (settled 2026-08-03; this section previously
+   described the opposite and the rig was set up that way). The bar source has
+   **"Control audio via OBS" on** (`reroute_audio: true`) and its monitoring at
+   **"Monitor Only (mute output)"** — page audio goes into the OBS mixer, and
+   from there only down the monitoring path to the HDMI output. Settings →
+   Audio → Monitoring Device stays `Default` = HDMI.
 
-   - Recordings and the replay buffer capture the cues. With reroute *off*,
-     CEF plays to the macOS default output and OBS never sees the audio, so
-     every recording carried a **silent** AAC track — measured at
-     `mean_volume -91.0 dB`, against `-39.5 dB` for the same 5 s once routed.
-   - ⚠️ **Monitoring must be "Monitor and Output"**, and this is the trap:
-     routed audio with monitoring at the default "Monitor Off" reaches the
-     recording and nothing else, so **the TV goes silent** — a shot clock that
-     no longer beeps, traded for a feature nobody hears until playback.
-     (`SetInputAudioMonitorType` → `OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT`;
-     Settings → Audio → Monitoring Device stays `Default` = HDMI.)
+   ⚠️ The two switches are easy to get backwards, and each wrong pairing fails
+   in a way you notice at a different time:
+
+   - reroute **off** (as it shipped, despite the docs): CEF plays straight to
+     the macOS default output. The TV beeps, but OBS never sees the audio, so
+     the recording carries a **silent** AAC track — `mean_volume -91.0 dB`.
+     Nobody finds out until playback.
+   - reroute **on**, monitoring **off**: the mix reaches the recording and
+     nothing else, so **the TV goes silent** — a shot clock that stops beeping,
+     which you find out about immediately and at the worst moment.
+   - reroute **on**, monitoring **and output**: both, which sounds right and is
+     what put every chime in the recording *twice* — see the Mic/Aux note below
+     for why the room's copy is the one to keep.
 
    Monitoring adds a little buffering to the speaker path that the direct CEF
    route didn't have. It eats into one margin worth naming: the mute window
@@ -869,11 +874,37 @@ print('peak', abs(a).max(), 'rms', round(float((a.astype(float)**2).mean()**0.5)
 "   # speak during the 4 s. peak 0 = Camo's audio toggle is off, not a bad mic
 ```
 
-Installing that driver also made it the system's *default input*, which
-matters for one thing: OBS's global Mic/Aux source is
-`coreaudio_input_capture` on `device_id: "default"`. It is muted with
-monitoring off and must stay that way — unmuted with monitoring on, the mic
-feeds the TV speakers that the mic is listening to.
+**OBS's Mic/Aux source is what puts the *room* in a recording** — cue strikes,
+the break, the player talking. It is `coreaudio_input_capture`, pinned to
+`CamoAudioDevice_UID` rather than the `"default"` it shipped as: Camo's driver
+happens to be the system default input today, but a headset or Jump Desktop's
+virtual mic would silently become the recording's audio, which is the same
+never-trust-the-default rule the listener follows above.
+
+**Unmuted, monitoring `NONE`** (settled 2026-08-03). Those are two different
+switches and only one of them is dangerous:
+
+- *Monitoring* is the hazard. On, the mic feeds the TV speakers that the mic is
+  listening to — a feedback loop. It must stay `NONE`; nothing about recording
+  needs it, because monitoring is the *speaker* path, not the capture path.
+- *Muted* was not protecting anything, and it cost the room. Muted, OBS records
+  the overlay's synthesized cues and nothing else — the shot you just played is
+  silent. This section previously said it "must stay that way", conflating the
+  two switches.
+
+**The bar source is "Monitor Only (mute output)" for the same reason** — one
+sound, one copy. With it at "Monitor and Output" a chime landed in the
+recording **twice**: once clean from the browser and once as the room's echo of
+the TV a beat later. Monitor-only keeps the speaker path (the TV still beeps —
+that is what monitoring *is*) while dropping the browser's copy from the mix,
+so the microphone's version is the only one recorded and it is in sync with the
+balls that made the rest of the sound.
+
+Verified 2026-08-03 by A/B, because the two settings are easy to get backwards:
+mute the mic and fire a cue, and the take is `-91.0 dB` — digital silence,
+proving the browser reaches the TV and nothing else. Unmute and fire the same
+cue, and a ~20 dB transient appears exactly on it (`-14.7 dB` against a −33 to
+−46 dB room floor), proving the TV really is still sounding it.
 
 ⚠️ **Not macOS's Continuity `<owner>'s iPhone Microphone`**, which is the same
 physical microphone reached the other way and was the default for one day

@@ -232,6 +232,47 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-03 (checkpoint 63 — recordings get the room, not just the robot):**
+  checkpoint 62 put the overlay's cues into recordings and called the recording
+  problem solved. It wasn't: the chimes and "Extension called" are *synthesized
+  by the page*, so routing that browser source captured the only sounds cueclock
+  makes itself — and none of the sounds the session is actually about. Steven's
+  first recording after it played back with beeps and no break, no cue strikes
+  and no voice. Room sound needs a **microphone**, and OBS's `Mic/Aux` was muted.
+
+  `hardware.md` said it "is muted with monitoring off and must stay that way",
+  which conflated two switches that fail in opposite directions. **Monitoring**
+  is the hazard — on, the mic feeds the TV speakers the mic is listening to. It
+  was already `NONE` and stays `NONE`; recording never needed it, because
+  monitoring is the *speaker* path, not the capture path. **Muted** was
+  protecting nothing. Unmuted, and pinned to `CamoAudioDevice_UID` rather than
+  the `"default"` it shipped as: Camo's driver is the system default input
+  today, but a headset or Jump Desktop's virtual mic would silently become the
+  recording's audio — the same never-trust-the-default rule the listener has
+  followed since Part D was written.
+
+  Then the cues arrived **twice** — once clean from the browser, once as the
+  room's echo off the TV a beat later. The bar source is now **"Monitor Only
+  (mute output)"**: the TV still beeps, because monitoring *is* the speaker
+  path, while the browser's copy leaves the mix. The microphone's version is the
+  only one recorded, and it is in sync with the balls that made the rest of the
+  sound. So the three states of that pair each fail at a different moment —
+  reroute off hides a silent recording until playback, monitoring off silences
+  the TV mid-rack, and monitor-and-output doubles every chime.
+
+  A/B'd rather than reasoned about, since the settings are easy to get
+  backwards: mic muted + cue fired = `-91.0 dB`, digital silence, so the browser
+  reaches the TV and nothing else; mic live + same cue = a ~20 dB transient
+  exactly on it (`-14.7 dB` against a −33 to −46 dB room floor), so the TV is
+  demonstrably still sounding it. The first attempt at that measurement was
+  thrown away — OBS's record start ate ~1.7 s of lead, which put the cue at t=0
+  and made a flat room-tone take look like a missing beep.
+
+  Also settled: the replay buffer was never broken. A save measured at −91.0 dB
+  earlier the same day was an 18 s window with no cue in it while the mic was
+  muted, not a buffer that drops audio; with the room live it records at
+  −31.1 dB like everything else.
+
 - **2026-08-03 (checkpoint 62 — the voice extension gets a mic and an answer;
   the rig's microphone was never missing, only muted):** closes #2, which had
   been parked on `needs:purchase` since 2026-08-02. **No mic was bought.** The

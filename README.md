@@ -68,8 +68,10 @@ uv run python -m cueclock.cli deck
 - OBS browser sources: `http://localhost:8000/shotclock?view=bar` (the live
   scene's bottom bar — clock *and* scoreboard in one 1334×1080 source at
   (0, 0); enable "Control audio via OBS" **and** set Audio Monitoring to
-  "Monitor and Output" — this is what sounds the chimes on the TV, and what
-  puts them in recordings),
+  "Monitor Only (mute output)" — that is what sounds the chimes on the TV.
+  Recorded audio comes from the unmuted Mic/Aux source instead — the room, so
+  cue strikes, the break, you, and the TV's own chimes exactly once
+  (`hardware.md` Part D)),
   `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
   broadcast-style clock scene), and `http://localhost:8000/replay` (the REPLAY
   badge — lives only in the Replay scene, which `scripts/setup_obs_replay.py`
