@@ -5,11 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Shot Clock</title>
     <style>
+        /* One palette for every cueclock overlay (issue #23). `/replay`'s
+           badge already used these; adopting them here makes the wall read as
+           one product instead of two. Accent is spent on exactly one thing —
+           the drain — and there is exactly one red, escalated by *area*, not
+           by hue: three reds a few percent apart are indistinguishable at
+           twelve feet, and area is not. */
+        :root {
+            --ink:    #0B0E13;
+            --accent: #2E86C8;
+            --slate:  #9FB3C4;
+            --alarm:  #FF4D4D;
+        }
+
         body {
             background-color: transparent;
             margin: 0;
             padding: 0;
         }
+
+        /* The plinth is the ?view=bar chrome. In the square and full views it
+           is `display: contents`, so it contributes no box at all and the
+           clock renders exactly as it always has. */
+        .plinth { display: contents; }
+        .gauge,
+        .scores,
+        .cell-divider,
+        .mode-eyebrow { display: none; }
 
         .clock-square {
             width: 200px;
@@ -119,28 +141,308 @@
         @keyframes flash-number {
             to { color: #5a0000; }
         }
+
+        /* ================= ?view=bar — the live-scene layout (#23) =========
+           One flat bar along the bottom of the side-angle column: scoreboard
+           left, clock in the right-hand cell, a drain along the whole top
+           edge. It replaces both the corner clock (which sat *on* live video,
+           and so was burned into every replay) and the old `/score` bar
+           (which was centred on the canvas and lay across the overhead strip).
+
+           Geometry is canvas-pixel exact for a **1334x1080 browser source at
+           (0, 0)**: 1334 is the seam where the overhead strip begins, and
+           nothing here may cross it. Every number below is measured off the
+           mockups the design was settled on. ===================== */
+
+        body.bar {
+            position: relative;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        body.bar .plinth {
+            display: block;
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 160px;
+            background: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Nothing at all until the server answers: a dead source shows no bar
+           rather than empty chrome over the table. */
+        body.bar .plinth.waiting { display: none; }
+
+        /* The bar sits *on* the picture; it does not cut a hole in it. The
+           video behind it is dark carpet and a dark chair, so a soft lift
+           above the top edge is what separates the two — it is load-bearing,
+           not decoration. */
+        body.bar .plinth::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 100%;
+            height: 30px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,0.41));
+        }
+
+        /* ---- the drain: `/replay`'s bar reused, including its track ----
+           The track is the point. A bare fill shrinks to an 8 px nub at four
+           seconds and reads as a stray mark; against a dim full-width track
+           the same nub reads as an almost-empty gauge, which is the job. It
+           is drawn in *every* state so the bar's top edge stays one constant
+           line that the alarm states sit under rather than cut through. */
+        body.bar .gauge {
+            display: block;
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 0;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.25);
+        }
+        /* Anchored to the *right* — the clock end. Anchored the other way the
+           last few seconds leave the red stub ~1300 px from the numeral it is
+           describing; anchored here the shrinking fill stays over the digits
+           the whole way down. */
+        body.bar .gauge-fill {
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 0;
+            background: var(--accent);
+            transition: width 100ms linear; /* the broadcast interval exactly */
+        }
+        body.bar .plinth.urgent .gauge-fill { background: var(--alarm); }
+        body.bar .plinth.grace   .gauge-fill,
+        body.bar .plinth.expired .gauge-fill,
+        body.bar .plinth.parked  .gauge-fill,
+        body.bar .plinth.no-clock .gauge-fill { display: none; }
+
+        /* ---- the clock cell: 290 px wide, hard against the seam ---- */
+        body.bar .clock-square {
+            display: block;
+            position: absolute;
+            right: 0;
+            top: 8px;   /* the gauge owns the bar's top 8 px in every state */
+            bottom: 0;
+            width: 290px;
+            background: transparent;
+            border: none;
+            opacity: 1; /* MOTION recolours the digits; it no longer dims */
+            transition: none;
+        }
+        /* Escalation by area: ink (urgent) -> edge (grace) -> field (expired).
+           GRACE and EXPIRED both read "0" and cannot be told apart by the
+           digits, so the cell has to say which one it is. Both start below
+           y=928 so neither cuts the gauge. */
+        body.bar .plinth.grace .clock-square {
+            border: 6px solid var(--alarm);
+        }
+        body.bar .plinth.expired .clock-square {
+            background: rgba(255, 77, 77, 0.98);
+            animation: bar-flash 0.6s step-end infinite;
+        }
+        /* `step-end` over explicit halves, not `steps(2, start)`: the latter
+           samples the *interpolated* midpoint, so the lit half of the blink
+           comes out a muted maroon instead of the alarm red. */
+        @keyframes bar-flash {
+            0%   { background: rgba(255, 77, 77, 0.98); }
+            50%  { background: transparent; }
+        }
+        body.bar .clock-icon { display: none; }
+
+        /* Mode describes the clock, so it belongs to the clock. */
+        body.bar .mode-eyebrow {
+            display: block;
+            position: absolute;
+            left: 145px;
+            top: 30px;
+            transform: translate(-50%, -50%);
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            padding-left: 4px; /* re-centre: letter-spacing also trails the last glyph */
+            color: var(--slate);
+            white-space: nowrap;
+        }
+        body.bar .plinth.expired .mode-eyebrow { color: rgba(255, 255, 255, 0.8); }
+        body.bar .no-clock .mode-eyebrow { display: none; }
+
+        body.bar .time-number {
+            position: absolute;
+            left: 145px;
+            top: 90px;
+            transform: translate(-50%, -50%);
+            font-size: 120px;
+            font-weight: 700;
+            line-height: 1;
+            color: #fff;
+        }
+        body.bar .plinth.urgent .time-number { color: var(--alarm); }
+        /* Parked is deliberately the opposite move from alarm: a stopped clock
+           must never look like a running one. */
+        body.bar .plinth.parked .time-number { color: var(--slate); }
+
+        body.bar .mode-label {
+            position: absolute;
+            left: 145px;
+            top: 74px;
+            transform: translate(-50%, -50%);
+            font-size: 42px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            padding-left: 2px;
+            line-height: 52px;
+            text-align: center;
+            color: var(--slate);
+            white-space: nowrap;
+        }
+
+        body.bar .cell-divider {
+            display: block;
+            position: absolute;
+            left: 1044px;
+            top: 34px;
+            width: 1px;
+            height: 92px;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        /* An alarm cell is its own edge; a second line beside it is noise. */
+        body.bar .plinth.grace   .cell-divider,
+        body.bar .plinth.expired .cell-divider { display: none; }
+
+        /* ---- the match: quieter than the clock, so the ratio reads ---- */
+        body.bar .scores {
+            display: block;
+            position: absolute;
+            inset: 0;
+            --row-y: 72px; /* with a race line the row lifts to make room */
+        }
+        body.bar .scores.no-race { --row-y: 84px; }
+
+        body.bar .pname {
+            position: absolute;
+            top: var(--row-y);
+            transform: translateY(-50%);
+            max-width: 400px;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--slate);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        body.bar .pname.left  { left: 36px; }
+        body.bar .pname.right { right: 326px; margin-right: -2px; }
+
+        /* Each of the three laid out on its own whole-pixel x rather than
+           centred as a flex row: a 1 px rule inside a centred box lands on a
+           half pixel, and half a hairline antialiases to nothing. */
+        body.bar .pts {
+            position: absolute;
+            top: var(--row-y);
+            transform: translateY(-50%);
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1;
+            color: #fff;
+        }
+        body.bar .pts.p1 { right: 840px; } /* right edge at x=494 */
+        body.bar .pts.p2 { left: 550px; }
+        body.bar .tally-rule {
+            position: absolute;
+            left: 522px;
+            top: var(--row-y);
+            transform: translateY(-50%);
+            width: 1px;
+            height: 54px;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        /* Restrained one-shot glow when a score changes, so a Stream Deck tap
+           is visible from the table without anything moving. */
+        body.bar .pts.pulse { animation: bar-score-pulse 0.9s ease-out; }
+        @keyframes bar-score-pulse {
+            0%   { color: var(--accent); text-shadow: 0 0 18px rgba(46, 134, 200, 0.85); }
+            100% { color: #fff; text-shadow: none; }
+        }
+
+        body.bar .race {
+            position: absolute;
+            left: 522px;
+            top: 122px;
+            transform: translate(-50%, -50%);
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            padding-left: 3px;
+            color: var(--slate);
+            opacity: 0.86;
+            white-space: nowrap;
+        }
+        /* Casual play has no target, so it says nothing at all. */
+        body.bar .scores.no-race .race { display: none; }
     </style>
 </head>
 <body>
 
-    <div class="clock-square" id="clock">
-        <svg class="clock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z"/>
-        </svg>
-        <div class="time-number" id="timer-text">30</div>
-        <div class="mode-label" id="mode-label">NO CLOCK</div>
+    <!-- Everything below lives inside the plinth so that one class on it
+         drives the whole ?view=bar state ladder from plain descendant
+         selectors. Outside that view the plinth is `display: contents` and
+         the extra elements are `display: none`, so the square and full views
+         see exactly the DOM they always saw. -->
+    <div class="plinth waiting" id="plinth">
+
+        <div class="gauge"><div class="gauge-fill" id="gauge-fill"></div></div>
+
+        <div class="scores no-race" id="scores">
+            <div class="pname left" id="bar-p1-name"></div>
+            <span class="pts p1" id="bar-p1-score">0</span>
+            <span class="tally-rule"></span>
+            <span class="pts p2" id="bar-p2-score">0</span>
+            <div class="pname right" id="bar-p2-name"></div>
+            <div class="race" id="bar-race"></div>
+        </div>
+
+        <div class="cell-divider"></div>
+
+        <div class="clock-square" id="clock">
+            <svg class="clock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z"/>
+            </svg>
+            <div class="mode-eyebrow" id="mode-eyebrow"></div>
+            <div class="time-number" id="timer-text">30</div>
+            <div class="mode-label" id="mode-label">NO CLOCK</div>
+        </div>
+
     </div>
 
     <script>
         const clockEl = document.getElementById('clock');
         const timerText = document.getElementById('timer-text');
 
+        // ?view=bar  — the live scene's bottom bar: clock cell + scoreboard,
+        //              one 1334x1080 source at (0, 0) (docs/hardware.md §B3).
+        //              Clock and score render from one page because the drain
+        //              runs the full width of the bar, crossing from the score
+        //              area into the clock cell, and no overlay can span two
+        //              OBS sources. It retired the separate `/score` page.
         // ?view=full — bare full-viewport number for a dedicated OBS scene.
         // ?audio=off — mute this instance's cues (use it on whichever source
         // duplicates one that is already sounding, or two scenes will chime
         // twice: OBS keeps non-visible browser sources running by default).
         const params = new URLSearchParams(location.search);
-        if (params.get('view') === 'full') document.body.classList.add('full');
+        const view = params.get('view');
+        if (view === 'full') document.body.classList.add('full');
+        const barView = view === 'bar';
+        if (barView) document.body.classList.add('bar');
         const audioEnabled = !['off', '0'].includes(params.get('audio'));
 
         // ---------------- Audio cues (Web Audio API) ----------------
@@ -176,6 +478,52 @@
             playTone(587.33, 1.1, 0.32, 'triangle', 0.35); // D5
         }
 
+        // ---------------- Spoken cue: "Extension called" ----------------
+        // What a ref says out loud, so every granted extension announces
+        // itself whoever called it — deck key, API or voice. The clip ships in
+        // the repo (Kokoro-82M is Apache-2.0; regenerate with
+        // scripts/make_voice_assets.py), so the chime below is a safety net for
+        // a deleted file rather than the normal path — but it must exist,
+        // because the one thing this cue cannot do is fall silent.
+        // Decoded through the same AudioContext as the tones, which
+        // means it inherits their gesture unlock and their output path.
+        let voiceBytes = null;   // undecoded WAV, fetched once at load
+        let voiceBuffer = null;  // decoded on first use
+        fetch('/audio/extension_called.wav')
+            .then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status)))
+            .then(b => { voiceBytes = b; })
+            .catch(() => { voiceBytes = null; });
+
+        function playBuffer(buf) {
+            const ctx = ensureAudio();
+            const src = ctx.createBufferSource();
+            const gain = ctx.createGain();
+            gain.gain.value = 0.9;
+            src.buffer = buf;
+            src.connect(gain).connect(ctx.destination);
+            src.start();
+        }
+        function cueExtension() {
+            if (voiceBuffer) { playBuffer(voiceBuffer); return; }
+            if (!voiceBytes) { cueExtensionChime(); return; }
+            // decodeAudioData detaches the buffer it is given — hand it a copy
+            // so a failed decode does not also destroy the bytes.
+            ensureAudio().decodeAudioData(voiceBytes.slice(0))
+                .then(buf => { voiceBuffer = buf; playBuffer(buf); })
+                .catch(() => { voiceBytes = null; cueExtensionChime(); });
+        }
+        // Rising pair = granted, falling pair = refused. A refused call has to
+        // sound like *something*: silence reads as "the mic never heard me",
+        // which is the one thing it must not be confusable with.
+        function cueExtensionChime() {
+            playTone(523.25, 0.35, 0.26, 'sine', 0.00);     // C5
+            playTone(783.99, 0.55, 0.26, 'sine', 0.18);     // G5
+        }
+        function cueExtensionDenied() {
+            playTone(311.13, 0.30, 0.24, 'triangle', 0.00); // Eb4
+            playTone(233.08, 0.45, 0.24, 'triangle', 0.22); // Bb3
+        }
+
         // Unlock audio on any user gesture (browsers require this).
         window.addEventListener('click', ensureAudio, { once: true });
         window.addEventListener('keydown', ensureAudio, { once: true });
@@ -188,7 +536,68 @@
         // deliberately ignored — these per-second beeps supersede it.
         let lastBeeped = null;
 
+        // ---------------- ?view=bar ----------------
+        // One phase class on the plinth drives the entire ladder, so the CSS
+        // above needs nothing cleverer than descendant selectors. The order
+        // here *is* the precedence: quiet beats loud, because a clock that
+        // isn't counting must never be able to look like one that is.
+        function barPhase(state) {
+            if (state.mode === 'no_clock')                     return 'no-clock';
+            if (state.state === 'EXPIRED')                     return 'expired';
+            if (state.state === 'GRACE')                       return 'grace';
+            if (state.state === 'MOTION' || state.state === 'IDLE') return 'parked';
+            if ((state.time ?? 99) <= 5)                       return 'urgent';
+            return 'running';
+        }
+
+        const plinthEl = document.getElementById('plinth');
+        const scoresEl = document.getElementById('scores');
+        const gaugeFill = document.getElementById('gauge-fill');
+        const eyebrowEl = document.getElementById('mode-eyebrow');
+        const raceEl = document.getElementById('bar-race');
+        // Last shown score per player, so a change pulses but the first paint
+        // doesn't.
+        const shownScore = { p1: null, p2: null };
+
+        if (barView) {
+            // Two lines in the bar's cell; one line everywhere else.
+            document.getElementById('mode-label').innerHTML = 'NO<br>CLOCK';
+        }
+
+        function setBarScore(key, value) {
+            const el = document.getElementById('bar-' + key + '-score');
+            el.innerText = value;
+            if (shownScore[key] !== null && shownScore[key] !== value) {
+                el.classList.remove('pulse');
+                void el.offsetWidth; // force reflow so re-adding replays it
+                el.classList.add('pulse');
+            }
+            shownScore[key] = value;
+        }
+
+        function renderBar(state) {
+            plinthEl.className = 'plinth ' + barPhase(state);
+            eyebrowEl.innerText = (state.mode ?? '').replace(/_/g, ' ').toUpperCase();
+
+            // The gauge reads time against whatever a fresh countdown would
+            // hand you right now — `base` is already rack- and ruleset-aware,
+            // so a 60 s first shot drains over 60 s, not over 30.
+            const base = state.base || 0;
+            const left = Math.max(0, Math.min(1, base ? (state.time ?? 0) / base : 0));
+            gaugeFill.style.width = (left * 100) + '%';
+
+            const sc = state.score;
+            if (!sc) return;
+            document.getElementById('bar-p1-name').innerText = sc.p1.name;
+            document.getElementById('bar-p2-name').innerText = sc.p2.name;
+            setBarScore('p1', sc.p1.score);
+            setBarScore('p2', sc.p2.score);
+            scoresEl.classList.toggle('no-race', sc.race_to == null);
+            if (sc.race_to != null) raceEl.innerText = 'RACE TO ' + sc.race_to;
+        }
+
         function render(state) {
+            if (barView) renderBar(state);
             // Sessions before mode existed (and any older server) send no
             // `mode` — treat that as a normal clocked session, not as quiet.
             const noClock = state.mode === 'no_clock';
@@ -216,6 +625,8 @@
             }
             if (state.cue === 'ten')     cueTen();
             if (state.cue === 'expired') cueExpired();
+            if (state.cue === 'extension')        cueExtension();
+            if (state.cue === 'extension_denied') cueExtensionDenied();
         }
 
         function connect() {

@@ -9,6 +9,7 @@ one payload every WS client and ``GET /api/state`` see.
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import WebSocket
@@ -120,6 +121,13 @@ class Hub:
         # which is exactly where drills happen. Cost: a phantom shot anchors a
         # phantom replay, which is a bug you would want to see anyway.
         self._last_shot_mono: float | None = None
+        # Called after a *granted* extension has been broadcast, because the
+        # overlay answers that broadcast by speaking "Extension called" out of
+        # the TV. `cueclock run` points it at the mic listener's mute window:
+        # the phrase contains the keyword, so an un-muted mic hears the
+        # announcement and calls the next extension itself (docs/hardware.md
+        # Part D). Set by whoever owns both halves; None when nothing listens.
+        self.on_extension_granted: Callable[[], None] | None = None
 
     def _log(self, kind: str, **detail: object) -> None:
         state = self.clock.state.value
@@ -286,9 +294,21 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
 
     async def extension(self) -> bool:
+        """Grant an extension if the rules allow, and have the overlay say so.
+
+        The cue rides the same one-shot `cue` field as the urgency tones, so
+        the announcement fires for the deck key, the API and the voice alike —
+        a ref calls the extension, not the microphone. A refused call still
+        cues (`extension_denied`): silence would be indistinguishable from a
+        mic that never heard the shout, at the table, mid-shot.
+        """
         accepted = self.clock.extension()
         self._log("cmd_extension", accepted=accepted)
-        await self.broadcast(self.clock.snapshot())
+        await self.broadcast(
+            self.clock.snapshot(cue="extension" if accepted else "extension_denied")
+        )
+        if accepted and self.on_extension_granted is not None:
+            self.on_extension_granted()
         return accepted
 
     async def set_ruleset(self, name: str) -> bool:

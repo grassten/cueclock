@@ -1,10 +1,15 @@
 """HTTP/WS surface — the Stream Deck contract from docs/design.md §2.1."""
 
 import asyncio
+import json
 from pathlib import Path
+from typing import cast
 
+import pytest
+from fastapi import WebSocket
 from fastapi.testclient import TestClient
 
+import cueclock.server.app as server_app
 from cueclock.clock import State
 from cueclock.server import create_app
 from cueclock.server.hub import Hub
@@ -59,7 +64,72 @@ def test_extension_accepted_then_rejected() -> None:
     with make_client() as client:
         client.post("/api/start")
         assert client.post("/api/extension").json() == {"ok": True, "accepted": True}
+        assert client.post("/api/extension").json()["accepted"] is True  # pool of 2
         assert client.post("/api/extension").json()["accepted"] is False
+
+
+class RecordingWS:
+    """Minimal WebSocket stand-in: keeps every payload the hub broadcasts."""
+
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+
+    async def accept(self) -> None:
+        pass
+
+    async def send_text(self, text: str) -> None:
+        self.messages.append(json.loads(text))
+
+
+def test_extension_cues_the_overlay_to_announce_it() -> None:
+    """Granted extensions cue the spoken call; refused ones cue their own tone.
+
+    The cue rides the broadcast, not the caller, so the deck key and the voice
+    announce identically — a ref calls the extension, not the microphone. A
+    refusal has to be audible too: silence is indistinguishable from a mic that
+    never heard the shout (docs/hardware.md Part D).
+    """
+    hub = Hub()
+    ws = RecordingWS()
+    asyncio.run(hub.connect(cast(WebSocket, ws)))
+    asyncio.run(hub.start())
+    assert asyncio.run(hub.extension()) is True
+    assert ws.messages[-1]["cue"] == "extension"
+    asyncio.run(hub.extension())  # second of the rack's two
+    assert asyncio.run(hub.extension()) is False  # pool spent
+    assert ws.messages[-1]["cue"] == "extension_denied"
+
+
+def test_only_a_granted_extension_deafens_the_mic() -> None:
+    """The mute hook follows the announcement, and a refusal announces no words.
+
+    `extension_denied` is a pair of tones with no keyword in them, so muting
+    there would deafen the listener for nothing.
+    """
+    hub = Hub()
+    muted: list[int] = []
+    hub.on_extension_granted = lambda: muted.append(1)
+    asyncio.run(hub.start())
+    asyncio.run(hub.extension())
+    assert len(muted) == 1
+    asyncio.run(hub.extension())  # second grant of the rack: announced, so muted again
+    assert len(muted) == 2
+    asyncio.run(hub.extension())  # refused — a denial speaks no words to hear
+    assert len(muted) == 2
+
+
+def test_voice_asset_is_served_when_generated_and_404s_when_not(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Gitignored and macOS-generated, so "absent" is a normal state: CI and a
+    # fresh clone both hit the 404 and fall back to the overlay's chime.
+    monkeypatch.setattr(server_app, "VOICE_DIR", tmp_path)
+    with make_client() as client:
+        assert client.get("/audio/extension_called.wav").status_code == 404
+        (tmp_path / "extension_called.wav").write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+        response = client.get("/audio/extension_called.wav")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "audio/wav"
 
 
 def test_ruleset_switch_alias_and_unknown() -> None:
@@ -87,10 +157,18 @@ def test_html_pages_served() -> None:
         page = client.get("/shotclock").text
         assert "clock-square" in page
         # ?view=full (broadcast-style bare number for the full-screen OBS
-        # scene) and ?audio=off both live client-side in the one page.
+        # scene), ?view=bar (the live scene's bottom bar) and ?audio=off all
+        # live client-side in the one page.
         assert "body.full" in page
+        assert "body.bar .plinth" in page
         assert "audioEnabled" in page
-        assert "scoreboard-container" in client.get("/score").text
+        # The scoreboard is part of that bar since 2026-08-03 (#23) — the
+        # drain runs the whole width of it, crossing from the score area into
+        # the clock cell, and no overlay can span two OBS sources. So `/score`
+        # is gone rather than deprecated: a route still answering would let a
+        # stale OBS source look like it still worked.
+        assert "bar-p1-score" in page and "bar-race" in page
+        assert client.get("/score").status_code == 404
         assert "Shot Clock Control" in client.get("/control").text
 
 

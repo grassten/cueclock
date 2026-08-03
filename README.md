@@ -65,18 +65,24 @@ uv run python -m cueclock.cli deck
   `--reference` at it — recipe in `docs/hardware.md` §E2 (the deck daemon
   takes the same path via `deck --reference`). The startup drift check warns
   loudly if the reference has gone stale.
-- OBS browser sources: `http://localhost:8000/shotclock` (corner overlay,
-  ~200×200, "Control audio via OBS"),
+- OBS browser sources: `http://localhost:8000/shotclock?view=bar` (the live
+  scene's bottom bar — clock *and* scoreboard in one 1334×1080 source at
+  (0, 0); enable "Control audio via OBS" **and** set Audio Monitoring to
+  "Monitor and Output" — this is what sounds the chimes on the TV, and what
+  puts them in recordings),
   `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
-  broadcast-style clock scene), `http://localhost:8000/score`
-  (1920×1080 bottom-bar scoreboard, driven by the Stream Deck score keys), and
-  `http://localhost:8000/replay` (the REPLAY badge — lives only in the Replay
-  scene, which `scripts/setup_obs_replay.py` builds; never assemble it by hand).
-  Phone control page: `/control`.
-- Voice "extension": say the word and the clock grants one. Needs the Vosk
-  model (`scripts/fetch_vosk_model.sh`, once) and a wired USB mic named via
-  `--mic-device` — the Mac mini has no built-in mic. `cueclock listen` is the
-  bring-up/soak tool (`docs/hardware.md` Part D).
+  broadcast-style clock scene), and `http://localhost:8000/replay` (the REPLAY
+  badge — lives only in the Replay scene, which `scripts/setup_obs_replay.py`
+  builds; never assemble it by hand). Phone control page: `/control` — player
+  names, race-to, scores, clock and session mode.
+- Voice "extension": say the word and the clock grants one — and the overlay
+  announces "Extension called" back, for that call and for the deck key alike.
+  Needs the Vosk model (`scripts/fetch_vosk_model.sh`, once) and a microphone —
+  the Mac mini has none built in, so it defaults to the iPhone's own mic over
+  the USB cable the side-angle camera already uses (`Camo Microphone`, which
+  needs audio switched on in Camo Studio). Any other is named with
+  `--mic-device`. `cueclock listen` is the bring-up/soak tool
+  (`docs/hardware.md` Part D).
 - Other subcommands: `record`, `replay`, `analyze`, `calibrate`,
   `fit-undistort`, `live` — see `--help`.
 

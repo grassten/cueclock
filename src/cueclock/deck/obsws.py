@@ -169,9 +169,17 @@ def open_projector(monitor_index: int = TV_MONITOR_INDEX) -> bool:
     Asking OBS directly beats relying on "Save projectors on exit", which only
     restores what happened to be open at the last quit — so a session that
     ended without one comes back with a blank TV, and the key's whole promise
-    is that it doesn't matter what the last session did. Verified idempotent
-    2026-08-02: calling it with a projector already up reuses that window
-    rather than stacking a second one.
+    is that it doesn't matter what the last session did.
+
+    **This request is not idempotent by itself** (measured 2026-08-03, and the
+    opposite of what was recorded here on 08-02). Three calls left three
+    fullscreen Program projectors stacked on monitor 0 — counted from OBS's own
+    `saved_projectors` list at quit, because perfectly overlapping windows on
+    one display look exactly like one, which is how the wrong conclusion got
+    made. What makes it safe is an OBS setting, not this code: **General →
+    "Limit one fullscreen projector per screen"** (`CloseExistingProjectors`),
+    which is off by default and is now part of the rig's OBS config
+    (docs/hardware.md §B3). With it on, three calls leave one window.
     """
     ok = request(
         "OpenVideoMixProjector",

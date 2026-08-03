@@ -151,9 +151,20 @@ grab thread (BayerRG8 @ 156 fps)
   blotching (iPhone auto tone-mapping/AF, no manual controls) and it died
   mid-session once without reconnecting, which cost two triage passes chasing
   a vision bug that wasn't one (CHANGELOG 2026-08-01).
-- Browser source `http://localhost:8000/shotclock` — the corner clock overlay
-  (transparent, ~200×200; enable **"Control audio via OBS"** so the chimes
-  reach the TV speakers).
+- Browser source `http://localhost:8000/shotclock?view=bar` — **the bar**: one
+  transparent **1334×1080** source at (0, 0) carrying the clock *and* the
+  scoreboard, drawn as a 160 px plinth along the bottom of the side-angle
+  column with the clock in its right-hand cell (issue #23, 2026-08-03). Enable
+  **"Control audio via OBS"** *and* set its Audio Monitoring to **"Monitor and
+  Output"** — this is the source that sounds the cues, and either half alone
+  gets you a silent TV or a silent recording (Part D). 1334 is the seam where the overhead strip
+  begins, so nothing it draws can reach the table.
+  Clock and score come from one page because the drain runs the full width of
+  the bar, crossing from the score area into the clock cell, and no overlay can
+  span two OBS sources. It replaced two sources that were both defects: a
+  193×193 corner clock sitting *on* the live side-angle video (so it was burned
+  into every replay — §C4a), and a `/score` bar centred on the canvas whose
+  right third lay across the overhead strip's bottom-left pocket.
 - Browser source `http://localhost:8000/replay` — the REPLAY badge: scrim,
   wordmark, countdown, drain bar, closing fade to black. Lives only in the
   Replay scene; the deck rewrites its URL on every press with `?s=<seconds>`
@@ -163,26 +174,22 @@ grab thread (BayerRG8 @ 156 fps)
   a real countdown — same reasoning as the `no_clock` label (§C2a). It also
   used to *cover* the burned-in clock with `?mask=` rectangles; that was
   removed 2026-08-03 (§C4a) and the countdown is visible again.
-- Browser source `http://localhost:8000/score` — the match scoreboard
-  (transparent 1920×1080; the bar sits bottom-center, broadcast lower-third
-  style). No audio of its own. Names/race-to are set from `/control`; scores
-  from the Stream Deck score keys. Hidden until the server answers, so a dead
-  source shows nothing rather than a broken box.
-
 **Scenes** (scene collection `Untitled`; names below are what the rig
 actually runs — the original plan called them *Table* / *Clock*):
 - **Stream Detail** (default, the live table scene): Camo side angle + Syphon
-  overhead + scoreboard + corner clock overlay. The scoreboard's eye icon is
-  the match/practice toggle — no separate *Match* scene.
+  overhead + the bar. Names and race-to are set from `/control`; scores from
+  the Stream Deck score keys. The bar is hidden until the server answers, so a
+  dead source shows no chrome at all rather than an empty plinth over the
+  table.
 - **Shot Clock** (full-screen shot clock, readable from anywhere): a browser
   source `http://localhost:8000/shotclock?view=full&audio=off` sized to the
-  full canvas (1920×1080), scoreboard alongside. It renders just a huge bare
-  number — broadcast style — transparent background over the scene's black;
-  add a color/shape source behind it only if a panel color is ever wanted.
-  `audio=off` because the corner overlay already sounds the cues (OBS keeps
-  non-visible browser sources running, so two sounding sources would chime
-  twice). The number is browser-rendered text: sharpness comes free at any
-  source size.
+  full canvas (1920×1080), the bar alongside if a score is wanted (add it with
+  `&audio=off` too). It renders just a huge bare number — broadcast style —
+  transparent background over the scene's black; add a color/shape source
+  behind it only if a panel color is ever wanted. `audio=off` because the bar
+  already sounds the cues (OBS keeps non-visible browser sources running, so
+  two sounding sources would chime twice). The number is browser-rendered
+  text: sharpness comes free at any source size.
 - **Canvas**: standby card shown between sessions (still image, no cueclock
   sources).
 - **Replay**: replay-buffer playback (Stream Deck phase 3, built 2026-08-02).
@@ -219,8 +226,11 @@ actually runs — the original plan called them *Table* / *Clock*):
   starter LUTs in `assets/obs/` (`cueclock-tone.cube` is the dialed-in table
   grade; the `-ccm` variant is richer but amplifies chroma noise ~3×).
   Judge the grade on the actual TV, not the Mac monitor.
-- Output: right-click program → Fullscreen Projector on the TV display;
-  General → "Save projectors on exit".
+- Output: right-click program → Fullscreen Projector on the TV display.
+  General → **"Limit one fullscreen projector per screen" ON**
+  (`CloseExistingProjectors`) and **"Save projectors on exit" OFF**
+  (`SaveProjectors`) — both are the opposite of the OBS default, and both are
+  load-bearing (settled 2026-08-03, §C4).
 - Replay Buffer enabled (Settings → Output, ~30 s) — Stream Deck phase 2/3
   owns the lifecycle.
 
@@ -460,8 +470,23 @@ missed the first one still comes up), **rebind the Syphon source**
 projector explicitly beats "Save projectors on exit", which only restores what
 was open at the last quit: a session that ended without one came back to a
 blank TV, and the key's promise is that the last session's state doesn't
-matter. Verified idempotent — calling it with a projector already up reuses
-that window rather than stacking another.
+matter.
+
+So the deck is the **only** thing that opens a projector, and OBS's two
+projector settings are set to enforce that (§B3). Both were wrong until
+2026-08-03, and together they were why pressing Session appeared to "open the
+presenter mode twice": **"Save projectors on exit"** restored one at OBS
+launch, then `open_projector` opened a second ~10 s later. Worse,
+`OpenVideoMixProjector` **stacks** — it does not reuse an open window, which
+the 08-02 note here claimed it did. Counting OBS's own `saved_projectors` at
+quit: three calls, three overlapping fullscreen windows on monitor 0; on one
+display they are indistinguishable from one, which is how the wrong conclusion
+survived. Turning **"Limit one fullscreen projector per screen"** on collapses
+any repeat to a single window (verified: 3 opens → 1), which also covers the
+re-open a daemon restart triggers when it re-adopts a live session. Turning
+**"Save projectors on exit"** off leaves exactly one open per session, at the
+cost of the TV showing the OBS UI for the ~10 s until the WebSocket answers —
+flip it back on if that ever matters more; the per-screen limit makes it safe.
 That rebind is not optional: every `run` publishes a **new Syphon UUID**, and
 the server is advertised under whatever launched it — `[python] cueclock` from
 the deck daemon's interpreter versus `[python3] cueclock` from a terminal
@@ -610,20 +635,25 @@ live footage, which is the clock's own black square with its white border and
 its digits deleted. That reads as damage (Steven, 2026-08-03: *the black square
 over the clock in replay view looks bad*).
 
-Removing it restores the checkpoint-46 problem: a replay shows a countdown that
-isn't real, under a badge that says REPLAY. That is the accepted interim state.
+Removing it restored the checkpoint-46 problem for one checkpoint: a replay
+showed a countdown that wasn't real, under a badge that said REPLAY.
 
-**The fix is upstream, and it is not a mask.** The buffer records program
-output, so a clean replay requires a clean *program*; stock OBS 32.1.1 has no
-per-scene or per-source recording (checked — the bundled plugin set only; a
-"record a different scene" path needs Exeldro's `obs-source-record`, plus
-hotkey-triggered saves and file discovery, because obs-websocket cannot save a
-filter-owned buffer). The cheap structural answer is to stop burning the clock
-over live video: put a flat backdrop under it in `Stream Detail` (a top bar
-holding clock + score, broadcast style) so a future mask would be black on
-black, or take the clock out of OBS entirely and float it over the projector —
-which also costs the chime routing (§B3, "Control audio via OBS"). Undecided;
-`Stream Detail`'s corner clock is due a redesign either way.
+**The fix was upstream, and it was not a mask** (landed 2026-08-03, checkpoint
+61, issue #23). The buffer records program output, so a clean replay requires a
+clean *program*; stock OBS 32.1.1 has no per-scene or per-source recording
+(checked — the bundled plugin set only; a "record a different scene" path needs
+Exeldro's `obs-source-record`, plus hotkey-triggered saves and file discovery,
+because obs-websocket cannot save a filter-owned buffer). So the clock stopped
+being drawn over live video at all: it is now the right-hand cell of the bar
+along the bottom of the side-angle column (§B3). A replayed countdown is still
+in the recorded pixels, but it is on a plinth rather than over the table, and
+the REPLAY badge sits above it — the same relationship a broadcast has with its
+own lower third. Whether that still wants covering is now a judgement on the
+wall, not a code question.
+
+The alternative — taking the clock out of OBS entirely and floating it over the
+projector — was not needed, and would have cost the chime routing (§B3,
+"Control audio via OBS").
 
 One tail worth knowing, and the reason a mask is a bad strategy rather than
 just an ugly one: pressing Replay from the **Shot Clock** scene used to mask
@@ -719,32 +749,167 @@ always the safe state for a key pressed mid-session.
    not committing to a mic for shot detection, so it is not backlog — it is
    off the table. The cases it covered (issues #5, #8, #11) now stand on
    vision levers or, for #5, on no known path at all.
-3. Nothing else. Overlay chimes come from the browser page via OBS; OBS owns
-   the Camo side-angle camera and its audio — cueclock must never grab it.
+3. **v1 — spoken "Extension called"** (built 2026-08-03). A ref says it out
+   loud, so every *granted* extension announces itself whoever called it —
+   deck key, `/api/extension` or voice. It rides the clock's existing one-shot
+   `cue` field: `hub.extension()` broadcasts `cue="extension"`, or
+   `"extension_denied"` when the rules refuse, and `shotclock.html` plays it
+   beside `cueTen`/`cueExpired`. Refusals sound too (a falling tone pair):
+   silence there is indistinguishable from a mic that never heard the shout,
+   which is the one thing it must not be confusable with.
+
+   **How it reaches the TV *and* the recording** (settled 2026-08-03; this
+   section previously described the opposite and the rig was set up that way).
+   The bar source has **"Control audio via OBS" on** (`reroute_audio: true`),
+   so page audio goes into the OBS mixer on track 1 rather than straight out
+   of CEF. Two consequences, and both are the point:
+
+   - Recordings and the replay buffer capture the cues. With reroute *off*,
+     CEF plays to the macOS default output and OBS never sees the audio, so
+     every recording carried a **silent** AAC track — measured at
+     `mean_volume -91.0 dB`, against `-39.5 dB` for the same 5 s once routed.
+   - ⚠️ **Monitoring must be "Monitor and Output"**, and this is the trap:
+     routed audio with monitoring at the default "Monitor Off" reaches the
+     recording and nothing else, so **the TV goes silent** — a shot clock that
+     no longer beeps, traded for a feature nobody hears until playback.
+     (`SetInputAudioMonitorType` → `OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT`;
+     Settings → Audio → Monitoring Device stays `Default` = HDMI.)
+
+   Monitoring adds a little buffering to the speaker path that the direct CEF
+   route didn't have. It eats into one margin worth naming: the mute window
+   below is anchored to the *broadcast*, not to the sound leaving the TV, so
+   its 2.5 s now covers the 0.98 s phrase plus broadcast→monitor→speaker
+   rather than broadcast→speaker. Still comfortable, no longer untouched.
+
+   ⚠️ Both `/shotclock` sources run at once (OBS keeps hidden browser sources
+   alive), so one needs `&audio=off` or every cue fires twice — tolerable on
+   a blip, obvious on a spoken phrase. The full-screen source
+   (`?view=full&audio=off`) is the one that gives way; verified 2026-08-03.
+
+   **The asset:** `src/cueclock/server/static/voice/extension_called.wav`,
+   served at `/audio/extension_called.wav` (16-bit PCM WAV — no codec question
+   in CEF) and **committed**. It is Kokoro-82M output — voice `af_bella`,
+   "Extension called!", speed 1.10, 0.98 s — and Kokoro's weights and voices
+   are Apache-2.0, so the audio may ship in a public repo. Regenerate or change
+   the phrase with `uv run scripts/make_voice_assets.py`: a PEP 723 script that
+   pulls its own dependencies, downloads the ~340 MB model into gitignored
+   `models/kokoro/`, and needs `brew install espeak-ng` for phonemization. The
+   overlay's chime fallback survives as a safety net for a deleted file, not as
+   an expected state.
+
+   **Why not macOS `say`** (the first cut, replaced the same day): its stock
+   compact voices are robotic, the Premium ones (Ava, Zoe — free downloads)
+   read breathy or droning on a two-word call, and `say` is macOS-only, which a
+   public repo would inherit. Its output also could not be committed — Apple's
+   voice data — which would have made "clone the repo, hear a chime" the normal
+   experience. Kokoro fixes all three at the cost of a one-time local render.
+4. **The mic must not hear the announcement.** The phrase contains the
+   keyword, the TV speakers and the microphone share a room, so an un-muted
+   listener calls the next extension itself. `Hub.on_extension_granted` fires
+   after a granted broadcast and `cueclock run` points it at
+   `ExtensionListener.mute()`, which feeds the recognizer silence for
+   `ANNOUNCE_MUTE_SECONDS` (2.5 s, anchored to the 0.98 s clip plus
+   broadcast→speaker lag). Driven from the *hub*, not from the listener's own
+   fire, because a deck-granted extension announces without the listener
+   having fired at all. The spotter's 2 s cooldown is **not** a substitute:
+   Vosk finalizes at end-of-utterance, so the announcement's own final can
+   land after the cooldown expires.
+5. Nothing else. OBS owns the Camo side-angle *camera*; its **audio** is a
+   separate device that cueclock may open (§ below) — CoreAudio inputs are
+   shareable, unlike the deck's exclusive HID claim.
+
+**⚠️ Siri voices cannot be used — do not re-try this** (established
+2026-08-03). They are not selectable with `say -v` (it silently falls back to
+the default voice — five "Voice N" renders came out byte-identical to
+Samantha), the "set them as System Voice and call bare `say`" trick from older
+macOS write-ups does nothing on macOS 26 (13 samples across five System Voice
+changes: all byte-identical), and `AVSpeechSynthesisVoice.speechVoices()` does
+not list them at all. Apple reserves them for Siri and Spoken Content. Only
+the Premium/Enhanced voices are reachable, and only after a manual download in
+System Settings → Accessibility → Spoken Content → Manage Voices — the stock
+compact voices sound robotic.
 
 **The Mac mini has no built-in microphone** (verified 2026-07-31:
 `system_profiler SPAudioDataType` lists only the built-in *speakers*, HDMI
 out, and virtual devices — Apple's spec sheet agrees; mic arrays are an
-iMac/MacBook feature). A wired USB mic is required hardware for this
-feature; until one is plugged in, `run` prints the no-mic line and
-everything else works normally.
+iMac/MacBook feature), so the input is always something plugged in or
+virtual.
+
+**The rig's mic is the iPhone's own, via Camo** (settled 2026-08-03,
+`--mic-device` default `Camo Microphone`). The phone is already on the USB
+cable for the side-angle camera and Camo Studio already owns it, so Camo's
+audio driver (`/Library/Audio/Plug-Ins/HAL/ReincubateCamoAudio.driver`) is the
+input that costs nothing extra. 48 kHz stereo natively; the listener opens it
+at 16 kHz mono and CoreAudio converts.
+
+⚠️ **Camo Studio's audio toggle must be ON, and its being off is invisible
+from this side.** `Camo Microphone` loads and opens with no error whether or
+not Camo is feeding it, and with audio off it streams **digital silence** —
+measured over a 4 s capture with speech playing in the room: peak 0 / rms 0.0
+/ zero non-zero samples, identical at 48 kHz stereo, 48 kHz mono and 16 kHz
+mono, while macOS's Continuity iPhone input recorded peak 1694 / rms 257 from
+the same sound in the same seconds. That is a Camo setting
+(`audioSettings.enabled` in `com.reincubate.macos.cam`), **not** a property of
+the device, and it is what an earlier revision of this section wrongly recorded
+as "Camo can't send audio". Turn it on in Camo Studio (View → Audio Settings);
+patching the preference file does not work — Camo rewrites it from the peer
+connection at launch, and its window exposes no accessibility tree, so this is
+a click, not something a script can do.
+
+A silent-but-healthy mic looks exactly like "nobody said the word", so if the
+voice call ever goes dead, **measure the input levels first** — before
+suspecting the spotter, the model, or the wiring:
+
+```bash
+uv run python -c "
+import sounddevice as sd, numpy as np
+d = sd.rec(int(4*16000), samplerate=16000, channels=1, dtype='int16', device='Camo Microphone')
+sd.wait(); a = np.asarray(d)
+print('peak', abs(a).max(), 'rms', round(float((a.astype(float)**2).mean()**0.5), 1))
+"   # speak during the 4 s. peak 0 = Camo's audio toggle is off, not a bad mic
+```
+
+Installing that driver also made it the system's *default input*, which
+matters for one thing: OBS's global Mic/Aux source is
+`coreaudio_input_capture` on `device_id: "default"`. It is muted with
+monitoring off and must stay that way — unmuted with monitoring on, the mic
+feeds the TV speakers that the mic is listening to.
+
+⚠️ **Not macOS's Continuity `<owner>'s iPhone Microphone`**, which is the same
+physical microphone reached the other way and was the default for one day
+(2026-08-03; it recognized speech across the room 3/3 at confidence 1.00, so
+this is not about quality). Opening it makes macOS claim the phone as a
+Continuity device while Camo is streaming the side angle off the same phone
+over the same cable, and the side-angle feed is what pays for the collision.
+It is also a Continuity *session* rather than a plain device — it can end on
+its own if the phone is taken away, and it goes deaf silently when it does.
+Keep it as the diagnostic that tells a dead Camo toggle from a dead room, not
+as the input.
+
+⚠️ **A wired USB mic is still the fallback** if the phone mic proves too
+far-field in play: it sits at the side-angle mount, aimed at the table rather
+than at the player. Any cheap wired one works; avoid Bluetooth (latency +
+input flakiness). Swapping is a one-line change to `DEFAULT_DEVICE` in
+`audio/listener.py`.
 
 Design facts: keyword spotting is mic-agnostic (no calibration in the camera
 sense); the input device is pinned by CoreAudio *name* — `--mic-device`
 (exact match, then case-insensitive substring) — never "system default": on
 no match the listener prints the available inputs and runs without the mic,
-so a Bluetooth headset, the Jump Desktop virtual mic, or Camo's virtual audio
-device can't silently become the listener. Once the USB mic is
-chosen, bake its name in as the `--mic-device` default. Any cheap wired USB
-mic works; avoid Bluetooth (latency + input flakiness). macOS asks for
+so a Bluetooth headset or the Jump Desktop virtual mic can't silently become
+the listener. The flag is *defaulted* rather than required because the deck's
+session key spawns a fixed argv (`deck/session.py` `run_command`) with no room
+for flags — a required flag made every deck-started session silently deaf,
+which is how sessions normally start. macOS asks for
 microphone permission (TCC) the first time the process opens the mic —
 approve the prompt for the terminal app once, or the stream delivers
 silence.
 
 Bring-up (at the table, before trusting it live):
 
-- [ ] Plug in the USB mic, then `uv run python -m cueclock.cli listen
-      --devices` — confirm its CoreAudio name and pass it as `--mic-device`.
+- [ ] `uv run python -m cueclock.cli listen --devices` — confirm `Camo
+      Microphone` is listed (Camo Studio running, phone on USB, audio enabled);
+      any other mic gets named with `--mic-device`.
 - [ ] `uv run python -m cueclock.cli listen` — say "extension" 10× at playing
       distance, head down over a shot: every call prints `ACCEPTED`
       (conf ≥ 0.9).

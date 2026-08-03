@@ -232,6 +232,170 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-03 (checkpoint 62 — the voice extension gets a mic and an answer;
+  the rig's microphone was never missing, only muted):** closes #2, which had
+  been parked on `needs:purchase` since 2026-08-02. **No mic was bought.** The
+  phone already hanging off the USB cable for the side-angle camera has one,
+  and it reaches CoreAudio two different ways — Camo Studio's audio driver
+  (`Camo Microphone`) and macOS Continuity (`<owner>'s iPhone Microphone`).
+  `--mic-device` defaults to Camo's, and is now *defaulted* rather than
+  required: the deck's session key spawns a fixed argv with no room for flags,
+  so a required flag made every deck-started session — the normal way to start
+  one — silently deaf.
+
+  **Camo's device streaming digital silence is a Camo setting, not a property
+  of the device**, and getting that wrong cost a day. It opens with no error
+  and delivers peak 0 / rms 0.0 / zero non-zero samples over 4 s with speech in
+  the room, identically at 48 kHz stereo, 48 kHz mono and 16 kHz mono, whenever
+  `audioSettings.enabled` is false in Camo Studio — which it was. The 08-03
+  morning conclusion recorded here and in `hardware.md` Part D ("Camo can't
+  send audio; use the Continuity device") was therefore wrong, and its fix was
+  worse than the bug: opening the Continuity mic makes macOS claim the phone as
+  a Continuity device while Camo is streaming the side angle off that same
+  phone over that same cable. Toggling audio on in Camo Studio (View → Audio
+  Settings) is the whole fix — 4/4 utterances accepted at confidence 1.00
+  through the real `listen` path. Patching Camo's preference file does **not**
+  work: it rewrites `audioSettings` from the peer connection at launch, and its
+  window exposes no accessibility tree, so this is a click no script can make.
+  Part D now leads with the level check that tells the two apart in one
+  command, because a silent-but-healthy mic and "nobody said the word" are
+  indistinguishable from inside the spotter.
+
+  **Every granted extension now announces itself** — "Extension called" out of
+  the TV, for the deck key, `/api/extension` and the voice alike, because a ref
+  says it out loud and the caller shouldn't have to look at the wall to know it
+  landed. It rides the clock's existing one-shot `cue` field, so no `/api/*`
+  contract moved. Refusals cue too (`extension_denied`, a falling tone pair):
+  silence there would be indistinguishable from a mic that never heard the
+  shout. The phrase contains the keyword and the speakers share a room with the
+  microphone, so `Hub.on_extension_granted` deafens the listener for
+  `ANNOUNCE_MUTE_SECONDS` (2.5 s — the 0.98 s clip plus broadcast→speaker lag).
+  That is driven from the *hub*, not from the listener's own fire, because a
+  deck-granted extension announces without the mic having fired at all; and the
+  spotter's 2 s cooldown is not a substitute, since Vosk finalizes at
+  end-of-utterance and the announcement's own final can land after it expires.
+  Asset: `static/voice/extension_called.wav`, Kokoro-82M `af_bella`, committed
+  because Kokoro is Apache-2.0 (`scripts/make_voice_assets.py` re-renders it).
+
+  **`extensions_per_frame` was silently enforcing half the allowance.** Every
+  ruleset's extension is per *player* per rack and the clock has no turn
+  tracking, so the pool has to be twice the per-player figure, self-policed at
+  the table — which is how the WNT ruleset was always modelled. The two 8-ball
+  rulesets said 1, so the second player got none. Both are 2 now; per-player
+  enforcement stays backlog (#15).
+
+  Also fixed here, found while testing the above: **the Session key opened the
+  TV projector twice.** OBS's "Save projectors on exit" restored one at launch
+  and `obsws.open_projector` opened another ~10 s later, and
+  `OpenVideoMixProjector` **stacks** rather than reusing an open window — the
+  opposite of what the 2026-08-02 note in `obsws.py` claimed. Counted from OBS's own
+  `saved_projectors` at quit: three calls, three overlapping fullscreen windows
+  on monitor 0, which on a single display are indistinguishable from one. That
+  is exactly how the wrong conclusion got made, and the stack persisted across
+  sessions through the same saved list. The rig's OBS config now has **"Limit
+  one fullscreen projector per screen" ON** (3 opens → 1 window, verified) and
+  **"Save projectors on exit" OFF**, leaving the deck the only thing that opens
+  a projector — the single-owner design `hardware.md` §C4 already described.
+  The cost is the OBS UI on the wall for the ~10 s until the WebSocket answers;
+  the per-screen limit is what makes flipping save-on-exit back safe.
+
+  And **the cues are in the recordings now**, which they never were. Checkpoint
+  61 and the README both said the bar source had "Control audio via OBS" on; it
+  did not (`reroute_audio: false`), so CEF played the chimes and the
+  announcement straight out the macOS default output to the TV and OBS never
+  saw them — every recording carried a **silent** AAC track, measured at
+  `mean_volume -91.0 dB` against `-39.5 dB` for the same 5 s once routed. Two
+  settings were needed, not one, and the second is the trap: routing the audio
+  into the mixer without also setting Audio Monitoring to **"Monitor and
+  Output"** puts it in the recording and takes it off the TV — a shot clock
+  that stops beeping, in exchange for audio nobody hears until playback. The
+  one real cost is that monitoring buffers the speaker path, which slightly
+  narrows a margin that used to be untouched: `ANNOUNCE_MUTE_SECONDS` is
+  anchored to the broadcast rather than to the sound leaving the TV, so its
+  2.5 s now absorbs broadcast→monitor→speaker instead of broadcast→speaker.
+  Also settled while checking it: of the two live `/shotclock` browser sources,
+  the full-screen one (`?view=full&audio=off`) is the one that stays silent, so
+  no cue fires twice.
+
+- **2026-08-03 (checkpoint 61 — the clock comes off the video: one bar for
+  clock and score, plus a control page you can use one-handed):** closes #23,
+  and finishes what checkpoint 60 retreated from. `shotclock.html` gains a
+  third view, **`?view=bar`** — a 160 px plinth along the bottom of the
+  side-angle column, scoreboard left, clock in a 290 px cell hard against the
+  seam at x=1334, with a drain along the whole top edge. `score.html` and the
+  `GET /score` route are **deleted**, not deprecated: the drain runs the full
+  width of the bar, crossing from the score area into the clock cell, and no
+  overlay can span two OBS sources, so clock and score had to render from one
+  page. No `/api/*` URL changed and the `/ws` payload already carried
+  everything the merged page needs (`Hub.payload` composes clock + `vision` +
+  `score`), so the Stream Deck contract is untouched.
+
+  What this fixes, in order of how much it mattered: the countdown was a
+  193×193 sticker sitting **on live video**, which is why every replay had a
+  fake clock counting in it (checkpoint 46) and why checkpoint 49's mask
+  existed at all; the scoreboard was centred on the *canvas* rather than on the
+  side-angle panel, so its right third lay across the overhead strip's
+  bottom-left pocket; and the two overlays were in different design languages.
+  A replayed countdown is still in the recorded pixels, but it now sits on a
+  plinth under the REPLAY badge — the relationship a broadcast has with its own
+  lower third — so whether it still wants covering is a judgement on the wall,
+  not a code question (`hardware.md` §C4a).
+
+  Design decisions worth not relitigating. **Escalation is by area, not hue** —
+  ink (urgent) → edge (GRACE, a 6 px outline) → field (EXPIRED, filled and
+  flashing): GRACE and EXPIRED both read "0" and can't be told apart by the
+  digits, and `score.html`'s three reds (`#ff7070`/`#ff5050`/`#ff2020`) differ
+  by a few percent, which is nothing at twelve feet. One `#FF4D4D` now.
+  **Parked (MOTION/IDLE) is the opposite move from alarm** — slate digits, no
+  drain — because a stopped clock must never look like a running one; that is
+  the same reasoning that removed the digits entirely in `no_clock`.
+  **The drain is anchored to the right**, the clock end: anchored the other way
+  the last few seconds leave the red stub ~1300 px from the numeral it is
+  describing. **Its dim track is drawn in every state** — a bare fill shrinks
+  to an 8 px nub at four seconds and reads as a stray mark, and the constant
+  track is also what the alarm states sit *under* instead of cutting through,
+  so the bar keeps reading as one object. Palette is `/replay`'s, so the two
+  overlays are one family.
+
+  Three things the mockups couldn't predict, found by rendering the page in
+  OBS's own CEF and diffing it against the mockups pixel by pixel (studio-mode
+  *preview*, so program was never touched): the hairlines came out about half
+  as bright in CEF as PIL had drawn them (PIL's `ImageDraw` replaces alpha
+  rather than compositing, so the mockup's "on the plinth" lines were really
+  lit by the video behind them); a 1 px rule inside a centre-transformed flex
+  row lands on a half pixel and antialiases to nothing, so the score divider is
+  laid out on its own whole-pixel x; and `steps(2, start)` samples the
+  *interpolated* midpoint of a keyframe pair, so the lit half of the EXPIRED
+  blink was a muted maroon rather than the alarm red — it is `step-end` over
+  explicit halves now. Geometry otherwise landed within 1–4 px of the mockups.
+
+  `control.html` is restyled into **Match / Clock / Session**, Match first, in
+  the bar's palette. This is presentation only — the name and race-to fields
+  already existed and already posted to `/api/score/config`; what changed is
+  that Match was previously the last thing on a long scroll, under the vision
+  kill switch. Race-to became a stepper (on a phone a number input is either
+  tiny arrows or a whole numeric keyboard, for a value that is almost always
+  5/7/9; stepping up from cleared lands on 5, since nobody plays a race to 1),
+  destructive controls are outlined rather than filled, and the Clock block
+  keeps the deck's exact vocabulary (§C2). One button was dropped: plain
+  `POST /api/start`, because `pause()` drops to IDLE and a later `start()`
+  restarts from full base — which is what **Start N** already does. The
+  endpoint stays; the deck never had a key for it either.
+
+  Deliberately not done: **no deck key for race-to**. It is once-per-match
+  setup and `/control` reaches it from a phone (`run` binds `0.0.0.0`). The
+  three free cells — (2,3), (2,4), (2,5) — are the ones the Flag reason page
+  unfolds into, so a persistent key there would be *replaced* by
+  PHANTOM/MISSED/OTHER for the ~60 s a Flag press is pending rather than go
+  dark, and a mis-press writes a ~3.4 GB ring dump.
+
+  Rig, changed in the same pass (`hardware.md` §B3 is a living doc): one
+  `Clock + Score bar` browser input at (0, 0), 1334×1080, "Control audio via
+  OBS" on, present in **both** `Stream Detail` and `Shot Clock` — one input is
+  one browser is one chime, so the cues no longer depend on which scene is
+  live. The full-screen clock gained `&audio=off` for the same reason, and the
+  dead `/score` source was removed.
+
 - **2026-08-03 (checkpoint 60 — the replay clock mask is withdrawn; a black
   rectangle over live footage was worse than the stale clock it hid):**
   checkpoint 49's `?mask=` is removed from `deck/replay.py` and the `/replay`

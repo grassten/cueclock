@@ -10,13 +10,17 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from cueclock.clock import ALIASES, MODES, RULESETS
 from cueclock.server.hub import Hub
 
 STATIC_DIR = Path(__file__).parent / "static"
+# Spoken cues, synthesized by scripts/make_voice_assets.py and committed —
+# Kokoro-82M is Apache-2.0, so unlike the macOS `say` output this first shipped
+# with, the audio can live in a public repo (docs/hardware.md Part D).
+VOICE_DIR = STATIC_DIR / "voice"
 
 
 def create_app(score_path: Path | None = None, journal_path: Path | None = None) -> FastAPI:
@@ -38,17 +42,18 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
 
     @app.get("/")
     async def index() -> JSONResponse:
-        return JSONResponse(
-            {"endpoints": ["/shotclock", "/score", "/replay", "/control", "/ws", "/api/*"]}
-        )
+        return JSONResponse({"endpoints": ["/shotclock", "/replay", "/control", "/ws", "/api/*"]})
 
     @app.get("/shotclock")
     async def shotclock_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "shotclock.html")
+        """Every clock overlay, selected by `?view=` (docs/hardware.md §B3).
 
-    @app.get("/score")
-    async def score_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "score.html")
+        `?view=bar` is the live scene's bottom bar — clock *and* scoreboard
+        from one page, because the drain spans both and no overlay can span
+        two OBS sources. It replaced the standalone `/score` page on
+        2026-08-03 (issue #23); `?view=full` and the bare square are unchanged.
+        """
+        return FileResponse(STATIC_DIR / "shotclock.html")
 
     @app.get("/control")
     async def control_page() -> FileResponse:
@@ -58,6 +63,19 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
     async def replay_page() -> FileResponse:
         """REPLAY badge for the OBS Replay scene (`?s=<seconds>` drains the bar)."""
         return FileResponse(STATIC_DIR / "replay.html")
+
+    @app.get("/audio/extension_called.wav")
+    async def extension_called_audio() -> FileResponse:
+        """The ref's "Extension called" announcement for the shotclock overlay.
+
+        One fixed path rather than a served directory: the only asset there is
+        is this one, and a name parameter would be a traversal to validate for
+        nothing.
+        """
+        path = VOICE_DIR / "extension_called.wav"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="run scripts/make_voice_assets.py")
+        return FileResponse(path, media_type="audio/wav")
 
     @app.websocket("/ws")
     async def ws_endpoint(ws: WebSocket) -> None:

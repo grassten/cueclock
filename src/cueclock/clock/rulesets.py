@@ -11,6 +11,11 @@ Validated against published rules on 2026-07-27 (sources in ``CHANGELOG.md``):
   for the first shot after the break-off or after a push out (the break
   itself is untimed).
 
+Every ruleset's extension allowance is per *player* per rack, and the clock
+has no turn tracking, so ``extensions_per_frame`` is the whole-rack pool —
+twice the per-player figure, self-policed at the table. Per-player enforcement
+is backlog.
+
 ``first_shot_seconds`` is the countdown used while fewer than two shots have
 been taken in the rack (the break is shot 1). The Ultimate Pool sources give
 no first-shot allowance, so both 8-ball rulesets set it equal to
@@ -43,7 +48,12 @@ RULESETS: dict[str, Ruleset] = {
             base_seconds=30,
             first_shot_seconds=30,  # == base: no first-shot allowance in the sources
             extension_seconds=15,
-            extensions_per_frame=1,
+            # One extension per *player* per frame, and the clock has no turn
+            # tracking — so the rack pool is 2, self-policed at the table, the
+            # same modelling the WNT ruleset below has always used. It was 1
+            # until 2026-08-03, which silently enforced one per *rack* and left
+            # the second player with none.
+            extensions_per_frame=2,
             grace_seconds=2.0,
             post_expiry_seconds=2.0,
         ),
@@ -52,7 +62,7 @@ RULESETS: dict[str, Ruleset] = {
             base_seconds=15,
             first_shot_seconds=15,  # == base, as above
             extension_seconds=15,
-            extensions_per_frame=1,
+            extensions_per_frame=2,  # per player, as above
             grace_seconds=2.0,
             post_expiry_seconds=2.0,
         ),
@@ -60,10 +70,7 @@ RULESETS: dict[str, Ruleset] = {
             name="wnt_9ball",
             base_seconds=30,  # WNT Event Rules §5: 30 s per shot
             first_shot_seconds=60,  # WNT §5: 60 s after the break-off / a push out
-            # WNT §5 is one extension per *player* per rack, but the clock has
-            # no turn tracking — so the rack pool is 2, self-policed at the
-            # table; per-player enforcement is backlog.
-            extension_seconds=30,
+            extension_seconds=30,  # WNT §5: one per player per rack
             extensions_per_frame=2,
             grace_seconds=2.0,
             post_expiry_seconds=2.0,

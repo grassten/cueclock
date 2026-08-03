@@ -8,7 +8,9 @@ no vosk, no model, no microphone (mic paths are exercised live via
 from __future__ import annotations
 
 import json
+import time
 
+from cueclock.audio.listener import ExtensionListener
 from cueclock.audio.spotter import ExtensionSpotter, match_input_device
 
 
@@ -121,6 +123,32 @@ def test_rejected_hits_do_not_reset_the_cooldown() -> None:
     assert spotter.feed(b"pcm", now=10.0)
     assert not spotter.feed(b"pcm", now=11.5)  # low confidence, no fire
     assert spotter.feed(b"pcm", now=12.0)  # cooldown still counts from 10.0
+
+
+# --- announcement mute window ---
+#
+# The overlay speaks "Extension called" out of the TV on every granted
+# extension, in the same room as this microphone, containing this keyword.
+# The window is what stops the announcement from calling the next extension.
+# (The feed loop's use of it — silence in, no fire out — needs a real stream,
+# so it is exercised live via `cueclock listen`, like the rest of the mic path.)
+
+
+def test_mute_window_opens_and_expires() -> None:
+    listener = ExtensionListener(lambda: None)
+    assert not listener.muted(time.monotonic())
+    listener.mute(1.0)
+    assert listener.muted(time.monotonic())
+    assert not listener.muted(time.monotonic() + 1.5)
+
+
+def test_mute_never_shortens_an_open_window() -> None:
+    # Announcements can overlap — a refused call's tone landing under the
+    # granted call's phrase. The mic stays deaf for the longer of the two.
+    listener = ExtensionListener(lambda: None)
+    listener.mute(5.0)
+    listener.mute(0.1)
+    assert listener.muted(time.monotonic() + 2.0)
 
 
 # --- device matching (docs/hardware.md Part D: pin by name, never default) ---

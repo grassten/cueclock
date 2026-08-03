@@ -93,7 +93,8 @@ def test_extension_pool_is_per_rack() -> None:
     clock = make_clock()
     clock.start(now=0.0)
     assert clock.extension()
-    assert not clock.extension()  # extensions_per_frame == 1
+    assert clock.extension()  # pool is 2: one per player, no turn tracking
+    assert not clock.extension()  # spent
     clock.shot_taken()
     clock.balls_settled(now=1.0)  # next shot, same rack — pool stays spent
     assert not clock.extension()
@@ -177,9 +178,10 @@ def test_rulesets_validated_values() -> None:
         "wnt_9ball",
     }
     default = RULESETS["ultimate_pool_8ball"]
-    assert default == Ruleset("ultimate_pool_8ball", 30, 30, 15, 1, 2.0, 2.0)
+    # extensions_per_frame is the whole-rack pool: one per player, two players.
+    assert default == Ruleset("ultimate_pool_8ball", 30, 30, 15, 2, 2.0, 2.0)
     assert RULESETS["ultimate_pool_8ball_final10"] == Ruleset(
-        "ultimate_pool_8ball_final10", 15, 15, 15, 1, 2.0, 2.0
+        "ultimate_pool_8ball_final10", 15, 15, 15, 2, 2.0, 2.0
     )
     # WNT Event Rules §5: 30 s shot, 60 s first shot, 30 s extension;
     # the pool of 2 is one-per-player, self-policed (no turn tracking).

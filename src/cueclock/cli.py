@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from cueclock.audio.listener import DEFAULT_DEVICE as DEFAULT_MIC_DEVICE  # no vosk import
 from cueclock.capture.clip import ClipReader, ClipWriter
 from cueclock.deck.session import DEFAULT_REFERENCE  # pure stdlib; no HID import
 from cueclock.display.pipeline import (
@@ -617,11 +618,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 f'voice "extension" off — Vosk model not found at {model_dir} '
                 "(scripts/fetch_vosk_model.sh downloads it)"
             )
-        elif args.mic_device is None:
-            print(
-                'voice "extension" off — no --mic-device given '
-                "(`cueclock listen --devices` lists the CoreAudio names)"
-            )
         else:
 
             def _extension_done(future: "Future[bool]") -> None:
@@ -640,6 +636,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 _voice_extension, model_path=model_dir, device_name=args.mic_device
             )
             listener.start()
+            # Every granted extension is announced out of the TV, whoever
+            # called it — deafen the mic for the phrase so it cannot hear the
+            # keyword in its own announcement (docs/hardware.md Part D).
+            hub.on_extension_granted = listener.mute
 
     def _surface(future: "Future[None]") -> None:
         exc = future.exception()
@@ -660,7 +660,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         asyncio.run_coroutine_threadsafe(coro, loop).add_done_callback(_surface)
 
     print(
-        f"run -> overlay http://{args.host}:{args.port}/shotclock | control /control | "
+        f"run -> overlay http://{args.host}:{args.port}/shotclock?view=bar | control /control | "
         f"detect ~{NOMINAL_FPS / args.stride:.0f} Hz | display ~{args.fps:.0f} fps "
         f"Syphon {args.name!r}\n"
         "clock starts when your first shot settles — Ctrl-C to stop"
@@ -826,9 +826,6 @@ def _cmd_listen(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    if args.mic_device is None:
-        print("pass --mic-device NAME (--devices lists the inputs)", file=sys.stderr)
-        return 1
 
     def _show(final: Final) -> None:
         verdict = "ACCEPTED" if final.accepted else f"rejected: {final.reason}"
@@ -859,13 +856,17 @@ def _cmd_listen(args: argparse.Namespace) -> int:
 
 def _add_mic_args(p: argparse.ArgumentParser) -> None:
     """Args shared by `run` and `listen` (voice "extension", docs/hardware.md Part D)."""
-    # No default on purpose: the Mac mini has no built-in mic (hardware.md
-    # Part D), and pin-by-name means never guessing among whatever inputs
-    # exist. Bake the USB mic's name in here once it's chosen.
+    # Defaulted, not required (2026-08-03): the deck's session key spawns a
+    # fixed argv (`deck/session.py` run_command) with no room for flags, so a
+    # required flag meant deck-started sessions — the normal way to start one —
+    # were silently deaf. The default is still a *name*, resolved by the same
+    # exact-then-substring match, and still never "system default": an absent
+    # device disables the listener with a printed reason rather than binding
+    # whatever else is plugged in. `--no-mic` opts out.
     p.add_argument(
         "--mic-device",
-        default=None,
-        help="mic CoreAudio name, exact then substring match (see `listen --devices`)",
+        default=DEFAULT_MIC_DEVICE,
+        help=f"mic CoreAudio name, exact then substring match (default {DEFAULT_MIC_DEVICE!r})",
     )
     p.add_argument(
         "--mic-model",
