@@ -253,7 +253,8 @@ the `ShotTaken` events vision actually emitted. Offline, read-only, no camera
 | Flag | Default | What |
 |---|---|---|
 | `--journal PATH` | *(required)* | session journal `.jsonl` — `run` writes one per session to `logs/session-<stamp>.jsonl` |
-| `--pair-window SECS` | `5.0` | how far apart a press and its shot may be and still pair |
+| `--press-lag SECS` | `12.0` | how long *after* its shot a press may land and still pair |
+| `--late-window SECS` | `5.0` | how long *after* its press a shot may land and still pair (late detection) |
 | `--idle-split SECS` | `180.0` | gap between presses that ends an armed window |
 
 ```bash
@@ -262,23 +263,33 @@ uv run python -m cueclock.cli report --journal logs/session-20260802-1930.jsonl
 
 Output: presses, shots, armed windows, pairs, **MISSED** (pressed, nothing
 detected), **PHANTOM** (detected, never pressed), the detection rate, and the
-press→detection delay distribution.
+stroke→press lag distribution.
 
-Three things about reading it:
+Four things about reading it:
 
 - **A disagreement is a review candidate, not a label.** The press stream has
   its own error rate — a forgotten press reads as a phantom, a double tap as a
   miss.
-- **Both defaults are provisional**, not measurements. `--pair-window` should
-  be re-derived from the delay distribution the report prints, once a real
-  session exists. Nothing auto-flags a "late" verdict against a guessed number.
+- **The reach is asymmetric, and that is not a detail.** A press always lands
+  after its stroke, by a variable amount, because the roll-out is inside that
+  interval — so `--press-lag` is wide (12 s) and `--late-window` is not (5 s).
+  Widening `--late-window` to match will pair a press with the *next* shot on
+  any long roll-out, inventing a miss and a phantom from two correct
+  detections.
+- **`--press-lag` is measured; `--late-window` is still a guess.** 12 s comes
+  from the 2026-08-03 session: the press follows the *settle* by 0.10–2.87 s
+  (median 0.81), and the roll-out ahead of it ran 2.27–8.62 s, for an observed
+  stroke→press span of 4.10–11.48 s. `--late-window` has no real session behind
+  it yet — nothing has ever paired forward. Nothing auto-flags a "late" verdict.
 - **Shots outside an armed window are ignored entirely.** The key is always
   live but Steven will not always press it, so presses arm the diff themselves:
   they are grouped into runs (split at `--idle-split`) and each run's window
-  spans its first press to its last, with **no trailing extension**. A genuine
-  phantom just after the final press of a run therefore goes uncounted — the
-  deliberate bias is to under-report phantoms rather than manufacture them out
-  of a stretch he simply was not marking.
+  spans its first press to its last. **Phantom judgement gets no trailing
+  extension** — a genuine phantom just after the final press of a run goes
+  uncounted, the deliberate bias being to under-report phantoms rather than
+  manufacture them out of a stretch he simply was not marking. Pairing alone
+  reaches `--late-window` past the edge, which can rescue the last press from a
+  false miss but can never invent a phantom.
 
 ### `deck`
 

@@ -39,7 +39,8 @@ from cueclock.display.pipeline import (
     build_undistort_maps,
 )
 from cueclock.server.report import IDLE_SPLIT_S as REPORT_IDLE_SPLIT_S
-from cueclock.server.report import PAIR_WINDOW_S as REPORT_PAIR_WINDOW_S
+from cueclock.server.report import LATE_DETECT_S as REPORT_LATE_DETECT_S
+from cueclock.server.report import PRESS_LAG_S as REPORT_PRESS_LAG_S
 
 BYTES_PER_FRAME = 1920 * 1200
 NOMINAL_FPS = 156.25
@@ -880,8 +881,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
     if not args.journal.exists():
         print(f"no such journal: {args.journal}", file=sys.stderr)
         return 2
-    report = build(args.journal, args.pair_window, args.idle_split)
-    print(format_report(report, args.pair_window))
+    report = build(args.journal, args.press_lag, args.late_window, args.idle_split)
+    print(format_report(report, args.press_lag, args.late_window))
     return 0
 
 
@@ -1011,13 +1012,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_report.add_argument("--journal", type=Path, required=True, help="session journal .jsonl")
     p_report.add_argument(
-        "--pair-window",
+        "--press-lag",
         type=float,
-        default=REPORT_PAIR_WINDOW_S,
+        default=REPORT_PRESS_LAG_S,
         help=(
-            "seconds a press and its ShotTaken may differ by and still pair "
-            f"(default {REPORT_PAIR_WINDOW_S}) — provisional, re-derive it from the "
-            "delay distribution this command prints"
+            "seconds a press may land after its ShotTaken and still pair "
+            f"(default {REPORT_PRESS_LAG_S}) — measured: the press follows the "
+            "settle, so this span carries the roll-out with it"
+        ),
+    )
+    p_report.add_argument(
+        "--late-window",
+        type=float,
+        default=REPORT_LATE_DETECT_S,
+        help=(
+            "seconds a ShotTaken may land *after* its press and still pair "
+            f"(default {REPORT_LATE_DETECT_S}) — late detection only; still "
+            "provisional, no real session has produced one yet"
         ),
     )
     p_report.add_argument(

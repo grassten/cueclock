@@ -232,6 +232,58 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-03 (checkpoint 59 — the press follows the settle, not the stroke;
+  the pair window was measuring the roll-out):** checkpoint 58's provisional
+  `PAIR_WINDOW_S = 5.0` is replaced by two measured, asymmetric reaches. The
+  first real marked session scored **15.4% (2/13)** on a session where vision
+  caught **every shot Steven marked**; the report was wrong, not the clock.
+  - **The measurement, which is the whole entry: the press is anchored to the
+    settle.** Across the 13 presses of `logs/session-20260803-121204.jsonl`,
+    press − settle is 0.10–2.87 s (median 0.81), 11 of 13 within 3 s — plain
+    reaction time, he watches the balls stop and taps. Press − *stroke*, which
+    is what the window was actually gating on, is 4.10–11.48 s, because the
+    roll-out sits inside that interval and roll-out is physics: shot → settle
+    measured 2.27–8.62 s in the same session. The two independent measurements
+    reconstruct the observed maximum (8.62 + 2.87 = 11.49), which is the check
+    that the 12 s reach is anchored and not fitted.
+  - **`PRESS_LAG_S = 12.0` cannot over-reach.** The shortest shot-to-shot gap
+    in that session is 13.0 s, and pairing takes the *nearest* unpaired shot,
+    so a 12 s reach can never skip past an intervening stroke.
+  - **One symmetric window could not have worked**, which is why this is two
+    constants rather than a bigger one. At 638.11 s the press sat 11.48 s after
+    its own stroke but only 8.65 s before the *next* one: a symmetric reach
+    wide enough to find the stroke takes the nearer shot instead, pairing a
+    press to a stroke that had not happened yet and manufacturing a miss and a
+    phantom out of two correct detections. `LATE_DETECT_S = 5.0` stays
+    deliberately short and **stays provisional** — no real session has ever
+    produced a forward pair, so there is nothing to anchor it to. Said plainly
+    in the constant, the CLI help and `docs/cli.md`.
+  - **Two further defects the same clip batch exposed, both fixed here.** The
+    "slowest pairs (review candidates for late detection)" list sorted by
+    `abs(shot - press)`, so with every healthy pair negative it ranked the
+    *promptest* detections as the latest — the list meant the opposite of its
+    heading. It now sorts on the signed delay and prints only shots emitted
+    after their press, saying "none" when there are none. Separately, the
+    pairing window's upper edge stopped dead at the last press, so a genuinely
+    late detection on a run's final shot could never pair and read as a miss;
+    pairing now reaches `LATE_DETECT_S` past the edge. **Phantom judgement is
+    untouched** and still uses the strict window — the trailing reach can
+    rescue a press from a false miss but can never invent a phantom.
+  - `--pair-window` becomes `--press-lag` + `--late-window` (`cli.py` and
+    `docs/cli.md` in this commit, per the standing rule).
+  - Tests: `tests/unit/test_report.py` 14 → 20. The pin that matters replays
+    the 2026-08-03 session verbatim — all 19 detections, all 13 presses — and
+    asserts 100% with every press taking the stroke *before* it; it fails on
+    any symmetric reach. Companion tests cover the late-detection sort, the
+    trailing-edge rescue, and that phantom judgement did not move. 351 unit
+    tests pass; the corpus battery is unaffected (no detection code touched)
+    and was run cold to confirm.
+  - **Six unmarked detections in that session are Steven's own forgotten
+    presses**, confirmed by him at triage time — not phantoms, and not
+    investigated further. The report calls them PHANTOM because that is what
+    the diff says; the "a disagreement is a review candidate, not a label"
+    clause is doing exactly its job.
+
 - **2026-08-02 (checkpoint 58 — the ground-truth key; accuracy finally has a
   denominator):** one deck key, `POST /api/groundtruth`, and
   `cueclock report`. Closes #19.
