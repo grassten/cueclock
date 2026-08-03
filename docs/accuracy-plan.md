@@ -303,69 +303,42 @@ carried-ball gates because bare fingers from above never oversize the blob.
 > **Terminology:** say **hand-rolled** (or hand-roll), never "bowled" — this is
 > pool. `hand-rolled` also disambiguates from a ball merely rolling.
 
-## 5. The IDLE break gate eats real breaks (#10)
+## 5. IDLE newborn gate — is it dead code? (#10)
 
-**Status: newly evidenced 2026-08-02, and the gate's justification is
-falsified. Nothing here is safe to fix blind — read all of it.**
+**Status: one instrumentation run from resolution. Needs no clip that still
+exists.**
 
-`hub.py` ignores newborn `ShotTaken` fires in IDLE regardless of speed
-(checkpoint 33). The comment justifies that with `flagged_9` and `flagged_14`,
-described as hard hand-rolled returns during rack setup at 3489 and
-3926 mm/s.
+`hub.py` ignores every newborn `ShotTaken` in IDLE regardless of speed
+(checkpoint 33). **Its justification is falsified.** It cited `flagged_9` and
+`flagged_14` as hand-rolled returns at 3489/3926 mm/s; Steven watched both on
+2026-08-02 and they are **9-ball breaks**. Both fired `newborn=true`, so the
+stated discriminator — breaks fire rest-anchored, hand-rolls fire newborn —
+does not separate the classes.
 
-**Steven watched both on 2026-08-02: they are 9-ball breaks.** Both fired
-`newborn=true`. So:
+Both clips were deleted the same day: recorded at 41.9 and 34.0 Hz against
+~78 Hz nominal, gaps to 115 ms. **A theory worth holding while working this:
+the newborn-ness may itself be a starvation artifact** — dropped frames kill
+tracks and spawn new ones, which is exactly what makes a fire "newborn." If so,
+checkpoint 33 built a gate against an artifact.
 
-1. **The discriminator does not separate the classes.** The claim was "every
-   real break fires rest-anchored, every hand-rolled ball is a newborn." Both
-   of these breaks fired newborn.
-2. **The gate rejects the events it was built from.** Pre-checkpoint-33 they
-   started the rack, which is correct for a break. The gate added afterwards
-   would eat both. The residual the comment names — "a break from a fully
-   occluded address fires newborn and is eaten" — is the gate's own evidence,
-   not a hypothetical.
-3. **Both breaks underread badly**: 3489/3926 against a corpus break range of
-   5845–7361. Same family as `break_underread_0801`.
+Note also that #11, the hand-rolled-phantom class this gate guarded, is closed
+**invalid**, and the other IDLE fire in `flagged_14` (458 mm/s) was rejected by
+the **speed floor**, not this gate.
 
-### Desk-workable first step — this may close the issue outright
+### The one run that decides it
 
-Ask what the gate protects against **now**:
+Replay the good corpus — 50+ clips including four real breaks (`break_0801`,
+`break_0801b`, `break_underread_0801`, `cluster_shot_0801`'s session break) —
+and count newborn `ShotTaken` fires in IDLE above the 3000 mm/s break floor.
 
-- Its only cited evidence was `flagged_9`/`flagged_14`, which are breaks.
-- #11, the hand-rolled-phantom class it guarded, is closed invalid.
-- The other IDLE fire in `flagged_14` (ball 626, 458 mm/s) was rejected by the
-  **speed floor**, not the newborn gate.
+- **Only breaks appear** → the gate catches nothing the speed floor does not.
+  Delete it, keep the floor, close #10.
+- **A genuine newborn non-shot appears above the floor** → the gate earns its
+  place; re-anchor the `hub.py` comment on that clip.
 
-So the gate may protect against nothing the 3000 mm/s break floor already
-catches. **Instrument a corpus replay for newborn `ShotTaken` fires in IDLE
-above the break floor, across every scenario.** If real breaks are all that
-appears, delete the gate — the speed floor stands alone and #10 closes with no
-recording needed.
-
-Only if a genuine newborn non-shot turns up above the floor does this need a
-fresh recording of a break from an occluded address.
-
-**Do not revert the gate blind** — run that instrumentation first. Removing it
+**Do not revert blind.** Run the instrumentation first — removing the gate
 without knowing what checkpoint 33 was reacting to trades a known failure for
 an unknown one.
-
-**Do not re-derive constants from `flagged_9`/`flagged_14`.** Both were
-recorded during detect-loop starvation — 41.9 Hz and 34.0 Hz against ~78 Hz
-nominal, gaps to 115 ms, roughly half the frames missing.
-
-They *are* usable as **count pins**: "this clip contains a real break, so the
-clock must not stay IDLE" survives a halved frame rate. Promoting them on that
-basis is fine. Deriving a threshold from them is not.
-
-### How this issue came back
-
-It was closed 2026-08-02 as absorbed by #19, then reopened the same day when
-the clips were finally examined. The lesson is in `clip-triage-ground-truth`:
-a clip's label is not evidence. #11 ("hand-rolled returns fire phantom shots")
-was closed as **invalid** in the same pass — its entire evidence base was
-these two clips plus `flagged_10/11/13`, which were never examined at all and
-have been deleted. Nothing in the corpus demonstrates a hand-rolled-ball
-phantom.
 
 ## 6. Phantom Scratch in the pocket jaw (#6)
 
@@ -385,17 +358,16 @@ on its own terms, independent of whether Scratch drives the clock today. The
 earlier "journal-only, fix only if Scratch drives the clock" posture is
 superseded.
 
-## No known path
+## Closed without a fix (do not reopen speculatively)
 
-**#8 part 2 — the white-shaft sweep.** The cue's pale shaft laid over the cloth
-during a walk-around births a clean, coherent, whiteness-eligible track at
-~1 m/s. It fired twice live and once counted a rack shot. Height does not help
-— the shaft lies flat. A shape test (a shaft blob is elongated, a ball is
-circular) is the obvious first look but is untested speculation.
-
-Cold replay never reproduces it; it depends on live vote/roster state. Future
-occurrences will be warm-replayable (ring dumps carry live state since
-checkpoint 36).
+- **#21 white-shaft sweep** — the cue's pale shaft laid over the cloth births a
+  clean, whiteness-eligible track at ~1 m/s; fired twice live, once counting a
+  rack shot. Closed 2026-08-02: no cold-reproducible case and no lever that is
+  not speculation. `lone_roller_0801` / `drill_shot_0801` remain in the corpus
+  pinned for other behaviours. A recurrence will be warm-replayable
+  (checkpoint 36) — reopen then, with evidence that can validate a fix.
+- **#11 hand-rolled returns** — closed invalid; nothing in the corpus
+  demonstrates the class. See item 5.
 
 ## Issues this plan closes
 
@@ -406,11 +378,10 @@ checkpoint 36).
 | **#8** bare-hand snatch | item 4 | `pickup_snatch_0801` grades to 0 shots. |
 | **#6** phantom jaw Scratch | item 6 | `hanger_pot_0801` grades to 0 scratches, 1 shot. |
 | **#19** ground-truth mode | item 2 | Key ships, a session produces a report, dumps land on disagreement. |
-| **#10** IDLE break gate | item 5 | Possibly closeable at the desk — instrument IDLE newborn fires above the break floor first; if only breaks appear, delete the gate. |
+| **#10** IDLE newborn gate | item 5 | Instrument IDLE newborn fires above the break floor; if only breaks appear, delete the gate. Needs no deleted clip. |
 
-**Not closed:** #21 (white-shaft sweep — no lever, waiting on a warm-replayable
-recurrence) and #2 (mic for voice "extension" — parked on hardware Steven
-still wants).
+**Not closed:** #2 (mic for voice "extension" — parked on hardware Steven
+still wants). #21 and #11 were closed *without* fixes — see above.
 
 ## Parallel execution (worktrees + subagents)
 
@@ -436,8 +407,7 @@ Neither touches `vision/`. They can merge in any order.
 
 Item 5 (#10) can join as B4 — it touches `server/hub.py`, disjoint from the
 `vision/` trio — but run its instrumentation step before writing any change.
-#21 is measurement-first too; it can run as a read-only investigation
-alongside anything. Item 2 (#19) is A1.
+Item 2 (#19) is A1.
 
 All three touch `vision/events.py` and `tests/corpus/test_corpus_events.py`.
 Work them in parallel worktrees, but **merge one at a time and re-run the full

@@ -315,6 +315,18 @@ survive unchanged in `design.md`.
     other. Golden event timelines filed as #22 — the corpus asserts counts
     only, so a settle sliding 300 ms passes green, and that is the regression
     net the foul reversal needs before it moves any threshold.
+  - **Final board, same day: 4 accuracy issues.** #21 (white-shaft sweep)
+    closed without a fix — two live occurrences but no cold-reproducible case
+    and no lever that was not speculation; a recurrence will be warm-replayable
+    and can reopen it. `flagged_9`/`flagged_14` deleted along with the other
+    four dumps (~20.4 GB total): at 34–42 Hz their newborn firing may itself be
+    a starvation artifact, since dropped frames kill and respawn tracks — which
+    would mean checkpoint 33 gated against an artifact. #10 kept and narrowed
+    to exactly that question: replay the *good* corpus, count newborn fires in
+    IDLE above the break floor, and either delete the gate as dead code or
+    re-anchor it on a real clip. Kept where #11/#21 were closed because this
+    one is live code whose rationale is known to be wrong, not a failure
+    lacking a repro.
   - Terminology: **hand-rolled**, never "bowled" — this is pool.
 
 - **2026-08-02 (checkpoint 51 — a settle re-arms the birth paths; the disarm
