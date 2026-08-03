@@ -65,8 +65,7 @@ HEARTBEAT_INTERVAL_SECONDS = 5.0
 # occluded address fires newborn and is eaten") was not hypothetical: it was
 # the evidence.
 #
-# The instrumentation run that closed #10 (docs/accuracy-plan.md item 5)
-# reported both halves honestly:
+# The instrumentation run that closed #10 reported both halves honestly:
 #
 #   * Its *positive control* did NOT pass in the intended sense. Nine
 #     rack-setup scenarios produce exactly two ShotTaken between them, and

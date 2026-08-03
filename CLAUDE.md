@@ -29,7 +29,6 @@ by `area:*` / `needs:*` labels; `BACKLOG.md` explains the layout.
 | `docs/design.md` | Architecture, detection design, event logic, engineering standards, build order, resolved decisions, corpus checklist. **§ numbers are cited from code — never renumber; append.** |
 | `docs/hardware.md` | Camera assembly/bring-up/locked settings (Part A) · display path debayer → undistort → Syphon → OBS → TV (Part B) · Stream Deck (Part C — **living button map: must match `deck/layout.py` in the same commit**) · mic plan (Part D) · TV + post-bump recalibration recipes (Part E) |
 | `docs/cli.md` | CLI reference: commands, flags, recipes — **must match `cli.py` in the same commit** |
-| `docs/accuracy-plan.md` | Scoped accuracy work + the decisions behind it (mic rejected, foul reversal, per-item validation clips). **Not an idea bank** — every entry has a gradeable clip or is a recorded decision. |
 | `BACKLOG.md` | Pointer to the work board + how it's organised (columns, labels, views). Not a task list — don't add items here, open an issue. |
 | `CHANGELOG.md` | Append-only dated checkpoints + build decisions (pre-2026-07-31 entries cite the old doc layout; originals archived in `~/Documents/cueclock-docs-archive/`) |
 | `README.md` | Public-facing overview, launch commands, OBS sources — keep the launch command here current |
@@ -70,6 +69,15 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   `events.py`/`track.py`, which is where nearly all accuracy work happens. Editing
   `detect.py` or `DetectConfig` invalidates every entry by design, so a cached run can
   never grade stale detections.
+- **A fresh git worktree is not a working repo here, and it fails silently.** Both
+  `tests/clips` (→ the T7) and `.venv` (→ `.venv.nosync/`) are *gitignored symlinks*, so a
+  new worktree has neither: every corpus test skips and the battery reports green having
+  graded nothing — an agent can honestly say "357 passed" while validating zero clips.
+  `.detect-cache.nosync/` is per-root too, so a worktree also starts cold. Before trusting
+  any run in one: recreate both symlinks (`.venv` must stay a symlink, never a real
+  directory), point `--detect-cache` at one shared absolute cache root, and **check the
+  test count and wall time** — a cold battery is ~4 min and ~400 tests; a 21 s run with no
+  shared cache means the corpus skipped.
 - Principles Steven has named explicitly: **KISS, YAGNI, DRY.** This repo will be
   open-sourced — write for a stranger reading it. v1 scope is clock + events + overlays
   (clock + scoreboard) + API + match mode (rack context, scores) + voice "extension";

@@ -34,3 +34,9 @@ config/
 
 # Session logs
 logs/
+
+# Working copy of a retired implementation plan. docs/accuracy-plan.md drove
+# checkpoints 53-58 and was deleted once they landed (its reasoning lives in
+# those CHANGELOG entries and in design.md). Ignored so a local copy can be
+# kept without it creeping back into the repo.
+docs/accuracy-plan.md

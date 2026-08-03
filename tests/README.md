@@ -55,6 +55,22 @@ default and checkpoint batteries run cold**. Cache dir `.detect-cache.nosync/`
 `--detect-cache` does nothing for a `DetectConfig` sweep — every grid point is
 a new key and a full cold run. It accelerates event/tracker work only.
 
+**What a change costs, by the file it touches:**
+
+| Editing | Cache | Iteration cost |
+|---|---|---|
+| `events.py` / `track.py` thresholds | **hits** | ~16 s |
+| `detect.py` / `DetectConfig` | **misses by design** | ~4 min, unavoidable |
+| anything outside `vision/` | n/a | unit suite, ~3 s |
+
+The detector case is the design working, not a problem to route around: a
+cached run must never grade stale detections.
+
+`--detect-cache DIR` takes an explicit path, so several checkouts can share one
+warm cache. That is safe to do concurrently — `store()` writes tmp+fsync+rename
+with pid/uuid-unique temp names, and identical bytes make last-writer-wins
+harmless.
+
 ## Golden timelines
 
 `EXPECTED` in `corpus/test_corpus_events.py` asserts event *counts*. Counts are
