@@ -273,18 +273,35 @@ def test_idle_break_gate() -> None:
     assert hub.clock.state is State.MOTION
 
 
-def test_idle_break_gate_rejects_newborn_fires() -> None:
-    """A newborn fire never starts a rack (checkpoint 33).
+def test_idle_break_gate_reads_speed_not_birth() -> None:
+    """A break-speed newborn fire starts the rack (checkpoint 57, closing #10).
 
-    Hard hand-rolled returns during rack setup measured 3489 and 3926 mm/s —
-    above the speed floor — and each started the rack while Steven was
-    still placing balls. Every real break in the corpus fires
-    rest-anchored (newborn=False); a hand-rolled ball is always a newborn
-    track. Mid-rack (RUNNING) newborn fires still count: the occluded-
-    address and own-rest strike paths are newborn by design.
+    Until 2026-08-02 a second IDLE gate ignored every newborn fire regardless
+    of speed. Its anchor was two clips read as hard hand-rolled returns at
+    3489/3926 mm/s; Steven watched both and **they are 9-ball breaks**, fired
+    newborn. The premise "newborn implies not a real shot" is contradicted by
+    seven more real newborn strikes in the corpus — the occluded-address and
+    own-rest paths are newborn by design — and supported by no rack-setup
+    motion anywhere in it.
+
+    A break out of a fully occluded address is exactly that case, and it must
+    start the rack. Speed is the discriminator that survived measurement:
+    racking and placement lookalikes sit below 1000 mm/s against breaks at
+    5845-7361.
     """
     hub = Hub()
-    asyncio.run(hub.shot_taken(speed_mms=3926.0, newborn=True))  # hard hand-roll
+    asyncio.run(hub.shot_taken(speed_mms=3926.0, newborn=True))  # occluded break
+    assert hub.clock.state is State.MOTION
+
+
+def test_idle_break_gate_still_eats_slow_newborn_motion() -> None:
+    """Removing the newborn half must not weaken the speed floor.
+
+    Rack setup that happens to surface as a newborn track is still rejected —
+    on speed, which is the part of the gate that was measured and stays.
+    """
+    hub = Hub()
+    asyncio.run(hub.shot_taken(speed_mms=900.0, newborn=True))  # placement motion
     assert hub.clock.state is State.IDLE
     asyncio.run(hub.shot_taken(speed_mms=5000.0, newborn=False))  # the break
     assert hub.clock.state is State.MOTION

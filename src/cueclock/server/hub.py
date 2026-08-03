@@ -51,30 +51,43 @@ HEARTBEAT_INTERVAL_SECONDS = 5.0
 # pre-33 margins — a real shot passing the gate starts the clock, which is the
 # right failure direction. Events without a speed (manual/synthetic) pass.
 #
-# Newborn fires are ignored in IDLE regardless of speed (checkpoint 33).
+# REMOVED 2026-08-02 (checkpoint 57, closing #10): a second IDLE gate that
+# ignored every *newborn* fire regardless of speed (checkpoint 33). Recorded
+# here because deleting a guard silently is how it comes back.
 #
-# !! THE ANCHOR FOR THIS GATE IS FALSIFIED — see issue #10. !!
+# It was justified by flagged_9/flagged_14 (3489 and 3926 mm/s), read at the
+# time as hard hand-rolled returns that started the rack while Steven was
+# still placing balls. On 2026-08-02 he watched both at the cold-replay event
+# times: **they are 9-ball breaks**, and both fired newborn. So the stated
+# discriminator — real breaks fire rest-anchored, hand-rolled balls fire
+# newborn — was measured on two examples of the very thing it was supposed to
+# admit, and the residual the original note conceded ("a break from a fully
+# occluded address fires newborn and is eaten") was not hypothetical: it was
+# the evidence.
 #
-# It was justified by flagged_9/flagged_14 (3489 and 3926 mm/s, 19:33 and
-# 19:51 UTC), read at the time as hard hand-rolled returns that started the
-# rack as "shot 1" while Steven was still placing balls. On 2026-08-02 he
-# watched both at the cold-replay event times: **they are 9-ball breaks.**
-# Both fired newborn, so the stated discriminator — every real break fires
-# rest-anchored (newborn=False), every hand-rolled ball is a newborn — does
-# not separate the two classes. The residual named below is therefore not
-# hypothetical: this gate rejects real breaks, and the events it was built
-# from are the proof.
+# The instrumentation run that closed #10 (docs/accuracy-plan.md item 5)
+# reported both halves honestly:
 #
-# Left in place pending #10 rather than reverted blind: removing it reopens
-# whatever checkpoint 33 was actually seeing, which is now unknown. Do not
-# re-derive constants from those two clips — both were recorded during
-# detect-loop starvation (41.9 and 34.0 Hz against ~78 nominal).
+#   * Its *positive control* did NOT pass in the intended sense. Nine
+#     rack-setup scenarios produce exactly two ShotTaken between them, and
+#     both are the genuine shots in those clips (scratch_replace,
+#     cue_grab_0801), both rest-anchored. Racking and placement themselves are
+#     now event-silent — checkpoints 28-56 fixed that — so the corpus contains
+#     no newborn rack-setup fire at all, and mere silence above the floor
+#     could not have proven this gate redundant.
+#   * What decided it was positive evidence, not silence. **Seven real strikes
+#     in the corpus fire newborn** (jaw_strike_0801, occluded_address_0731,
+#     lone_roller_0801, scratch_shot_0801, parked_vote_strike_0801,
+#     address_chatter_miss_0801, drill_shot_0801) — the occluded-address and
+#     own-rest paths are newborn *by design*. Against that, zero rack-setup
+#     motions fire newborn. The premise "newborn implies not a real shot" is
+#     contradicted nine times over and supported nowhere.
 #
-# Historical rationale, retained for context: breaks in the corpus fire
-# rest-anchored from an openly addressed white (break_0801, break_0801b,
-# break_underread_0801, cluster_shot_0801's session break). Residual: a
-# break from a fully occluded address fires newborn and is eaten — the Start
-# key recovers, same as a missed break.
+# The speed floor below independently covers the failure this was reaching
+# for: design.md measures racking and placement lookalikes below 1000 mm/s
+# against breaks at 5845-7361, and the floor sits at 3000. Do not re-derive
+# anything from flagged_9/flagged_14 — both were recorded during detect-loop
+# starvation (41.9 and 34.0 Hz against ~78 nominal) and have been deleted.
 
 
 class Hub:
@@ -318,9 +331,11 @@ class Hub:
         if (
             self.clock.state is State.IDLE
             and floor is not None
-            and (newborn or (speed_mms is not None and speed_mms < floor))
+            and speed_mms is not None
+            and speed_mms < floor
         ):
-            # Racking / placement motion, not a break — see the gate note above.
+            # Racking / placement motion, not a break — see the gate note
+            # above. Speed only: the newborn half was removed at checkpoint 57.
             self._log("vision_shot_taken_ignored_idle", **detail)
             return
         self.clock.shot_taken()

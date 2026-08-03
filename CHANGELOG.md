@@ -232,6 +232,37 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 57 — the IDLE gate reads speed, not birth):** the
+  newborn half of the IDLE gate (checkpoint 33) is removed. The **speed floor
+  is untouched** — it was never in question. Closes #10.
+  - **The positive control did not pass, and that is stated rather than
+    glossed.** The plan required proving the corpus exercises rack setup before
+    reading silence as "dead code". It does not: nine rack-setup scenarios
+    produce exactly two `ShotTaken` between them, and both are the *genuine*
+    shots in those clips (`scratch_replace`, `cue_grab_0801`), both
+    rest-anchored. Racking and placement are now event-silent — checkpoints
+    28–56 fixed precisely that — so the corpus holds no newborn rack-setup fire
+    at all, and an absence above the floor could not have proven anything.
+  - **What decided it was positive evidence, not silence.** Seven real strikes
+    in the corpus fire newborn — `jaw_strike_0801`, `occluded_address_0731`,
+    `lone_roller_0801`, `scratch_shot_0801`, `parked_vote_strike_0801`,
+    `address_chatter_miss_0801`, `drill_shot_0801` — because the
+    occluded-address and own-rest paths are newborn *by design*. Against that,
+    zero rack-setup motions fire newborn. The gate's premise, "newborn implies
+    not a real shot", is contradicted nine times over (those seven plus the two
+    breaks that anchored it) and supported nowhere. It was not dead code; it
+    was wrong code.
+  - The gate was measured on two clips read as hard hand-rolled returns, which
+    Steven identified as **9-ball breaks that fired newborn** — i.e. on
+    examples of the very thing it was supposed to admit. The residual its own
+    note conceded ("a break from a fully occluded address fires newborn and is
+    eaten") was that evidence, not a hypothetical.
+  - The speed floor independently covers the failure this was reaching for:
+    racking and placement lookalikes measure below 1000 mm/s against breaks at
+    5845–7361, and the floor sits at 3000. The removal is recorded in full in
+    `hub.py` beside the surviving gate — deleting a guard silently is how it
+    comes back.
+
 - **2026-08-02 (checkpoint 56 — the bare-hand snatch; a fraction gate needs a
   sample floor):** `pickup_snatch_0801` flips from its known-wrong
   `(1, 0, 2, 2)` pin to **0 shots**. Closes #8. Cold battery **384 passed,
