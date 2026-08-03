@@ -93,6 +93,23 @@ that shows what a threshold move did to the rest of the corpus. Regenerating
 without reading it is the same as not having goldens, and a CHANGELOG entry for
 a detection change should cite which timelines moved.
 
+### Separating a real regression from a timing shift
+
+Goldens are checked *before* the count assertions, so a threshold change tends
+to turn everything red at once and the genuine breakages hide among timing
+shifts. To split them, stash the goldens and regenerate — what stays red is a
+count failure, i.e. an actual behaviour regression:
+
+```sh
+cp -R tests/goldens /tmp/goldens.base
+uv run pytest tests/corpus -n 4 --detect-cache --update-goldens   # counts only
+diff -r /tmp/goldens.base tests/goldens                           # what moved, and where
+```
+
+This is the loop the checkpoint 53–58 accuracy work ran on; a threshold move
+that reported 42 red files was 6 real failures and 36 timing shifts, and there
+is no way to tell them apart by eye.
+
 Tolerances and the rationale for *not* asserting `ball_id` are in
 `corpus/goldens.py`; `unit/test_goldens.py` covers the comparator itself, so it
 runs everywhere including CI.
@@ -110,6 +127,8 @@ All `-n 4`, same machine. 53 scenarios except where noted.
 | 2026-08-02, + reference/calibration reuse — **cold, the gate** | **4:51** |
 | 2026-08-02, `--detect-cache` warm, corpus only | **12 s** |
 | 2026-08-02, `--detect-cache` warm, full suite | **21 s** |
+| 2026-08-02, checkpoint 58 (406 tests) — **cold, the gate** | **3:27** |
+| 2026-08-02, checkpoint 58, `--detect-cache` warm, corpus only | **16 s** |
 
 Building the cache from empty costs roughly a cold run, once.
 
