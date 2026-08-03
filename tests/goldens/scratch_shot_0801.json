@@ -10,12 +10,12 @@
       "newborn": true
     },
     {
-      "type": "Scratch",
-      "t": 5.3573
-    },
-    {
       "type": "BallsSettled",
       "t": 5.7285
+    },
+    {
+      "type": "Scratch",
+      "t": 6.3686
     }
   ]
 }

@@ -186,14 +186,14 @@ EXPECTED: dict[
     # still-rolling cue as a fresh id at the jaw and the age gate let
     # settle fire 1.3 s after the strike, mid-roll — young solidly-observed
     # movers now block stillness, and the settle lands at 14.56 s, after
-    # the ball truly stops. (2) The Scratch is PHANTOM (the cue never left
-    # the table — its track died inside the pocket zone because the ball
-    # genuinely stopped there): journal-only in v1, pinned as-is; a
-    # cue-stops-hanging shot is indistinguishable from a pot at track
-    # death, and the counter-evidence (a white still ball reappearing at
-    # the death spot) only arrives ~1 s later. Known limitation, see
-    # design.md §4.2.
-    "hanger_pot_0801": (1, 1, 1, 1),
+    # the ball truly stops. (2) The Scratch was PHANTOM — the cue never
+    # left the table, its track died inside the pocket zone because the
+    # ball genuinely stopped there. FIXED 2026-08-02 (#6): the counter-
+    # evidence was never missing, only late, so the verdict is deferred a
+    # second and cancelled when a ball turns up at the death spot. Measured
+    # here: a reborn track 0.24 s later, 33 mm away, converging to 12 mm.
+    # Now 0 scratches, with the shot and settle unmoved to the millisecond.
+    "hanger_pot_0801": (1, 0, 1, 1),
     # pickup_newborn: picking the resting cue up births a new track from
     # the hand+ball blob (the old track's merge-hold keeps eating the blob
     # until it slides out of the association gate). The carry was smooth

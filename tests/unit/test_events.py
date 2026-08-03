@@ -348,8 +348,12 @@ def test_scratch_latched_during_motion() -> None:
     shot = sim.run(0.65)  # ends ~45 mm from the (0, 0) pocket
     assert types(shot) == [ShotTaken]
     sim.remove(CUE)
-    events = sim.run(0.8)
-    assert types(events) == [Scratch, BallsSettled]
+    # The scratch is *latched* here but published a scratch_confirm_s later
+    # (#6, 2026-08-02) — the delay is what lets a cue that merely stopped in
+    # the jaw cancel its own phantom by reappearing. Nothing turns up at this
+    # death spot, so the verdict stands; it just lands after the settle now.
+    assert types(sim.run(0.8)) == [BallsSettled]
+    assert types(sim.run(0.8)) == [Scratch]
     sim.place(CUE, 500.0, 500.0)  # ball in hand: replaced on the table
     assert sim.run(1.0) == []  # no re-scratch, no extra settle
 
@@ -495,9 +499,68 @@ def scratch_prelude() -> Sim:
     shot = sim.run(0.65)  # dies ~60 mm from the (0, 0) pocket
     assert types(shot) == [ShotTaken]
     sim.remove(CUE)
-    assert types(sim.run(0.8)) == [Scratch, BallsSettled]
+    # Latched immediately, published a scratch_confirm_s later (#6) — so the
+    # settle now lands first. Nothing reappears at the death spot, so the
+    # verdict stands.
+    assert types(sim.run(0.8)) == [BallsSettled]
+    assert types(sim.run(0.8)) == [Scratch]
     sim.run(1.0)  # table quiet; no cue-flagged track exists
     return sim
+
+
+def test_cue_stopping_in_the_jaw_is_not_a_scratch() -> None:
+    # #6, hanger_pot_0801: a legal pot whose cue follows in and stops hanging
+    # in the jaw. Its track dies inside the pocket zone — identical to a pot
+    # at the moment of death — and it fired a Scratch 0.75 s after a shot
+    # Steven confirmed legal. The counter-evidence was never missing, only
+    # late: measured on that clip, a reborn track appears 0.24 s after the
+    # loss, 33 mm from the death spot. Deferring the verdict is the fix.
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)
+    sim.place(OBJ, 1200.0, 500.0)
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    assert types(sim.run(0.65)) == [ShotTaken]  # dies ~45 mm from (0, 0)
+    sim.remove(CUE)  # track lost over the pocket mouth
+    sim.run(0.5)  # latched, not yet published
+    sim.place(7, 55.0, 45.0)  # the ball was there all along: reborn as a new id
+    assert Scratch not in map(type, sim.run(2.0))
+
+
+def test_a_different_ball_near_the_pocket_does_not_cancel_a_scratch() -> None:
+    # The other side of the same gate. Cancellation is positional, so it has
+    # to be tight enough that an object ball resting near the same pocket
+    # cannot vouch for a cue that genuinely dropped. In the hanger_pot
+    # episode the reappearing cue sat 33 mm away while an unrelated still
+    # ball sat 94 mm away; the gate is 60 mm.
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)
+    sim.place(OBJ, 1200.0, 500.0)
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    assert types(sim.run(0.65)) == [ShotTaken]
+    sim.remove(CUE)
+    sim.run(0.5)
+    sim.place(7, 140.0, 40.0)  # ~95 mm away: a neighbour, not the cue
+    assert Scratch in map(type, sim.run(2.0))
+
+
+def test_the_vote_finding_another_ball_does_not_cancel_a_scratch() -> None:
+    # After the cue drops, the whiteness vote parks on some other white-ish
+    # ball within a few frames. That is the vote finding a replacement, not
+    # the cue reappearing — and treating it as the cue returning suppressed
+    # all three genuine scratches in the corpus while this fix was being
+    # built. Only position may cancel.
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)
+    sim.place(OBJ, 1200.0, 500.0)
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    assert types(sim.run(0.65)) == [ShotTaken]
+    sim.remove(CUE)
+    sim.run(0.5)
+    sim.cue_id = OBJ  # the vote parks on a ball far from the death spot
+    assert Scratch in map(type, sim.run(2.0))
 
 
 def test_shot_from_pocket_jaw_after_scratch_fires() -> None:

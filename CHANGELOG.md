@@ -232,6 +232,36 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-02 (checkpoint 55 — Scratch becomes a deferred verdict; the jaw
+  phantom is gone):** `hanger_pot_0801` grades 0 scratches with its shot and
+  settle unmoved to the millisecond. Closes #6. Cold battery **382 passed,
+  3:51**.
+  - **The counter-evidence was never missing, only late.** A cue that stops
+    hanging in the jaw dies inside the pocket zone exactly like a potted one,
+    which is why this was written off as a known limitation in `design.md`
+    §4.2. But measured on the clip: a reborn track appears **0.24 s** after the
+    loss, **33 mm** from the death spot, converging to 12 mm. On all three
+    genuine scratches (`scratch_shot_0801`, `shot_debug`, `scratch_replace`)
+    **nothing at all** is observed within 200 mm for the next 3 s. That is a
+    clean discriminator; it only had to be waited for. Scratch drives no clock
+    state in v1, so waiting is free.
+  - Track death in a pocket zone now *latches*; the event publishes
+    `scratch_confirm_s` (1.0 s, 4x the measured reappearance) later and is
+    cancelled if any observed ball is within `scratch_reappear_mm` (60 mm) of
+    the cue's last observed position.
+  - **Cancellation must be positional only** — learned the hard way. The first
+    version also cancelled when the cue flag came back, which reads as "the cue
+    returned". It is not: after the cue drops, the whiteness vote parks on some
+    other white-ish ball within a few frames, and that suppressed **all three**
+    genuine scratches. There is now a unit test for exactly this.
+  - 60 mm is bounded on both sides by the same episode: above the 33 mm first
+    sighting, and well under the 94 mm at which a genuinely different, still
+    ball sat — which must not vouch for a cue that really dropped.
+  - **Consequence to know about:** the emitted `t` is now the confirmation,
+    ~1 s after the ball actually vanished, and a Scratch can land *after* the
+    shot's `BallsSettled` (it does in `scratch_shot_0801`). Subtract the delay
+    when correlating a Scratch against clip footage.
+
 - **2026-08-02 (checkpoint 54 — the foul reversal; the sub-impulse class is
   detectable):** `shaft_adjust`, `tip_bump` and `soft_touch_0731` all fire a
   ShotTaken for the first time. Closes #5. Cold battery **379 passed, 3:51**.

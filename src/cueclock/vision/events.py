@@ -306,6 +306,30 @@ class EventConfig:
 
     # Scratch
     cue_lost_latch_s: float = 0.3
+    # Scratch is a *deferred* verdict (#6, 2026-08-02). A cue that stops
+    # hanging in the pocket jaw is indistinguishable from a potted one at the
+    # moment its track dies — both end with the last observation inside the
+    # pocket zone — so hanger_pot_0801 fired a Scratch 0.75 s after a legal
+    # shot Steven confirmed. The counter-evidence is unambiguous but it
+    # arrives late: a ball reappears at the death spot. Measured there, a
+    # reborn track shows up 0.24 s after the loss, 33 mm away, converging to
+    # 12 mm. On all three genuine scratches (scratch_shot_0801, shot_debug,
+    # scratch_replace) **nothing at all** is observed within 200 mm for the
+    # next 3 s. That is the whole discriminator; it just has to be waited for.
+    #
+    # 1.0 s is 4x the one measured reappearance, and it costs the real
+    # scratches nothing: each has 3.5-6.6 s of clip left when it fires, and
+    # Scratch drives no clock state in v1 (§8), so latency here is free.
+    # Bias is deliberate — waiting longer can only suppress phantoms.
+    #
+    # NOTE: the emitted `t` is therefore the *confirmation* time, roughly
+    # scratch_confirm_s after the ball actually vanished. Subtract it when
+    # correlating a Scratch against clip footage.
+    scratch_confirm_s: float = 1.0
+    # 60 mm: above the 33 mm first sighting with margin, and well under the
+    # 94 mm at which a genuinely different, stationary ball sat during that
+    # same episode — which must not cancel anything. Balls are ~51 mm.
+    scratch_reappear_mm: float = 60.0
     # 120, not 80: a sinking ball's last observations come from the pocket-jaw
     # blob, whose centroid drifts past the table edge as the ball goes down
     # (cue seen at 57+ mm outside the corner in the corpus scratch clip)
@@ -431,6 +455,9 @@ class EventEngine:
         self._cue_last_seen: tuple[float, float, float, float] | None = None  # (t, x, y, speed)
         self._cue_lost_while_moving = False
         self._scratch_fired = False
+        # A latched but unpublished scratch: (trigger_t, x, y) of the cue's
+        # last observed position. Resolved by _resolve_pending_scratch.
+        self._pending_scratch: tuple[float, float, float] | None = None
         # Per-ball last time it visibly translated (first sighting counts):
         # bounds how long the spin-churn gate may hold settle (spin_watch_s).
         self._last_translate: dict[int, float] = {}
@@ -785,7 +812,14 @@ class EventEngine:
         if cue is not None and cue.observed:
             self._cue_last_seen = (t, cue.x_mm, cue.y_mm, cue.speed_mms)
             self._cue_lost_while_moving = False
-            self._scratch_fired = False  # cue back on the table re-arms the latch
+            if self._pending_scratch is None:
+                self._scratch_fired = False  # cue back on the table re-arms the latch
+            # A pending verdict is NOT cancelled by the cue flag coming back.
+            # After the cue drops, the whiteness vote parks on some other
+            # white-ish ball within a few frames — that is the vote finding a
+            # replacement, not the cue reappearing, and letting it cancel here
+            # suppressed all three genuine scratches in the corpus. Only
+            # position decides: see _resolve_pending_scratch.
         elif cue is None and self._cue_last_seen is not None:
             last_t, last_x, last_y, last_speed = self._cue_last_seen
             if not self._cue_lost_while_moving:
@@ -796,9 +830,13 @@ class EventEngine:
                 and t - last_t >= cfg.cue_lost_latch_s
                 and self._near_pocket(last_x, last_y)
             ):
+                # Latch the verdict, do not publish it: a ball may yet turn up
+                # at the death spot, which means the cue stopped in the jaw
+                # rather than dropping. See scratch_confirm_s.
                 self._scratch_fired = True
-                events.append(Scratch(t))
+                self._pending_scratch = (t, last_x, last_y)
 
+        events.extend(self._resolve_pending_scratch(t, balls))
         return events
 
     # ---------- strike helpers ----------
@@ -1345,6 +1383,42 @@ class EventEngine:
         return True
 
     # ---------- scratch helpers ----------
+
+    def _resolve_pending_scratch(self, t: float, balls: list[BallState]) -> list[Event]:
+        """Publish or cancel a latched scratch once the evidence is in.
+
+        A ball observed at the spot where the cue vanished means it never
+        left the table — it stopped hanging in the jaw, which is a legal shot
+        (hanger_pot_0801). Anything else, after `scratch_confirm_s`, is a
+        genuine scratch.
+
+        Cancelling restores the same state as seeing the cue directly: the
+        ball sitting there *is* the cue, so `_cue_last_seen` follows it. That
+        also keeps the latch from re-arming on the next frame and firing the
+        same phantom again when the whiteness vote is slow to return.
+        """
+        pending = self._pending_scratch
+        if pending is None:
+            return []
+        cfg = self._cfg
+        trigger_t, x, y = pending
+        nearest = min(
+            (b for b in balls if b.observed),
+            key=lambda b: hypot(b.x_mm - x, b.y_mm - y),
+            default=None,
+        )
+        if nearest is not None and hypot(nearest.x_mm - x, nearest.y_mm - y) <= (
+            cfg.scratch_reappear_mm
+        ):
+            self._pending_scratch = None
+            self._scratch_fired = False
+            self._cue_lost_while_moving = False
+            self._cue_last_seen = (t, nearest.x_mm, nearest.y_mm, nearest.speed_mms)
+            return []
+        if t - trigger_t >= cfg.scratch_confirm_s:
+            self._pending_scratch = None
+            return [Scratch(t)]
+        return []
 
     def _near_pocket(self, x: float, y: float) -> bool:
         return any(
