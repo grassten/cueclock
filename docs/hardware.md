@@ -233,8 +233,9 @@ actually runs — the original plan called them *Table* / *Clock*):
   (`SaveProjectors`) — both are the opposite of the OBS default, and both are
   load-bearing (settled 2026-08-03, §C4).
 - Replay Buffer enabled (Settings → Output) — Stream Deck phase 2/3 owns the
-  lifecycle, and `scripts/setup_obs_replay.py` owns its **length**: 300 s, so a
-  held Replay key has a whole rack to play (§C4a). Don't set it by hand.
+  lifecycle, and `scripts/setup_obs_replay.py` owns its **length**: 600 s, so a
+  held Replay key has a whole rack to play — even a long one (§C4a). Don't set
+  it by hand.
 
 Latency budget end-to-end (camera → TV in Game Mode): on the order of 100 ms —
 well under the "few hundred ms is fine" bar; the detection path never leaves
@@ -560,7 +561,7 @@ a camera bump alongside the README command (§E2).
 
 **OBS one-time settings — all done 2026-08-02:** WebSocket server enabled
 (Tools → WebSocket Server Settings; credentials copied to gitignored
-`config/obs_websocket.json`), replay buffer enabled (20 s then; 300 s since
+`config/obs_websocket.json`), replay buffer enabled (20 s then; 600 s since
 2026-08-05, and the setup script sets it — §C4a), "Save projectors
 on exit" on, and OBS was never in Login Items. The client is
 `deck/obsws.py` — one request per connection (open, authenticate, send, read,
@@ -610,21 +611,36 @@ is, the same fallback a stale shot anchor already had.
 
 **The buffer has to be long enough to hold a rack, and 20 s never was.** This is
 the one part of the feature that is an OBS setting rather than code:
-`RecRBTime`, now **300 s** (`replay.BUFFER_TARGET_S`), written into the active
+`RecRBTime`, now **600 s** (`replay.BUFFER_TARGET_S`), written into the active
 profile by `scripts/setup_obs_replay.py --buffer-seconds N` so the length the
 deck assumes and the length OBS keeps can't drift. **OBS reads it when the
-buffer starts**, so a change lands at the next Session start, not immediately.
-Two consequences, both measured 2026-08-05 (`ffprobe`: 18.4 s / 12.2 MB ⇒
-**5.3 Mbps ≈ 0.66 MB/s**): five minutes costs ~200 MB of RAM in OBS (nothing on
-24 GB) and **every Replay press now writes ~200 MB to `~/Movies`**, up from 12
-MB — worth knowing before a long session, and why `SAVE_TIMEOUT_S` went 3 → 8 s.
-OBS also caps the buffer by memory (`RecRBSize`, 512 MB ⇒ ~770 s here), silently,
-whichever binds first; the setup script prints that cap in seconds so a buffer
-that is shorter than it says can't read as a bug in the seek.
+buffer starts**, so a change lands at the next Session start (or a manual
+`Stop`/`StartReplayBuffer`), not immediately.
+
+Ten rather than five minutes because the buffer is sized for the *worst* rack,
+not the average one (Steven, 2026-08-05: *just in case there's a safety battle
+and a long rack*). A rack that outruns the buffer doesn't fail — the cue point
+clamps to the file's start — it silently begins mid-rack, which is the failure
+here that looks most like the feature working. A safety battle is precisely the
+rack worth replaying.
+
+The cost is linear, and it is disk more than RAM. Measured 2026-08-05 (`ffprobe`
+on real saves: 12.2 MB / 18.4 s and 43 MB / 77.6 s ⇒ **0.55–0.66 MB/s**), ten
+minutes is ~400 MB held in OBS — nothing on 24 GB — and **~400 MB written to
+`~/Movies` on every press**, up from 12 MB. Twenty presses is 8 GB and nothing
+prunes that directory. It is also why `SAVE_TIMEOUT_S` went 3 → 8 s.
+
+OBS caps the buffer by memory *and* by time, honouring whichever binds first and
+saying nothing about it — so the setup script now sets `RecRBSize` from the time
+target (×1.5 headroom for a busier scene: 594 MB ≈ 900 s) rather than leaving it
+where it was. A memory cap that was fine for the old length is exactly how a
+ten-minute buffer silently becomes a seven-minute one, and that reads as a bug
+in the seek, not as a setting.
 
 **Measured live, 2026-08-05** (both spans driven against the real OBS with the
-server up but no camera, so the shot anchor was deliberately null): a 68.2 s
-buffer — itself the proof the 300 s setting took, since the old one capped the
+server up but no camera, so the shot anchor was deliberately null; taken while
+the buffer was still set to 300 s, and it had been running 68 s): a 68.2 s
+buffer — itself the proof the setting took, since the old 20 s one capped the
 file at 20 — gave `rack 37.2s ago → cue 29.6s, 38.6s on air` (68.2 − 37.2 + 0.1
 − 1.5 ✓) and `no anchor → cue 48.2s, 20.0s on air` (the `MAX_PLAY_S` fallback).
 Both seeks landed on a keyframe just before the target, both cut to **Replay**
@@ -653,7 +669,7 @@ shot), `DISPLAY_LAG_S` 0.1 (camera→Syphon→OBS, §B3's ~100 ms budget — the
 detector's stamp is when *vision* saw the shot, the recording shows it later),
 `MAX_PLAY_S` 20 and `MIN_PLAY_S` 2 (a stale anchor can't strand the TV on the
 whole buffer; an instant press still shows something), `SPEED` 1.0,
-`BUFFER_TARGET_S` 300 (what the setup script writes into OBS).
+`BUFFER_TARGET_S` 600 (what the setup script writes into OBS).
 
 **Why 1.0 and not slow-mo.** OBS records at 30 fps, so half speed is
 frame-doubled mush. Real slow-mo needs OBS set to 60 fps first; then `SPEED`

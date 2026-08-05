@@ -53,11 +53,20 @@ TRANSITION = "Fade"
 MB_PER_S = 0.66
 """Measured size of one second of program output (`replay.BUFFER_TARGET_S`).
 
-Only used to check the *other* buffer limit: OBS caps the replay buffer by time
+Used to size the *other* buffer limit: OBS caps the replay buffer by time
 **and** by memory, whichever binds first, and the memory one is silent — a
-buffer set to five minutes that only ever holds three looks like a bug in the
-seek. So the size cap is reported in seconds, which is the unit the failure
+buffer set to ten minutes that only ever holds seven looks like a bug in the
+seek, not like a setting. So the memory cap is set from the time target rather
+than left where it was, and reported in seconds, which is the unit the failure
 would be noticed in."""
+
+SIZE_HEADROOM = 1.5
+"""How much slack the memory cap gets over the measured rate.
+
+The rate is an average of two clips, and program output is not a constant
+bitrate — a table full of moving balls costs more than an empty one. The cap
+exists to be *not* the binding limit, so it is set where a 50% busier scene
+still cannot reach it."""
 
 
 def _names(request: str, key: str, field: str) -> list[str] | None:
@@ -155,47 +164,52 @@ def _profile_param(category: str, name: str) -> str | None:
     return None
 
 
-def ensure_buffer_seconds(seconds: int) -> bool:
-    """Set the profile's replay-buffer length, and report what limits it.
+def _set_profile_param(category: str, name: str, value: str, unit: str) -> bool:
+    """Write one profile parameter, saying whether it moved. False = OBS refused."""
+    current = _profile_param(category, name)
+    if current == value:
+        print(f"replay buffer: {name} already {value}{unit} ({category})")
+        return True
+    if (
+        obsws.request(
+            "SetProfileParameter",
+            {"parameterCategory": category, "parameterName": name, "parameterValue": value},
+        )
+        is None
+    ):
+        return False
+    print(f"replay buffer: {name} {current or '?'}{unit} -> {value}{unit} ({category})")
+    return True
 
-    Which key holds it depends on the output mode, so the mode is asked for
+
+def ensure_buffer_seconds(seconds: int) -> bool:
+    """Set the profile's replay-buffer length, and the memory cap to match.
+
+    Which key holds them depends on the output mode, so the mode is asked for
     rather than assumed — writing `SimpleOutput/RecRBTime` on an Advanced
     profile would succeed, change nothing, and print that it worked.
+
+    Both limits are set together because OBS honours whichever binds first and
+    says nothing about it: a time limit raised on its own can be silently
+    overruled by a memory cap that was fine for the old length.
     """
     mode = _profile_param("Output", "Mode")
     if mode is None:
         return False
     category = "SimpleOutput" if mode == "Simple" else "AdvOut"
-    current = _profile_param(category, "RecRBTime")
 
-    if current == str(seconds):
-        print(f"replay buffer: already {seconds} s ({category})")
-    else:
-        set_ok = obsws.request(
-            "SetProfileParameter",
-            {
-                "parameterCategory": category,
-                "parameterName": "RecRBTime",
-                "parameterValue": str(seconds),
-            },
-        )
-        if set_ok is None:
-            return False
-        print(f"replay buffer: {current or '?'} s -> {seconds} s ({category})")
-        print("  takes effect when the buffer next starts — i.e. the next Session start")
+    size_mb = max(1, round(seconds * MB_PER_S * SIZE_HEADROOM))
+    if not _set_profile_param(category, "RecRBTime", str(seconds), " s"):
+        return False
+    if not _set_profile_param(category, "RecRBSize", str(size_mb), " MB"):
+        return False
 
-    # The memory cap is the limit nobody sets on purpose and everybody hits.
-    size_mb = _profile_param(category, "RecRBSize")
-    if size_mb and size_mb.isdigit() and int(size_mb) > 0:
-        capped_s = int(size_mb) / MB_PER_S
-        note = (
-            "  binds first — raise it or the buffer is shorter than it says"
-            if (capped_s < seconds)
-            else "  clear of the time limit"
-        )
-        print(f"replay buffer: {size_mb} MB cap ≈ {capped_s:.0f} s at {MB_PER_S} MB/s")
-        print(note)
-    print(f"replay buffer: each save now writes ≈ {seconds * MB_PER_S:.0f} MB to the recording dir")
+    print(
+        f"replay buffer: {seconds} s ≈ {seconds * MB_PER_S:.0f} MB at {MB_PER_S} MB/s, "
+        f"under a {size_mb} MB cap (≈ {size_mb / MB_PER_S:.0f} s) — time is the binding limit"
+    )
+    print(f"replay buffer: each save writes ≈ {seconds * MB_PER_S:.0f} MB to the recording dir")
+    print("  takes effect when the buffer next starts — i.e. the next Session start")
     return True
 
 

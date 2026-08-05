@@ -232,6 +232,28 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 65 addendum — ten minutes of buffer, and a memory cap
+  that can't bind first):** `BUFFER_TARGET_S` 300 → **600 s**, at Steven's ask:
+  *just in case there's a safety battle and a long rack*. The buffer is sized
+  for the worst rack rather than the average one, because a rack that outruns it
+  doesn't fail — the cue point clamps to the file's start and the replay quietly
+  begins mid-rack, which is the failure here that looks most like the feature
+  working, and a safety battle is exactly the rack worth watching back.
+
+  Cost is ~400 MB held in OBS and **~400 MB written to `~/Movies` per press**
+  (0.55–0.66 MB/s measured). Nothing prunes that directory; twenty presses is
+  8 GB.
+
+  The setup script now **sets** `RecRBSize` from the time target (×1.5 headroom
+  for a busier scene — 594 MB ≈ 900 s) instead of only warning about it. OBS
+  honours whichever of the two limits binds first and says nothing, so a memory
+  cap left at a value that suited the old length is how a ten-minute buffer
+  silently becomes a seven-minute one — and that reads as a bug in the seek
+  rather than as a setting. Applied live and the buffer restarted onto it.
+
+  Playback speed deliberately left at 1.0 (Steven: *don't make it 2x*). #17
+  keeps the slow-mo/stinger work; this feature's job is the saved footage.
+
 - **2026-08-05 (checkpoint 65 — one Replay key, two spans: tap the shot, hold
   the rack):** Steven asked for a choice at the Replay key — the last shot, or
   the whole rack. It is one key still, on the tap/hold rule the score keys

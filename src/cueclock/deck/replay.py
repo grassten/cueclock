@@ -87,16 +87,25 @@ class Span(Enum):
 
 # ---------- measured / chosen constants ----------
 
-BUFFER_TARGET_S = 300.0
+BUFFER_TARGET_S = 600.0
 """How much program output OBS should keep, in seconds — the setting a rack
 replay lives or dies by, and the one thing this feature needs that is not code.
 
 `scripts/setup_obs_replay.py` writes it into the active profile's `RecRBTime`;
 it is stated here because it is a *replay* decision, not a setup-script one.
-Five minutes covers a rack with room to spare, and costs about 200 MB: measured
-2026-08-05, the saved files run **5.3 Mbps ≈ 0.66 MB/s** (`ffprobe`, 18.4 s /
-12.2 MB), which is also what each Replay press now writes to `~/Movies` — up
-from 12 MB, and worth knowing before a long session fills a disk.
+
+**Ten minutes, sized for the worst rack rather than the average one** (Steven,
+2026-08-05: *just in case there's a safety battle and a long rack*). A rack that
+outruns the buffer does not fail — the cue point clamps to the file's start —
+it just quietly begins mid-rack, which is the one failure here that looks like
+the feature working. Five minutes covers a normal rack; a safety battle is
+exactly the rack worth replaying, so the buffer is cut for that.
+
+The cost is linear and it is disk, not RAM: measured 2026-08-05, program output
+runs **0.55-0.66 MB/s** (`ffprobe` on real saves: 12.2 MB / 18.4 s, 43 MB /
+77.6 s), so ten minutes is ~400 MB held in OBS and **~400 MB written to
+`~/Movies` on every press**. Twenty presses in a session is 8 GB. Nothing prunes
+that directory — worth a look after a long night.
 
 Raising it does not change a tapped press: `MAX_PLAY_S` caps that from the end
 of the file, whatever the file's length."""
