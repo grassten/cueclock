@@ -33,7 +33,7 @@ corpus: 54 scenarios, all green.
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
 | Session toggle (one key powers the TV on, brings up `run` + OBS + the projector — and takes it all back down) | live |
-| Instant replay: one key cuts the TV to the last shot, seeked to 1.5 s before it | live |
+| Instant replay: one key cuts the TV to the last shot (seeked to 1.5 s before it), or held, to the whole rack from its break | live |
 | Replay stinger + slow-mo, music keys, drill tracking | planned — [work board](https://github.com/users/grassten/projects/3) |
 
 ## How it works

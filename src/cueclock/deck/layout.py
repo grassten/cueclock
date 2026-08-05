@@ -19,8 +19,11 @@ answers "how much time do I have" — two questions, two channels.
 **Face grammar** — the `OFF`-button confusion was never the word, it was a
 *state* on a key read as a *command*. So: command keys say the verb and nothing
 else; cycle keys put the current value bright over the next value dim, so both
-are on the face and neither can be mistaken for the other; the one hold key
-states where it is and names the gesture out.
+are on the face and neither can be mistaken for the other; a key with a hold on
+it says so on its second line, because a gesture nothing names is a feature only
+its author knows about (Session states where it is, Replay names the span a hold
+would reach — the score keys are the exception, and only because their inverse
+is self-evident and their result is already on the wall).
 """
 
 from __future__ import annotations
@@ -172,7 +175,18 @@ class ReplayShow:
     One key for both directions because there is only ever one thing to do with
     it: while live it starts a replay, while a replay is on it ends one. The
     face says which (`deck/replay.py` owns the sequence).
+
+    Tap plays the last shot, hold plays the whole rack — the same tap/hold rule
+    the score keys follow, and for the same reason: the common press has to stay
+    instant. Putting the rare span behind a hold rather than behind a chooser
+    page (Flag's pattern) is what keeps "watch that shot" at one press with
+    nothing to read. Cost is that a tap now fires on *release*; a hold that
+    matures fires while the key is still down, so the answer never waits for a
+    finger to come off. Held length matches `ScoreAdjust`, deliberately: one
+    hold dwell to learn for the whole deck.
     """
+
+    hold_s: float = 0.6
 
 
 Action = ApiPost | Cycle | SessionToggle | ScoreAdjust | FlagStart | FlagReason | ReplayShow
@@ -286,11 +300,15 @@ class Key:
             # current_base(): 60 s inside the WNT first-shot window, 15 under
             # Final 10, 30 otherwise. A plain "Reset" can't say which.
             return Face(text="START", big=str(state.base), stripe=stripe)
-        if self.name == "replay" and state.replaying:
-            # The only two-line command face on the deck. "BACK" alone would
-            # not say where, and "LIVE" alone is a *state* on a key read as a
-            # command — the exact confusion rule 3 exists to prevent.
-            return Face(text="BACK", sub="TO LIVE", stripe=stripe)
+        if self.name == "replay":
+            if state.replaying:
+                # "BACK" alone would not say where, and "LIVE" alone is a
+                # *state* on a key read as a command — the exact confusion
+                # rule 3 exists to prevent.
+                return Face(text="BACK", sub="TO LIVE", stripe=stripe)
+            # Live: the verb, then the gesture that gets the other span. A hold
+            # is invisible on a key that doesn't say it has one (rule 3).
+            return Face(text=self.text, sub="HOLD RACK", stripe=stripe)
         if self.name == "extension":
             left = max(0, state.extensions_allowed - state.extensions_used)
             pips = (left, state.extensions_allowed) if state.extensions_allowed else None
@@ -387,3 +405,7 @@ REASON_KEYS: tuple[Key, ...] = (
 FLAG_PENDING_FACE = "WHY?"  # on the Flag key itself while the page is open
 DUMP_PENDING_FACE = "SAVING…"
 REPLAY_PENDING_FACE = "CUEING…"  # while the buffer is written and seeked
+# A held press says what it heard, not just that it is working: the hold fires
+# under the finger, and this face is the only confirmation the gesture landed
+# before the TV changes a second or two later.
+RACK_PENDING_FACE = "RACK…"

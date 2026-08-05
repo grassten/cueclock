@@ -114,13 +114,23 @@ class Hub:
         self._detect_last: tuple[float, float] | None = None  # (frame_t, mono when processed)
         self._heartbeat_prev: tuple[float, int] | None = None  # (mono, frames) at last line
         # When the last shot was seen, monotonic — the instant replay's anchor
-        # (`GET /api/last_shot`). Stamped for every ShotTaken the vision core
+        # (`GET /api/replay_anchors`). Stamped for every ShotTaken the vision core
         # emits, *before* the kill switch / mode / break gates: those decide
         # whether a shot moves the clock, and replay asks a different question —
         # what is on the video. So the anchor still works in `no_clock` mode,
         # which is exactly where drills happen. Cost: a phantom shot anchors a
         # phantom replay, which is a bug you would want to see anyway.
         self._last_shot_mono: float | None = None
+        # Where the current rack starts — the other anchor the Replay key seeks
+        # to, on a *held* press ("play the whole rack" rather than "play that
+        # shot"). Two stamps because the useful start is the break, not the
+        # racking: the SET UP press is taken first, then superseded by the first
+        # shot after it, so a rack replay opens on the break instead of on a
+        # minute of someone building a triangle. None until either happens,
+        # which the deck reads as "as far back as the buffer goes" — the same
+        # answer it already gives for a shot older than the buffer.
+        self._rack_mono: float | None = None
+        self._rack_break_mono: float | None = None
         # Called after a *granted* extension has been broadcast, because the
         # overlay answers that broadcast by speaking "Extension called" out of
         # the TV. `cueclock run` points it at the mic listener's mute window:
@@ -151,6 +161,23 @@ class Hub:
         if self._last_shot_mono is None:
             return None
         return time.monotonic() - self._last_shot_mono
+
+    def rack_age(self) -> float | None:
+        """Seconds since this rack began, or None if it hasn't begun yet.
+
+        The break when one has been seen, the SET UP press before that — see
+        the stamps in `__init__`. An age rather than a timestamp for the same
+        reason `last_shot_age` is one: the caller is another process.
+
+        `no_clock` has no SET UP key at all, so out there this is the first
+        shot of the session until something racks. That is the honest answer:
+        a drill has no racks, and the deck's fallback (the whole buffer) is
+        what "the rack" means when nothing has declared one.
+        """
+        anchor = self._rack_break_mono if self._rack_break_mono is not None else self._rack_mono
+        if anchor is None:
+            return None
+        return time.monotonic() - anchor
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
         """The composed broadcast/state payload: clock + `vision` + `score`."""
@@ -279,7 +306,11 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
 
     async def new_rack(self) -> None:
-        self.clock.new_rack(time.monotonic())
+        now = time.monotonic()
+        self.clock.new_rack(now)
+        # A new rack retires the old replay anchor: the press starts it, and
+        # the next shot (the break) will supersede this stamp.
+        self._rack_mono, self._rack_break_mono = now, None
         self._log("cmd_new_rack")
         await self.broadcast(self.clock.snapshot())
 
@@ -369,6 +400,10 @@ class Hub:
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
         self._last_shot_mono = time.monotonic()  # replay anchor — before every gate
+        if self._rack_break_mono is None:
+            # First shot since the last SET UP: the break, and from here on the
+            # rack replay opens on it. Ungated for the same reason as above.
+            self._rack_break_mono = self._last_shot_mono
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock

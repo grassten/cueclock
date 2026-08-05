@@ -232,8 +232,9 @@ actually runs — the original plan called them *Table* / *Clock*):
   (`CloseExistingProjectors`) and **"Save projectors on exit" OFF**
   (`SaveProjectors`) — both are the opposite of the OBS default, and both are
   load-bearing (settled 2026-08-03, §C4).
-- Replay Buffer enabled (Settings → Output, ~30 s) — Stream Deck phase 2/3
-  owns the lifecycle.
+- Replay Buffer enabled (Settings → Output) — Stream Deck phase 2/3 owns the
+  lifecycle, and `scripts/setup_obs_replay.py` owns its **length**: 300 s, so a
+  held Replay key has a whole rack to play (§C4a). Don't set it by hand.
 
 Latency budget end-to-end (camera → TV in Game Mode): on the order of 100 ms —
 well under the "few hundred ms is fine" bar; the detection path never leaves
@@ -275,8 +276,10 @@ Everything below follows from these; they are also the module docstring of
    *state* shown on a key read as a *command*. So: **commands** say the verb and
    nothing else (`START 30`, `PUSH`, `FLAG`); **cycles** put the current value
    bright over the next value dim, so both are on the face and neither can be
-   mistaken for the other; the one **hold** key states where it is and names the
-   gesture out (`ON` / `HOLD 1s`).
+   mistaken for the other; a key carrying a **hold** names it on the second line
+   (`ON` / `HOLD 1s`, `REPLAY` / `HOLD RACK`) — a gesture nothing states is a
+   feature only its author knows about. The score keys are the exception, and
+   only because their inverse is self-evident and lands on the wall scoreboard.
 
 Colour groups (bottom stripe, `faces.STRIPE_*`): **amber** = on the clock
 (seconds matter) · **blue** = the match (no pressure) · **purple** = evidence ·
@@ -327,7 +330,7 @@ row 3   RULESET      SET UP       P1  3        P2  2        I SHOT
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left**, so the pool reads before the press instead of after a red `NO EXT`. Never removed inside a clocked mode — a spent pool shows as empty pips, which are the only readout of how many remain | `EXT` + one pip per extension, flashes `OK` / `NO EXT` | match, run out |
-| 2,1 | **Replay** | Save the buffer and cut to it on the TV, starting `1.5 s` before the last shot (§C4a). Press again to go back to live; it returns by itself when the file runs out | `REPLAY` → `CUEING…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
+| 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at this rack's break and plays the rack. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
 | 2,2 | **Flag** | Opens the reason page at 2,3–2,5. The dump fires from whichever reason is pressed | `FLAG` → `WHY?` | always |
 | 2,3–2,5 | **Phantom / Missed / Other** | `POST /api/dump?label=flag_phantom` etc. Only visible while the page is open | `PHANTOM` / `MISSED` / `OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | reason page only |
 | 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` | current over next: `8-BALL`/`FINAL 10` | match, run out |
@@ -557,7 +560,8 @@ a camera bump alongside the README command (§E2).
 
 **OBS one-time settings — all done 2026-08-02:** WebSocket server enabled
 (Tools → WebSocket Server Settings; credentials copied to gitignored
-`config/obs_websocket.json`), replay buffer enabled (20 s), "Save projectors
+`config/obs_websocket.json`), replay buffer enabled (20 s then; 300 s since
+2026-08-05, and the setup script sets it — §C4a), "Save projectors
 on exit" on, and OBS was never in Login Items. The client is
 `deck/obsws.py` — one request per connection (open, authenticate, send, read,
 close), every call best-effort so OBS being closed or the WebSocket server
@@ -571,22 +575,85 @@ Code: `deck/replay.py` (cue-point arithmetic + the obs-websocket sequence) and
 the `ReplayShow` branch in `deck/daemon.py`. The scene is built by
 `scripts/setup_obs_replay.py`, never by hand (§B3).
 
-**Where playback starts.** The buffer holds the last 20 s of program output, so
-the interesting part is always at the *end* — playing from the start is twenty
-seconds of someone chalking. The vision core already timestamps every ShotTaken
-to ~20 ms of contact, the server reports how long ago that was
-(`GET /api/last_shot`), and the file ends at the save, which makes the cue
+**Where playback starts.** The buffer holds the last `RecRBTime` seconds of
+program output, so the interesting part is always at the *end* — playing from
+the start is minutes of someone chalking. The vision core already timestamps
+every ShotTaken to ~20 ms of contact, the server reports how long ago that was
+(`GET /api/replay_anchors`), and the file ends at the save, which makes the cue
 point arithmetic:
 
 ```
-cursor = duration − shot_age + display_lag − lead      (20 − 4 + 0.1 − 1.5 = 14.5 s)
+cursor = duration − anchor_age + display_lag − lead      (20 − 4 + 0.1 − 1.5 = 14.5 s)
 ```
+
+**Two spans, one key** (2026-08-05, checkpoint 65). A **tap** anchors on the
+last shot; a **hold** (0.6 s, the score keys' dwell) anchors on the rack — its
+break if one has been seen, the SET UP press before that — and plays from there
+to now. Same file, same seek, same badge: a span is just which of the two ages
+`/api/replay_anchors` returns gets fed to the same arithmetic (`replay.Span`,
+whose value *is* the field name). The one behavioural difference is the ceiling:
+`MAX_PLAY_S` caps a tap at 20 s so a stale anchor can't strand the TV on the
+whole buffer, and a hold lifts that to the file's length, because "play the
+rack" is exactly the request to lift it.
+
+Tap/hold rather than a chooser page (Flag's pattern) because the common press
+has to stay one press with nothing to read; the cost is that a tap now fires on
+**release**, while a mature hold fires under the finger and says `RACK…` so the
+gesture is acknowledged before the TV changes.
+
+**The rack anchor is the break, not the racking.** `Hub` stamps the SET UP press
+and then lets the next shot supersede it, so a rack replay opens on the break
+instead of on a minute of building a triangle. `no_clock` has no SET UP key, so
+out there the anchor is the session's first shot until something racks — and a
+null anchor (or one older than the buffer) plays as much of the buffer as there
+is, the same fallback a stale shot anchor already had.
+
+**The buffer has to be long enough to hold a rack, and 20 s never was.** This is
+the one part of the feature that is an OBS setting rather than code:
+`RecRBTime`, now **300 s** (`replay.BUFFER_TARGET_S`), written into the active
+profile by `scripts/setup_obs_replay.py --buffer-seconds N` so the length the
+deck assumes and the length OBS keeps can't drift. **OBS reads it when the
+buffer starts**, so a change lands at the next Session start, not immediately.
+Two consequences, both measured 2026-08-05 (`ffprobe`: 18.4 s / 12.2 MB ⇒
+**5.3 Mbps ≈ 0.66 MB/s**): five minutes costs ~200 MB of RAM in OBS (nothing on
+24 GB) and **every Replay press now writes ~200 MB to `~/Movies`**, up from 12
+MB — worth knowing before a long session, and why `SAVE_TIMEOUT_S` went 3 → 8 s.
+OBS also caps the buffer by memory (`RecRBSize`, 512 MB ⇒ ~770 s here), silently,
+whichever binds first; the setup script prints that cap in seconds so a buffer
+that is shorter than it says can't read as a bug in the seek.
+
+**Measured live, 2026-08-05** (both spans driven against the real OBS with the
+server up but no camera, so the shot anchor was deliberately null): a 68.2 s
+buffer — itself the proof the 300 s setting took, since the old one capped the
+file at 20 — gave `rack 37.2s ago → cue 29.6s, 38.6s on air` (68.2 − 37.2 + 0.1
+− 1.5 ✓) and `no anchor → cue 48.2s, 20.0s on air` (the `MAX_PLAY_S` fallback).
+Both seeks landed on a keyframe just before the target, both cut to **Replay**
+and both returned to **Stream Detail**. `show()` blocked **1.2–1.4 s** — up from
+the 0.34–0.63 s of checkpoint 49, which is the bigger file being written and
+opened, and why the pending face matters more than it did.
+
+The deck loop's own half of this — a tap firing on release, a hold firing under
+the finger, a mature hold *not* also firing a tap on the lift — is covered by
+`tests/unit/test_deck_loop.py`, which drives `_loop` with a fake device. That is
+the one deck path that had never been testable without a finger, and the gesture
+that made it worth building: a Replay key that silently plays the wrong span is
+indistinguishable from one that works.
+
+**A rack replay runs in real time**, and stays that way until someone verifies
+that OBS honours `speed_percent` on a hardware-decoded media source. Fast
+forward is honest at 30 fps (unlike slow-mo, which needs frames that were never
+recorded), so 2× is one per-press setting away — but if OBS ignores it, `play_s`
+is half the real airtime and the deck cuts back to live mid-rack. Until then the
+bound is the Replay key itself, which says `BACK` for the whole time it runs.
+The badge stops counting `LIVE IN n` above 20 s for the same reason: over a
+five-minute replay that number is one nobody can use.
 
 Constants live at the top of `deck/replay.py`: `LEAD_S` 1.5 (runway before the
 shot), `DISPLAY_LAG_S` 0.1 (camera→Syphon→OBS, §B3's ~100 ms budget — the
 detector's stamp is when *vision* saw the shot, the recording shows it later),
 `MAX_PLAY_S` 20 and `MIN_PLAY_S` 2 (a stale anchor can't strand the TV on the
-whole buffer; an instant press still shows something), `SPEED` 1.0.
+whole buffer; an instant press still shows something), `SPEED` 1.0,
+`BUFFER_TARGET_S` 300 (what the setup script writes into OBS).
 
 **Why 1.0 and not slow-mo.** OBS records at 30 fps, so half speed is
 frame-doubled mush. Real slow-mo needs OBS set to 60 fps first; then `SPEED`

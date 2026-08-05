@@ -3,12 +3,20 @@
 
     uv run python scripts/setup_obs_replay.py [--server http://localhost:8000]
 
-Creates (or repairs) three things the instant replay needs, so none of it has
+Creates (or repairs) four things the instant replay needs, so none of it has
 to be assembled by hand in the OBS UI at the table:
 
   * a **Replay** scene, sized to the canvas
   * **Replay Media** — the saved buffer, muted, playing at 100%
   * **Replay Badge** — the `/replay` overlay: scrim, REPLAY wordmark, drain bar
+  * a replay buffer long enough to hold a **rack** (`--buffer-seconds`)
+
+The buffer length is the one setting the feature cannot work around: a held
+Replay key plays the rack from its break, and 20 s of program output has no
+rack in it. It is written into the active profile here rather than clicked into
+Settings → Output, so the length the deck assumes and the length OBS keeps
+cannot drift apart. **OBS reads it when the buffer starts**, so a change lands
+at the next Session start, not immediately.
 
 Three settings are load-bearing rather than cosmetic, and all three are the
 opposite of the OBS default:
@@ -36,11 +44,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cueclock.deck import obsws
-from cueclock.deck.replay import BADGE_INPUT, MEDIA_INPUT, SCENE_NAME, SPEED
+from cueclock.deck.replay import BADGE_INPUT, BUFFER_TARGET_S, MEDIA_INPUT, SCENE_NAME, SPEED
 
 CANVAS_W = 1920
 CANVAS_H = 1080
 TRANSITION = "Fade"
+
+MB_PER_S = 0.66
+"""Measured size of one second of program output (`replay.BUFFER_TARGET_S`).
+
+Only used to check the *other* buffer limit: OBS caps the replay buffer by time
+**and** by memory, whichever binds first, and the memory one is silent — a
+buffer set to five minutes that only ever holds three looks like a bug in the
+seek. So the size cap is reported in seconds, which is the unit the failure
+would be noticed in."""
 
 
 def _names(request: str, key: str, field: str) -> list[str] | None:
@@ -125,6 +142,63 @@ def fill_canvas(name: str) -> bool:
     return True
 
 
+def _profile_param(category: str, name: str) -> str | None:
+    data = obsws.request(
+        "GetProfileParameter", {"parameterCategory": category, "parameterName": name}
+    )
+    if data is None:
+        return None
+    for field in ("parameterValue", "defaultParameterValue"):
+        value = data.get(field)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def ensure_buffer_seconds(seconds: int) -> bool:
+    """Set the profile's replay-buffer length, and report what limits it.
+
+    Which key holds it depends on the output mode, so the mode is asked for
+    rather than assumed — writing `SimpleOutput/RecRBTime` on an Advanced
+    profile would succeed, change nothing, and print that it worked.
+    """
+    mode = _profile_param("Output", "Mode")
+    if mode is None:
+        return False
+    category = "SimpleOutput" if mode == "Simple" else "AdvOut"
+    current = _profile_param(category, "RecRBTime")
+
+    if current == str(seconds):
+        print(f"replay buffer: already {seconds} s ({category})")
+    else:
+        set_ok = obsws.request(
+            "SetProfileParameter",
+            {
+                "parameterCategory": category,
+                "parameterName": "RecRBTime",
+                "parameterValue": str(seconds),
+            },
+        )
+        if set_ok is None:
+            return False
+        print(f"replay buffer: {current or '?'} s -> {seconds} s ({category})")
+        print("  takes effect when the buffer next starts — i.e. the next Session start")
+
+    # The memory cap is the limit nobody sets on purpose and everybody hits.
+    size_mb = _profile_param(category, "RecRBSize")
+    if size_mb and size_mb.isdigit() and int(size_mb) > 0:
+        capped_s = int(size_mb) / MB_PER_S
+        note = (
+            "  binds first — raise it or the buffer is shorter than it says"
+            if (capped_s < seconds)
+            else "  clear of the time limit"
+        )
+        print(f"replay buffer: {size_mb} MB cap ≈ {capped_s:.0f} s at {MB_PER_S} MB/s")
+        print(note)
+    print(f"replay buffer: each save now writes ≈ {seconds * MB_PER_S:.0f} MB to the recording dir")
+    return True
+
+
 def check_transition() -> None:
     """Report the transition rather than setting it — it is global to OBS."""
     data = obsws.request("GetCurrentSceneTransition")
@@ -149,6 +223,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--server", default="http://localhost:8000", help="cueclock server base URL"
+    )
+    parser.add_argument(
+        "--buffer-seconds",
+        type=int,
+        default=int(BUFFER_TARGET_S),
+        help="how much program output OBS keeps — a held Replay key needs a whole rack of it",
     )
     args = parser.parse_args()
 
@@ -182,6 +262,7 @@ def main() -> int:
     }
 
     steps = (
+        ensure_buffer_seconds(args.buffer_seconds),
         ensure_scene(),
         ensure_input(MEDIA_INPUT, "ffmpeg_source", media_settings),
         ensure_input(BADGE_INPUT, "browser_source", badge_settings),

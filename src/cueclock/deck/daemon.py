@@ -27,6 +27,7 @@ from cueclock.deck.layout import (
     DUMP_PENDING_FACE,
     FLAG_PENDING_FACE,
     LAYOUT,
+    RACK_PENDING_FACE,
     REASON_KEYS,
     REPLAY_PENDING_FACE,
     ApiPost,
@@ -153,6 +154,18 @@ def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckS
     raise TypeError(f"{key.name}: action has no dispatch path")  # pragma: no cover
 
 
+def _start_replay(deck: Any, index: int, base: str, span: replay.Span) -> replay.Playing | None:
+    """Cue and cut to a replay, saying on the key which span is being cued.
+
+    Blocks the loop for as long as OBS takes to write the file and open it —
+    same deal as a ring dump, and longer now that a rack-length buffer is a
+    couple of hundred megabytes. The face is what makes that wait legible.
+    """
+    pending = RACK_PENDING_FACE if span is replay.Span.RACK else REPLAY_PENDING_FACE
+    _set_key(deck, index, faces.Face(pending))
+    return replay.show(base, span=span)
+
+
 def _score_post(action: ScoreAdjust, name: str, base: str, *, decrement: bool) -> Image.Image:
     result = client.post(base, action.path(decrement=decrement))
     print(f"{name}: {'-' if decrement else '+'}1 -> {result.status}", flush=True)
@@ -217,6 +230,17 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
     flashes: dict[int, float] = {}
     holds: dict[int, tuple[float, str]] = {}  # index -> (deadline, kind)
     reason_deadline: float | None = None  # flag reason page auto-files at this time
+
+    def begin_replay(index: int, span: replay.Span) -> None:
+        """Cue a replay and repaint what it changed — tap and hold share this."""
+        nonlocal playing, state
+        playing = _start_replay(deck, index, base, span)
+        if playing is None:
+            _set_key(deck, index, faces.flash_err("ERROR"))
+            flashes[index] = time.monotonic() + FLASH_S
+        state = replace(state, replaying=playing is not None)
+        _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+
     next_poll = time.monotonic() + POLL_S
     while True:
         now = time.monotonic()
@@ -252,6 +276,12 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 session.stop()
                 state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes))
+                continue
+            if kind == "replay":
+                # Held past the threshold: the whole rack, not the last shot.
+                # It fires here, under the finger, rather than on release —
+                # a hold that waited for the lift would feel like a slow tap.
+                begin_replay(index, replay.Span.RACK)
                 continue
             # A score key held past its threshold: take the point back.
             action = _BY_INDEX[index].action
@@ -301,27 +331,30 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 flashes[index] = time.monotonic() + FLASH_S
             continue
 
+        if isinstance(key.action, ReplayShow):
+            if playing is not None:
+                # Mid-replay the key is BACK, and has no spans: one press ends
+                # it, on the press rather than the release, and the matching
+                # release finds nothing armed.
+                if pressed:
+                    replay.stop(playing)
+                    playing = None
+                    state = replace(state, replaying=False)
+                    _draw_all(
+                        deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes)
+                    )
+            elif pressed:
+                holds[index] = (time.monotonic() + key.action.hold_s, "replay")
+            elif holds.pop(index, None) is not None:
+                # Released before the hold matured: the ordinary tap, the last
+                # shot. A `None` here means the hold already fired the rack.
+                begin_replay(index, replay.Span.SHOT)
+            continue
+
         if not pressed:
             continue
         if not state.up:
             print(f"{key.name}: ignored — server down", flush=True)
-            continue
-
-        if isinstance(key.action, ReplayShow):
-            if playing is not None:
-                replay.stop(playing)
-                playing = None
-            else:
-                # Blocks the loop for as long as OBS takes to write the file
-                # and open it — same deal as a ring dump, and the face says so.
-                _set_key(deck, index, faces.Face(REPLAY_PENDING_FACE))
-                playing = replay.show(base)
-                if playing is None:
-                    _set_key(deck, index, faces.flash_err("ERROR"))
-                    flashes[index] = time.monotonic() + FLASH_S
-                    continue
-            state = replace(state, replaying=playing is not None)
-            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
             continue
 
         if isinstance(key.action, FlagStart):

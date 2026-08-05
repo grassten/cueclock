@@ -157,7 +157,8 @@ class FakeObs:
 
 @pytest.fixture
 def shot_4s_ago(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(client, "get_json", lambda *a, **k: {"age_s": 4.0})
+    """The anchors a mid-rack press gets: a shot 4 s back, a rack 90 s back."""
+    monkeypatch.setattr(client, "get_json", lambda *a, **k: {"shot_age_s": 4.0, "rack_age_s": 90.0})
 
 
 def test_show_cuts_to_the_replay_scene_and_remembers_the_way_back(
@@ -365,6 +366,92 @@ def test_show_refuses_to_start_a_replay_from_inside_one(
     assert "save" not in fake.calls
 
 
+# --- spans: tap plays the shot, hold plays the rack ---
+
+
+def test_a_held_press_reaches_back_to_the_break_not_the_last_shot(
+    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
+) -> None:
+    fake = FakeObs(duration=300.0)  # a rack-length buffer
+    fake.install(monkeypatch)
+
+    playing = replay.show("http://x", span=replay.Span.RACK, now=100.0)
+
+    assert playing is not None
+    # 300 s file, rack 90 s back, 1.5 s lead, 0.1 s display lag.
+    assert fake.cursor_s == pytest.approx(208.6 - fake.snap_s)
+    assert playing.until == pytest.approx(100.0 + 91.4)
+
+
+def test_the_shot_ceiling_does_not_cap_a_rack(
+    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
+) -> None:
+    """`MAX_PLAY_S` protects a tap from a stale anchor; a hold is the request
+    to see more than that, so the only bound left is the buffer itself."""
+    fake = FakeObs(duration=300.0)
+    fake.install(monkeypatch)
+    monkeypatch.setattr(
+        client, "get_json", lambda *a, **k: {"shot_age_s": 4.0, "rack_age_s": 280.0}
+    )
+
+    playing = replay.show("http://x", span=replay.Span.RACK, now=0.0)
+
+    assert playing is not None
+    assert playing.until > replay.MAX_PLAY_S
+
+
+def test_a_rack_older_than_the_buffer_plays_all_of_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeObs(duration=300.0)
+    fake.install(monkeypatch)
+    monkeypatch.setattr(
+        client, "get_json", lambda *a, **k: {"shot_age_s": 4.0, "rack_age_s": 900.0}
+    )
+
+    playing = replay.show("http://x", span=replay.Span.RACK, now=0.0)
+
+    assert playing is not None
+    assert fake.cursor_s == 0.0
+    assert playing.until == pytest.approx(300.0)
+
+
+def test_a_tap_still_plays_the_last_shot_out_of_a_rack_length_buffer(
+    monkeypatch: pytest.MonkeyPatch, shot_4s_ago: None
+) -> None:
+    """A longer buffer must not lengthen an ordinary press — the shot cue is
+    measured from the *end* of the file, whatever the file's length."""
+    fake = FakeObs(duration=300.0)
+    fake.install(monkeypatch)
+
+    playing = replay.show("http://x", now=0.0)
+
+    assert playing is not None
+    assert playing.until == pytest.approx(5.4)
+    assert fake.cursor_s == pytest.approx(294.6 - fake.snap_s)
+
+
+def test_a_rack_that_has_not_started_plays_the_buffer_rather_than_failing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `no_clock` has no SET UP key, so `rack_age_s` can be null while shots
+    # are being taken. A press still shows something.
+    fake = FakeObs()
+    fake.install(monkeypatch)
+    monkeypatch.setattr(client, "get_json", lambda *a, **k: {"shot_age_s": 4.0, "rack_age_s": None})
+
+    playing = replay.show("http://x", span=replay.Span.RACK, now=0.0)
+
+    assert playing is not None
+    assert fake.cursor_s == 0.0
+
+
+def test_each_span_reads_its_own_anchor() -> None:
+    """The span *is* the field name, so a renamed anchor breaks in one place."""
+    assert replay.Span.SHOT.value == "shot_age_s"
+    assert replay.Span.RACK.value == "rack_age_s"
+
+
 def test_show_survives_a_server_that_cannot_say_when_the_shot_was(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -383,7 +470,9 @@ def test_show_reads_the_anchor_before_saving(monkeypatch: pytest.MonkeyPatch) ->
     fake = FakeObs()
     fake.install(monkeypatch)
     monkeypatch.setattr(
-        client, "get_json", lambda *a, **k: fake.calls.append("age") or {"age_s": 4.0}
+        client,
+        "get_json",
+        lambda *a, **k: fake.calls.append("age") or {"shot_age_s": 4.0, "rack_age_s": 90.0},
     )
 
     replay.show("http://x")

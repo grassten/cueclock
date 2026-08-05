@@ -160,6 +160,12 @@
         // covers is the tail of the balls settling.
         const BLACKOUT_S = 0.45;
 
+        // The countdown only starts inside this many seconds of the return.
+        // A shot replay is never longer than that, so it reads exactly as it
+        // always has; a held press replays a whole rack, and `LIVE IN 214` is
+        // a number nobody can use — the drain bar already says "a while yet".
+        const COUNTDOWN_FROM_S = 20;
+
         const params = new URLSearchParams(location.search);
 
         // ?s=<seconds> — how long this replay runs, so the bar drains in step
@@ -187,7 +193,8 @@
             const started = performance.now();
             const tick = () => {
                 const left = seconds - (performance.now() - started) / 1000;
-                secs.innerText = left > 0 ? `LIVE IN ${Math.ceil(left)}` : '';
+                const show = left > 0 && left <= COUNTDOWN_FROM_S;
+                secs.innerText = show ? `LIVE IN ${Math.ceil(left)}` : '';
             };
             tick();
             setInterval(tick, 100);

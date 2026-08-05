@@ -27,6 +27,7 @@ from cueclock.deck.layout import (
     FlagStart,
     Group,
     Key,
+    ReplayShow,
     ScoreAdjust,
     SessionToggle,
     cycle_label,
@@ -208,10 +209,12 @@ def test_an_unknown_cycle_value_still_renders_something() -> None:
     assert cycle_label("mode", None) == "—"
 
 
-def test_command_keys_never_carry_a_sub_line() -> None:
-    # The sub line means "one tap away". On a command key that would be a lie.
+def test_only_keys_with_a_second_gesture_carry_a_sub_line() -> None:
+    # The sub line means "one gesture away" — a tap on a cycle key, a hold on
+    # Session and Replay. On a key that does exactly one thing it would be a
+    # lie, and the whole face grammar rests on the sub line being trustworthy.
     for key in LAYOUT:
-        if not isinstance(key.action, Cycle | SessionToggle):
+        if not isinstance(key.action, Cycle | SessionToggle | ReplayShow):
             assert key.face(MATCH).sub is None, key.name
 
 
@@ -525,11 +528,22 @@ def test_replay_key_offers_the_verb_that_applies() -> None:
     live = BY_NAME["replay"].face(MATCH)
     mid_replay = BY_NAME["replay"].face(replace(MATCH, replaying=True))
     assert live.text == "REPLAY"
-    assert live.sub is None
+    # The hold is on the face or it does not exist — nothing else on the deck
+    # would tell you the key has a second span.
+    assert live.sub == "HOLD RACK"
     # "LIVE" alone would be a state on a key read as a command (rule 3), so the
     # face names the destination on its second line instead.
     assert mid_replay.text == "BACK"
     assert mid_replay.sub == "TO LIVE"
+
+
+def test_replay_hold_matches_the_other_deck_holds() -> None:
+    # One dwell to learn: the rare span sits behind the same hold as the rare
+    # score direction, and both are shorter than the session's deliberate stop.
+    replay_key, p1, session = (BY_NAME[n].action for n in ("replay", "p1", "session"))
+    assert isinstance(replay_key, ReplayShow) and isinstance(p1, ScoreAdjust)
+    assert isinstance(session, SessionToggle)
+    assert replay_key.hold_s == p1.hold_s < session.hold_s
 
 
 def test_replay_key_stays_on_the_spine_mid_replay() -> None:

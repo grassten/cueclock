@@ -1,4 +1,4 @@
-"""Instant replay: save the OBS buffer, seek to the shot, show it, come back.
+"""Instant replay: save the OBS buffer, seek to the anchor, show it, come back.
 
 The whole feature rests on one observation. The replay buffer holds the last
 ``RecRBTime`` seconds of **program output** — so a replay is a pixel-exact
@@ -8,10 +8,19 @@ start means twenty seconds of someone chalking.
 
 So playback seeks. The vision core already timestamps every ShotTaken to about
 20 ms of contact (`design.md` §2.1, checkpoint 11), the server reports how long
-ago that was (`GET /api/last_shot`), and the file ends at the save — which
+ago that was (`GET /api/replay_anchors`), and the file ends at the save — which
 makes the cue point arithmetic::
 
-    cursor = duration - shot_age + display_lag - lead
+    cursor = duration - anchor_age + display_lag - lead
+
+**Two spans, one key** (2026-08-05). A tapped Replay key anchors on the last
+shot; a held one anchors on the start of the rack (`Span`), which is the same
+arithmetic against the other age the server reports. Nothing else differs
+except the ceiling: a shot replay is capped at ``MAX_PLAY_S``, a rack replay is
+allowed the whole file, because "the whole rack" is exactly the request to lift
+that cap. What makes a rack fit at all is an OBS setting rather than code —
+`RecRBTime` has to be long enough to hold one (`scripts/setup_obs_replay.py`
+sets it), and 20 s never was.
 
 No cue-stick detection is involved, and deliberately so: the detector discards
 the stick/arm blob by design (it is the oversized occluder), so finding it
@@ -53,6 +62,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from enum import Enum
 
 from cueclock.deck import client, obsws
 
@@ -62,7 +72,34 @@ SCENE_NAME = "Replay"
 MEDIA_INPUT = "Replay Media"
 BADGE_INPUT = "Replay Badge"
 
+
+class Span(Enum):
+    """How far back a press reaches — the two things there are to watch.
+
+    The value is the field of `GET /api/replay_anchors` that anchors it, so a
+    span is a lookup rather than a branch, and a renamed field fails at the one
+    place that reads it.
+    """
+
+    SHOT = "shot_age_s"  # the last shot: a tap
+    RACK = "rack_age_s"  # this rack from its break: a hold
+
+
 # ---------- measured / chosen constants ----------
+
+BUFFER_TARGET_S = 300.0
+"""How much program output OBS should keep, in seconds — the setting a rack
+replay lives or dies by, and the one thing this feature needs that is not code.
+
+`scripts/setup_obs_replay.py` writes it into the active profile's `RecRBTime`;
+it is stated here because it is a *replay* decision, not a setup-script one.
+Five minutes covers a rack with room to spare, and costs about 200 MB: measured
+2026-08-05, the saved files run **5.3 Mbps ≈ 0.66 MB/s** (`ffprobe`, 18.4 s /
+12.2 MB), which is also what each Replay press now writes to `~/Movies` — up
+from 12 MB, and worth knowing before a long session fills a disk.
+
+Raising it does not change a tapped press: `MAX_PLAY_S` caps that from the end
+of the file, whatever the file's length."""
 
 LEAD_S = 1.5
 """How much runway before the shot. Enough to watch the stroke land, short
@@ -75,8 +112,13 @@ The detector's timestamp is when the *vision core* saw the shot; the recording
 shows it this much later, so the seek lands where the video is."""
 
 MAX_PLAY_S = 20.0
-"""Ceiling on one replay. A stale anchor (no shot for a minute, then a press)
-must not strand the TV staring at the whole buffer."""
+"""Ceiling on a *shot* replay. A stale anchor (no shot for a minute, then a
+press) must not strand the TV staring at the whole buffer.
+
+A rack replay lifts this to the file's own length instead — that request is
+precisely "show me more than the last shot", so the cap that protects a tap
+would be the bug in a hold. What bounds a rack replay is the buffer
+(`BUFFER_TARGET_S`) and the Replay key itself, which says BACK throughout."""
 
 MIN_PLAY_S = 2.0
 """Floor. Pressing the instant the balls stop should still show something."""
@@ -84,9 +126,21 @@ MIN_PLAY_S = 2.0
 SPEED = 1.0
 """Playback rate. 1.0 because OBS records at 30 fps and half speed from 30 fps
 is frame-doubled mush — real slow-mo needs OBS set to 60 fps first, at which
-point this becomes 0.5 and the setup script's `speed_percent` follows it."""
+point this becomes 0.5 and the setup script's `speed_percent` follows it.
 
-SAVE_TIMEOUT_S = 3.0  # how long to wait for OBS to write the file
+Fast-forward has no such problem (dropping frames needs no frames that were
+never recorded), so a rack replay at 2x is one per-press `speed_percent` away —
+but it is *unverified* whether OBS honours that setting on a hardware-decoded
+media source, and getting it wrong is not cosmetic: `play_s` would be half the
+real airtime and the deck would cut back to live mid-rack. So it stays 1.0
+until someone watches a 2x replay end where the arithmetic says it will."""
+
+SAVE_TIMEOUT_S = 8.0
+"""How long to wait for OBS to write the file.
+
+Was 3.0 against a 20 s buffer (~12 MB). A rack-length buffer writes ~200 MB per
+press, so the ceiling grew with it — the wait is bounded by a poll for a
+changed path, and only a save that never lands ever pays the whole timeout."""
 LOAD_TIMEOUT_S = 2.0  # how long to wait for the media source to report a duration
 SEEK_TIMEOUT_S = 1.5  # how long to keep re-asking for a seek that hasn't landed
 POLL_S = 0.1
@@ -142,7 +196,7 @@ class Playing:
 
 def cue_point(
     duration_s: float,
-    shot_age_s: float | None,
+    anchor_age_s: float | None,
     *,
     lead_s: float = LEAD_S,
     display_lag_s: float = DISPLAY_LAG_S,
@@ -150,19 +204,21 @@ def cue_point(
     min_play_s: float = MIN_PLAY_S,
     speed: float = SPEED,
 ) -> CuePoint:
-    """Where to start playing a just-saved replay, given the last shot's age.
+    """Where to start playing a just-saved replay, given its anchor's age.
 
-    ``shot_age_s`` is measured at the save, and the file ends at the save, so
-    the shot sits ``shot_age_s`` from the end — plus ``display_lag_s``, because
-    the recording lags the detector.
+    ``anchor_age_s`` is measured at the save, and the file ends at the save, so
+    the anchor sits ``anchor_age_s`` from the end — plus ``display_lag_s``,
+    because the recording lags the detector. The anchor is the last shot for a
+    tapped press and the rack's break for a held one; the arithmetic cannot
+    tell them apart, which is why there is only one of it.
 
-    No shot this session, or a shot older than the buffer, plays the whole
+    No anchor this session, or one older than the buffer, plays the whole
     file (capped) rather than failing: a press always shows something.
     """
-    if shot_age_s is None:
+    if anchor_age_s is None:
         cursor = duration_s - max_play_s
     else:
-        cursor = duration_s - shot_age_s + display_lag_s - lead_s
+        cursor = duration_s - anchor_age_s + display_lag_s - lead_s
     cursor = min(cursor, duration_s - min_play_s)  # always some footage left
     cursor = max(cursor, duration_s - max_play_s)  # never more than the ceiling
     cursor = max(0.0, cursor)  # never before the file starts
@@ -227,8 +283,12 @@ def _seek(target_s: float, deadline: float) -> bool:
         time.sleep(POLL_S)
 
 
-def show(base: str, *, now: float | None = None) -> Playing | None:
+def show(base: str, *, span: Span = Span.SHOT, now: float | None = None) -> Playing | None:
     """Save the buffer and cut to it on the TV. None if anything failed.
+
+    ``span`` picks which anchor to seek to — the last shot (tap) or the start
+    of the rack (hold). Everything downstream of the cue point is identical:
+    one file, one seek, one badge, one way back.
 
     Every failure leaves the program scene alone: an unreachable OBS, a missing
     Replay scene or a save that never lands means the TV keeps showing live,
@@ -247,9 +307,9 @@ def show(base: str, *, now: float | None = None) -> Playing | None:
     # Read the anchor before saving, so its age matches the file's end. Its own
     # request rather than the 2 s state poll: two seconds of staleness is two
     # seconds of the replay starting in the wrong place.
-    payload = client.get_json(base, "/api/last_shot")
-    raw_age = payload.get("age_s") if payload else None
-    shot_age_s = float(raw_age) if isinstance(raw_age, int | float) else None
+    payload = client.get_json(base, "/api/replay_anchors")
+    raw_age = payload.get(span.value) if payload else None
+    anchor_age_s = float(raw_age) if isinstance(raw_age, int | float) else None
 
     before = obsws.last_replay_path()
     if not obsws.save_replay_buffer():
@@ -270,7 +330,14 @@ def show(base: str, *, now: float | None = None) -> Playing | None:
         print(f"replay: {MEDIA_INPUT} never reported a duration", flush=True)
         return None
 
-    cue = cue_point(duration, shot_age_s)
+    # A held press asks for more than the last shot, so the ceiling that
+    # protects a tap becomes the file itself — the buffer is the only bound
+    # left, and the key says BACK for the whole time it runs.
+    cue = cue_point(
+        duration,
+        anchor_age_s,
+        max_play_s=MAX_PLAY_S if span is Span.SHOT else duration,
+    )
 
     # Start the badge loading now — before the seek, whose round trips it can
     # hide behind — and reload it explicitly. The source deliberately does not
@@ -292,9 +359,10 @@ def show(base: str, *, now: float | None = None) -> Playing | None:
     if not obsws.set_scene(SCENE_NAME):
         return None
 
-    age = "no shot" if shot_age_s is None else f"shot {shot_age_s:.1f}s ago"
+    anchor = "no anchor" if anchor_age_s is None else f"{span.name.lower()} {anchor_age_s:.1f}s ago"
     print(
-        f"replay: {age}, {duration:.1f}s file, cue {cue.cursor_s:.1f}s, {cue.play_s:.1f}s on air",
+        f"replay: {anchor}, {duration:.1f}s file, "
+        f"cue {cue.cursor_s:.1f}s, {cue.play_s:.1f}s on air",
         flush=True,
     )
     started = time.monotonic() if now is None else now

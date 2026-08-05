@@ -152,16 +152,28 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
     async def api_state() -> dict[str, object]:
         return hub.payload()  # same composed payload the WS broadcasts
 
-    @app.get("/api/last_shot")
-    async def api_last_shot() -> dict[str, object]:
-        """How long ago the last shot was seen — the instant replay's anchor.
+    @app.get("/api/replay_anchors")
+    async def api_replay_anchors() -> dict[str, object]:
+        """Both points the instant replay can seek to, as ages in seconds.
 
-        Its own endpoint rather than a field of `/api/state` because the deck
-        polls state every 2 s and this answer is only worth having at the
+        `shot_age_s` is the last ShotTaken (a tapped Replay key), `rack_age_s`
+        is where this rack began (a held one) — either may be null, which the
+        deck reads as "play as far back as the buffer goes".
+
+        Its own endpoint rather than fields of `/api/state` because the deck
+        polls state every 2 s and these answers are only worth having at the
         instant of the press: two seconds of staleness is two seconds of the
-        replay starting in the wrong place.
+        replay starting in the wrong place. Both in one response because a
+        press only ever needs one round trip, and it wants them measured
+        against the same instant — the save that ends the file.
+
+        Replaced `GET /api/last_shot` (2026-08-05) rather than growing a second
+        field onto it: an endpoint named for one anchor that returns two is a
+        name that lies. The old URL 404s deliberately — a deck daemon left on
+        the old build should fail visibly, not quietly cue every replay to the
+        top of the buffer.
         """
-        return {"age_s": hub.last_shot_age()}
+        return {"shot_age_s": hub.last_shot_age(), "rack_age_s": hub.rack_age()}
 
     @app.get("/api/score")
     async def api_score() -> dict[str, object]:

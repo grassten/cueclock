@@ -232,6 +232,73 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 65 — one Replay key, two spans: tap the shot, hold
+  the rack):** Steven asked for a choice at the Replay key — the last shot, or
+  the whole rack. It is one key still, on the tap/hold rule the score keys
+  already use, because the common press has to stay one press with nothing to
+  read (the alternative, a Flag-style chooser page, puts either a second press
+  or a 1.5 s auto-default in front of every replay).
+
+  **Almost none of the work was the arithmetic.** `cue_point` was already
+  generic — `cursor = duration − anchor_age + display_lag − lead` does not care
+  what the anchor is — so a rack replay is the same call against a second age,
+  and `Span` (whose value *is* the field name it reads) is the whole branch.
+  The one behavioural difference: `MAX_PLAY_S` still caps a tap at 20 s, and a
+  hold lifts the cap to the file's own length, because "play the rack" is
+  exactly the request to lift it.
+
+  **The blocker was the buffer, not the code.** `RecRBTime` was 20 s, which has
+  no rack in it. Now 300 s, written into the active profile by
+  `setup_obs_replay.py --buffer-seconds` rather than clicked into Settings, so
+  the length the deck assumes and the length OBS keeps cannot drift. Measured
+  2026-08-05 (`ffprobe` on real saves: 18.4 s / 12.2 MB ⇒ 5.3 Mbps ≈ 0.66 MB/s):
+  five minutes is ~200 MB of RAM in OBS, and every press now writes ~200 MB to
+  `~/Movies` instead of 12 MB — hence `SAVE_TIMEOUT_S` 3 → 8 s. OBS also caps
+  the buffer by memory, silently, whichever binds first, so the script reports
+  `RecRBSize` in *seconds*: a buffer shorter than it claims would otherwise read
+  as a bug in the seek.
+
+  **The rack anchor is the break, not the racking.** `Hub` stamps the SET UP
+  press and lets the next shot supersede it, ahead of the same gates the shot
+  anchor already sits ahead of — so a rack replay opens on the break, and a
+  `no_clock` drill (no SET UP key out there) anchors on its first shot. Null
+  falls back to "as much of the buffer as there is", which is what a stale shot
+  anchor already did.
+
+  `GET /api/last_shot` → **`GET /api/replay_anchors`** (`{shot_age_s,
+  rack_age_s}`): renamed rather than grown a field, one round trip, both ages
+  measured against the same instant. The old URL 404s on purpose — a deck left
+  on the old build should fail visibly, not quietly cue every replay to the top
+  of the buffer (`/score`'s rule, checkpoint 61).
+
+  Face grammar amended: a key carrying a hold now names it on its second line
+  (`REPLAY` / `HOLD RACK`, beside Session's `ON` / `HOLD 1s`), because a gesture
+  nothing states is a feature only its author knows about. A mature hold fires
+  under the finger and says `RACK…`; a tap fires on release. The badge stops
+  counting `LIVE IN n` above 20 s — over a five-minute replay that number is one
+  nobody can use.
+
+  Deferred, deliberately: **2× rack playback.** Fast-forward is honest at 30 fps
+  and it is one per-press `speed_percent` away, but nobody has verified OBS
+  honours that on a hardware-decoded media source — and if it ignores it,
+  `play_s` is half the real airtime and the deck cuts back to live mid-rack.
+
+  **Verified live the same day**, both spans driven against the real OBS with
+  the server up and no camera (so the shot anchor was null on purpose). A
+  68.2 s buffer — itself the proof the 300 s setting took, since the old one
+  capped the file at 20 — gave `rack 37.2s ago → cue 29.6s, 38.6s on air` and
+  `no anchor → cue 48.2s, 20.0s on air`; both seeks landed, both cut to Replay,
+  both returned to Stream Detail. `show()` blocked 1.2–1.4 s, up from checkpoint
+  49's 0.34–0.63 s, which is the bigger file. `RecRBTime` is now 300 s in the
+  profile, the buffer was restarted to pick it up, and the deck daemon was
+  relaunched onto the new layout.
+
+  363 unit tests green, including a new `tests/unit/test_deck_loop.py` that
+  drives `_loop` with a fake device — the first test of the deck's press
+  routing, because tap/hold is the one thing no face test can see and its
+  failure mode is a key that quietly plays the wrong span. Mutation-checked both
+  ways (hold→SHOT, and a release that fires after a hold); each mutant is caught.
+
 - **2026-08-05 (checkpoint 64 — the frozen cue keeps the flag while the real one
   leaves; and a break lost by 4 mm/s):** two `flag_missed` dumps, two
   independent bugs, both fixed.
