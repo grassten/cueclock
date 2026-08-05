@@ -357,6 +357,24 @@ EXPECTED: dict[
     # strike as a kiss. The cue self-vetoed. Cold replay rebuilds
     # identity from scratch and cannot reproduce it.
     "stroke_gear_margin_0802": (1, 0, 1, 1),
+    # 2026-08-05 morning flag (checkpoint 64) — a `flag_missed` dump, match
+    # mode. Ground truth from the table: Steven took a shot, and vision never
+    # saw it. Live the clock ran down through the stroke from 30 to 10.95 and
+    # he took an extension to avoid a false violation; the detect loop was
+    # healthy at 76-78 Hz the whole time, so this is not starvation.
+    #
+    # The cue's own track froze at its rest spot and KEPT the whiteness vote
+    # while the ball was struck and gone: the tracker holds a still track
+    # through merged blobs and coasts it for still_coast_s (3 s), the struck
+    # ball re-emerged 171 mm away — past the 100 mm association gate — as a
+    # new track, and the frozen phantom's stale whiteness outranked the live
+    # one for 2.8 s. So the flag-borne handoff never evaluated the real ball,
+    # and cold replay produced **zero events over the whole 20 s**.
+    #
+    # This is the first cold-reproducible member of the identity-drift class
+    # stroke_gear_margin_0802 could only show warm. Pins the cue's remembered
+    # rest as the scan's third identity anchor: one shot, one settle.
+    "phantom_flag_strike_0805": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -400,6 +418,7 @@ REFERENCES: dict[str, str] = {
     "address_chatter_miss_0801": "empty_table_0801",
     "stroke_gear_veto_0802": "empty_table_0801",
     "stroke_gear_margin_0802": "empty_table_0801",
+    "phantom_flag_strike_0805": "empty_table_0801",
 }
 
 
@@ -603,6 +622,30 @@ def test_settle_stall_settle_is_prompt() -> None:
     post_shot = [t for t in settles if t > 6.9]
     assert post_shot, "the shot's settle never fired — the settle stall is back"
     assert 9.7 <= post_shot[0] <= 10.7, f"settle at {post_shot[0]:.2f}s — outside rest+2 dwells"
+
+
+def test_phantom_flag_shot_fires_at_the_stroke() -> None:
+    """The handoff must anchor on the stroke, not on the vote recovering.
+
+    phantom_flag_strike_0805: the cue is last detected at its rest spot at
+    10.030 s (clip-relative), undetected for 0.173 s while it travels 171 mm,
+    and re-emerges at 10.228 s as a merged blob 193 mm out at 2281 mm/s. The
+    fire confirms at 10.27 s off the cue's remembered rest.
+
+    Counts alone would stay green through the bug that matters here. The
+    tracker's own recovery path eventually reaches the same place — the frozen
+    phantom dies at its 3 s coast budget (13.04 s), the regrab grace expires a
+    second later, and the flag lands on the real ball around 14.06 s — so a
+    shot minted from *that* would still count 1. It would also be ~3.8 s late
+    on a 30 s clock, which is the whole failure. The window pinned here is the
+    stroke plus a confirm, so riding the vote's recovery fails it.
+    """
+    if not (CLIPS / "phantom_flag_strike_0805").exists():
+        pytest.skip("clip phantom_flag_strike_0805 not recorded")
+    events = _run_clip("phantom_flag_strike_0805", _reference_model("empty_table_0801"))
+    shots = [e.t for e in events if isinstance(e, ShotTaken)]
+    assert shots, "the stroke never fired — the phantom-flag miss is back"
+    assert 10.0 <= shots[0] <= 10.8, f"shot at {shots[0]:.2f}s — not anchored on the stroke"
 
 
 def test_address_chatter_shot_fires_at_impulse() -> None:

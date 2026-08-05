@@ -351,6 +351,29 @@ def test_idle_break_gate() -> None:
     assert hub.clock.state is State.MOTION
 
 
+def test_idle_break_gate_passes_the_2996_break() -> None:
+    """The floor must not eat a normal break by 4 mm/s (checkpoint 64).
+
+    flag_missed, 2026-08-03 17:37:23Z: Steven pressed New Rack, broke, and the
+    gate ignored the shot at **2996 mm/s** against a 3000 floor. Ground truth
+    is his: a normal-power break. The clock sat IDLE through it and he
+    recovered by switching to run_out and pressing Restart — the table-side
+    intervention the old floor's "the Start key recovers" trade-off waved off.
+
+    2500 is anchored between the two ground-truth-labeled journal populations
+    (see MATCH_BREAK_FLOOR_MMS): the confirmed break at 2996 and the worst
+    labeled racking impulse at 2072. Both edges are pinned here, so neither
+    can drift back over the other.
+    """
+    hub = Hub()
+    asyncio.run(hub.shot_taken(speed_mms=2996.0))  # the break the gate ate
+    assert hub.clock.state is State.MOTION
+
+    hub = Hub()
+    asyncio.run(hub.shot_taken(speed_mms=2072.0))  # journal-pinned racking phantom
+    assert hub.clock.state is State.IDLE
+
+
 def test_idle_break_gate_reads_speed_not_birth() -> None:
     """A break-speed newborn fire starts the rack (checkpoint 57, closing #10).
 

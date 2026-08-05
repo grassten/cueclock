@@ -13,7 +13,7 @@ Hardware installed and calibrated; the clock runs real practice sessions.
 Detection accuracy work is ongoing — every live miss gets captured by a
 Stream Deck "Flag" key (last ~20 s of raw frames → a clip named for the
 failure reason) and turned into a graded regression scenario. Current
-corpus: 22 scenarios, all green.
+corpus: 54 scenarios, all green.
 
 | Piece | State |
 |---|---|

@@ -27,6 +27,7 @@ may omit ``raw_speed_mms``; it falls back to ``speed_mms``.
 from collections import deque
 from dataclasses import dataclass, field
 from math import hypot
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -318,6 +319,29 @@ class EventConfig:
     # The measurements are kept here because they are real and were expensive;
     # the gate is not, because no clip exercises it and untested gates rot.
     newborn_confirm_min_s: float = 0.10
+    # Same idea for the handoff path (phantom_flag_strike_0805), and measured
+    # the same way. A handoff candidate is rest-anchored, so it does NOT run
+    # the merged gate — a ball struck out of an address is merged with the
+    # stick that struck it (measured 100% merged confirm observations on the
+    # real strike), which is exactly why the birth path cannot be the fix. The
+    # observation fraction carries the whole carried-ball judgement instead, so
+    # it has to be a measurement rather than three lucky frames.
+    #
+    # Observation fraction vs. confirm age, over the clips that must fire and
+    # the hand class that must not:
+    #
+    #   age    strike 0805  scratch_shot   cue_grab  pickup_newborn  shaft_adjust
+    #   0.10       1.00        1.00          1.00        1.00           0.25
+    #   0.15       1.00        1.00          0.82        0.92           0.21
+    #   0.20       1.00        1.00          0.64        0.69           0.22
+    #
+    # 0.20 s is the first age at which the existing `newborn_confirm_obs_min`
+    # (0.9) separates them — at 0.10 s two of the three carries read a perfect
+    # 1.00 and at 0.15 s pickup_newborn's 0.92 still clears the floor. So the
+    # fraction needs no new constant; only the wait does. It leaves a third of
+    # `strike_confirm_window_s` for the confirm to land, and 0.2 s is nothing
+    # against a 30 s clock (same trade as newborn_confirm_min_s).
+    handoff_confirm_min_s: float = 0.20
     # Flicker filter: hand/stick fragments pass the detector's geometry gates
     # only intermittently, so their tracks are mostly coasted — measured 7-43%
     # observed on the flagged live captures (missed_strike_0731,
@@ -405,6 +429,10 @@ class _StrikeCandidate:
     # holds the cue flag at open time: the candidate then follows that track
     # directly instead of the (empty) cue flag.
     newborn: bool = False
+    # Handoff-origin candidates (phantom-flag strike) are rest-anchored, so
+    # they skip the merged gate a struck-out-of-address ball cannot pass — and
+    # pay for it with an observation floor held open long enough to measure.
+    handoff: bool = False
     last_raw: float | None = None
     ball_id: int | None = None
     impulse_raw: float = 0.0  # max raw speed seen while the candidate lives.
@@ -570,12 +598,19 @@ class EventEngine:
         # 2220 mm/s) dies on the three measured confirm gates instead:
         # observation ≥ 0.9, raw-step ratio ≤ 2, merged fraction ≤ 0.5.
         self._newborn_disarmed_at: float | None = None
+        # Last time the whiteness-vote holder was actually *observed*, not
+        # coasted. The handoff path (_maybe_open_handoff) reads it to tell the
+        # cue's own continuation from a bystander: only a track born after the
+        # cue went dark can be the ball that left the rest spot.
+        self._cue_last_obs_t: float = float("-inf")
 
     def update(self, t: float, balls: list[BallState]) -> list[Event]:
         events: list[Event] = []
         cfg = self._cfg
         cue = next((b for b in balls if b.is_cue), None)
         was_moving = self._table_moving
+        if cue is not None and cue.observed:
+            self._cue_last_obs_t = t
 
         # Birth registry + roster founding. Tracks present within the first
         # creep window of engine life are founding roster members (the engine
@@ -643,7 +678,9 @@ class EventEngine:
             # parked_vote_strike_0801). On a quiet table the only thing that
             # can materialize at impulse speed is the ball that was just
             # struck: a fresh track carries the identity by its birth
-            # conjunction, an old roster track by its own rest.
+            # conjunction, an old roster track by its own rest, and a track
+            # that stepped off the cue's own remembered rest inside the handoff
+            # radius by that rest (the phantom-flag case, _maybe_open_handoff).
             cue_quiet = cue is None or not cue.observed
             cue_raw = (
                 0.0
@@ -658,7 +695,12 @@ class EventEngine:
                     if raw < cfg.strike_impulse_mms or not ball.observed:
                         continue
                     if cue_quiet:
-                        self._maybe_open_newborn(t, ball, raw, follow_ball=True)
+                        # Strongest anchor first: the cue's own remembered rest
+                        # carries chain of custody, so it admits the merged
+                        # emergence the birth path must reject as a carry.
+                        self._maybe_open_handoff(t, ball, raw)
+                        if self._candidate is None:
+                            self._maybe_open_newborn(t, ball, raw, follow_ball=True)
                     if self._candidate is None:
                         self._maybe_open_rested(t, ball, raw)
                     if self._candidate is not None:
@@ -929,10 +971,39 @@ class EventEngine:
             # _axis_killed_t) and the honest impulse arrives right behind.
             self._maybe_open_newborn(t, cue, raw)
             return
-        rest_t0, rest_x, rest_y = self._cue_rest
+        if self._open_from_rest(t, cue, raw, self._cue_rest, follow_ball=False) == "too_far":
+            # Impulse far from the remembered rest: the rest may be anchored to
+            # the wrong ball (flag parked elsewhere while the real cue was
+            # occluded) — the birth evidence gets its say.
+            self._maybe_open_newborn(t, cue, raw)
+
+    def _open_from_rest(
+        self,
+        t: float,
+        ball: BallState,
+        raw: float,
+        rest: tuple[float, float, float],
+        follow_ball: bool,
+    ) -> Literal["opened", "rejected", "too_far"]:
+        """Open a rest-anchored candidate: dwell + carom guard + axis seed.
+
+        Shared by the flag-borne path (`_maybe_open_candidate`, where `ball` is
+        the flag holder itself) and the handoff path (`_maybe_open_handoff`,
+        where the flag is stuck on a coasting phantom and `ball` is the reborn
+        track carrying the cue's identity). The evidence is the same either
+        way: the impulse steps off a spot the cue held still for a full dwell,
+        no ball-mover reached that spot, and the departure is long enough to
+        seed a trajectory axis.
+
+        `too_far` is reported instead of a plain rejection so the caller can
+        fall through to the birth evidence — an impulse beyond the handoff
+        radius means the rest may be anchored to the wrong ball entirely.
+        """
+        cfg = self._cfg
+        rest_t0, rest_x, rest_y = rest
         if self._cue_last_still_t - rest_t0 < cfg.pre_strike_dwell_s:
-            return
-        dx, dy = cue.x_mm - rest_x, cue.y_mm - rest_y
+            return "rejected"
+        dx, dy = ball.x_mm - rest_x, ball.y_mm - rest_y
         # Gear-behind exemption (stroke_gear_veto_0802, checkpoint 50): a hand
         # stamp inside carom_reach_mm is not, by itself, evidence of a grab.
         # The player's own stick/bridge blob stamps from *behind* the cue on a
@@ -956,21 +1027,18 @@ class EventEngine:
         # the cue away from its bringer, so direction cannot judge them.
         departing = hypot(dx, dy) >= cfg.strike_dir_seed_min_mm
         for _mt, mx, my, mid, hand in self._recent_movers:
-            if mid == cue.ball_id:
+            if mid == ball.ball_id:
                 continue
             if hypot(mx - rest_x, my - rest_y) > cfg.carom_reach_mm:
                 continue
             if hand and departing and (mx - rest_x) * dx + (my - rest_y) * dy < 0.0:
                 continue  # the stroke's own gear, behind the departing cue
-            return  # carom guard: a mover reached the rest spot
+            return "rejected"  # carom guard: a mover reached the rest spot
         norm = hypot(dx, dy)
-        if norm < cfg.strike_dir_seed_min_mm or norm > cfg.strike_handoff_radius_mm:
-            if norm > cfg.strike_handoff_radius_mm:
-                # Impulse far from the remembered rest: the rest may be
-                # anchored to the wrong ball (flag parked elsewhere while the
-                # real cue was occluded) — the birth evidence gets its say.
-                self._maybe_open_newborn(t, cue, raw)
-            return  # too little displacement to trust as a direction, or too far
+        if norm > cfg.strike_handoff_radius_mm:
+            return "too_far"
+        if norm < cfg.strike_dir_seed_min_mm:
+            return "rejected"  # too little displacement to trust as a direction
         # Rest memory is kept until a candidate *fires*: a bogus candidate
         # (e.g. the impact yanking the old track's centroid) then fails the
         # axis check and the real impulse can still re-open from the same rest.
@@ -981,9 +1049,83 @@ class EventEngine:
             dir_x=dx / norm,
             dir_y=dy / norm,
             impulse_raw=raw,
-            x_open=cue.x_mm,
-            y_open=cue.y_mm,
+            x_open=ball.x_mm,
+            y_open=ball.y_mm,
+            ball_id=ball.ball_id if follow_ball else None,
         )
+        return "opened"
+
+    def _maybe_open_handoff(self, t: float, ball: BallState, raw: float) -> None:
+        """Phantom-flag handoff strike (flag_missed_2, checkpoint 64).
+
+        The addressed cue's own track can be frozen at its rest spot and keep
+        the whiteness vote while the ball is struck and gone. Three mechanisms
+        compose: the tracker holds a still track in place through merged blobs
+        and coasts it for `still_coast_s` (3 s) on the premise that an
+        addressed ball "cannot move unseen"; the struck ball re-emerges beyond
+        the 100 mm association gate and so founds a *new* track; and the frozen
+        phantom's whiteness is never resampled, so its stale score outranks the
+        live one and the flag never transfers.
+
+        Measured on flag_missed_2: the cue was last detected at its rest spot
+        (1529, 872) at 10.030 s, went undetected entirely for 0.173 s while it
+        travelled 171 mm, and re-emerged at 10.228 s as a merged blob 193 mm
+        away at 2281 mm/s — with the flag still on the phantom for 2.8 s more.
+        At that impulse frame every gate of the flag-borne handoff already
+        passed (dwell 9.72 s, still-stamp gap 0.013 s, quiet table, no mover
+        within `carom_reach_mm` of the rest, 193 mm inside the 250 mm radius).
+        The strike was missed for one reason only: the flag was on the wrong
+        track, so `_maybe_open_candidate` never evaluated this ball.
+
+        So the cue's remembered rest becomes a third identity anchor for the
+        scan, beside birth conjunction (`_maybe_open_newborn`) and a roster
+        ball's own rest (`_maybe_open_rested`). It introduces no constant: the
+        dwell, step, radius and carom guard are the flag-borne path's, reused
+        verbatim through `_open_from_rest`.
+
+        The rest-anchored confirm is the point of routing it here rather than
+        through the birth path. A ball struck out of an address emerges merged
+        with the stick that struck it — this one reads merged on nearly every
+        frame — and `newborn_merged_frac_max` correctly reads that as a carried
+        ball. Chain of custody from the cue's own rest is what makes the merge
+        admissible, exactly as it is for an ordinary streaking shot.
+        """
+        cfg = self._cfg
+        if self._cue_rest is None:
+            return
+        if raw < cfg.newborn_impulse_mms:
+            # The birth path's floor, not the flag-borne one. The rest spot
+            # vouches for the *place* the impulse came from, but nothing
+            # vouches for this track — so a slow thing appearing near the
+            # cue's rest is still far more likely carried than struck, exactly
+            # as it is for a birth. At 110 the scan handed the slot to
+            # hand/stick fragments near the rest and cost soft_shot its real
+            # shot outright.
+            return
+        if self._newborn_disarmed_at is not None:
+            return
+        if self._table_moving:
+            # Same latch guard as the other two scan paths: mid-scatter, a
+            # reborn ball's impulse near the cue's stale rest is a carom or
+            # streak churn, not a strike.
+            return
+        if t - self._cue_last_still_t > cfg.strike_step_max_s:
+            return  # ramp, not a step — see _maybe_open_candidate
+        born = self._first_seen.get(ball.ball_id)
+        if born is None or born <= self._cue_last_obs_t:
+            # The identity claim, and the whole reason this path may trust a
+            # merged emergence: the cue went dark and *then* this track
+            # appeared, so it is the cue's continuation rather than a
+            # bystander. A stick fragment, a reaching hand or an established
+            # ball all pre-date the cue going dark and are refused here —
+            # which is what keeps the pickup/grab class (cue_grab_0801,
+            # pickup_newborn_0801, pickup_snatch_0801,
+            # ball_in_hand_pickup_0801) out of a path that skips the
+            # carried-ball gates. No constant: it is an ordering test.
+            return
+        opened = self._open_from_rest(t, ball, raw, self._cue_rest, follow_ball=True)
+        if opened == "opened" and self._candidate is not None:
+            self._candidate.handoff = True
 
     def _maybe_open_newborn(
         self, t: float, cue: BallState, raw: float, follow_ball: bool = False
@@ -1238,6 +1380,36 @@ class EventEngine:
             # gates already carry the rest-cycle evidence.
             self._candidate = None
             return []
+        if candidate.handoff:
+            if t - candidate.t0 < cfg.handoff_confirm_min_s:
+                return []  # too early to judge a carry — see handoff_confirm_min_s
+            open_gap = hypot(candidate.x_open - candidate.x0, candidate.y_open - candidate.y0)
+            if displacement < open_gap + cfg.strike_min_travel_mm:
+                # It must be *leaving* the rest spot, not arriving at it. The
+                # axis check tests direction only, and a hand sweeping in along
+                # the stroke line holds a near-perfect axis dot while its
+                # distance from the anchor shrinks — so the player's own
+                # approaching stick/hand blob, which is born right when the cue
+                # goes dark and ends inside the handoff radius, satisfied every
+                # other gate and fired. It cannot be caught by the carom guard
+                # like other movers can, because here it *is* the candidate and
+                # the guard skips the candidate's own stamps.
+                #
+                # A struck ball's distance from the rest grows monotonically off
+                # the anchor (193 -> 221 mm over this window on the real
+                # strike); a bringer's shrinks. No new constant: the margin is
+                # the travel floor the candidate must clear anyway. Held rather
+                # than killed, so a real strike that is briefly flat still has
+                # the rest of its window.
+                return []
+            if not self._observed_since(cue, candidate.t0):
+                # A hand keeps losing the ball it is carrying (fingers wrap it,
+                # long coast runs): measured 0.64 / 0.69 / 0.22 observed over
+                # this window against 1.00 on both real handoff strikes. This
+                # is the only carried-ball gate the path has, since the merged
+                # one cannot apply.
+                self._candidate = None
+                return []
         if candidate.newborn:
             self._newborn_disarmed_at = t  # one shot per rest cycle
         self._candidate = None

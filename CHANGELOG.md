@@ -232,6 +232,146 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 64 — the frozen cue keeps the flag while the real one
+  leaves; and a break lost by 4 mm/s):** two `flag_missed` dumps, two
+  independent bugs, both fixed.
+
+  **The clock ran down through a real shot (`flag_missed_2`, 13:54 UTC, match
+  mode).** Ground truth is Steven's: he shot, and vision never saw it. The
+  detect loop was healthy at 76–78 Hz throughout, so this is not the
+  contention artifact; the clock counted 30 → 10.95 and he took an extension to
+  avoid a false violation. Cold replay produced **zero events over the whole
+  20 s**, which makes it the first cold-reproducible member of the
+  identity-drift class `stroke_gear_margin_0802` could only show warm.
+
+  The addressed cue's own track froze at its rest spot and **kept the whiteness
+  vote** while the ball was struck and gone. Three tracker mechanisms compose:
+  a still track matched by a merged blob is *held* in place (checkpoint 28) and,
+  unmatched, coasts for `still_coast_s` — 3 s, on the premise that an addressed
+  ball cannot move unseen; the struck ball re-emerges past the 100 mm
+  association gate and so founds a **new** track; and a frozen track's color is
+  never resampled, so its stale whiteness (0.73) outranks the live one
+  (0.60–0.72) and the flag never transfers. Measured: the cue was last detected
+  at its rest (1529, 872) at 10.030 s, undetected **entirely** for 0.173 s while
+  it travelled 171 mm, and back at 10.228 s as a merged blob 193 mm out at
+  2281 mm/s. The phantom held the flag until its 3 s coast expired at 13.04 s.
+
+  What made this cheap to fix is that nothing was actually wrong with the
+  gates. At the impulse frame **every** gate of the existing flag-borne handoff
+  already passed — dwell 9.72 s, still-stamp gap 0.013 s, quiet table, no mover
+  within `carom_reach_mm` of the rest, 193 mm inside `strike_handoff_radius_mm`.
+  The strike was missed for one reason: the flag was on the wrong track, so
+  `_maybe_open_candidate` never evaluated the real ball. So the cue's remembered
+  rest becomes the identity-carrying scan's **third anchor**, beside birth
+  conjunction and a roster ball's own rest, sharing the flag-borne open logic
+  verbatim (`_open_from_rest`). Fires at 10.43 s cold, reporting 2602 mm/s —
+  which, note, is under the *old* IDLE break floor: had this stroke been a
+  break rather than a mid-rack shot, the two fixes in this checkpoint would
+  have been needed together to start the rack.
+
+  **The tracker was deliberately left alone.** The obvious fix — stop a frozen
+  phantom from holding the flag — was measured first and abandoned: instrumented
+  across the corpus, "flag-holder absent (neither observed nor merged-held) for
+  over `coast_s`" fires on `phantom_flag_strike_0805` (1.312 s) but *also* on
+  `parked_vote_strike_0801` (2.983 s) and `ball_in_hand_pickup_0801` (2.976 s),
+  which must stay silent and whose silence depends on the carom/hand-stamp
+  guards. Changing identity would have moved the blast radius to scratch
+  detection, which keys on the cue being *absent*. The event-layer path keeps
+  every existing guard.
+
+  Scoping the new path cost two rounds, both driven by measurement rather than
+  reading the source. At the flag-borne impulse floor (110 mm/s) it handed the
+  candidate slot to stick fragments near the rest and **cost `soft_shot` its
+  real shot outright** — so it takes the birth path's floor instead
+  (`newborn_impulse_mms`): the rest vouches for the *place*, nothing vouches for
+  the track. Then the pickup/grab class fired phantoms (`cue_grab_0801` @11.32,
+  `pickup_newborn_0801` @9.26, `shaft_adjust` @4.33), closed by an **ordering
+  test with no constant at all**: the track must have been first seen *after*
+  the flag-holder was last observed, so a stick fragment, a reaching hand or an
+  established ball all pre-date the cue going dark and are refused.
+
+  Why it is routed through the rest anchor and not the birth path, which
+  already exists for occluded addresses: a ball struck out of an address is
+  merged with the stick that struck it — **100 %** merged confirm observations
+  on the real strike — and `newborn_merged_frac_max` correctly reads that as a
+  carry. Its raw speed is erratic too (2281 → 289 → 215), so it fails the
+  smoothness gate as well. Both carried-ball discriminators call this a carry;
+  chain of custody from the cue's own rest is what makes the merge admissible,
+  exactly as it is for an ordinary streaking shot.
+
+  That leaves the observation fraction carrying the whole carried-ball
+  judgement, so it has to be a measurement and not three lucky frames — the
+  `pickup_snatch_0801` lesson (checkpoint 56) repeated on a new path. Measured
+  against the hand class at increasing confirm age:
+
+  | confirm age | strike 0805 | scratch_shot | cue_grab | pickup_newborn | shaft_adjust |
+  |---|---|---|---|---|---|
+  | 0.10 s | 1.00 | 1.00 | 1.00 | 1.00 | 0.25 |
+  | 0.15 s | 1.00 | 1.00 | 0.82 | 0.92 | 0.21 |
+  | 0.20 s | 1.00 | 1.00 | 0.64 | 0.69 | 0.22 |
+
+  0.20 s is the first age at which the **existing** `newborn_confirm_obs_min`
+  (0.9) separates the populations — at 0.10 s two of three carries read a
+  perfect 1.00, and at 0.15 s `pickup_newborn`'s 0.92 still clears the floor. So
+  the fraction needed no new constant; only the wait did
+  (`handoff_confirm_min_s`), and it leaves a third of the confirm window for the
+  fire to land.
+
+  **One already-passing clip changed hands.** `scratch_shot_0801`'s strike now
+  comes through this path instead of the birth path, and being rest-anchored it
+  reports a less underread speed — **2008 mm/s against the birth path's 1518**,
+  the `break_underread_0801` failure mode showing up on a clip nobody had
+  flagged. It costs 0.09 s of latency for the confirm wait. Its golden moves
+  accordingly (3.32 → 3.41 s, `newborn: true` → `false`, 1518 → 2008 mm/s);
+  that is the only golden that moved, and the shot/scratch/settle counts are
+  untouched.
+
+  **A normal break lost by 4 mm/s (`flag_missed`, 2026-08-03 17:37 UTC, match
+  mode).** Steven pressed New Rack, broke, and the gate ignored it: **2996 mm/s
+  against a 3000 floor**. The clock sat IDLE through the break and he recovered
+  by switching to `run_out` and pressing Restart — precisely the table-side
+  intervention the floor's "the Start key recovers" trade-off waved off.
+  `MATCH_BREAK_FLOOR_MMS` 3000 → **2500**, anchored between the two
+  ground-truth-labeled populations mined out of every session journal (all 58
+  `vision_shot_taken_ignored_idle` records ever logged): the confirmed break at
+  2996 against the journal-pinned racking phantom at 2072 and a placement
+  cluster at 251–1118. 2500 is the geometric middle of that boundary
+  (√(2072 × 2996) = 2492) — 17 % under the confirmed break, 1.2× over the worst
+  labeled racking impulse. It admits five historical IDLE impulses at
+  2568–2974 whose ground truth is unknown.
+
+  The asymmetry is what justifies moving toward the racking side: a gated real
+  break leaves the clock dead and needs a press at the table, while an early
+  start from racking **self-heals** — the real break that follows fires a
+  ShotTaken and resets to 30. No floor covers the whole class and this one does
+  not pretend to: `break_underread_0801` is a frame-verified rack explosion
+  whose ShotTaken read **705 mm/s**, which sits *inside* the placement cluster.
+  Speed alone cannot separate that one; the gap stays open and stays documented
+  on that scenario rather than papered over with a number that would admit
+  every placement on the table.
+
+  Also worth knowing: **the break itself was not in its own clip.** The ring is
+  20 s and the flag came 32 s after the stroke, so the dump holds only the
+  aftermath — the failure is pinned from the session journal and a unit test,
+  and the dump was deleted rather than promoted. Both edges (2996 fires,
+  2072 does not) are unit-pinned so neither can drift back over the other.
+
+  Corpus: `phantom_flag_strike_0805` promoted (1 shot, 0 scratches, 1 settle)
+  with a bespoke timing pin — counts alone would stay green through the bug
+  that matters, because the tracker's own recovery path reaches the same place
+  ~3.8 s late (phantom dies at its 3 s coast budget, regrab grace expires, flag
+  lands on the real ball ~14.06 s), and a shot minted from *that* would still
+  count 1. `flag_missed` (the 08-03 break) was **deleted, not promoted**: its
+  break is not in its own ring, so it can pin nothing.
+
+  Four new tests, three of them unit so CI covers the logic without clips: the
+  handoff fire (fails on the pre-fix engine with the exact live symptom — the
+  engine returns `[]`), the hand-bringer rejection, the mid-scatter rejection,
+  and both edges of the moved break floor. Plus the corpus entry and its
+  timing pin. **54 corpus scenarios; 408 tests pass cold in 4:10**
+  (`pytest -n 4`, T7 mounted, no live session), goldens regenerated with one
+  moved timeline.
+
 - **2026-08-03 (checkpoint 63 — recordings get the room, not just the robot):**
   checkpoint 62 put the overlay's cues into recordings and called the recording
   problem solved. It wasn't: the chimes and "Extension called" are *synthesized

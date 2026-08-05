@@ -13,6 +13,8 @@ DT = 1 / 80  # nominal detection cadence (frame timestamps; the engine is cadenc
 
 CUE = 0
 OBJ = 1
+REBORN = 2  # a struck ball's continuation: a track born mid-episode, so it is
+# neither a roster member nor the flag holder
 
 
 class Sim:
@@ -919,6 +921,85 @@ def test_hand_grab_of_the_resting_cue_is_not_a_shot() -> None:
     sim.velocity(7, 0.0, 0.0)
     sim.velocity(CUE, 1200.0, 0.0)  # the grab: an impulse-fast coherent yank
     assert ShotTaken not in map(type, sim.run(0.4))
+
+
+def test_phantom_flag_handoff_strike_fires() -> None:
+    # phantom_flag_strike_0805: the addressed cue's own track freezes at its
+    # rest spot and keeps the whiteness vote while the ball is struck and
+    # gone. Three mechanisms compose — the tracker holds a still track in
+    # place through merged blobs and coasts it for still_coast_s (3 s), the
+    # struck ball re-emerges beyond the 100 mm association gate and so founds
+    # a NEW track, and the frozen phantom's colour is never resampled so its
+    # stale whiteness outranks the live one.
+    #
+    # Measured on the clip: the cue was last detected at its rest spot
+    # (1529, 872) at 10.030 s, went undetected entirely for 0.173 s while it
+    # travelled 171 mm, and re-emerged at 10.228 s as a merged blob 193 mm
+    # away at 2281 mm/s — flag still on the phantom for 2.8 s more. Every
+    # gate of the flag-borne handoff already passed at that frame (dwell
+    # 9.72 s, still-stamp gap 0.013 s, quiet table, no mover within
+    # carom_reach_mm of the rest); the strike was missed only because the flag
+    # was on the wrong track. Live the clock ran down through the shot and
+    # Steven took an extension; cold replay produced ZERO events over 20 s.
+    #
+    # The emergence is merged on nearly every frame — a ball struck out of an
+    # address is inseparable from the stick that struck it — so the birth path
+    # correctly reads it as a carry and cannot be the fix. Chain of custody
+    # from the cue's own rest is what makes the merge admissible.
+    sim = rack()
+    sim.run(3.0)
+    sim.occlude(CUE)  # phantom: frozen at the rest spot, still holding the flag
+    sim.run(0.2)
+    sim.place(REBORN, 693.0, 500.0)  # re-emerges 193 mm out, already at speed
+    sim.merge(REBORN)  # struck out of an address: merged with the stick
+    sim.velocity(REBORN, 900.0, 0.0)
+    assert ShotTaken in map(type, sim.run(0.5))
+
+
+def test_phantom_flag_handoff_still_respects_the_hand_bringer() -> None:
+    # The mirror of the fire above, and the hole the first cut of this path
+    # had: the player's own hand/stick blob is born the moment the cue goes
+    # dark, sweeps along the stroke line, and ends inside the handoff radius —
+    # so it passes the birth-order test, the impulse floor, the dwell and a
+    # near-perfect axis dot, and it cannot be vetoed by the carom guard the way
+    # other movers are, because here the bringer IS the candidate and the guard
+    # skips a candidate's own stamps. It fired a phantom shot on the hand.
+    #
+    # What separates them is that a struck ball *leaves* the rest spot while a
+    # bringer arrives at it: distance from the anchor grows on the real strike
+    # (193 -> 221 mm) and shrinks here. Pinned on the same geometry as the fire
+    # above so it lands on that discriminator and not a side effect.
+    sim = rack()
+    sim.run(3.0)
+    sim.occlude(CUE)
+    sim.place(7, 700.0, 480.0)  # hand blob: merged, fast, non-roster...
+    sim.merge(7)
+    sim.velocity(7, -900.0, 0.0)
+    sim.run(0.15)  # ...ending inside kiss range of the cue's rest
+    sim.velocity(7, 0.0, 0.0)
+    sim.place(REBORN, 620.0, 500.0)  # the "ball" leaves toward the hand
+    sim.merge(REBORN)
+    sim.velocity(REBORN, 900.0, 0.0)
+    assert ShotTaken not in map(type, sim.run(0.5))
+
+
+def test_phantom_flag_handoff_does_not_fire_mid_scatter() -> None:
+    # The latch guard the other two scan paths already carry. Mid-episode a
+    # roster ball's streak dies and its continuation is reborn near whatever
+    # the cue's stale rest happens to be; that is a scatter rebirth, not a
+    # strike (break_0801b fired one as a newborn before the same guard went
+    # onto the birth path). Table motion is latched here without a fire, so
+    # the rest memory survives and _table_moving is the only thing refusing.
+    sim = rack()
+    sim.run(3.0)
+    sim.velocity(OBJ, 600.0, 0.0)  # latch table motion, far from the cue rest
+    sim.run(0.5)
+    sim.occlude(CUE)
+    sim.run(0.05)
+    sim.place(REBORN, 693.0, 500.0)
+    sim.merge(REBORN)
+    sim.velocity(REBORN, 900.0, 0.0)
+    assert ShotTaken not in map(type, sim.run(0.5))
 
 
 def test_stroke_gear_behind_the_departing_cue_does_not_reject_strike() -> None:

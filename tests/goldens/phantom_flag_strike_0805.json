@@ -1,0 +1,17 @@
+{
+  "scenario": "phantom_flag_strike_0805",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 10.4329,
+      "ball_id": 12,
+      "speed_mms": 2601.5832,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 13.9404
+    }
+  ]
+}
