@@ -9,15 +9,11 @@ TV, controlled from a Stream Deck. Everything runs on one Mac mini.
 
 ## Demo
 
-[![cueclock demo — overhead and side angle with the live clock and scoreboard](assets/img/demo-poster.jpg)](https://github.com/grassten/cueclock/releases/download/demo-2026-08-05/cueclock_demo.mp4)
+https://github.com/user-attachments/assets/af7e8c98-a67f-48dd-b12a-9e74381881af
 
-**▶ [Watch the demo](https://github.com/grassten/cueclock/releases/download/demo-2026-08-05/cueclock_demo.mp4)** (2:44, 9 MB) — a real
-practice session: overhead and side-angle feeds composited with the live shot
-clock and scoreboard. The clock starts on the detected strike and resets on the
-settle, with no operator touching anything.
-
-<sup>Hosted as a [release asset](https://github.com/grassten/cueclock/releases/tag/demo-2026-08-05) rather than committed — the
-original is 296 MB, and video does not belong in git history.</sup>
+A real practice session: overhead and side-angle feeds composited with the live
+shot clock and scoreboard. The clock starts on the detected strike and resets on
+the settle, with no operator touching anything.
 
 ## Status (July 2026): the rig is live
 
