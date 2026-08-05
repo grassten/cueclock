@@ -7,6 +7,18 @@ tracking in true table millimeters detects shots, settles, and scratches; the
 events drive a shot-clock state machine rendered as an OBS overlay on a wall
 TV, controlled from a Stream Deck. Everything runs on one Mac mini.
 
+## Demo
+
+[![cueclock demo — overhead and side angle with the live clock and scoreboard](assets/img/demo-poster.jpg)](https://github.com/grassten/cueclock/releases/download/demo-2026-08-05/cueclock_demo.mp4)
+
+**▶ [Watch the demo](https://github.com/grassten/cueclock/releases/download/demo-2026-08-05/cueclock_demo.mp4)** (2:44, 9 MB) — a real
+practice session: overhead and side-angle feeds composited with the live shot
+clock and scoreboard. The clock starts on the detected strike and resets on the
+settle, with no operator touching anything.
+
+<sup>Hosted as a [release asset](https://github.com/grassten/cueclock/releases/tag/demo-2026-08-05) rather than committed — the
+original is 296 MB, and video does not belong in git history.</sup>
+
 ## Status (July 2026): the rig is live
 
 Hardware installed and calibrated; the clock runs real practice sessions.
