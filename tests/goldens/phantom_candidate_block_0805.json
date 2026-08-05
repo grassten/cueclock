@@ -1,0 +1,17 @@
+{
+  "scenario": "phantom_candidate_block_0805",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 11.4954,
+      "ball_id": 7,
+      "speed_mms": 4689.9475,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 17.3775
+    }
+  ]
+}

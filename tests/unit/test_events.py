@@ -1065,3 +1065,72 @@ def test_reported_speed_carries_confirm_kinematics() -> None:
             assert shots[0].speed_mms is not None and shots[0].speed_mms >= 3000
             return
     raise AssertionError("strike never fired")
+
+
+def test_coasting_phantom_candidate_releases_the_slot_to_the_handoff() -> None:
+    # flag_missed / flag_missed_3, checkpoint 66. The flag-borne open is right
+    # at the impulse frame and then the tracker loses the ball: the struck cue
+    # outruns the association gate and founds a new track, while the candidate
+    # advances on extrapolated positions that can never reach the confirm. The
+    # single candidate slot is exactly what the handoff needs, and it needs it
+    # now — the struck ball is only inside strike_handoff_radius_mm for a
+    # moment. Live, the slot stayed shut until the candidate died and the real
+    # ball was 469 mm out (flag_missed) / 292 mm out (flag_missed_3).
+    # The phantom must *ride to expiry*, which is the live shape: it has to
+    # keep enough apparent speed that the feasibility check cannot kill it,
+    # while never travelling the 22 mm the slow confirm wants. A jitter in
+    # place does both — exactly what flag_missed_3's abandoned track did,
+    # drifting (675,88) -> (651,74) at a stuck raw of 119 mm/s for the whole
+    # 0.30 s window. Let it creep in a straight line instead and it confirms
+    # on its own at 0.25 s, and the test stops testing anything.
+    sim = rack()
+    sim.run(1.0)  # dwell: the rest memory earns its credit
+    sim.velocity(CUE, 1200.0, 0.0)
+    sim.run(DT)  # one frame at impulse speed: the rest candidate opens
+    sim.occlude(CUE)  # the tracker loses the ball; the candidate rides a coast
+    sim.place(REBORN, 660.0, 500.0)  # the struck cue surfaces inside the radius
+    sim.velocity(REBORN, 2500.0, 0.0)
+    events: list[Event] = []
+    for _ in range(40):  # 0.5 s of the phantom jittering in place
+        sim.velocity(CUE, 0.0, 150.0)
+        events += sim.run(DT)
+        sim.velocity(CUE, 0.0, -150.0)
+        events += sim.run(DT)
+    assert ShotTaken in types(events)
+
+
+def test_parked_vote_newborn_confirms_on_travel() -> None:
+    # flag_missed_2, checkpoint 66. The vote parks on an *observed, still* ball
+    # — the object ball the cue is about to pot — so `cue_quiet` is False and
+    # the birth path used to be skipped outright, while _maybe_open_rested
+    # cannot help (a newborn is not in the roster). With the vote corroborating
+    # nothing, the identity comes from the ball's own travel: measured 962 mm
+    # on the real strike. See parked_confirm_travel_mm.
+    sim = rack()
+    sim.cue_id = OBJ  # the vote parks on a ball that stays observed and still
+    sim.run(1.0)
+    sim.remove(CUE)  # the addressed cue's own track dies under the occlusion
+    sim.run(0.5)
+    sim.place(REBORN, 300.0, 500.0)  # it re-emerges at speed, out of nowhere
+    sim.velocity(REBORN, 2000.0, 0.0)
+    assert ShotTaken in types(sim.run(0.5))  # 600 mm at 2000 mm/s = 0.30 s
+
+
+def test_parked_vote_newborn_rejects_a_short_traveller() -> None:
+    # The mirror of the test above, and the reason the gate is travel rather
+    # than speed: everything this configuration falsely admitted corpus-wide
+    # moved 202-382 mm and stopped (a hand placing a ball, a stroke blob, a
+    # rebirth in streak churn) — including scratch_replace's 3179 mm/s throw,
+    # which is *faster* than the real strike's 1927. Deliberately the same
+    # setup, the same impulse and the same birth conjunction as above; only
+    # the distance travelled differs, so this pins the discriminator itself.
+    sim = rack()
+    sim.cue_id = OBJ
+    sim.run(1.0)
+    sim.remove(CUE)
+    sim.run(0.5)
+    sim.place(REBORN, 300.0, 500.0)
+    sim.velocity(REBORN, 2000.0, 0.0)
+    sim.run(0.15)  # ~300 mm — the false class's whole budget
+    sim.velocity(REBORN, 0.0, 0.0)
+    assert ShotTaken not in types(sim.run(0.6))

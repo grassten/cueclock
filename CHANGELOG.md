@@ -232,6 +232,100 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 66 — the candidate slot that shut out the rescue, and
+  a vote parked in plain sight):** three `flag_missed` dumps from one afternoon
+  session, three real shots vision never saw — a hard/long shot at 15:49 and two
+  normal-pace pots at 16:16, ground truth Steven's. The detect loop ran 77–78 Hz
+  right up to every press, so none of these is the starvation artifact. All
+  three journal the same signature: a `vision_balls_settled` with no
+  `vision_shot_taken` before it and `rack_shots` incremented anyway, which is
+  `clock/state.py`'s own missed-strike compensation firing — the engine marking
+  that a shot must have happened because balls moved and stopped. Live, the
+  clock never froze: it counted down through the balls rolling and reset on the
+  settle. Warm and cold both reproduced all three, so checkpoint 64's handoff
+  (shipped that morning, and running in this very session) does not cover them.
+
+  **The slot, not the gates (`phantom_candidate_block_0805`,
+  `late_emergence_strike_0805`).** The flag-borne open is *correct* at the
+  impulse frame — the cue dwells 11.1 s, steps off its rest at 2106 mm/s, and a
+  candidate opens. Then the tracker loses the ball: the struck cue outruns the
+  100 mm association gate and founds a **new** track while the candidate goes on
+  advancing on extrapolated positions that can never reach the confirm. Nothing
+  is wrong with any gate; what blinds the engine is that a doomed candidate
+  **holds the single candidate slot** through exactly the window the identity
+  scans needed it. Measured: the struck ball sat 224 mm from the rest at
+  11.284 s, inside `strike_handoff_radius_mm` and passing every handoff gate,
+  but the scan is guarded by `self._candidate is None`. The candidate died at
+  11.355 s on the feasibility check — 21.1 mm travelled against the 22.0 mm it
+  still needed, **dead by 0.9 mm**, computed on a phantom the tracker had
+  re-stamped still — and by then the real ball was 469 mm out. On
+  `late_emergence_strike_0805` the candidate did not even die: it rode a
+  coasting phantom for its full 0.30 s window while the struck ball sat 175 mm
+  from the rest, and the scan first ran at 15.726 s with everything ≥292 mm away.
+
+  So a candidate whose target is unobserved this frame is **shelved**, and the
+  slot goes to the handoff — the one claimant carrying chain of custody from the
+  cue's own rest. Shelved, not dropped: if no scan takes it the candidate is
+  handed straight back, so a real strike whose cue merely blinks keeps its
+  window. Releasing the slot to the *birth* path as well was measured and
+  rejected — it cost `break_0801` its flag-borne fire (ball 0 at 7371 mm/s →
+  ball 4 at 6060, newborn, 51 ms early). Dark-run length cannot separate those
+  (4 frames on `break_0801` against 3 on the rescue); the anchor can.
+
+  `late_emergence_strike_0805` needed one thing more. Its abandoned cue track
+  drifted rather than being held still, so `_cue_last_still_t` — which only
+  advances while the flag-holder is *reported still* — froze, and the handoff's
+  ramp test began billing the occlusion: 0.128 s against the frozen stamp,
+  **refused by 8 ms**, where the cue had actually been seen 0.109 s earlier. The
+  gate now measures from the last observation. It cannot re-admit a ramp: the
+  ordering test already requires the track to be born after the cue went dark,
+  so what the window bounds is how long after the cue vanished its continuation
+  may surface. Checkpoint 64's own phantom was *held* still through merged
+  blobs, so its stamp stayed fresh and the `max` leaves it untouched.
+
+  **A vote parked in plain sight (`parked_vote_newborn_0805`).** Different
+  blindness, same session. The whiteness vote sat on an **observed, still** ball
+  — the object ball the cue was about to pot — while the struck cue emerged from
+  the address occlusion as a track born at 11.310 s already doing 1752 mm/s.
+  Both identity paths were gated on `cue_quiet` (no *observed* ball holds the
+  flag), so with the holder observed the birth path was skipped outright, and
+  `_maybe_open_rested` cannot cover it: it demands roster membership, and the
+  roster admits at settle, which a ball born mid-shot has never had. A vote
+  parked on an observed ball is the same blindness as one parked on a dark ball.
+
+  What the birth path loses with the holder observed is the vote's
+  corroboration, so it has to earn the identity from the ball's own behaviour.
+  **No standard signal separates the classes** — instrumented over every
+  candidate this configuration admits corpus-wide, impulse speed overlaps badly
+  (the true strike opens at 1927 mm/s; `scratch_replace`'s hand-throw reads
+  **3179**), and so do rest dwell and distance from the holder. Travel does, and
+  by physics: a struck cue crosses the table, a stick fragment or a hand-moved
+  ball does not. Measured over 1 s from the birth spot — real strike **962 mm**,
+  against 375 (`address_chatter_miss_0801`), 328/382 and 328×4
+  (`scratch_replace`), 267/277 (`stroke_tug_strike_0801`) and 256/202
+  (`parked_vote_strike_0801`). `parked_confirm_travel_mm` **600** is the
+  geometric middle of that 2.5× gap: 1.6× above the worst false, 1.6× below the
+  true one. The real strike crosses it 0.435 s after the open, which sets
+  `parked_confirm_window_s` **0.60**. Ordinary strikes are untouched — only the
+  weakest identity claim in the engine waits, and 0.45 s is nothing on a 30 s
+  clock. Because that claim is the weakest *and* holds the slot twice as long as
+  anything else, the flag-borne path may pre-empt it: without that, a merged
+  stroke blob parks the slot and swallows the real shot behind it (caught by
+  `test_stroke_gear_behind_the_departing_cue_does_not_reject_strike`, where the
+  gear sweeps in at 900 mm/s and the cue then departs at 1200).
+
+  Honest limit: the true class here is **n=1**. A short pot from an occluded
+  address with a parked vote — under 600 mm of cue travel — would still be
+  missed, and the corpus has no example either way. That is a real hole, now
+  pinned rather than assumed.
+
+  Corpus: three scenarios promoted, all warm-fail/cold-fail before the change.
+  **57 scenarios, 433 tests pass cold in 5:49.** Three new goldens and — the
+  result worth reading — **no existing golden moved**. Three unit tests added,
+  each verified to fail on the pre-fix engine and pass on the post-fix one, the
+  travel gate paired with its mirror (a 300 mm traveller that must stay silent,
+  same setup, same impulse, same birth conjunction — only the distance differs).
+
 - **2026-08-05 (checkpoint 65 addendum — ten minutes of buffer, and a memory cap
   that can't bind first):** `BUFFER_TARGET_S` 300 → **600 s**, at Steven's ask:
   *just in case there's a safety battle and a long rack*. The buffer is sized

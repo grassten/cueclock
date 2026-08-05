@@ -375,6 +375,41 @@ EXPECTED: dict[
     # stroke_gear_margin_0802 could only show warm. Pins the cue's remembered
     # rest as the scan's third identity anchor: one shot, one settle.
     "phantom_flag_strike_0805": (1, 0, 1, 1),
+    # 2026-08-05 afternoon flags (checkpoint 66) — three `flag_missed` dumps in
+    # one session, three real shots vision never saw. Ground truth from the
+    # table: a hard/long shot and two normal-pace pots. The detect loop was
+    # healthy at 77-78 Hz right up to each press, so none of these is
+    # starvation. All three journal the same signature — a BallsSettled with no
+    # ShotTaken before it, and rack_shots incremented by clock/state.py's
+    # missed-strike compensation, which is the engine's own marker for exactly
+    # this. Live the clock never froze: it counted down through the balls
+    # rolling and then reset on the settle.
+    #
+    # The strike gate opens correctly at the impulse and then the tracker loses
+    # the ball: the struck cue outruns the 100 mm association gate and founds a
+    # NEW track, while the candidate advances on extrapolated positions that
+    # can never confirm. Holding that single slot is what blinds the engine —
+    # the identity scans need it while the struck ball is still inside
+    # strike_handoff_radius_mm of the rest, and by the time the candidate dies
+    # the ball is 469 mm out (here) and 292 mm out (late_emergence_strike).
+    # Pins the shelve: a candidate riding a coasting track releases the slot to
+    # the handoff. Hard shot, so the cue crosses fast — one shot, one settle.
+    "phantom_candidate_block_0805": (1, 0, 1, 1),
+    # Same session, a normal-pace pot — and a different blindness. The vote was
+    # parked on an *observed, still* ball (the object ball the cue was about to
+    # pot) while the struck cue emerged from the address occlusion as a track
+    # born already at 1752 mm/s. An observed flag-holder used to disable the
+    # birth path outright, and _maybe_open_rested cannot cover it because a
+    # newborn is not in the roster. Pins that the birth path runs with the
+    # holder observed, and that it confirms on travel when it does.
+    "parked_vote_newborn_0805": (1, 0, 1, 1),
+    # Same session, the pot straight after — the block again, but this one also
+    # pins the step gate. The abandoned cue track drifted instead of being held
+    # still, so _cue_last_still_t froze and the handoff's ramp test started
+    # billing the occlusion: 0.128 s against the frozen stamp, refused by 8 ms,
+    # where the cue had actually been seen 0.109 s earlier. Measured from the
+    # last observation it passes, and the strike lands 0.31 s after the impulse.
+    "late_emergence_strike_0805": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -419,6 +454,9 @@ REFERENCES: dict[str, str] = {
     "stroke_gear_veto_0802": "empty_table_0801",
     "stroke_gear_margin_0802": "empty_table_0801",
     "phantom_flag_strike_0805": "empty_table_0801",
+    "phantom_candidate_block_0805": "empty_table_0801",
+    "parked_vote_newborn_0805": "empty_table_0801",
+    "late_emergence_strike_0805": "empty_table_0801",
 }
 
 
@@ -666,3 +704,77 @@ def test_address_chatter_shot_fires_at_impulse() -> None:
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the address-chatter miss is back"
     assert 10.0 <= shots[0] <= 11.2, f"shot at {shots[0]:.2f}s — not anchored on the impulse"
+
+
+def test_blocked_candidate_shot_fires_at_the_stroke() -> None:
+    """The shelved slot must be claimed while the ball is still in radius.
+
+    phantom_candidate_block_0805: the cue dwells at (1709, 803) for 11.1 s,
+    steps off it at 11.239 s reading 2106 mm/s, and the flag-borne candidate
+    opens correctly — then the tracker loses the ball. The struck cue surfaces
+    as a new track at 11.284 s, 224 mm from the rest and inside the 250 mm
+    handoff radius, but the doomed candidate holds the slot until the
+    feasibility check kills it at 11.355 s (21.1 mm travelled against the
+    22.0 mm it still needed — dead by 0.9 mm, on a phantom the tracker had
+    re-stamped still). By then the real ball is 469 mm out and every anchor
+    refuses it. Cold replay produced one BallsSettled and no ShotTaken.
+
+    Counts would catch a total miss, but not a late one: the window pinned
+    here is the impulse plus a confirm. A shot minted off some later recovery
+    would still count 1 while the clock had already run through the stroke.
+    """
+    if not (CLIPS / "phantom_candidate_block_0805").exists():
+        pytest.skip("clip phantom_candidate_block_0805 not recorded")
+    events = _run_clip("phantom_candidate_block_0805", _reference_model("empty_table_0801"))
+    shots = [e.t for e in events if isinstance(e, ShotTaken)]
+    assert shots, "the stroke never fired — the blocked-candidate miss is back"
+    assert 11.2 <= shots[0] <= 11.9, f"shot at {shots[0]:.2f}s — not anchored on the stroke"
+
+
+def test_late_emergence_shot_fires_at_the_stroke() -> None:
+    """The handoff's step gate must not bill the occlusion to the ramp budget.
+
+    late_emergence_strike_0805: the cue is struck at 15.425 s (2479 mm/s off a
+    15 s rest) and its track is abandoned *drifting* rather than held still, so
+    `_cue_last_still_t` freezes at 15.410. The struck ball surfaces at 15.534 s,
+    175 mm from the rest — well inside the handoff radius — and was refused by
+    8 ms: 0.128 s against the frozen stamp, where the cue had actually been
+    observed 0.109 s earlier. Measured from the last observation it passes and
+    the strike confirms at 15.739 s.
+
+    The margin here is 11 ms, so this is the scenario that will notice if the
+    step gate ever goes back to reading a stamp that stops advancing precisely
+    because the ball vanished.
+    """
+    if not (CLIPS / "late_emergence_strike_0805").exists():
+        pytest.skip("clip late_emergence_strike_0805 not recorded")
+    events = _run_clip("late_emergence_strike_0805", _reference_model("empty_table_0801"))
+    shots = [e.t for e in events if isinstance(e, ShotTaken)]
+    assert shots, "the stroke never fired — the late-emergence miss is back"
+    assert 15.4 <= shots[0] <= 16.1, f"shot at {shots[0]:.2f}s — not anchored on the stroke"
+
+
+def test_parked_vote_newborn_confirms_on_travel_not_speed() -> None:
+    """The parked-vote birth path must judge the ball by how far it goes.
+
+    parked_vote_newborn_0805: the whiteness vote sits on an observed, still
+    ball at (717, 91) — the object ball about to be potted — while the struck
+    cue emerges from the address occlusion as a track born at 11.310 s already
+    doing 1752 mm/s. With the holder observed there was no path at all: the
+    birth path was gated on the holder being dark, and the own-rest path wants
+    roster membership a newborn cannot have.
+
+    Speed cannot be the discriminator, which is why this pins the timing.
+    Measured over 1 s from the birth spot, this real strike travels 962 mm
+    while everything the configuration falsely admitted corpus-wide managed
+    202-382 mm — including scratch_replace's 3179 mm/s throw, *faster* than
+    this strike's impulse. The 600 mm gate is crossed 0.435 s after the open,
+    so the fire lands at 11.758 s; firing much earlier would mean the travel
+    confirm has been bypassed.
+    """
+    if not (CLIPS / "parked_vote_newborn_0805").exists():
+        pytest.skip("clip parked_vote_newborn_0805 not recorded")
+    events = _run_clip("parked_vote_newborn_0805", _reference_model("empty_table_0801"))
+    shots = [e.t for e in events if isinstance(e, ShotTaken)]
+    assert shots, "the stroke never fired — the parked-vote birth miss is back"
+    assert 11.6 <= shots[0] <= 12.1, f"shot at {shots[0]:.2f}s — travel confirm not honoured"

@@ -1,0 +1,17 @@
+{
+  "scenario": "late_emergence_strike_0805",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 15.739,
+      "ball_id": 10,
+      "speed_mms": 3888.8294,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 21.2563
+    }
+  ]
+}

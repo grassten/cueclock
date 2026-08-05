@@ -18,20 +18,49 @@ Flow spec: `docs/hardware.md` §C5. Clip conventions: `docs/design.md` §9.
 ## Step 0 — Preflight
 
 ```bash
-pgrep -fl "cueclock.cli run"     # MUST be empty
+pgrep -fl "cueclock.cli run"     # if non-empty, kill it (below) before anything else
 ls -d /Volumes/T7 && df -h /Volumes/T7 | tail -1
 ls -la ~/cueclock-dumps/
 ```
 
 Three hard rules:
 
-- **Never triage while a session is live.** Replays and corpus batteries
-  starve the detect loop (78 Hz → 11–20 Hz measured) and the clock goes
-  silently blind. If a `run` is up, stop or wait.
+- **Never triage while a session is live — and if one is, kill it.** Replays
+  and corpus batteries starve the detect loop (78 Hz → 11–20 Hz measured) and
+  the clock goes silently blind. Invoking this skill *is* the instruction to
+  take the session down: stop it as Step 0 and say so, don't ask and don't
+  wait. (Steven, 2026-08-05: he's off the table by the time he asks for
+  triage; blocking on a confirmation just stalls the pass.)
 - **Use `.venv/bin/python3 -m cueclock.cli …`, not `uv run`,** whenever any
   long-lived `uv run` is alive — concurrent `uv run`s block or die silently.
 - **T7 must be mounted** to promote anything (`tests/clips` is a symlink to
   it) and to read the reference clip. Unmounted ⇒ the symlink dangles.
+
+### Killing a live session
+
+**SIGINT, never SIGKILL** — SIGINT is the documented clean stop and it closes
+the pylon device so the camera cools (`deck/session.py`, `STOP_ESCALATE_S`);
+`cli.py` maps SIGTERM to the same path, so that's the one escalation.
+
+```bash
+RUN=$(pgrep -f "cueclock.cli run")
+[ -n "$RUN" ] && kill -INT $RUN
+for i in $(seq 1 40); do kill -0 $RUN 2>/dev/null || break; /bin/sleep 0.5; done
+kill -0 $RUN 2>/dev/null && kill -TERM $RUN    # only if still up after ~20 s
+pgrep -fl "cueclock.cli run" || echo "(no live run)"
+```
+
+`run` is normally a **child of the deck daemon** (`ppid` = the
+`com.cueclock.deck` launchd job), not a launchd job itself, so it does **not**
+respawn. The deck's state machine handles the child vanishing on its own
+(`session.py` `tick()` → "run exited on its own" → `_release()`), dropping the
+caffeinate assertion and putting the key back to OFF — no daemon restart, no
+`launchctl kickstart` needed. Leave the daemon up.
+
+This leaves **OBS running** (the deck's own Stop key also quits OBS; a bare
+SIGINT doesn't). That's fine for triage — only the detect loop contends — but
+if OBS was recording, say so rather than leaving him to find a half-written
+file in `~/Movies/`.
 
 ## Step 1 — Inventory
 

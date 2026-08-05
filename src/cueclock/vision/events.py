@@ -277,6 +277,26 @@ class EventConfig:
     # outlier (no_cue_strike_0801, non-newborn). 0.5 sits 4x above the
     # worst real strike and 2x below the measured carry (100%).
     newborn_merged_frac_max: float = 0.5
+    # Parked-vote birth strike (flag_missed_2, checkpoint 66). When the flag
+    # sits on an *observed* ball, the birth path loses the vote's corroboration
+    # — the one thing that told it this newborn is the cue — so it must earn
+    # the identity from the ball's own behaviour instead. A struck cue crosses
+    # the table; a stick fragment, a rebirth blob or a hand-moved ball does not.
+    #
+    # Measured over 1 s from the birth spot on every candidate this
+    # configuration admits corpus-wide: the real strike (flag_missed_2, the
+    # potted cue) travels **962 mm**, against 375 (address_chatter_miss_0801),
+    # 328/382 and 328 x4 (scratch_replace, including its 3179 mm/s throw),
+    # 267/277 (stroke_tug_strike_0801) and 256/202 (parked_vote_strike_0801).
+    # 600 sits 1.6x above the worst false and 1.6x below the true one — the
+    # geometric middle of a 2.5x gap. The real strike crosses it 0.435 s after
+    # the open, which sets the window below.
+    #
+    # Note the cost this does NOT pay: rest-anchored and cue-quiet birth
+    # candidates are untouched, so every ordinary strike keeps its 60 mm/0.30 s
+    # confirm. Only the weakest identity claim in the engine waits.
+    parked_confirm_travel_mm: float = 600.0
+    parked_confirm_window_s: float = 0.60  # 0.435 s measured + margin
     # Minimum confirm time for birth-path candidates (#8, pickup_snatch_0801,
     # 2026-08-02). The three gates above are all *fractions over the confirm
     # window*, and a fast confirm can close that window in three observations
@@ -433,6 +453,10 @@ class _StrikeCandidate:
     # they skip the merged gate a struck-out-of-address ball cannot pass — and
     # pay for it with an observation floor held open long enough to measure.
     handoff: bool = False
+    # Parked-vote birth candidates opened while an *observed* ball still held
+    # the cue flag, so the whiteness vote corroborates nothing. They confirm on
+    # travel instead — see `parked_confirm_travel_mm`.
+    parked: bool = False
     last_raw: float | None = None
     ball_id: int | None = None
     impulse_raw: float = 0.0  # max raw speed seen while the candidate lives.
@@ -633,7 +657,9 @@ class EventEngine:
                 self._cue_id_streak += 1
             else:
                 self._cue_id_last, self._cue_id_streak = cue.ball_id, 1
-        if self._candidate is not None and t - self._candidate.t0 > cfg.strike_confirm_window_s:
+        if self._candidate is not None and t - self._candidate.t0 > self._confirm_window(
+            self._candidate
+        ):
             # Centralized expiry: a candidate whose target cannot advance
             # (cue-follow candidate while the flag is empty, or a no-cue
             # candidate whose track died) must not linger and block the scan.
@@ -652,6 +678,28 @@ class EventEngine:
             ]
             if fast:
                 self._candidate.impulse_raw = max(self._candidate.impulse_raw, max(fast))
+        # A parked-vote candidate is the weakest claim the engine can hold and
+        # it occupies the slot for twice as long as anything else, so it must
+        # never shut out the flag-borne path: the cue's own flag stepping off
+        # its own remembered rest outranks a newborn the vote does not
+        # corroborate at all. Without this a merged stroke blob could park the
+        # slot and swallow the real shot behind it for the whole 0.60 s window
+        # (test_stroke_gear_behind_the_departing_cue_does_not_reject_strike:
+        # the gear sweeps in at 900 mm/s, the cue then departs at 1200 and
+        # never got evaluated). Same shelve-and-restore shape as the scan
+        # below, and the same principle — strongest anchor first.
+        if (
+            self._candidate is not None
+            and self._candidate.parked
+            and cue is not None
+            and cue.observed
+            and self._cue_id_streak >= cfg.cue_id_debounce_frames
+        ):
+            parked = self._candidate
+            self._candidate = None
+            self._maybe_open_candidate(t, cue)
+            if self._candidate is None:
+                self._candidate = parked
         if self._candidate is not None and self._candidate.ball_id is not None:
             # A no-cue candidate follows its own track, not the cue flag.
             target = next((b for b in balls if b.ball_id == self._candidate.ball_id), None)
@@ -663,6 +711,27 @@ class EventEngine:
             else:
                 self._maybe_open_candidate(t, cue)
             self._update_cue_rest(t, cue)
+        # A candidate riding a coasting track must not hold the slot shut
+        # (flag_missed / flag_missed_3, checkpoint 66). The flag-borne open is
+        # correct at the impulse frame and then the tracker loses the ball: the
+        # struck cue outruns the 100 mm association gate and founds a *new*
+        # track, while the candidate advances on extrapolated positions that
+        # can never confirm. The single candidate slot is exactly what the
+        # identity scans below need, and they need it *now* — the struck ball
+        # is only inside `strike_handoff_radius_mm` of the rest for a moment.
+        # Measured: on flag_missed the candidate opened at 11.239 and died at
+        # 11.355 (the feasibility check, on a phantom re-stamped still), by
+        # which time the real cue was 469 mm out — 219 mm past the radius it
+        # had cleared at 224 mm just 0.07 s earlier; on flag_missed_3 the
+        # candidate rode a coasting phantom for its full 0.30 s window while
+        # the struck ball sat 175 mm from the rest, and the scan first ran at
+        # 15.726 with everything 292 mm or further away. Shelved rather than
+        # dropped: if no scan opens, the candidate is put straight back, so a
+        # real strike whose cue merely blinks through an occlusion keeps its
+        # window. No new constant — the scans' own gates do all the judging.
+        shelved: _StrikeCandidate | None = None
+        if self._candidate is not None and not self._candidate_target_observed(balls, cue):
+            shelved, self._candidate = self._candidate, None
         if self._candidate is None:
             # Identity-carrying scans, for strikes the cue flag cannot vouch
             # for. Two configurations: no *observed* ball holds the flag —
@@ -694,17 +763,48 @@ class EventEngine:
                     raw = ball.speed_mms if ball.raw_speed_mms is None else ball.raw_speed_mms
                     if raw < cfg.strike_impulse_mms or not ball.observed:
                         continue
-                    if cue_quiet:
-                        # Strongest anchor first: the cue's own remembered rest
-                        # carries chain of custody, so it admits the merged
-                        # emergence the birth path must reject as a carry.
-                        self._maybe_open_handoff(t, ball, raw)
+                    # Strongest anchor first: the cue's own remembered rest
+                    # carries chain of custody, so it admits the merged
+                    # emergence the birth path must reject as a carry.
+                    #
+                    # A shelved candidate releases the slot to *this path only*
+                    # (checkpoint 66). The handoff is the one claimant that
+                    # carries chain of custody from the cue's own rest, which is
+                    # what makes it safe to pre-empt a candidate that is still
+                    # nominally alive. Letting the birth path in as well cost
+                    # break_0801 its flag-borne fire: a scatter track born at
+                    # 5502 mm/s took the slot 51 ms early and the break changed
+                    # hands (ball 0 at 7371 mm/s -> ball 4 at 6060, newborn).
+                    # Dark-run length cannot separate those — measured 4 frames
+                    # on break_0801 against 3 on flag_missed at its rescue — but
+                    # the anchor can.
+                    self._maybe_open_handoff(t, ball, raw)
+                    if shelved is None:
+                        # Neither path below is gated on the flag-holder being
+                        # unobserved any more (flag_missed_2, checkpoint 66). A
+                        # vote parked on an *observed, still* ball is the same
+                        # blindness as a vote parked on a dark one, and it
+                        # disabled the birth path outright: the struck cue was
+                        # born at 11.310 already at 1752 mm/s out of an address
+                        # occlusion while the flag sat on the object ball it was
+                        # about to pot — observed on every frame, so `cue_quiet`
+                        # was False and only `_maybe_open_rested` ran, which a
+                        # newborn can never satisfy (it demands roster
+                        # membership, and the roster admits at settle). What the
+                        # birth path loses with the flag-holder observed is the
+                        # vote's corroboration, so a candidate opened here is
+                        # marked `parked` and must clear the travel confirm —
+                        # see `parked_confirm_travel_mm`.
+                        opening = self._candidate is None
+                        self._maybe_open_newborn(t, ball, raw, follow_ball=True)
+                        if opening and self._candidate is not None and not cue_quiet:
+                            self._candidate.parked = True
                         if self._candidate is None:
-                            self._maybe_open_newborn(t, ball, raw, follow_ball=True)
-                    if self._candidate is None:
-                        self._maybe_open_rested(t, ball, raw)
+                            self._maybe_open_rested(t, ball, raw)
                     if self._candidate is not None:
                         break
+        if shelved is not None and self._candidate is None:
+            self._candidate = shelved  # no scan took the slot — hand it back
 
         # ---- table moving / settled (per-ball displacement over windows) ----
         for ball in balls:
@@ -1109,8 +1209,25 @@ class EventEngine:
             # reborn ball's impulse near the cue's stale rest is a carom or
             # streak churn, not a strike.
             return
-        if t - self._cue_last_still_t > cfg.strike_step_max_s:
-            return  # ramp, not a step — see _maybe_open_candidate
+        # Ramp, not a step — but measured from the last moment the cue was
+        # *visible*, not from a still-stamp that stopped advancing precisely
+        # because the ball disappeared (flag_missed_3, checkpoint 66).
+        # `_cue_last_still_t` only advances while the flag-holder is reported
+        # still (`_update_cue_rest`), so once the abandoned track starts
+        # drifting the stamp freezes and this gate silently bills the occlusion
+        # to the ramp budget. Measured on flag_missed_3: cue last still 15.410,
+        # last observed 15.425, struck ball surfaced at 15.534 — 0.128 s against
+        # the frozen stamp (refused by 8 ms) but 0.109 s since the cue was last
+        # seen. Checkpoint 64's own phantom was *held* still through merged
+        # blobs, so its stamp stayed fresh and `max` leaves it untouched.
+        #
+        # This cannot re-admit a ramp: the ordering test below requires the
+        # track to be born after `_cue_last_obs_t`, so what the window now
+        # bounds is how long after the cue vanished its continuation may
+        # surface — the occlusion coast. A shaft/hand push keeps the cue in
+        # view and founds no new track, so it never reaches this path at all.
+        if t - max(self._cue_last_still_t, self._cue_last_obs_t) > cfg.strike_step_max_s:
+            return
         born = self._first_seen.get(ball.ball_id)
         if born is None or born <= self._cue_last_obs_t:
             # The identity claim, and the whole reason this path may trust a
@@ -1296,12 +1413,40 @@ class EventEngine:
             y_open=ball.y_mm,
         )
 
+    def _confirm_window(self, candidate: _StrikeCandidate) -> float:
+        """How long this candidate has to confirm.
+
+        Parked-vote birth candidates get the longer window their travel
+        confirm needs; everything else keeps `strike_confirm_window_s`.
+        """
+        cfg = self._cfg
+        return cfg.parked_confirm_window_s if candidate.parked else cfg.strike_confirm_window_s
+
+    def _candidate_target_observed(self, balls: list[BallState], cue: BallState | None) -> bool:
+        """Is the open candidate's target a real detection this frame?
+
+        A candidate advances either on its own track (`ball_id`) or on whatever
+        holds the cue flag. Either way, an unobserved target is an extrapolation
+        the tracker is coasting — it cannot confirm a strike, and it must not
+        keep the identity scans from claiming the slot. See the shelve in
+        `update`.
+        """
+        candidate = self._candidate
+        if candidate is None:
+            return False
+        target = (
+            cue
+            if candidate.ball_id is None
+            else next((b for b in balls if b.ball_id == candidate.ball_id), None)
+        )
+        return target is not None and target.observed
+
     def _advance_candidate(self, t: float, cue: BallState) -> list[Event]:
         cfg = self._cfg
         candidate = self._candidate
         if candidate is None:
             return []
-        if t - candidate.t0 > cfg.strike_confirm_window_s:
+        if t - candidate.t0 > self._confirm_window(candidate):
             self._candidate = None  # impulse without follow-through: not a shot
             return []
         raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
@@ -1327,6 +1472,10 @@ class EventEngine:
         # rather than jumped 22 mm on one merged-centroid frame.
         late = t - candidate.t0 >= cfg.strike_slow_confirm_after_s
         needed = cfg.strike_slow_confirm_mm if late else cfg.strike_confirm_displacement_mm
+        if candidate.parked:
+            # The vote corroborates nothing here, so the ball's own travel is
+            # the identity evidence — see `parked_confirm_travel_mm`.
+            needed = cfg.parked_confirm_travel_mm
         if displacement < needed:
             # Feasibility: a candidate that can no longer reach the confirm
             # displacement in the window it has left is dead now, not at
@@ -1336,7 +1485,7 @@ class EventEngine:
             # fire). A real strike's ball is still at speed here and passes
             # trivially. The reachable target is the *slow* threshold: that is
             # the least a candidate could still fire on.
-            time_left = candidate.t0 + cfg.strike_confirm_window_s - t
+            time_left = candidate.t0 + self._confirm_window(candidate) - t
             if displacement + raw * time_left < cfg.strike_slow_confirm_mm:
                 self._candidate = None
             return []
