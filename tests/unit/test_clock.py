@@ -261,6 +261,41 @@ def test_restart_runs_immediately_at_current_base() -> None:
     assert clock.remaining == 30  # window over — same button, base time
 
 
+def test_restart_after_a_missed_break_counts_the_break() -> None:
+    # Live, twice (2026-08-05 19:59, 2026-08-06 01:53): the break was gated in
+    # IDLE, Start recovered the clock, and the first shot after it got 60 s a
+    # second time because the rack was still one shot short.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.balls_settled(now=1.0)  # the missed break's settle — no-op in IDLE
+    assert clock.rack_shots == 0
+    clock.restart(now=2.0)  # Start 60: the break is behind us
+    assert clock.remaining == 60  # the press still hands out the 60 it says
+    assert clock.rack_shots == 1
+    clock.shot_taken()  # the first shot after the break, under that 60
+    clock.balls_settled(now=3.0)
+    assert clock.remaining == 30  # window over, as it should have been
+
+
+def test_restart_mid_rack_leaves_the_shot_count_alone() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.restart(now=2.0)  # missed-auto-reset recovery, still in the window
+    assert clock.rack_shots == 1  # not bumped a second time
+    assert clock.remaining == 60
+
+
+def test_restart_without_a_rack_does_not_invent_a_break() -> None:
+    # run_out has no break to count, so the press is a plain fresh countdown.
+    clock = make_clock("wnt_9ball")
+    clock.set_mode(get_mode("run_out"))
+    clock.restart(now=1.0)
+    assert clock.rack_shots == 0
+    assert clock.remaining == 30
+
+
 def test_reset_keeps_rack_shots_and_extensions() -> None:
     clock = make_clock("wnt_9ball")
     clock.new_rack(now=0.0)

@@ -232,6 +232,38 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 69 — the button that recovered the clock but not the
+  rack):** Steven, on WNT match mode: the break doesn't register, he presses
+  Start 60 to get going, takes a shot — and gets 60 seconds again for the next
+  one. Detection is not the bug here; the recovery key is.
+
+  `current_base()` hands out the WNT §5 first-shot 60 s while the rack has
+  counted fewer than two shots, the break being shot 1. A missed break
+  increments nothing: the strike is refused by the break floor in IDLE and the
+  settle is a no-op in IDLE (checkpoint 26's rule, and the right one — racking
+  produces genuine settles). `restart()` then set the countdown and started it
+  **without touching `_rack_shots`**, so the rack sat one shot short and the
+  60 s window shifted one shot late for the rest of it. Journal-pinned twice:
+  `session-20260805-194410` at 19:59:56 (break gated at 2251 mm/s) and
+  `session-20260806-015007` at 01:53:03 (no `vision_shot_taken` at all — a bare
+  IDLE settle, which he flagged), both `cmd_restart rack_shots=0 rem=60.0`
+  followed by a settle at `rem=60.0` one shot later.
+
+  Fixed where the meaning is: pressing Start with no shot counted in a
+  rack-scoped mode **counts the break** (`_rack_shots = 1`). Out of a fresh rack
+  the clock parks in IDLE precisely so the untimed break can happen, so a press
+  from there can only mean the break already did. The 60 the face promises is
+  unchanged — `current_base()` still reads 60 at one shot — and only the shot
+  after it correctly drops to 30. `run_out` is untouched (no rack, no break to
+  count), and a mid-rack press still leaves the count alone.
+
+  Considered and dropped: gating this on evidence (a settle seen while parked)
+  rather than the press itself. Across all 20 `cmd_restart` presses in the
+  journals, 8 of the 9 in-rack WNT presses carried that evidence and one didn't
+  — a press one second after cycling to WNT with no rack behind it, which the
+  simpler rule mis-books as a break. Steven's call, and the right one: the
+  button means what it says, and a 30 that should be 60 is one Push key away.
+
 - **2026-08-05 (checkpoint 68 — the break that outran its own budget):** Steven
   came down to test checkpoint 66 and the very first break was missed. One
   `flag_missed` dump, ground truth his: a **normal-power break**. The journal is

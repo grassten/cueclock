@@ -137,7 +137,18 @@ class ShotClock:
 
         Mid-rack recovery for a missed auto-reset — rack-aware (60 s during
         the WNT post-break window, base otherwise), extensions untouched.
+
+        Pressed with no shot yet counted this rack, it also **counts the
+        break**. Out of a fresh rack the clock parks in IDLE so the untimed
+        break can happen whenever the player is ready, and a break vision
+        missed increments nothing — the strike is gated by the break floor and
+        the settle is a no-op in IDLE. So the press means the break is behind
+        us; without counting it the rack sits one shot short and the WNT §5
+        60 s window replays on the shot after (live, 2026-08-05 19:59 and
+        2026-08-06 01:53: break missed, Start pressed, 60 s handed out twice).
         """
+        if self.mode.rack_scoped and self._rack_shots == 0:
+            self._rack_shots = 1
         self.remaining = float(self.current_base())
         self.state = State.RUNNING
         self._cues_fired.clear()
