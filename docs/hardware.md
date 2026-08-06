@@ -331,7 +331,7 @@ row 3   RULESET      SET UP       P1  3        P2  2        I SHOT
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left**, so the pool reads before the press instead of after a red `NO EXT`. Never removed inside a clocked mode — a spent pool shows as empty pips, which are the only readout of how many remain | `EXT` + one pip per extension, flashes `OK` / `NO EXT` | match, run out |
-| 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at this rack's break and plays the rack. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
+| 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at the last break and plays that rack — including after SET UP, until the new rack is broken. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
 | 2,2 | **Flag** | Opens the reason page at 2,3–2,5. The dump fires from whichever reason is pressed | `FLAG` → `WHY?` | always |
 | 2,3–2,5 | **Phantom / Missed / Other** | `POST /api/dump?label=flag_phantom` etc. Only visible while the page is open | `PHANTOM` / `MISSED` / `OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | reason page only |
 | 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` | current over next: `8-BALL`/`FINAL 10` | match, run out |
@@ -588,9 +588,8 @@ cursor = duration − anchor_age + display_lag − lead      (20 − 4 + 0.1 −
 ```
 
 **Two spans, one key** (2026-08-05, checkpoint 65). A **tap** anchors on the
-last shot; a **hold** (0.6 s, the score keys' dwell) anchors on the rack — its
-break if one has been seen, the SET UP press before that — and plays from there
-to now. Same file, same seek, same badge: a span is just which of the two ages
+last shot; a **hold** (0.6 s, the score keys' dwell) anchors on the rack — the
+last break there has been — and plays from there to now. Same file, same seek, same badge: a span is just which of the two ages
 `/api/replay_anchors` returns gets fed to the same arithmetic (`replay.Span`,
 whose value *is* the field name). The one behavioural difference is the ceiling:
 `MAX_PLAY_S` caps a tap at 20 s so a stale anchor can't strand the TV on the
@@ -602,12 +601,23 @@ has to stay one press with nothing to read; the cost is that a tap now fires on
 **release**, while a mature hold fires under the finger and says `RACK…` so the
 gesture is acknowledged before the TV changes.
 
-**The rack anchor is the break, not the racking.** `Hub` stamps the SET UP press
-and then lets the next shot supersede it, so a rack replay opens on the break
-instead of on a minute of building a triangle. `no_clock` has no SET UP key, so
-out there the anchor is the session's first shot until something racks — and a
-null anchor (or one older than the buffer) plays as much of the buffer as there
-is, the same fallback a stale shot anchor already had.
+**The rack anchor is the break, and only ever the break** (amended 2026-08-05,
+checkpoint 67). SET UP **arms** the next shot to become it rather than stamping
+itself, so a rack replay opens on the break instead of on a minute of building a
+triangle — *and* keeps pointing at the rack you just played until the new one is
+actually broken. That second half is the common press: you run out, you rack up,
+then you hold Replay to see how you did it. Taking the press as the anchor made
+that press show the empty table you had just cleared (live failure below).
+`no_clock` has no SET UP key, so out there the anchor is the session's first shot
+until something racks — and a null anchor (or one older than the buffer) plays as
+much of the buffer as there is, the same fallback a stale shot anchor already had.
+
+> **Live failure, 2026-08-05.** `setup: POST /api/rack` and then, 2.0 s later,
+> `replay: rack 2.0s ago, 598.5s file, cue 595.1s, 3.4s on air` — a correct hold,
+> a correct 10-minute buffer, a seek that landed, and 3.4 s of an already-run-out
+> table on the wall. The rack Steven wanted had broken ~266 s earlier and was
+> sitting comfortably inside the file. Nothing about the failure looked like a
+> wrong anchor from the deck's side, which is why the log line prints the age.
 
 **The buffer has to be long enough to hold a rack, and 20 s never was.** This is
 the one part of the feature that is an OBS setting rather than code:

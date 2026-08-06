@@ -232,6 +232,51 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 67 — the rack you just played, not the one you just
+  racked):** first live use of the held Replay key (checkpoint 65) failed, and
+  everything about it worked except the anchor. Steven ran a rack out, pressed
+  SET UP, held Replay a couple of seconds later, and the TV cut to an empty
+  already-run-out table for about a second and came straight back.
+
+  The deck log names it exactly: `setup: POST /api/rack -> 200` and then
+  `replay: rack 2.0s ago, 598.5s file, cue 595.1s, 3.4s on air`. A correct
+  hold (span `RACK`), a correct 10-minute buffer (598.5 s of file, the
+  checkpoint-65 addendum's setting proving itself), a seek that landed, a
+  badge, and a clean return — cueing 595.1 s into a 598.5 s file because the
+  anchor said the rack was 2.0 s old. The journal has the rack Steven wanted
+  breaking ~266 s before the press and running 14 shots to `cmd_new_rack` at
+  mono 628378.88, all of it sitting comfortably inside the buffer.
+
+  **The bug is the SET UP stamp, and it was in the press the feature exists
+  for.** Checkpoint 65 gave the rack anchor two stamps — the SET UP press
+  first, superseded by the next shot (the break) — reasoning that a rack replay
+  must not open on a minute of building a triangle. The break half is right.
+  The press half is not just imprecise but inverted: between racking and
+  breaking there is *by definition* nothing on the table to watch, so pointing
+  the anchor at the fresh rack guarantees the empty-table replay, and it does it
+  at the exact moment a player asks for a rack replay. Nobody holds Replay
+  mid-rack to see the balls they have not hit yet; they hold it after running
+  out, which is after SET UP.
+
+  So `Hub.new_rack` now only **arms** the next `shot_taken` to become the
+  anchor. It stamps nothing and retires nothing: until the new rack is broken,
+  the rack worth replaying is the one that just ended, and the new break
+  releases it. `_rack_mono` is gone, `rack_age()` reads one stamp, and null now
+  means one thing (no break yet this session) instead of two. The deck's
+  fallback for null and for an anchor older than the buffer is unchanged — play
+  as much of the buffer as there is.
+
+  No deck-side or `replay.py` change: `Span`, the cue-point arithmetic, the
+  lifted ceiling and the tap/hold routing all behaved. The two `test_server.py`
+  tests that asserted the old semantics are replaced by two that assert the new
+  ones, the second named for this failure; both verified failing against the
+  pre-fix hub. 366 unit tests green. No detection code touched, so the corpus
+  battery is not implicated.
+
+  Log-line note for next time: `replay:` prints the anchor age precisely because
+  a wrong anchor is invisible from the wall — an empty-table replay looks like a
+  broken seek, and it took one line of the deck log to tell those apart.
+
 - **2026-08-05 (checkpoint 66 — the candidate slot that shut out the rescue, and
   a vote parked in plain sight):** three `flag_missed` dumps from one afternoon
   session, three real shots vision never saw — a hard/long shot at 15:49 and two

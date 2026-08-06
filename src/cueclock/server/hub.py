@@ -121,16 +121,17 @@ class Hub:
         # which is exactly where drills happen. Cost: a phantom shot anchors a
         # phantom replay, which is a bug you would want to see anyway.
         self._last_shot_mono: float | None = None
-        # Where the current rack starts — the other anchor the Replay key seeks
-        # to, on a *held* press ("play the whole rack" rather than "play that
-        # shot"). Two stamps because the useful start is the break, not the
-        # racking: the SET UP press is taken first, then superseded by the first
-        # shot after it, so a rack replay opens on the break instead of on a
-        # minute of someone building a triangle. None until either happens,
-        # which the deck reads as "as far back as the buffer goes" — the same
-        # answer it already gives for a shot older than the buffer.
-        self._rack_mono: float | None = None
+        # Where the rack worth replaying starts — the other anchor the Replay
+        # key seeks to, on a *held* press ("play the whole rack" rather than
+        # "play that shot"). It is the **break**, never the racking: SET UP only
+        # *arms* the next shot to become it. So between racking and breaking the
+        # anchor is still the rack that just ended, which is the whole point —
+        # you run out, you rack up, and then you ask to see how you did it.
+        # None until the session's first break, which the deck reads as "as far
+        # back as the buffer goes" — the same answer it already gives for an
+        # anchor older than the buffer.
         self._rack_break_mono: float | None = None
+        self._rack_pending = False  # SET UP seen: the next shot is the break
         # Called after a *granted* extension has been broadcast, because the
         # overlay answers that broadcast by speaking "Extension called" out of
         # the TV. `cueclock run` points it at the mic listener's mute window:
@@ -163,21 +164,27 @@ class Hub:
         return time.monotonic() - self._last_shot_mono
 
     def rack_age(self) -> float | None:
-        """Seconds since this rack began, or None if it hasn't begun yet.
+        """Seconds since the last break, or None if none has been seen.
 
-        The break when one has been seen, the SET UP press before that — see
-        the stamps in `__init__`. An age rather than a timestamp for the same
-        reason `last_shot_age` is one: the caller is another process.
+        Always the break, never the SET UP press — see the stamps in
+        `__init__`. An age rather than a timestamp for the same reason
+        `last_shot_age` is one: the caller is another process.
+
+        Between a SET UP press and the break that answers it this still reports
+        the *previous* rack, deliberately. A table that has just been racked has
+        nothing on it to watch, and the rack you want at that moment is the one
+        you just played. Reporting the press instead was the live failure of
+        2026-08-05: SET UP, then a held Replay 2.0 s later, cued 595.1 s into a
+        598.5 s file and put 3.4 s of an empty table on the wall.
 
         `no_clock` has no SET UP key at all, so out there this is the first
         shot of the session until something racks. That is the honest answer:
         a drill has no racks, and the deck's fallback (the whole buffer) is
         what "the rack" means when nothing has declared one.
         """
-        anchor = self._rack_break_mono if self._rack_break_mono is not None else self._rack_mono
-        if anchor is None:
+        if self._rack_break_mono is None:
             return None
-        return time.monotonic() - anchor
+        return time.monotonic() - self._rack_break_mono
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
         """The composed broadcast/state payload: clock + `vision` + `score`."""
@@ -308,9 +315,11 @@ class Hub:
     async def new_rack(self) -> None:
         now = time.monotonic()
         self.clock.new_rack(now)
-        # A new rack retires the old replay anchor: the press starts it, and
-        # the next shot (the break) will supersede this stamp.
-        self._rack_mono, self._rack_break_mono = now, None
+        # SET UP *arms* the next shot to become the replay anchor; it does not
+        # retire the old one. Until the break lands there is nothing on the
+        # table to watch, so the rack worth replaying is still the one that
+        # just ended — see `rack_age`.
+        self._rack_pending = True
         self._log("cmd_new_rack")
         await self.broadcast(self.clock.snapshot())
 
@@ -400,10 +409,13 @@ class Hub:
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
         self._last_shot_mono = time.monotonic()  # replay anchor — before every gate
-        if self._rack_break_mono is None:
-            # First shot since the last SET UP: the break, and from here on the
-            # rack replay opens on it. Ungated for the same reason as above.
+        if self._rack_pending or self._rack_break_mono is None:
+            # The break: the first shot after a SET UP press, or the session's
+            # first shot (a `no_clock` drill has no SET UP key at all). From
+            # here on the rack replay opens on it, and the previous rack is
+            # released. Ungated for the same reason as above.
             self._rack_break_mono = self._last_shot_mono
+            self._rack_pending = False
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock

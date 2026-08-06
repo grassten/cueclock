@@ -574,31 +574,40 @@ def test_last_shot_reports_how_long_ago_the_shot_was() -> None:
     assert 0.0 <= age < 1.0
 
 
-def test_the_rack_anchor_moves_from_the_setup_press_to_the_break() -> None:
-    """A rack replay should open on the break, not on a minute of racking."""
+def test_the_rack_anchor_is_the_break_and_stays_there_for_the_rack() -> None:
+    """A rack replay opens on the break, not on a minute of racking."""
     app = create_app()
     hub: Hub = app.state.hub
     with TestClient(app) as client:
         client.post("/api/rack")
-        hub._rack_mono -= 60.0  # the SET UP press, a minute of racking ago
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 59.0
+        assert client.get("/api/replay_anchors").json()["rack_age_s"] is None  # nothing yet
 
         asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))  # the break
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] < 1.0
+        hub._rack_break_mono -= 60.0
+        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 59.0
 
         asyncio.run(hub.shot_taken(t=2.0, speed_mms=3000.0))  # the next shot
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] < 1.0
+        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 59.0  # still the break
 
 
-def test_a_new_rack_retires_the_previous_break() -> None:
+def test_setting_up_keeps_the_rack_you_just_played_until_the_next_break() -> None:
+    """The live failure of 2026-08-05, which is the common press.
+
+    You run out, you press SET UP, you hold Replay to watch how you did it.
+    Retiring the anchor on the press cued 595.1 s into a 598.5 s file and put
+    3.4 s of the empty table you had just cleared on the wall.
+    """
     app = create_app()
     hub: Hub = app.state.hub
     with TestClient(app) as client:
-        asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))
-        hub._rack_break_mono -= 300.0  # five minutes into the last rack
+        asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))  # the break
+        hub._rack_break_mono -= 300.0  # five minutes of rack
         assert client.get("/api/replay_anchors").json()["rack_age_s"] > 299.0
 
-        client.post("/api/rack")
+        client.post("/api/rack")  # ran out, racked up
+        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 299.0
+
+        asyncio.run(hub.shot_taken(t=2.0, speed_mms=5000.0))  # the new break retires it
         assert client.get("/api/replay_anchors").json()["rack_age_s"] < 1.0
 
 
