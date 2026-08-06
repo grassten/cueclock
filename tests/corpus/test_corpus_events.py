@@ -452,13 +452,17 @@ EXPECTED: dict[
     # (2.48x, above pickup_snatch's 2.37x carry — the denominator is blur
     # garbage), newborn (table-motion latch, correctly), handoff (poisoned
     # obs_t: the stick blob impersonated the resting cue after the ball
-    # left). The golden pins the DESIRED events, measured from the one
-    # mechanism that produced them (the eruption restore, measured and
-    # removed — see events.py): the break fires at 10.139 at corroborated
-    # 6503 mm/s. RED until the class is solved at the tracker/detect layer;
-    # the aftermath cannot separate a break from a snatch at the event layer
-    # (twelve discriminators measured, all failed — accuracy plan
-    # 2026-08-06).
+    # left). Until checkpoint 75 the golden pinned the DESIRED in-flight
+    # fire (10.139 s at 6503 mm/s — the removed eruption restore's numbers)
+    # and stood deliberately red. Retired with Steven's sign-off,
+    # 2026-08-06 (§13.5(3)): the product no longer needs the engine to
+    # catch this break in flight — the honest late fire the engine does
+    # produce (14.107 s at 443 mm/s, floor-eaten live) plus the involved-12
+    # settle is exactly what the hub's E8 adjudication converts into the
+    # counted break, and test_server.py pins that conversion with this
+    # clip's own numbers. The golden now pins today's actual events, so
+    # drift stays visible; catching the flight in-engine remains E7 work
+    # and would surface here as the fire moving earlier/faster.
     "break_dark_flight_0806": (1, 0, 1, 1),
     # The fully dark break (flag_missed_4, 2026-08-06 18:08Z; Steven's ground
     # truth: a full-power break off a fresh 15-ball rack, whole flight
