@@ -884,9 +884,25 @@ class EventEngine:
                         # vote's corroboration, so a candidate opened here is
                         # marked `parked` and must clear the travel confirm —
                         # see `parked_confirm_travel_mm`.
+                        #
+                        # An EMPTY flag parks the candidate too (2026-08-06):
+                        # "parked" is the epistemic state "the vote does not
+                        # corroborate this ball", and no-crowned-cue is that
+                        # state exactly as much as crowned-elsewhere is. The
+                        # old `not cue_quiet` condition dated from a metric
+                        # whose generous floor always crowned *something*; the
+                        # annulus floor honestly leaves the flag empty, and
+                        # three false fires walked straight through the fast
+                        # confirm the moment it did (a practice-stroke blob at
+                        # 791 mm/s on parked_vote_strike_0801, ball 11 on
+                        # address_chatter_miss_0801 — both under 400 mm of
+                        # travel, the measured false ceiling). A candidate
+                        # that WINS the debounced vote mid-confirm is
+                        # un-parked in _advance_candidate: corroboration
+                        # arriving is corroboration.
                         opening = self._candidate is None
                         self._maybe_open_newborn(t, ball, raw, follow_ball=True)
-                        if opening and self._candidate is not None and not cue_quiet:
+                        if opening and self._candidate is not None:
                             self._candidate.parked = True
                         if self._candidate is None:
                             self._maybe_open_rested(t, ball, raw)
@@ -1601,6 +1617,19 @@ class EventEngine:
             self._candidate = None  # impulse without follow-through: not a shot
             return []
         raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
+        if (
+            candidate.parked
+            and cue.is_cue
+            and self._cue_id_streak >= self._cfg.cue_id_debounce_frames
+        ):
+            # The vote's corroboration arrived mid-confirm: the candidate's
+            # own ball now holds the debounced cue flag, so the reason it was
+            # parked — "the vote does not corroborate this ball" — is gone,
+            # and it earns back the ordinary confirm. A streak-frozen
+            # whiteness cannot fake this (the flag needs the floor and the
+            # switch margin), and a stick/hand blob never clears the 0.50
+            # floor at all.
+            candidate.parked = False
         if candidate.newborn:
             # Carried-ball gates (measured on scratch_replace): a hand-carried
             # cue's raw speed is erratic between adjacent frames while a

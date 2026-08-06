@@ -471,6 +471,10 @@ def test_no_cue_newborn_strike_fires() -> None:
     sim.occlude(CUE)  # address occlusion: no observed ball holds the flag
     sim.run(0.2)
     sim.place(7, 800.0, 300.0)
+    sim.cue_id = 7  # the annulus vote crowns a clean white emergence on its
+    # first confirmed frame (measured born-whiteness 0.98-1.00, checkpoint
+    # 73 traces) — that crowning is what un-parks the birth candidate; an
+    # uncrowned emergence waits for the parked travel confirm instead
     sim.velocity(7, 900.0, 0.0)
     assert ShotTaken in map(type, sim.run(0.4))
 
@@ -575,6 +579,7 @@ def test_shot_from_pocket_jaw_after_scratch_fires() -> None:
     # silently absorbed the miss).
     sim = scratch_prelude()
     sim.place(7, 60.0, 60.0)  # the hanger emerges from the jaws...
+    sim.cue_id = 7  # ...white and unopposed, so the vote crowns it at once
     sim.velocity(7, 900.0, 900.0)  # ...clean, fully observed, smooth
     assert ShotTaken in map(type, sim.run(0.4))
 
@@ -819,6 +824,7 @@ def test_fast_newborn_strike_still_fires() -> None:
     sim.occlude(CUE)
     sim.run(0.2)
     sim.place(7, 800.0, 300.0)
+    sim.cue_id = 7  # crowned on emergence (see test_no_cue_newborn_strike_fires)
     sim.velocity(7, 1500.0, 0.0)
     assert ShotTaken in map(type, sim.run(0.4))
 
@@ -866,6 +872,7 @@ def test_fired_lone_roller_gets_a_settle() -> None:
     sim.occlude(CUE)  # address occlusion: no observed ball holds the flag
     sim.run(0.2)
     sim.place(7, 800.0, 300.0)
+    sim.cue_id = 7  # crowned on emergence (see test_no_cue_newborn_strike_fires)
     sim.velocity(7, 900.0, 0.0)
     assert ShotTaken in map(type, sim.run(0.4))
     sim.velocity(7, 0.0, 0.0)
@@ -1122,6 +1129,7 @@ def test_hand_stamps_do_not_guard_the_birth_paths() -> None:
     sim.run(0.2)  # any candidate the blob itself opened dies (merged gate);
     # its hand stamps are still inside the guard window when the ball births
     sim.place(8, 800.0, 300.0)  # the struck ball emerges at speed
+    sim.cue_id = 8  # crowned on emergence (see test_no_cue_newborn_strike_fires)
     sim.velocity(8, 900.0, 0.0)
     assert ShotTaken in map(type, sim.run(0.4))
 
