@@ -232,6 +232,37 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-06 (checkpoint 73 — the annulus shipped, and the engine learned that
+  identity moves):** the accuracy-plan §5.1 line landed end to end; corpus 13 red →
+  2 red / 439 green, all iteration on the warm detect cache. (a) Cue whiteness moved
+  to the perspective-scaled 0.55–0.83 ball-radius annulus (`_ring_whiteness`,
+  `ReferenceModel.radius_px` from the calibration's local scale, `cue_min_whiteness`
+  0.3 → 0.50 re-anchored on the stored-EMA population). (b) The traced phantom re-arm
+  died: `BallState.present` (matched-vs-coasting, distinct from `observed`) guards
+  rest *founding* — a coasting holder may refresh a rest but never found one.
+  (c) The deep one: the annulus crowns a clean rebirth on its first confirmed frame,
+  so the flag now moves mid-candidate routinely, and the flag-following candidate
+  inherited displacement across the switch — one mechanism that both fired
+  `pickup_snatch_0801` at 6108 mm/s and *was how the old code fired the breaks*.
+  A debounced flag switch now kills the candidate; the continuation re-qualifies
+  through the handoff path on the old holder's timeline, birth-anchored, with a
+  departure-speed physics test (`handoff_speed_gain_max`: a struck ball cannot
+  re-appear faster than its departure — power_shot 1.03× vs the snatch's 2.37×)
+  standing in for the table-motion latch the departure itself raised. (d) "Parked"
+  now means *uncorroborated* — an empty flag parks a birth candidate exactly like a
+  flag parked elsewhere (the old condition dated from a floor that always crowned
+  something). (e) `ShotTaken.speed_mms` requires two consecutive frames of agreement;
+  single merged-centroid spikes had been published as shot speeds and several goldens
+  had canonized them. 11 goldens regenerated with per-clip justification (8 speed-only,
+  3 explained improvements — address_chatter now fires at the impulse and its named
+  test passes again). Standing red, both understood and recorded in the accuracy plan
+  §12: `parked_vote_strike_0801` (a practice-stroke fragment — Steven's hoodie/cue
+  entering frame at EMA 0.70 — crowned on an empty flag; ground truth confirmed by
+  Steven from a rendered clip; guard needs measurement, one candidate separator
+  already measured dead) and `stroke_tug_strike_0801` (checkpoint 29's 0.01 s
+  knife-edge, second cause untraced). Cue-track continuity not re-measured this
+  session; run `continuity_probe.py` next.
+
 - **2026-08-06 (checkpoint 72 — nine detection hypotheses dead, the phantom
   traced to identity, and goldens made readable):** a full accuracy session run
   against `~/Desktop/cueclock-accuracy-plan.md`. The headline is a category
