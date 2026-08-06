@@ -232,6 +232,44 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-06 (checkpoint 74 — the first annulus live session: three flagged
+  misses, three mechanisms, two fixed):** Steven's 20-minute session flagged a break
+  the clock sat through, a missed soft roll, and a missed cluster shot. Ring dumps
+  replay bit-exact (the ring stores the exact frames the live loop processed —
+  `dump_trace.py` warm-restores state.pkl), and triage found none of them was
+  checkpoint 73's fault: each was an engine assumption the corpus never exercised.
+  (a) `occluded_roll_0806`: a live address emergence is a stick-merge split whose
+  centroid reads slow (first honest raw at age 0.179 s, crown at 0.31 s) — the 0.1 s
+  newborn age gate, calibrated on clean 0.012 s corpus emergences, anti-selects for
+  junk. New `newborn_dead_rest_max_age_s` (0.6) on the dead-rest fallback branches
+  only, and only for tracks born into a rest story already broken (the still-stamp
+  predates the birth) — `stroke_tug`'s fragment, which broke the story *by crowning*,
+  stays refused. (b) `cluster_rest_shot_0806`: a ball resting in a cluster is
+  merged-still forever (the blob is handed around its member tracks), so it can never
+  show the roster's observed fraction — measured 176 s at ~0% observed through six
+  settles — and when the struck cue's blob was re-associated onto its track,
+  `_maybe_open_rested` refused the shot on roster membership alone. Cluster residency
+  (old + present through sustained quiet) now admits; the own-rest dwell splits into
+  presence-witnessed dwell + pixel-witnessed departure run (`_translate_run`,
+  tip_bump's 666 ms dark push still refused). (c) The parked confirm gained a fast
+  tier (`parked_fast_confirm_mms` 1200: two consecutive observed raws, so a single
+  3179 mm/s hand-throw spike cannot certify) — in-flight tracks fragment before
+  covering 600 mm (the cluster shot's cue fragmented into three tracks). (d) Rest and
+  still-stamp upkeep no longer stops while a follow-ball candidate holds the slot
+  (stroke_gear_veto_0802 had lost its fire to a squatting parked fragment freezing
+  the stamp; byte-identical to golden again). (e) The break (`break_dark_flight_0806`,
+  deliberate standing red): the cue crossed 1390 mm unobserved, its "departure" one
+  stick-smeared 2441 mm/s step, and every re-qualification honestly refuses. An
+  eruption restore fired it perfectly (10.139 s, corroborated 6503 mm/s) — and fired
+  `pickup_snatch_0801` at 5780 through the identical mechanism. Twelve event-layer
+  discriminators measured against the snatch; all twelve failed (ledger in the
+  accuracy plan §12 and the tombstone at the kill-rule site). A pickup must never
+  fire, so the restore is removed and the break class waits on tracker/detect-level
+  evidence. Corpus 3 red / 441 green (the two old standing reds unchanged + the
+  break); unit suite 370 green; `parked_vote_newborn_0805` regenerated (fires 0.33 s
+  earlier at honest corroborated 2019 mm/s via the fast tier) with its named test
+  updated to pin both confirm tiers.
+
 - **2026-08-06 (checkpoint 73 — the annulus shipped, and the engine learned that
   identity moves):** the accuracy-plan §5.1 line landed end to end; corpus 13 red →
   2 red / 439 green, all iteration on the warm detect cache. (a) Cue whiteness moved

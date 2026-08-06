@@ -293,6 +293,23 @@ class EventConfig:
     newborn_strike_max_age_s: float = 0.1  # cue-vote debounce (2 frames) plus
     # a few association frames at the 78 Hz detect cadence; the real case
     # opened 0.012 s after birth
+    # The dead-rest fallback branches (`_maybe_open_candidate`: no rest, or a
+    # still-stamp gone stale) get a longer age budget. Those branches run
+    # when the flag's own story is already broken — the crown had nowhere to
+    # be for seconds — and a live address emergence needs the time: the
+    # track is born from a messy stick-merge whose polluted centroid reads
+    # slow (first raw >= newborn_impulse_mms at age 0.179 on flag_missed_2),
+    # and the debounced crown that routes this fallback arrived at age 0.31,
+    # 3x over the tight gate — while the junk stick blob next to it, born
+    # clean, passed at age 0.0. The tight gate anti-selects for junk there.
+    # The birth-radius gate still bounds the claim (the candidate must be
+    # within strike_handoff_radius_mm of its OWN birth spot); 0.6 covers the
+    # measured 0.18-0.31 with the 2x headroom the other occlusion windows
+    # carry. The too_far fallback keeps the tight gate: its real dependent
+    # (occluded_address_0731) opened at 0.012 s, and the widened gate there
+    # admitted a crowned body fragment born 768 mm from the rest 2.5 s
+    # before the real shot (stroke_tug_strike_0801, 2026-08-06).
+    newborn_dead_rest_max_age_s: float = 0.6
     # A hand-carried cue ball (scratch_replace, ball-in-hand) can also be born
     # at speed with the table quiet. Two measured discriminators, both far
     # from both sides: a struck cue on open cloth is observed every confirm
@@ -331,6 +348,21 @@ class EventConfig:
     # confirm. Only the weakest identity claim in the engine waits.
     parked_confirm_travel_mm: float = 600.0
     parked_confirm_window_s: float = 0.60  # 0.435 s measured + margin
+    # Fast tier of the parked confirm (flag_missed_3, 2026-08-06). The 600 mm
+    # travel confirm demands ~1000 mm/s AVERAGE over the whole window, and a
+    # live in-flight cue track rarely survives that long — the real struck
+    # cue fragmented into three successive tracks on one shot, and its
+    # 1865-1990 mm/s fragment died parked at 0.6 s having never been allowed
+    # the 60 mm confirm. Every false this parking was anchored on is slow:
+    # the practice-stroke blob at 791 mm/s, ball 11's spike suppressed to
+    # noise by two-step corroboration, stick retractions at 340-460. A
+    # parked candidate whose target shows TWO CONSECUTIVE observed raw
+    # steps at this floor (min(prev, raw) — the same one-corrupt-centroid
+    # suppression impulse_raw uses, so a single merged yank cannot certify)
+    # is moving like a struck ball and confirms on the normal displacement
+    # thresholds. 1200 is 1.5x the measured false ceiling (791) and 0.64x
+    # the slowest real that needs the tier (1865).
+    parked_fast_confirm_mms: float = 1200.0
     # Minimum confirm time for birth-path candidates (#8, pickup_snatch_0801,
     # 2026-08-02). The three gates above are all *fractions over the confirm
     # window*, and a fast confirm can close that window in three observations
@@ -512,8 +544,13 @@ class _StrikeCandidate:
     handoff: bool = False
     # Parked-vote birth candidates opened while an *observed* ball still held
     # the cue flag, so the whiteness vote corroborates nothing. They confirm on
-    # travel instead — see `parked_confirm_travel_mm`.
+    # travel instead — see `parked_confirm_travel_mm` — unless the target
+    # certifies struck-ball speed (two consecutive observed raws at
+    # `parked_fast_confirm_mms`; latched here because the fragment's track can
+    # die between certifying and confirming).
     parked: bool = False
+    fast_certified: bool = False
+    last_obs_raw: float | None = None  # observed-frames-only chain for the fast tier
     last_raw: float | None = None
     ball_id: int | None = None
     opened_on: int | None = None  # the track id the candidate's target had at
@@ -622,6 +659,14 @@ class EventEngine:
         # Per-ball last time it visibly translated (first sighting counts):
         # bounds how long the spin-churn gate may hold settle (spin_watch_s).
         self._last_translate: dict[int, float] = {}
+        # Per-ball current translation run: (first stamp of the run, the
+        # stamp that stood before it). Lets the own-rest strike path test
+        # dwell against the stamp as of BEFORE the impulse's own onset — a
+        # cluster ball's dwell is presence-witnessed, never pixel-witnessed,
+        # so the impulse frames must not be billed against it
+        # (flag_missed_3, 2026-08-06). A new run starts when a stamp lands
+        # more than moving_window_s after the previous one.
+        self._translate_run: dict[int, tuple[float, float]] = {}
         # Per-ball open creep-gate excursion: (start t, pre-excursion x/y,
         # pre-excursion translate stamp). Translate stamps land immediately —
         # a hand ramp or tip bump must break the strike dwell on its very
@@ -790,6 +835,15 @@ class EventEngine:
             target = next((b for b in balls if b.ball_id == self._candidate.ball_id), None)
             if target is not None:
                 events.extend(self._advance_candidate(t, target))
+            # The flag's rest/still bookkeeping is orthogonal to who holds
+            # the candidate slot and must not starve while a follow-ball
+            # candidate occupies it: a parked scan open on a stroke fragment
+            # froze the still-stamp for 0.6 s and the real cue's flag-borne
+            # open then read its own quiet address as a stale ramp
+            # (stroke_gear_veto_0802, 2026-08-06 — the fire the gear-behind
+            # exemption exists to admit).
+            if cue is not None and self._cue_id_streak >= cfg.cue_id_debounce_frames:
+                self._update_cue_rest(t, cue)
         elif cue is not None and self._cue_id_streak >= cfg.cue_id_debounce_frames:
             if self._candidate is not None and self._candidate.opened_on not in (
                 None,
@@ -842,6 +896,25 @@ class EventEngine:
                     )
                 if raw >= cfg.strike_impulse_mms and last_obs_old is not None and quiet_enough:
                     self._maybe_open_handoff(t, cue, raw, last_obs_t=last_obs_old)
+                # MEASURED AND REMOVED (2026-08-06): an "eruption restore"
+                # lived here — stash the killed candidate and restore it when
+                # the aftermath births a fleet of fast young tracks, to fire
+                # the live break this kill eats (its cue crosses the table
+                # unobserved; the gain test's denominator is one stick-
+                # smeared 2441 mm/s step while the ball flew 8000+). Twelve
+                # candidate discriminators against pickup_snatch_0801 were
+                # measured and ALL failed: young-track count (4 vs 6),
+                # speed (538-2709 vs 700-2700), spread (400+ mm both),
+                # persistence (arm fragments outlive 3 observed frames),
+                # fleet birth distance from the rest (1067-1337 vs 988+),
+                # non-hand mover stamps (0 both), roster deaths (rack reads
+                # as 1-2 merged tracks), old-holder afterlife (coast->gone
+                # both), departure certification (single fast step both:
+                # 2327 vs 2441). A snatch's aftermath is observationally
+                # identical to a break's at this layer, and a pickup must
+                # never fire. The break class needs tracker/detect-level
+                # evidence (see the accuracy plan) — do not rebuild this
+                # from event-layer aftermath statistics.
             elif self._candidate is not None:
                 events.extend(self._advance_candidate(t, cue))
             else:
@@ -984,6 +1057,9 @@ class EventEngine:
                         base[2],
                         self._last_translate[ball.ball_id],
                     )
+                prev_stamp_run = self._last_translate[ball.ball_id]
+                if t - prev_stamp_run > cfg.moving_window_s:
+                    self._translate_run[ball.ball_id] = (t, prev_stamp_run)
                 self._last_translate[ball.ball_id] = t
             else:
                 excursion = self._translate_excursion.pop(ball.ball_id, None)
@@ -1007,6 +1083,9 @@ class EventEngine:
             b.ball_id: exc
             for b in balls
             if (exc := self._translate_excursion.get(b.ball_id)) is not None
+        }
+        self._translate_run = {
+            b.ball_id: run for b in balls if (run := self._translate_run.get(b.ball_id)) is not None
         }
         self._first_seen = {b.ball_id: self._first_seen[b.ball_id] for b in balls}
         self._birth_pos = {b.ball_id: self._birth_pos[b.ball_id] for b in balls}
@@ -1105,10 +1184,14 @@ class EventEngine:
                 # off mid-aim. Dead ids are inert (ids are never reused), and
                 # the settle below prunes to the standing set while the
                 # player is away from the table.
-                self._roster.update(b.ball_id for b in balls if self._judgeable(b))
+                self._roster.update(
+                    b.ball_id for b in balls if self._judgeable(b) or self._cluster_resident(b)
+                )
             if self._table_moving and t - self._all_still_since >= cfg.settle_dwell_s:
                 self._table_moving = False
-                self._roster = {b.ball_id for b in balls if self._judgeable(b)}
+                self._roster = {
+                    b.ball_id for b in balls if self._judgeable(b) or self._cluster_resident(b)
+                }
                 self._episode_origin.clear()
                 self._episode_last.clear()
                 self._episode_free_mover = False
@@ -1229,8 +1312,22 @@ class EventEngine:
         raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
         if raw < cfg.strike_impulse_mms:
             return
+        born = self._first_seen.get(cue.ball_id)
+        # The dead-rest age budget applies only when the rest story was
+        # already broken when this track was born: a crown with nowhere
+        # credible to be for the ball's whole life is the occluded-address
+        # signature (flag_missed_2: still-stamp dead 7.6 s before the
+        # emergence). A story that broke AFTER the birth broke because of
+        # the birth — the fragment's own crowning stopped the refresh
+        # (stroke_tug_strike_0801: still fresh until 0.13 s before the
+        # fallback, fragment already 0.45 s old) — and gets no extra time.
+        wide = (
+            cfg.newborn_dead_rest_max_age_s
+            if born is not None and self._cue_last_still_t <= born
+            else None
+        )
         if self._cue_rest is None:
-            self._maybe_open_newborn(t, cue, raw)
+            self._maybe_open_newborn(t, cue, raw, max_age_s=wide)
             return
         if t - self._cue_last_still_t > cfg.strike_step_max_s and not (
             self._axis_killed_t is not None and t - self._axis_killed_t <= cfg.strike_step_max_s
@@ -1248,9 +1345,10 @@ class EventEngine:
             # by 0.33-0.45 s. A stale still-story is the occluded-address
             # class's defining feature, not a placement signature; do not
             # re-propose staleness as the separator.
-            self._maybe_open_newborn(t, cue, raw)
+            self._maybe_open_newborn(t, cue, raw, max_age_s=wide)
             return
-        if self._open_from_rest(t, cue, raw, self._cue_rest, follow_ball=False) == "too_far":
+        verdict = self._open_from_rest(t, cue, raw, self._cue_rest, follow_ball=False)
+        if verdict == "too_far":
             # Impulse far from the remembered rest: the rest may be anchored to
             # the wrong ball (flag parked elsewhere while the real cue was
             # occluded) — the birth evidence gets its say.
@@ -1486,7 +1584,12 @@ class EventEngine:
             self._candidate.handoff = True
 
     def _maybe_open_newborn(
-        self, t: float, cue: BallState, raw: float, follow_ball: bool = False
+        self,
+        t: float,
+        cue: BallState,
+        raw: float,
+        follow_ball: bool = False,
+        max_age_s: float | None = None,
     ) -> None:
         """Occluded-address strike: the cue-vote winner was just born at speed.
 
@@ -1517,7 +1620,8 @@ class EventEngine:
             # settled (unlatched) table.
             return
         born = self._first_seen.get(cue.ball_id)
-        if born is None or t - born > cfg.newborn_strike_max_age_s:
+        age_budget = cfg.newborn_strike_max_age_s if max_age_s is None else max_age_s
+        if born is None or t - born > age_budget:
             return
         if self._engine_t0 is None or born - self._engine_t0 <= cfg.settle_creep_window_s:
             return  # founding track: first sight at engine start is not a birth
@@ -1590,6 +1694,26 @@ class EventEngine:
             return
         rest_x, rest_y = rest
         last_translate = self._last_translate.get(ball.ball_id)
+        run = self._translate_run.get(ball.ball_id)
+        if (
+            last_translate is not None
+            and run is not None
+            and t - run[0] <= cfg.moving_window_s
+            and self._run_witnessed(history, run[0], t)
+        ):
+            # The fresh stamps are the impulse's own onset run, just started
+            # and pixel-witnessed end to end. The dwell question is about
+            # what came BEFORE it, so test the stamp that stood before the
+            # run. A cluster ball's dwell can never be observation-witnessed
+            # (the merged blob is handed around its member tracks, so every
+            # member reads present-not-observed — flag_missed_3 measured
+            # ~0% observed over 176 s of genuine rest), and the checks below
+            # would refuse it on exactly that blindness. The departure is
+            # where pixel evidence is non-negotiable: a tip-bump push rides
+            # the ball out of sight for 666 ms, while a struck ball's onset
+            # gap measures <= 77 ms — `_run_witnessed` holds that line with
+            # the strike occlusion budget (strike_step_max_s).
+            last_translate = run[1]
         if last_translate is None or t - last_translate < cfg.pre_strike_dwell_s:
             # The stamp says "recently moved" — but sustained address churn
             # fakes that: the stick and bridge hand over the addressed ball
@@ -1703,6 +1827,15 @@ class EventEngine:
         # the rule would have un-parked live is a crowned ball-in-hand
         # placement roll (parked_vote_strike_0801, 256 mm of travel), whose
         # refusal is the travel confirm the un-park would bypass. Removed.
+        # Parked fast tier: two consecutive raws at the floor, only from
+        # frames the target was actually measured — a coasted frame repeats
+        # the EMA and would fake the corroboration (see
+        # `parked_fast_confirm_mms`).
+        if cue.observed:
+            prev_obs = candidate.last_obs_raw
+            candidate.last_obs_raw = raw
+            if prev_obs is not None and min(prev_obs, raw) >= cfg.parked_fast_confirm_mms:
+                candidate.fast_certified = True
         if candidate.newborn:
             # Carried-ball gates (measured on scratch_replace): a hand-carried
             # cue's raw speed is erratic between adjacent frames while a
@@ -1725,9 +1858,12 @@ class EventEngine:
         # rather than jumped 22 mm on one merged-centroid frame.
         late = t - candidate.t0 >= cfg.strike_slow_confirm_after_s
         needed = cfg.strike_slow_confirm_mm if late else cfg.strike_confirm_displacement_mm
-        if candidate.parked:
+        if candidate.parked and not candidate.fast_certified:
             # The vote corroborates nothing here, so the ball's own travel is
-            # the identity evidence — see `parked_confirm_travel_mm`.
+            # the identity evidence — see `parked_confirm_travel_mm`. A
+            # fast-certified target has shown corroborated struck-ball speed
+            # instead and keeps the normal thresholds
+            # (`parked_fast_confirm_mms`).
             needed = cfg.parked_confirm_travel_mm
         if displacement < needed:
             # Feasibility: a candidate that can no longer reach the confirm
@@ -1931,6 +2067,49 @@ class EventEngine:
         t_now = positions[-1][0]
         ref = next((p for p in positions if p[0] >= t_now - window_s), positions[0])
         return hypot(ball.x_mm - ref[1], ball.y_mm - ref[2])
+
+    def _run_witnessed(self, history: "_BallHistory", start: float, t: float) -> bool:
+        """Every frame of [start, t] observed within the strike occlusion
+        budget — the departure-evidence half of the own-rest path's
+        presence-witnessed dwell (see `_maybe_open_rested`)."""
+        prev_seen = start
+        for p in history.positions:
+            if p[0] < start:
+                continue
+            if p[3]:
+                if p[0] - prev_seen > self._cfg.strike_step_max_s:
+                    return False
+                prev_seen = p[0]
+        return t - prev_seen <= self._cfg.strike_step_max_s
+
+    def _cluster_resident(self, ball: BallState) -> bool:
+        """Old track whose spot the tracker still accounts for, without clean
+        observations — a ball resting inside a cluster.
+
+        Roster admission used to demand `_judgeable`, whose observed-fraction
+        half a cluster ball can never show: adjacent resting balls merge into
+        one blob and the matcher hands the blob around its member tracks
+        frame by frame, so each reads present-not-observed near 100% of the
+        time. flag_missed_3 (2026-08-06) measured the cost: the blue ball's
+        track sat 176 s at ~0% observed through six settles, locked out of
+        the roster — and when the struck cue's blob was re-associated onto
+        it at the impulse, `_maybe_open_rested` refused the real shot on
+        roster membership alone, with every behavioural gate downstream of
+        the roster check ready to pass.
+
+        Presence through sustained table quiet is the admission evidence:
+        the union below only runs after `settle_dwell_s` of stillness, so a
+        track that is old enough to judge and still being matched (any
+        branch, merged-still included) is a ball standing on a quiet table,
+        not a hand fragment sweeping through. What this deliberately admits
+        beyond `_judgeable` is exactly the merged-still population; junk
+        that merely coasts (matched by nothing) stays out — coasting is
+        `present=False`.
+        """
+        positions = self._history[ball.ball_id].positions
+        if positions[-1][0] - positions[0][0] < 0.8 * self._cfg.settle_creep_window_s:
+            return False
+        return ball.present
 
     def _judgeable(self, ball: BallState) -> bool:
         """Old and solid enough to judge motion/stillness from its history.

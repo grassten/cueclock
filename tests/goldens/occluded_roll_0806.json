@@ -1,0 +1,17 @@
+{
+  "scenario": "occluded_roll_0806",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 12.2891,
+      "ball_id": 14,
+      "speed_mms": 1073.2574,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 16.2702
+    }
+  ]
+}

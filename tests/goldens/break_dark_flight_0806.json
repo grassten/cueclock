@@ -1,0 +1,17 @@
+{
+  "scenario": "break_dark_flight_0806",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 10.1388,
+      "ball_id": 111,
+      "speed_mms": 6503.4653,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 17.9411
+    }
+  ]
+}

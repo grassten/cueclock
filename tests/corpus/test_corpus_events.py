@@ -438,6 +438,47 @@ EXPECTED: dict[
     # and reads 0.56 observed, worse than the hand-grab the floor exists to
     # reject. Pins both — one shot, at break speed, from a rack explosion.
     "break_outrun_0805": (1, 0, 1, 1),
+    # 2026-08-06 live session, first outing of the annulus identity. Three
+    # flagged misses, three distinct mechanisms — checkpoint 74.
+    #
+    # A ring dump: the stored frames are exactly the ~72 Hz the live loop
+    # processed, so replay is frame-for-frame what the session saw.
+    #
+    # The break the clock sat through (manual Restart at the table). The cue
+    # crossed 1390 mm to the rack entirely unobserved — its "departure" was
+    # one stick-smeared 2441 mm/s step — and the reborn cue was crowned at
+    # the rack within 2 frames, so the flag-switch kill rule ate the
+    # rest-anchored candidate and every re-qualification refused: gain test
+    # (2.48x, above pickup_snatch's 2.37x carry — the denominator is blur
+    # garbage), newborn (table-motion latch, correctly), handoff (poisoned
+    # obs_t: the stick blob impersonated the resting cue after the ball
+    # left). The golden pins the DESIRED events, measured from the one
+    # mechanism that produced them (the eruption restore, measured and
+    # removed — see events.py): the break fires at 10.139 at corroborated
+    # 6503 mm/s. RED until the class is solved at the tracker/detect layer;
+    # the aftermath cannot separate a break from a snatch at the event layer
+    # (twelve discriminators measured, all failed — accuracy plan
+    # 2026-08-06).
+    "break_dark_flight_0806": (1, 0, 1, 1),
+    # A soft-medium positional shot (~450 mm/s roll, 560 mm) missed live.
+    # The cue emerged from a long address occlusion as a stick-merge split
+    # whose centroid reads slow — first honest raw at age 0.179, debounced
+    # crown at 0.31 — while the tight newborn age gate (calibrated on clean
+    # corpus emergences at 0.012 s) refused it and a parked stick-retraction
+    # blob squatted the slot. Pins the dead-rest age budget
+    # (newborn_dead_rest_max_age_s): the crown was born into a rest story
+    # already 7.6 s dead, so the fallback gets the time the emergence needs.
+    "occluded_roll_0806": (1, 0, 1, 1),
+    # A shot out of a frozen cue-object cluster, missed live twice over: the
+    # struck cue walked away with the track id of the cluster ball beside it
+    # (an id that had been present-not-observed for 176 s — the merged blob
+    # is handed around its members, so no member can ever show the roster's
+    # observed fraction), and the ghost of the address blob kept the crown
+    # and the still-stamp at the vacated rest. Pins cluster-resident roster
+    # admission and the presence-witnessed dwell of _maybe_open_rested (the
+    # departure run must be pixel-witnessed; the dwell may be presence-
+    # witnessed).
+    "cluster_rest_shot_0806": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -486,6 +527,9 @@ REFERENCES: dict[str, str] = {
     "parked_vote_newborn_0805": "empty_table_0801",
     "late_emergence_strike_0805": "empty_table_0801",
     "break_outrun_0805": "empty_table_0801",
+    "break_dark_flight_0806": "empty_table_0801",
+    "occluded_roll_0806": "empty_table_0801",
+    "cluster_rest_shot_0806": "empty_table_0801",
 }
 
 
@@ -846,7 +890,7 @@ def test_late_emergence_shot_fires_at_the_stroke() -> None:
 
 
 def test_parked_vote_newborn_confirms_on_travel_not_speed() -> None:
-    """The parked-vote birth path must judge the ball by how far it goes.
+    """The parked-vote birth path must judge the ball, not trust the vote.
 
     parked_vote_newborn_0805: the whiteness vote sits on an observed, still
     ball at (717, 91) — the object ball about to be potted — while the struck
@@ -855,17 +899,23 @@ def test_parked_vote_newborn_confirms_on_travel_not_speed() -> None:
     birth path was gated on the holder being dark, and the own-rest path wants
     roster membership a newborn cannot have.
 
-    Speed cannot be the discriminator, which is why this pins the timing.
-    Measured over 1 s from the birth spot, this real strike travels 962 mm
-    while everything the configuration falsely admitted corpus-wide managed
-    202-382 mm — including scratch_replace's 3179 mm/s throw, *faster* than
-    this strike's impulse. The 600 mm gate is crossed 0.435 s after the open,
-    so the fire lands at 11.758 s; firing much earlier would mean the travel
-    confirm has been bypassed.
+    A single speed reading cannot be the discriminator — scratch_replace's
+    hand throw spikes to 3179 mm/s, *faster* than this strike's impulse — so
+    the parked confirm has two tiers, both pinned here. Travel: measured over
+    1 s from the birth spot, this real strike goes 962 mm while every false
+    the configuration admitted corpus-wide managed 202-382 mm (600 mm gate).
+    Corroborated speed (`parked_fast_confirm_mms`, flag_missed_3 2026-08-06):
+    TWO CONSECUTIVE observed raw steps at 1200+ — this strike sustains
+    1865-2019 mm/s and certifies, firing at 11.425 s on the normal 60 mm
+    confirm, 0.33 s before the travel tier would have; a hand throw's spike
+    never repeats on adjacent observed steps and still waits out the 600 mm
+    it cannot cover (scratch_replace stays silent in its own scenario).
+    Firing before the impulse at 11.310, or later than the travel tier's
+    11.758, would mean one of the tiers is broken.
     """
     if not (CLIPS / "parked_vote_newborn_0805").exists():
         pytest.skip("clip parked_vote_newborn_0805 not recorded")
     events = _run_clip("parked_vote_newborn_0805", _reference_model("empty_table_0801"))
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the parked-vote birth miss is back"
-    assert 11.6 <= shots[0] <= 12.1, f"shot at {shots[0]:.2f}s — travel confirm not honoured"
+    assert 11.31 <= shots[0] <= 11.8, f"shot at {shots[0]:.2f}s — parked confirm tiers broken"
