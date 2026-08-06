@@ -70,9 +70,9 @@ def test_key_index_is_row_major_from_top_left() -> None:
 # --- the spine: top-left 2x2, present in every mode, never moves ---
 
 SPINE = {"session", "mode", "replay", "flag"}
-# Ground truth (#19) is not spine — it sits bottom-right — but it is the other
-# key with no mode condition at all, so it survives everywhere the spine does.
-ALWAYS_ON = SPINE | {"groundtruth"}
+# With "I shot" retired (#19, 2026-08-05) the spine is the whole of what has no
+# mode condition at all — nothing else survives every mode.
+ALWAYS_ON = set(SPINE)
 
 
 def test_spine_holds_the_top_left_block() -> None:
@@ -105,21 +105,17 @@ def test_run_out_drops_the_rack_only_keys() -> None:
 
 def test_no_clock_collapses_to_the_spine() -> None:
     # Everything that exists to shape a countdown leaves with the countdown.
-    # Ground truth stays: a drill is still a shot, and vision still emits a
-    # ShotTaken in no_clock (journaled `vision_shot_taken_no_clock`), so the
-    # press still measures detection — which is the point of the key.
     assert visible_names(NO_CLOCK) == ALWAYS_ON
 
 
-def test_ground_truth_is_never_dark() -> None:
-    """It is not a mode, so no mode may take it away (#19).
+def test_the_retired_ground_truth_cell_stays_empty() -> None:
+    """(3,5) held "I shot" (#19) until 2026-08-05; nothing took its place.
 
-    The design collapsed to a single unconditional key precisely so there is
-    nothing to remember at the table. A mode that hid it would put the
-    remembering back.
+    Pinned because the accuracy denominator now comes from the journal with
+    nothing asked of the table, and a key reappearing there would quietly
+    re-introduce the thing that was removed.
     """
-    for state in (MATCH, RUN_OUT, NO_CLOCK):
-        assert "groundtruth" in visible_names(state)
+    assert all((key.row, key.col) != (3, 5) for key in (*LAYOUT, *REASON_KEYS))
 
 
 def test_push_is_absent_under_the_eight_ball_rulebooks() -> None:

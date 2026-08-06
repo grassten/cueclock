@@ -15,13 +15,28 @@ all in the same pass, without asking permission (Step 7b).
 
 Flow spec: `docs/hardware.md` §C5. Clip conventions: `docs/design.md` §9.
 
-## Step 0 — Preflight
+## Step 0 — Preflight, and **start from the number, not the clip**
 
 ```bash
 pgrep -fl "cueclock.cli run"     # if non-empty, kill it (below) before anything else
 ls -d /Volumes/T7 && df -h /Volumes/T7 | tail -1
 ls -la ~/cueclock-dumps/
+.venv/bin/python -m cueclock.cli report --since 7d    # the week the flags came from
+.venv/bin/python -m cueclock.cli report --all         # the trend they sit in
 ```
+
+**Read the report before opening a single clip**, and quote it when you report
+back. Flag presses sample only the failures Steven noticed; `report` counts
+every strike the engine missed, because the clock's own compensation records
+one on every shot (`server/report.py`, `docs/cli.md` §report). A flagged clip
+that turns out to be one instance of a mechanism already costing 3% is a very
+different object from one that is the only evidence of something new — and you
+cannot tell which without the aggregate first.
+
+If a strategy question is on the table ("is this working", "why isn't it
+getting better"), **answer it from the report and the trend, never by opening a
+clip.** Steven has rejected clip-diving as a way to reason about direction
+(2026-08-05).
 
 Three hard rules:
 
@@ -233,28 +248,52 @@ and the Syphon Client source selected.
 | passes | passes | Live-only. Suspect starvation (Step 4 `hz`) or the presentation path. Usually not a vision bug. |
 | n/a | either | No snapshot in the clip — cold only, plus a printed note. |
 
-## Step 7 — Decide
+## Step 7 — Decide. **The default is delete.**
+
+More clips have not meant more accuracy. Between 2026-07-27 and 2026-08-05 the
+corpus went 17 → 57 scenarios and `vision/events.py` went 257 → 1842 lines
+(51 tuned constants), while the miss rate stayed flat at ~3.3% — and six of
+the last nine detection fixes were repairing damage done by earlier ones. A
+clip is evidence of a **mechanism**, not a scenario to be covered; there are
+infinite shots and a small number of causes, so coverage was never reachable
+and was never the goal.
 
 Per clip, pick one and tell Steven which:
 
-- **Promote** — reproducible, and it pins behavior nothing else covers.
+- **Delete** — *the default.* A duplicate of a mechanism already represented,
+  or explained as contention / presentation. Record the finding, drop the
+  3.6 GB. "This exact shot fails" is **not** a reason to keep it.
+- **Promote** — reproducible **and** it demonstrates a cause the corpus cannot
+  currently represent. Say which existing scenario is the nearest neighbour and
+  why it does not already cover this. If you cannot name that, delete.
 - **Keep** — real evidence, not yet gradeable (e.g. waiting on the acoustic
   corroborator). Move to T7 under a descriptive name; do not add `EXPECTED`.
-- **Delete** — duplicate of a covered scenario, or explained as contention /
-  presentation. Record the finding, drop the 3.6 GB.
 
-## Step 7b — Fix every defect the triage found. Do not ask first.
+## Step 7b — Fix the cause. A new threshold is not a fix.
 
 **Triage is not done when the bug is named. It is done when the bug is
-gone.** Fix all of them, in this pass, without stopping for permission —
+gone.** Fix what you find, in this pass, without stopping for permission —
 Steven has said so explicitly, and a diagnosis handed back is a defect left
 live at the table. There is nobody else to pick it up.
 
-This holds when there is more than one bug in a batch, when they sit in
-different subsystems, and when a clip turns out to hide a second failure
-behind the first. Fix each one. Two clips have meant two independent bugs
-before (checkpoints 50 and 51 — a carom guard misreading the player's own
-stick, and a one-shot latch that could never clear).
+But *what counts as a fix changed on 2026-08-05*, because the old rule is what
+produced 51 interacting constants and a flat miss rate:
+
+> A change is a fix if it **removes rules** or **corrects a cause upstream**.
+> A change that adds a threshold or a special case fitted to this clip is not a
+> fix, however well it is measured.
+
+If the only available change is a new constant tuned to the clip in hand,
+**write the mechanism down in the CHANGELOG and stop.** Say plainly that you
+are stopping and why. That is not a parked failure in the sense Steven
+prohibits (Step 7b still forbids `xfail`-and-move-on); it is refusing to add
+the 52nd constant that will veto a real shot three weeks from now — which is
+exactly what checkpoints 50, 51, 56, 57 and 66 each had to undo.
+
+Nearly every miss traces to one upstream cause: **the tracker loses cue-ball
+identity during the address and strike**, and the event engine then guesses.
+Prefer a fix in `track.py` (association, using physics) over one more rescue
+path in `events.py`.
 
 Specifically forbidden as an ending:
 
@@ -263,8 +302,9 @@ Specifically forbidden as an ending:
   and unfixable today* (silent hand motion — the acoustic-corroborator
   class), never a holding pen for work not yet attempted.
 - Filing the fix as a board card and stopping.
-- Stopping at "the measurement says this can't be a threshold." That is
-  where the work starts, not where it ends.
+- Adding a constant to make one clip pass and reporting the corpus green as if
+  that were evidence of improvement. It is evidence of no regression, which is
+  a different and much weaker claim (Step 10).
 
 When an anchor turns out to be falsified, **measure the candidate
 discriminators before writing any code**: instrument the engine over the
@@ -334,7 +374,9 @@ evidence about the snapshot, not about the fix.
 
 Every constant introduced along the way must be anchored to a measurement
 from the corpus. No blind threshold tuning — that discipline is how the old
-app's 90–95% plateau gets avoided.
+app's 90–95% plateau gets avoided. **Anchoring a constant is necessary and no
+longer sufficient**: see Step 7b: every one of the 51 constants in `events.py`
+was anchored to a measurement, and the miss rate is flat.
 
 ## Step 9 — Drain
 
@@ -345,6 +387,30 @@ du -sh ~/cueclock-dumps/            # confirm it's drained
 
 Staging lives on the internal SSD (~68 GB free ≈ 19 dumps). It is not
 backed up and not synced — a dump that matters belongs on the T7.
+
+## Step 10 — Prove it on shots nobody picked
+
+**A green corpus is not evidence that accuracy improved.** It is evidence of no
+regression, which is weaker and easily mistaken for the real thing — the corpus
+went 17 → 57 scenarios and stayed green throughout the nine days the miss rate
+did not move.
+
+The test set is Steven's ordinary play: ~130 uncurated shots a night, already
+counted, nothing asked of him. So the pass ends like this:
+
+1. Record the pre-change baseline from `report --all` (764 shots / 3.27% as of
+   2026-08-05) and the last week from `report --since 7d`.
+2. State, in the CHANGELOG entry, **what the miss rate should do** if the fix is
+   real, and roughly how many shots it takes to tell. Rough arithmetic at the
+   current baseline: ~630 shots (≈5 sessions) to confirm a drop to 1%; ~2500
+   (≈19 sessions) to confirm 3.3% → 2%. A fix whose predicted effect is smaller
+   than the noise at this volume is a fix nobody can validate — say so.
+3. Next session, run `report` again and compare. **Report the number back to
+   Steven whether or not it moved**, including when it got worse.
+
+Deletions are a result worth reporting on their own: lines removed from
+`events.py` with the rate unchanged is a win, because the interaction surface
+that produces self-inflicted regressions got smaller.
 
 ## Why staging is not the T7
 

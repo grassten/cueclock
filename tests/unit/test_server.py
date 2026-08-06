@@ -412,56 +412,21 @@ def test_idle_break_gate_still_eats_slow_newborn_motion() -> None:
     assert hub.clock.state is State.MOTION
 
 
-# ---------- ground truth (#19) ----------
+# ---------- ground truth (#19, retired 2026-08-05) ----------
 
 
-def test_ground_truth_press_never_touches_the_clock() -> None:
-    """A press is an observation, not a command.
+def test_ground_truth_endpoint_is_gone() -> None:
+    """The "I shot" key is removed; its endpoint must fail visibly.
 
-    The whole design rests on the player pressing one key with no judgement
-    attached; if the press moved the clock it would become a decision again.
+    Same rule as `/score` and `/api/last_shot` (checkpoints 61, 65): a deck
+    daemon left on an old build must break loudly, never keep looking like it
+    works. The denominator now comes from the clock's own missed-strike
+    compensation, which asks nothing of the table (`server/report.py`).
     """
-    hub = Hub()
-    hub.ground_truth_press()
-    assert hub.clock.state is State.IDLE
-    asyncio.run(hub.shot_taken(speed_mms=5000.0))
-    assert hub.clock.state is State.MOTION
-    hub.ground_truth_press()
-    assert hub.clock.state is State.MOTION
-
-
-def test_ground_truth_press_is_journaled_on_the_capture_clock() -> None:
-    """Stamped like a vision event so alignment never crosses clock domains.
-
-    The press has no frame of its own, so the stamp extrapolates from the
-    newest processed frame — which is exactly where detect-loop starvation
-    would otherwise hide, since emit time and capture time diverge there.
-    """
-    hub = Hub()
-    hub.note_frame(41.5)
-    hub.ground_truth_press()
-    record = hub.journal.tail(60.0)[-1]
-    assert record["kind"] == "ground_truth_press"
-    assert isinstance(record["t"], float)
-    assert record["t"] >= 41.5
-    assert record["frame_t"] == record["t"]
-
-
-def test_ground_truth_press_without_vision_is_unanchored_not_guessed() -> None:
-    """No frames means no capture clock. Record null rather than invent one."""
-    hub = Hub()
-    hub.ground_truth_press()
-    record = hub.journal.tail(60.0)[-1]
-    assert record["kind"] == "ground_truth_press"
-    assert record["t"] is None
-
-
-def test_ground_truth_endpoint_records_a_press() -> None:
-    hub = Hub()
     app = create_app()
-    app.state.hub = hub
+    app.state.hub = Hub()
     with TestClient(app) as client:
-        assert client.post("/api/groundtruth").json() == {"ok": True}
+        assert client.post("/api/groundtruth").status_code == 404
 
 
 # ---------- session journal upgrades (frame_t + detect heartbeat, 2026-08-01) ----------

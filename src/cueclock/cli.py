@@ -24,6 +24,7 @@ from types import FrameType
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from cueclock.server.hub import Hub
     from cueclock.vision.calibration import TableCalibration
 
 import cv2
@@ -39,9 +40,6 @@ from cueclock.display.pipeline import (
     UndistortParams,
     build_undistort_maps,
 )
-from cueclock.server.report import IDLE_SPLIT_S as REPORT_IDLE_SPLIT_S
-from cueclock.server.report import LATE_DETECT_S as REPORT_LATE_DETECT_S
-from cueclock.server.report import PRESS_LAG_S as REPORT_PRESS_LAG_S
 
 BYTES_PER_FRAME = 1920 * 1200
 NOMINAL_FPS = 156.25
@@ -584,9 +582,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     # Scores persist across restarts (a mid-match crash must not lose the match).
     session_stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    journal_path = Path("logs") / f"session-{session_stamp}.jsonl"
     app = create_app(
         score_path=Path("config/score.json"),
-        journal_path=Path("logs") / f"session-{session_stamp}.jsonl",
+        journal_path=journal_path,
     )
     if ring_capacity > 0:
         app.state.dump = dump_ring
@@ -775,7 +774,30 @@ def _cmd_run(args: argparse.Namespace) -> int:
             listener.stop()
         server.should_exit = True
         server_thread.join(timeout=5)
+        _log_session_summary(hub, journal_path)
     return 0
+
+
+def _log_session_summary(hub: "Hub", journal_path: Path) -> None:
+    """Print this session's miss rate and journal it, on the way out.
+
+    Pure convenience: the number is *derived* from records already on disk
+    (`server/report.py`), so a session killed hard loses nothing — `cueclock
+    report` reconstructs the same answer from the same file. This exists so the
+    number is in front of you when you hold the Session key, without ever
+    asking you to press anything during play.
+    """
+    from cueclock.server.report import SUMMARY_KIND, build, format_session, summary_detail
+
+    try:
+        report = build(journal_path)
+    except OSError:
+        return  # no journal (or unreadable): nothing to summarise, never fatal
+    if not report.total:
+        return
+    hub.journal.log(SUMMARY_KIND, **summary_detail(report))
+    print()
+    print(format_session(report))
 
 
 def _sigterm_to_interrupt(signum: int, frame: FrameType | None) -> None:
@@ -876,14 +898,40 @@ def _add_mic_args(p: argparse.ArgumentParser) -> None:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    """Ground truth vs. detection, offline from a session journal (#19)."""
-    from cueclock.server.report import build, format_report
+    """Miss rate from the session journals — the clock's own compensation, read back."""
+    from cueclock.server.report import (
+        build,
+        find_journals,
+        format_rollup,
+        format_session,
+        parse_since,
+    )
 
-    if not args.journal.exists():
-        print(f"no such journal: {args.journal}", file=sys.stderr)
+    if args.journal is not None:
+        if not args.journal.exists():
+            print(f"no such journal: {args.journal}", file=sys.stderr)
+            return 2
+        print(format_session(build(args.journal)))
+        return 0
+
+    if not args.logs.is_dir():
+        print(f"no such logs directory: {args.logs}", file=sys.stderr)
         return 2
-    report = build(args.journal, args.press_lag, args.late_window, args.idle_split)
-    print(format_report(report, args.press_lag, args.late_window))
+    since_s: float | None = None
+    if args.since is not None:
+        try:
+            since_s = parse_since(args.since)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+    journals = find_journals(args.logs, since_s)
+    if not journals:
+        print(f"no session journals in {args.logs}", file=sys.stderr)
+        return 2
+    if since_s is None and not args.all:
+        print(format_session(build(journals[-1])))  # newest session
+        return 0
+    print(format_rollup([build(path) for path in journals]))
     return 0
 
 
@@ -1009,37 +1057,20 @@ def main(argv: list[str] | None = None) -> int:
 
     p_report = sub.add_parser(
         "report",
-        help="ground-truth report: press stream vs. detected shots, from a session journal",
-    )
-    p_report.add_argument("--journal", type=Path, required=True, help="session journal .jsonl")
-    p_report.add_argument(
-        "--press-lag",
-        type=float,
-        default=REPORT_PRESS_LAG_S,
-        help=(
-            "seconds a press may land after its ShotTaken and still pair "
-            f"(default {REPORT_PRESS_LAG_S}) — measured: the press follows the "
-            "settle, so this span carries the roll-out with it"
-        ),
+        help="accuracy report: missed strikes per session, read back from the journals",
     )
     p_report.add_argument(
-        "--late-window",
-        type=float,
-        default=REPORT_LATE_DETECT_S,
-        help=(
-            "seconds a ShotTaken may land *after* its press and still pair "
-            f"(default {REPORT_LATE_DETECT_S}) — late detection only; still "
-            "provisional, no real session has produced one yet"
-        ),
+        "--journal", type=Path, help="one session journal .jsonl (default: the newest)"
     )
     p_report.add_argument(
-        "--idle-split",
-        type=float,
-        default=REPORT_IDLE_SPLIT_S,
-        help=(
-            "gap between presses that ends an armed window "
-            f"(default {REPORT_IDLE_SPLIT_S}); shots outside a window are ignored"
-        ),
+        "--logs", type=Path, default=Path("logs"), help="journal directory (default logs/)"
+    )
+    p_report.add_argument(
+        "--since",
+        help="roll up every session in a recent span, e.g. 7d / 24h / 2w",
+    )
+    p_report.add_argument(
+        "--all", action="store_true", help="roll up every session journal on disk"
     )
 
     p_deck = sub.add_parser(

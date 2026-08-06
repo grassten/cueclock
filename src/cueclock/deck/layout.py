@@ -369,29 +369,13 @@ LAYOUT: tuple[Key, ...] = (
     ),
     Key(3, 3, "p1", Group.MATCH, ScoreAdjust("p1"), modes=RACKED),
     Key(3, 4, "p2", Group.MATCH, ScoreAdjust("p2"), modes=RACKED),
-    # Ground truth (#19): one unconditional key, "I shot", pressed every shot
-    # with no judgement attached. It records an observation and never touches
-    # the clock; the server derives missed / phantom / late by diffing presses
-    # against emitted ShotTaken events (`cueclock report`).
-    #
-    # Deliberately NOT a mode and never dark. Once the design collapsed to a
-    # single key the only remaining cost is the press, so there is nothing
-    # left for a toggle to save — and a toggle is one more thing to remember
-    # at the table, which is the exact cost this key exists to remove.
-    #
-    # Bottom-right corner, the last free cell and the second corner on the
-    # deck: like Extension it can be found by feel, which matters for a key
-    # pressed on every shot. Two-line face because "SHOT" alone is a noun a
-    # command-key reader would take as an instruction (rule 3); "I SHOT" can
-    # only be read as the statement it is.
-    Key(
-        3,
-        5,
-        "groundtruth",
-        Group.EVIDENCE,
-        ApiPost("/api/groundtruth", "✓", "ERROR"),
-        text="I\nSHOT",
-    ),
+    # (3,5) is free. It held the "I shot" ground-truth key (#19) from
+    # 2026-08-02 until 2026-08-05, when it was removed: a key the player must
+    # remember on every shot is a key that stops being pressed, and it was
+    # pressed in two sessions out of twenty-nine. The denominator it existed to
+    # provide was already in the journal — the clock's own missed-strike
+    # compensation — so `cueclock report` now derives the miss rate with
+    # nothing asked of the table (`server/report.py`).
 )
 
 # The transient reason page: shown only while a Flag press is waiting for a

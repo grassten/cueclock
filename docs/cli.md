@@ -54,7 +54,7 @@ Ground rules that apply to every command:
 | `fit-undistort` | Fit display undistort params from the table's rails | no |
 | `calibrate` | Fit the px→mm table homography from the rails | no |
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
-| `report` | Ground-truth report: press stream vs. detected shots, from a session journal | no |
+| `report` | Accuracy report: missed strikes per session, read back from the journals | no |
 | `deck` | Stream Deck control-surface daemon | no |
 
 ## Recipes
@@ -246,50 +246,63 @@ Plus the shared mic args below.
 
 ### `report`
 
-Reads a session journal and diffs the ground-truth key's presses (#19) against
-the `ShotTaken` events vision actually emitted. Offline, read-only, no camera
-— run it on any journal, any time, including one copied off the machine.
+**The accuracy number.** Reads the session journals and counts the strikes
+vision missed. Offline, read-only, no camera — run it on any journal, any time,
+including one copied off the machine.
 
 | Flag | Default | What |
 |---|---|---|
-| `--journal PATH` | *(required)* | session journal `.jsonl` — `run` writes one per session to `logs/session-<stamp>.jsonl` |
-| `--press-lag SECS` | `12.0` | how long *after* its shot a press may land and still pair |
-| `--late-window SECS` | `5.0` | how long *after* its press a shot may land and still pair (late detection) |
-| `--idle-split SECS` | `180.0` | gap between presses that ends an armed window |
+| `--journal PATH` | *(newest)* | one session journal `.jsonl`; `run` writes one per session to `logs/session-<stamp>.jsonl` |
+| `--logs DIR` | `logs` | where the journals live |
+| `--since SPAN` | — | roll up every session in a recent span: `7d`, `24h`, `2w` |
+| `--all` | off | roll up every journal on disk |
 
 ```bash
-uv run python -m cueclock.cli report --journal logs/session-20260802-1930.jsonl
+uv run python -m cueclock.cli report              # the session that just ended
+uv run python -m cueclock.cli report --since 7d   # this week, one table
+uv run python -m cueclock.cli report --all        # the whole history
 ```
 
-Output: presses, shots, armed windows, pairs, **MISSED** (pressed, nothing
-detected), **PHANTOM** (detected, never pressed), the detection rate, and the
-stroke→press lag distribution.
+`run` also prints the single-session report on its way out (so holding the deck's
+Session key ends with the number on screen) and appends it to the journal as a
+`session_summary` record.
+
+**Where the number comes from — this is the part worth understanding.** Nothing
+in the journal says "missed". Two detectors run per shot: *"he hit the ball"*,
+which must identify the cue ball through the moment the stick and hand are one
+blob with it, and *"everything has stopped"*, which needs no ball identity and
+is reliable. When the first fails and the second fires, `ShotClock.balls_settled`
+reasons that balls came to rest with no detected shot, so a shot must have
+happened, and bumps `rack_shots` (`clock/state.py`, written 2026-07-31 for
+correctness, not for measurement). Every journal record carries that count, so:
+
+> a `vision_balls_settled` record whose `rack_shots` exceeds the preceding
+> record's **is the engine confessing it missed a strike**.
+
+Derived, never accumulated — nothing runs live, so the rate survives a crash or
+a `kill -9`, and improving the reader retroactively improves every session ever
+recorded.
 
 Four things about reading it:
 
-- **A disagreement is a review candidate, not a label.** The press stream has
-  its own error rate — a forgotten press reads as a phantom, a double tap as a
-  miss.
-- **The reach is asymmetric, and that is not a detail.** A press always lands
-  after its stroke, by a variable amount, because the roll-out is inside that
-  interval — so `--press-lag` is wide (12 s) and `--late-window` is not (5 s).
-  Widening `--late-window` to match will pair a press with the *next* shot on
-  any long roll-out, inventing a miss and a phantom from two correct
-  detections.
-- **`--press-lag` is measured; `--late-window` is still a guess.** 12 s comes
-  from the 2026-08-03 session: the press follows the *settle* by 0.10–2.87 s
-  (median 0.81), and the roll-out ahead of it ran 2.27–8.62 s, for an observed
-  stroke→press span of 4.10–11.48 s. `--late-window` has no real session behind
-  it yet — nothing has ever paired forward. Nothing auto-flags a "late" verdict.
-- **Shots outside an armed window are ignored entirely.** The key is always
-  live but Steven will not always press it, so presses arm the diff themselves:
-  they are grouped into runs (split at `--idle-split`) and each run's window
-  spans its first press to its last. **Phantom judgement gets no trailing
-  extension** — a genuine phantom just after the final press of a run goes
-  uncounted, the deliberate bias being to under-report phantoms rather than
-  manufacture them out of a stretch he simply was not marking. Pairing alone
-  reaches `--late-window` past the edge, which can rescue the last press from a
-  false miss but can never invent a phantom.
+- **It is a floor, not a ceiling.** A shot whose *settle* was also missed leaves
+  no trace at all.
+- **Settles in `IDLE` are not shots.** Those are racking motion the clock
+  correctly ignored; counting them would pad the denominator and make the number
+  look better than the table does. The report prints them separately.
+- **Phantoms are candidates, never verdicts.** The journal cannot prove the clock
+  froze with no shot behind it. What it can show is an implausibly short
+  shot→settle interval (<1 s against a measured 2.27–8.62 s roll-out), which is
+  reported for review.
+- **A miss below ~50 Hz is not a vision failure.** Flag dumps and corpus
+  batteries starve the detect loop; those misses are counted separately so
+  contention never gets mistaken for a detection bug.
+
+Retired 2026-08-05: the ground-truth key (#19) and its press-vs-detection diff.
+One key pressed every shot was the right idea and the wrong mechanism — it was
+used in 2 sessions out of 29, because a key you must remember is a key that
+stops being pressed. The compensation signal above needs nothing at the table
+and covers every session ever recorded, including the two that carry presses.
 
 ### `deck`
 

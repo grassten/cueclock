@@ -232,6 +232,96 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 70 — the denominator was already in the journal; the
+  key that asked for it is retired):** Steven, after nine days of clip triage:
+  *"I'm still seeing accuracy issues almost every rack... are we gonna keep
+  chasing down clip after clip until number of clips approaches infinity?"* He
+  is not imagining it, and for the first time that is a measurement rather than
+  an argument.
+
+  **The number: 764 shots, 25 missed, 3.27% — a miss every 2.2 racks, flat
+  across 2026-08-01 → 08-06** (3.32 / 5.13 / 2.84 / 0.00 / 2.48 / 3.85% by day).
+  Over the same nine days `vision/events.py` grew **257 → 1842 lines** (7.2x, 51
+  tuned constants) and the corpus went 17 → 57 scenarios. Seven times the code,
+  no movement. Six of the nine detection checkpoints in that stretch (50, 51,
+  56, 57, 66, and 68's own predecessor) were repairing damage done by earlier
+  gates rather than covering new phenomena — which is the plateau mechanism
+  itself: new failure classes arriving about as fast as clips retire them.
+
+  **Nothing new was instrumented to learn this.** `ShotClock.balls_settled`
+  increments `rack_shots` **only** when no ShotTaken arrived since the previous
+  settle — the missed-strike compensation added 2026-07-31 for correctness (a
+  short count replayed the WNT §5 60 s window), never for measurement. Every
+  journal record carries that count. So a `vision_balls_settled` record whose
+  `rack_shots` exceeds the preceding record's *is the engine confessing it
+  missed a strike*, and it has been writing one on every miss since the day it
+  landed. 25 confessions, sitting in `logs/`, unread. Settles recorded in
+  `IDLE` are racking motion the clock correctly ignored and are excluded — 69 of
+  them across the history, and counting them would have padded the denominator
+  and made the number look better than the table does.
+
+  Two detectors run per shot and only one is fragile: *"he hit the ball"* must
+  identify the cue ball through the moment the stick and hand are one blob with
+  it; *"everything has stopped"* needs no identity at all. The second is
+  reliable enough to serve as ground truth for the first, which is the whole
+  finding — and the reason §6 of the plan proposes moving the clock's freeze off
+  the identity argument entirely.
+
+  **`cueclock report` is rebuilt around that signal** (`server/report.py`, whole
+  module replaced): `report` (newest session), `--journal`, `--since 7d`,
+  `--all`. Derived, never accumulated — nothing runs live, so the rate survives
+  a crash or a `kill -9`, a better reader retroactively improves every session on
+  disk, and the two 2026-08-03 sessions that carry presses are read like any
+  other. `run` prints the single-session report on clean shutdown (so holding the
+  deck's Session key ends with the number on screen) and appends a
+  `session_summary` record. Also reported, because the redesign will need them:
+  phantom **candidates** (shot→settle under 1 s against a measured 2.27–8.62 s
+  roll-out — a review candidate, never a verdict, since the journal cannot prove
+  a phantom), misses that coincided with a starved detect loop (<50 Hz: 1 of the
+  12 checkable ones, so contention is *not* the story), and the scratch rate —
+  **47 in 764 shots, 1 per 16**, which is almost certainly mostly false and has
+  been invisible because scratch is journal-only in v1.
+
+  **The "I shot" key (#19) is removed**, three days after it shipped. One
+  unconditional key with no judgement attached was the right design and still
+  the wrong mechanism: it was pressed in **2 sessions out of 29**, because a key
+  the player must remember on every shot is a key that stops being pressed.
+  `POST /api/groundtruth` 404s on purpose (the `/score` rule — a deck on an old
+  build must fail visibly), the press-pairing reader and its three tuned windows
+  are gone, and deck cell (3,5) is empty with a test pinning it empty, so nothing
+  quietly reintroduces a table-side ask. Layout and `hardware.md` Part C moved in
+  the same commit, as required.
+
+  **The triage-clips skill is rewritten around the premise change.** Step 0 now
+  starts from `report`, not from the clip, and forbids answering a strategy
+  question by opening one. Step 7's default outcome is **delete** — promotion
+  requires naming the nearest existing scenario and why it fails to cover the
+  mechanism. Step 7b redefines a fix: *a change is a fix if it removes rules or
+  corrects a cause upstream; a threshold fitted to the clip in hand is not*, and
+  if that is the only change available, write the mechanism down and stop.
+  Anchoring a constant to a measurement is now stated as necessary and **no
+  longer sufficient** — all 51 were anchored. New Step 10 sets the evidence bar:
+  a green corpus proves no regression, not improvement; the test set is Steven's
+  ~130 uncurated shots a night, with the arithmetic for how long a claim takes to
+  confirm (~630 shots ≈ 5 sessions for 3.27% → 1%; ~2500 ≈ 19 sessions for
+  3.27% → 2%).
+
+  Full plan, including the part not built: `~/Desktop/cueclock-accuracy-plan.md`.
+  **No detection code was touched** — this checkpoint is instrument and process
+  only, so the corpus battery is not implicated. 370 unit tests green, ruff clean,
+  mypy --strict clean. The shipped reader reproduces the same 764 / 25 / 3.27%
+  the throwaway analysis found, which is the point of shipping it: the reading is
+  now pinned by tests rather than re-derived (and re-derived differently) each
+  time.
+
+  Two things corrected on the record, both mine: the miss rate is **not** a
+  motion-blur or lighting problem — the room is a Diamond under a full perimeter
+  LED frame, the 8x shortfall in `hardware.md` §A6 was already fully compensated
+  at bring-up (iris ~2 stops open + x2 gain), and the misses actually root-caused
+  in checkpoint 66 were at 1927–2106 mm/s where blur is ~12 mm on a 57 mm ball.
+  And 99.9% was an overclaim; 99% (one miss per 7 racks) is the honest target,
+  with 99.9% needing ~3000 clean shots just to demonstrate.
+
 - **2026-08-05 (checkpoint 69 — the button that recovered the clock but not the
   rack):** Steven, on WNT match mode: the break doesn't register, he presses
   Start 60 to get going, takes a shot — and gets 60 seconds again for the next

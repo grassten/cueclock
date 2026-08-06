@@ -320,8 +320,8 @@ row 1   SESSION      MODE         START 30     PUSH         EXT ••
 row 2   REPLAY       FLAG         (·)          (·)          (·)
         ▁▁grey▁▁     ▁purple▁      ← the reason page unfolds here →
 
-row 3   RULESET      SET UP       P1  3        P2  2        I SHOT
-        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁     ▁purple▁
+row 3   RULESET      SET UP       P1  3        P2  2        (free)
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
 
 | Pos | Key | Action | Face | Present in |
@@ -338,7 +338,7 @@ row 3   RULESET      SET UP       P1  3        P2  2        I SHOT
 | 3,2 | **Set up** | `POST /api/rack` — you're not shooting, you're setting up: clock parks, extensions refill, shot count zeroes. One word for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `SET UP`, flashes `SET` / `ERROR` | match, run out |
 | 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
 | 3,4 | **P2** | as P1 | `P2` over the score | match |
-| 3,5 | **I shot** | `POST /api/groundtruth` — ground truth (#19). Pressed **every shot**, with no judgement attached: it records that a shot happened and never touches the clock. The server derives missed / phantom / late offline by diffing presses against emitted `ShotTaken` events (`cueclock report`). Bottom-right corner so it can be found by feel, like Extension | `I SHOT`, flashes `✓` / `ERROR` | **always** — not a mode |
+| 3,5 | *(free)* | Held **I shot** (`POST /api/groundtruth`, #19) from 2026-08-02 until **2026-08-05, when it was removed**. The key was correct in every respect except the one that mattered: it asked the player to do something on every shot, and it was pressed in 2 sessions out of 29. The denominator it existed to provide was already in the journal — `ShotClock.balls_settled` bumps `rack_shots` exactly when vision missed the strike — so `cueclock report` now derives the miss rate with nothing asked of the table (`server/report.py`). The endpoint 404s on purpose, per the `/score` rule | — | — |
 
 Press outcomes flash as background colour (green ok / red error) for 1.2 s —
 words only, no decorative glyphs. The only graphics are *data*: extension pips,

@@ -266,35 +266,6 @@ class Hub:
         )
         self._heartbeat_prev = (now, self._detect_frames)
 
-    # ---------- ground truth (#19) ----------
-
-    def ground_truth_press(self) -> None:
-        """Record that a shot was actually taken. Never touches the clock.
-
-        One unconditional key, "I shot", pressed every shot with no judgement
-        attached — that is the only fact a human holds which the machine does
-        not. Everything else (missed / phantom / late) the server derives by
-        diffing this press stream against emitted ShotTaken events; see
-        `cueclock report`. **If a change to this feature would add a case the
-        player must recognise at the table, the change is wrong** — push the
-        branch into the server (Steven, 2026-08-02).
-
-        Deliberately not a coroutine and deliberately not broadcasting: an
-        observation is not a command, and nothing about the clock changes.
-
-        Stamped on the *capture* clock, like vision events, by extrapolating
-        from the newest processed frame — so alignment never has to cross the
-        emit-time/capture-time boundary, which is exactly where detect-loop
-        starvation hides. With no vision feeding this hub there is no capture
-        clock to stamp against, and `t` is null: the report treats such
-        presses as unanchored rather than guessing.
-        """
-        anchor: float | None = None
-        if self._detect_last is not None:
-            frame_t, frame_mono = self._detect_last
-            anchor = round(frame_t + (time.monotonic() - frame_mono), 3)
-        self._log("ground_truth_press", t=anchor, frame_t=anchor)
-
     # ---------- commands (each also broadcasts, per the "on every event" rule) ----------
 
     async def start(self) -> None:
