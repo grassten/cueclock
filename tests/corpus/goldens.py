@@ -54,6 +54,10 @@ if TYPE_CHECKING:
     from cueclock.vision.events import Event
 
 GOLDENS = Path(__file__).parent.parent / "goldens"
+FAILURES_DIR = ".failures"
+"""Where a red golden's full diff is written, under `tests/goldens/`. Gitignored:
+it is per-run output, not a record. Stale files from an earlier run are
+overwritten per scenario, never appended to."""
 
 # One detect frame is ~12.8 ms at the 78 Hz nominal cadence, and an event can
 # only fire on a frame boundary — so this is ~1.5 frames. Replay is
@@ -106,27 +110,91 @@ def write(scenario: str, reference: str, events: list["Event"]) -> None:
     path_for(scenario).write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def _mismatch(actual: list[dict[str, Any]], golden: list[dict[str, Any]]) -> str | None:
-    """The first difference between two timelines, or None if they agree."""
+def _differences(actual: list[dict[str, Any]], golden: list[dict[str, Any]]) -> list[str]:
+    """*Every* difference between two timelines — not just the first.
+
+    Reporting one difference at a time turns triage into a rerun loop, and a
+    cold corpus rerun is ~5 minutes. It also hides the shape of a change: one
+    settle sliding is a timing question, but ten sliding together is a
+    threshold move, and you cannot tell those apart from the first of them.
+    """
     actual_types = [r["type"] for r in actual]
     golden_types = [r["type"] for r in golden]
     if actual_types != golden_types:
-        return f"event sequence changed\n  golden: {golden_types}\n  actual: {actual_types}"
+        # Field-level comparison needs the two lists to correspond; once the
+        # sequence differs they do not, and pairing them by index invents
+        # differences that say nothing.
+        return [f"event sequence changed\n  golden: {golden_types}\n  actual: {actual_types}"]
 
+    out: list[str] = []
     for i, (got, want) in enumerate(zip(actual, golden, strict=True)):
         label = f"event {i} ({want['type']}@{want['t']:.2f})"
         if abs(got["t"] - want["t"]) > T_TOL_S:
-            return f"{label}: fired at {got['t']:.3f}s, golden {want['t']:.3f}s"
+            delta = got["t"] - want["t"]
+            out.append(
+                f"{label}: fired at {got['t']:.3f}s, golden {want['t']:.3f}s "
+                f"({delta:+.3f}s, {'later' if delta > 0 else 'earlier'})"
+            )
         for key in sorted(set(got) | set(want)):
             if key in ("type", "t") or key in UNASSERTED:
                 continue
             a, b = got.get(key), want.get(key)
             if isinstance(a, float) and isinstance(b, float):
                 if abs(a - b) > max(SPEED_ABS_TOL_MMS, abs(b) * SPEED_REL_TOL):
-                    return f"{label}: {key} {a:.1f}, golden {b:.1f}"
+                    pct = (a - b) / b * 100.0 if b else float("inf")
+                    out.append(f"{label}: {key} {a:.1f}, golden {b:.1f} ({pct:+.1f}%)")
             elif a != b:
-                return f"{label}: {key} {a!r}, golden {b!r}"
-    return None
+                out.append(f"{label}: {key} {a!r}, golden {b!r}")
+    return out
+
+
+def _mismatch(actual: list[dict[str, Any]], golden: list[dict[str, Any]]) -> str | None:
+    """All differences as one message, or None if the timelines agree."""
+    problems = _differences(actual, golden)
+    return "\n".join(problems) if problems else None
+
+
+def _timeline(actual: list[dict[str, Any]], golden: list[dict[str, Any]]) -> str:
+    """Golden and actual side by side, one row per event, differences marked.
+
+    Two JSON blobs are technically complete and practically unreadable — and
+    reading them is the whole job, because the question a red golden asks is
+    "is this better, worse, or merely different?" and that is answered by
+    looking at the timeline, not by the pass/fail bit.
+    """
+
+    def render(rec: dict[str, Any] | None) -> str:
+        if rec is None:
+            return "-"
+        extra = " ".join(
+            f"{k}={rec[k]:.1f}" if isinstance(rec[k], float) else f"{k}={rec[k]}"
+            for k in sorted(rec)
+            if k not in ("type", "t")
+        )
+        return f"{rec['type']}@{rec['t']:.3f} {extra}".rstrip()
+
+    rows = ["  {:<3} {:<52} {:<52}".format("#", "golden", "actual")]
+    for i in range(max(len(golden), len(actual))):
+        g = golden[i] if i < len(golden) else None
+        a = actual[i] if i < len(actual) else None
+        mark = " " if g == a else "*"
+        rows.append(f"{mark} {i:<3} {render(g):<52} {render(a):<52}")
+    return "\n".join(rows)
+
+
+def _write_failure(scenario: str, report: str) -> Path:
+    """Persist a golden diff so it survives however the run was captured.
+
+    A cold battery is ~5 minutes, and the diff is the measurement. Losing it to
+    a truncated pytest capture, an `xdist` worker's interleaving, or a `tail`
+    on the log means paying that 5 minutes again to read something that was
+    already computed. Written per scenario so parallel workers never collide.
+    """
+    directory = GOLDENS / FAILURES_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{scenario}.txt"
+    path.write_text(report)
+    return path
 
 
 def check(scenario: str, reference: str, events: list["Event"]) -> None:
@@ -151,12 +219,26 @@ def check(scenario: str, reference: str, events: list["Event"]) -> None:
 
     golden = json.loads(path.read_text())
     actual = to_records(events)
-    problem = _mismatch(actual, golden["events"])
-    if problem is not None:
+    problems = _differences(actual, golden["events"])
+    if problems:
+        report = (
+            f"{scenario} (reference {reference}): {len(problems)} difference(s)\n"
+            + "\n".join(f"  - {p}" for p in problems)
+            + "\n\n"
+            + _timeline(actual, golden["events"])
+            + "\n\n"
+            f"  golden json: {json.dumps(golden['events'])}\n"
+            f"  actual json: {json.dumps(actual)}\n"
+        )
         raise AssertionError(
-            f"{scenario}: {problem}\n"
-            f"  golden: {json.dumps(golden['events'])}\n"
-            f"  actual: {json.dumps(actual)}\n"
-            f"If the change is intended, regenerate with --update-goldens and "
-            f"cite the moved timelines in the CHANGELOG entry."
+            report + "\n"
+            "A red golden is a diff to read, not a verdict. It has three causes and\n"
+            "they need different answers:\n"
+            "  1. a bug in the new code      -> fix the code (check the table, not\n"
+            "                                   the pass/fail bit: is the new timing\n"
+            "                                   physically right?)\n"
+            "  2. a deliberate improvement   -> regenerate with --update-goldens and\n"
+            "                                   cite the moved timelines in CHANGELOG\n"
+            "  3. an over-specific assertion -> widen the tolerance, and say why\n"
+            f"Full report also written to {_write_failure(scenario, report)}."
         )

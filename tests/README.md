@@ -132,6 +132,63 @@ All `-n 4`, same machine. 53 scenarios except where noted.
 
 Building the cache from empty costs roughly a cold run, once.
 
+### Why you keep paying for cold runs, and how to stop
+
+The key includes `detect.py`'s **file bytes** and every `DetectConfig` field
+value. That is deliberate — it is what makes a cached run unable to grade stale
+detections — but it has a consequence worth planning around: *any* edit to
+`detect.py` invalidates all 59 entries, including a comment, and including
+adding a feature behind a flag that is switched **off**, where the output is
+bit-identical. The key is on the file, not on its behaviour, and it should stay
+that way; behavioural keying is exactly how you end up silently grading stale
+detections. So route around it instead.
+
+`track.py` and `events.py` are deliberately **not** in the key. That is the
+whole lever:
+
+> **Land the detect-side change once, pay one cold run to warm the cache, then
+> iterate everything downstream against it.**
+
+Checkpoint 72's session is the worked example of getting this wrong. `detect.py`
+was edited five separate times while `track.py` was being debugged in the same
+loop, so every iteration paid a full cold battery. The bug actually under
+investigation — a recovered core stealing a greedy match from a *moving* track,
+which made a rolling ball read as still and fired a settle 1.7 s early — lived
+entirely in `track.py`. With `detect.py` held still and the cache warm, that
+debug loop is **~21 s instead of 5–12 minutes**.
+
+Two more things that cost real time that day:
+
+- **Contention inflates the gate ~2.5×.** That cold battery reported 12:17
+  against the ~4:51 baseline above, because two corpus replay sweeps were
+  running alongside it. When you are checking wall time to confirm the corpus
+  did not skip (see the worktree warning in `CLAUDE.md`), check what else is
+  running before concluding anything from the number.
+- **Re-running to read a failure.** Fixed at the source: golden diffs now report
+  *every* difference rather than the first, render golden vs actual as an
+  aligned table, and are written to `tests/goldens/.failures/<scenario>.txt`
+  so a truncated capture never costs a rerun. See `corpus/goldens.py`.
+
+### A red golden is a diff to read, not a verdict
+
+It has three causes and they need different answers:
+
+1. **A bug in the new code.** Decide from the table, not the pass/fail bit: is
+   the new timing physically right? Checkpoint 72's settle moved 1.7 s
+   *earlier*, which looks like an improvement — late settles are a real defect
+   class — until you print ball speeds across the disputed window and find the
+   table still moving at ~100 mm/s when the settle fired.
+2. **A deliberate improvement.** Regenerate with `--update-goldens` and cite the
+   moved timelines in the CHANGELOG entry.
+3. **An over-specific assertion.** Widen the tolerance and say why. This is why
+   `ball_id` is recorded but never asserted.
+
+The failure mode to avoid is reflex in either direction: reverting on red throws
+away the most informative artifact the battery produces, and regenerating on red
+turns the net into a rubber stamp. Note that two of checkpoint 72's three diffs
+were *same event, same time, different magnitude* — invisible as a pass/fail
+count, and the reason goldens exist.
+
 Per frame, measured the same day: raw-frame read 2.4 ms (`pread`) or 11.1 ms
 (`memmap`), `detect_balls` 5.5 ms, churn 0.4 ms, tracker + engine **0.08 ms**.
 That last number is the whole argument for the cache — and for keeping
