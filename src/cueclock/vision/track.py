@@ -65,7 +65,19 @@ class TrackConfig:
     # transition has to come through within ~0.1 s
     whiteness_freeze_mms: float = 500.0  # motion blur corrupts color samples: don't
     # update whiteness while the ball moves fast (a flying cue must keep its flag)
-    cue_min_whiteness: float = 0.3
+    cue_min_whiteness: float = 0.5  # re-anchored with the annulus metric
+    # (checkpoint 73). This floor only bites when there is no holder to defend
+    # the flag, so it decides what may be *crowned* when the cue is gone. On
+    # the old centre-patch score the object balls sat at p50 0.31 and the cue
+    # at 0.85, and 0.3 was between them; on the annulus the object balls sit at
+    # p50 0.03 with p99 0.488 — 0.3 is at the *top* of their distribution, and
+    # left there it crowned a hand carrying a ball (ball_in_hand_nudge, a
+    # 9389 mm/s "shot"). Measured over 19 194 corpus frames of stored EMA
+    # scores: 0.50 keeps 87.3% of flag-worthy frames and admits 0.73% of the
+    # rest, sitting just above their p99. Past 0.55 the trade goes bad —
+    # 2.9% more cue frames lost to buy 0.26% fewer admitted. The residual
+    # confusable is not junk but **stripes**: half a USA 8-ball set is half
+    # white, and a ring at 0.55-0.83 radii crosses the band.
     cue_switch_margin: float = 0.05
     cue_regrab_s: float = 1.0  # after the flagged track dies, report no cue this long
     # instead of crowning the next-whitest ball — scratch detection keys on the

@@ -50,37 +50,87 @@ def build_table_mask(reference_bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.u
     )
 
 
+BALL_RADIUS_MM = 28.575  # a US 8-ball ball is 2 1/4" = 57.15 mm (WPA spec)
+
+
+def build_radius_map(
+    shape: tuple[int, int], calibration: TableCalibration, step: int = 16
+) -> npt.NDArray[np.float32]:
+    """Predicted ball radius, in raw pixels, at every pixel of the frame.
+
+    A ball is 57.15 mm everywhere (WPA spec), but its *pixel* radius is not a
+    constant: measured over 106 149 corpus detections it runs **18.1-24.3 px**
+    (p1-p99), and almost all of that is perspective within a single frame
+    rather than difference between mounts (per-mount medians 21.6 / 21.8 /
+    22.2). So anything expressed in ball radii — the whiteness annulus — has
+    to ask where on the table it is standing. A fixed pixel ring is
+    0.66-0.99 ball radii at one end of this table and 0.49-0.74 at the other,
+    which is enough to put the sample on the shaded limb in one place and
+    inside the specular cap in another.
+
+    Computed as the local scale of :meth:`TableCalibration.to_table_mm`: step
+    one pixel in +x and in +y, see how far that is in mm, and invert.
+    Averaged over the two axes so perspective anisotropy does not bias it.
+    Sampled on a `step` grid and bilinearly resized — the field is smooth
+    (~6 px of variation across 1920), so 16 px sampling costs ~10 ms instead
+    of ~2 s and is exact to well under a tenth of a pixel.
+    """
+    h, w = shape
+    ys, xs = np.mgrid[0 : h + step : step, 0 : w + step : step].astype(np.float64)
+    grid = np.stack([xs.ravel(), ys.ravel()], axis=1)
+    base = calibration.to_table_mm(grid)
+    dx = calibration.to_table_mm(grid + np.array([1.0, 0.0]))
+    dy = calibration.to_table_mm(grid + np.array([0.0, 1.0]))
+    mm_per_px = (
+        np.hypot(*(dx - base).T) + np.hypot(*(dy - base).T)
+    ) / 2.0  # mm moved per pixel stepped
+    with np.errstate(divide="ignore", invalid="ignore"):
+        radius = np.where(mm_per_px > 0, BALL_RADIUS_MM / mm_per_px, 0.0)
+    coarse = radius.reshape(xs.shape).astype(np.float32)
+    return cast(
+        npt.NDArray[np.float32],
+        cv2.resize(coarse, (w, h), interpolation=cv2.INTER_LINEAR),
+    )
+
+
 @dataclass(eq=False)
 class ReferenceModel:
-    """The three static arrays `detect_balls` consumes, built once per camera position.
+    """The static arrays `detect_balls` consumes, built once per camera position.
 
     Bundled for two reasons. It costs ~0.30 s to build (median of 15 grays +
     the dilated cloth mask), which the corpus battery otherwise pays 51 times
     over; and it is the *complete* non-frame input to detection, so hashing
-    these three arrays content-addresses everything upstream — the reference
-    clip's pixels, how many frames were sampled and which, `build_reference`,
-    `cloth_mask`, and the dilation. That is what makes a detection cache key
+    these arrays content-addresses everything upstream — the reference clip's
+    pixels, how many frames were sampled and which, `build_reference`,
+    `cloth_mask`, the dilation, and (since checkpoint 73) the calibration the
+    radius map is derived from. That is what makes a detection cache key
     provably complete instead of a list of source files someone must remember
-    to extend.
+    to extend — and it is why `radius_px` is a required field rather than an
+    optional one with a fallback: an optional one could differ silently.
     """
 
     gray: npt.NDArray[np.uint8]  # per-pixel median of the empty-table frames
     bayer: npt.NDArray[np.uint8]  # first sampled frame, for shadow rejection
     mask: npt.NDArray[np.uint8]  # dilated cloth region
+    radius_px: npt.NDArray[np.float32]  # predicted ball radius per pixel
 
     @classmethod
-    def build(cls, reference_frames: list[npt.NDArray[np.uint8]]) -> "ReferenceModel":
+    def build(
+        cls, reference_frames: list[npt.NDArray[np.uint8]], calibration: TableCalibration
+    ) -> "ReferenceModel":
+        gray = build_reference(reference_frames)
         return cls(
-            gray=build_reference(reference_frames),
+            gray=gray,
             bayer=reference_frames[0],
             mask=build_table_mask(reference_frames[0]),
+            radius_px=build_radius_map(gray.shape, calibration),
         )
 
     def digest(self) -> str:
-        """Content hash of all three arrays (memoized — ~20 ms over 6.9 MB)."""
+        """Content hash of every array (memoized — ~20 ms over 6.9 MB)."""
         if self._digest is None:
             h = hashlib.sha256()
-            for array in (self.gray, self.bayer, self.mask):
+            for array in (self.gray, self.bayer, self.mask, self.radius_px):
                 h.update(f"{array.shape}{array.dtype}".encode())
                 h.update(array.tobytes())
             self._digest = h.hexdigest()
@@ -102,7 +152,9 @@ class VisionPipeline:
     ) -> None:
         self._calibration = calibration
         self.reference = (
-            reference if isinstance(reference, ReferenceModel) else ReferenceModel.build(reference)
+            reference
+            if isinstance(reference, ReferenceModel)
+            else ReferenceModel.build(reference, calibration)
         )
         self.detect_config = detect_config or DetectConfig()
         self._tracker = BallTracker(track_config)
@@ -130,6 +182,7 @@ class VisionPipeline:
             self.detect_config,
             self.reference.mask,
             self.reference.bayer,
+            self.reference.radius_px,
         )
         gray = bayer_to_gray(bayer)
         churn = [

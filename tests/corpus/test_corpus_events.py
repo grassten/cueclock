@@ -81,7 +81,15 @@ EXPECTED: dict[
     "tip_bump": (1, 0, 1),
     "spin_in_place": (1, 0, 1),
     "slow_creep": (1, 0, 1),
-    "walk_around_settle": (None, 0, None),
+    # walk_around_settle: `docs/design.md`'s corpus checklist scripted this one
+    # as "shoot, then walk around the table leaning over it while balls are
+    # still settling" — so one real shot, by intent recorded before any code
+    # saw the clip. It carried no shot count until 2026-08-06 (an oversight,
+    # not a judgement: the checklist was never transcribed into this table),
+    # which left the golden as its only pin. Steven confirmed from the clip
+    # that day: a real shot, timing accurate, and the obstruction — leaning
+    # over and swinging the cue through the settling balls — was deliberate.
+    "walk_around_settle": (1, 0, 1),
     "rack_balls": (0, 0, None),
     "scratch_replace": (1, 1, None),
     # TV-era scenarios (recorded 2026-07-29: post-TV-install camera position,
@@ -489,7 +497,7 @@ def _reference_model(name: str) -> "ReferenceModel":
 
     reader = ClipReader(CLIPS / name)
     indices = np.linspace(0, len(reader) - 1, num=15, dtype=int)
-    return ReferenceModel.build([reader.frame(int(i)) for i in indices])
+    return ReferenceModel.build([reader.frame(int(i)) for i in indices], _calibration())
 
 
 @cache

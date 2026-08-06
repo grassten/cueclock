@@ -51,7 +51,31 @@ class DetectConfig:
     max_area_px: float = 6000.0  # ~4x nominal: streak allowance, arms rejected
     min_extent_px: int = 25  # cue stick (~12 px wide) fails this
     max_extent_px: int = 170  # ~3 ball diameters of motion streak passes
-    patch_radius_px: int = 10  # central-disk radius for the whiteness sample
+    patch_radius_px: int = 10  # central-disk radius for the shadow sample
+    # Cue-ball whiteness, sampled on the ball's *annulus* rather than its
+    # centre (checkpoint 73). The centre is the specular cap every glossy ball
+    # wears under an overhead light, so a central patch scores the lamp, not
+    # the ball: measured over the 126 607 still corpus detections it separates
+    # the cue from the object balls only 2.7x (p50 0.845 vs 0.310, and the
+    # cue's p5 0.581 sits *below* the object balls' p95 0.720 — no separation
+    # at the tails at all). In 3 px rings the signal is at 0.55-0.83 ball
+    # radii, where the same population separates far harder. Both bounds are
+    # forced by the measurement: inside ~0.3 radii every ball is white, and
+    # past ~0.85 the sphere's own limb shading destroys the cue ball's own
+    # score. Three earlier cuts of this measurement expressed the ring in
+    # PIXELS and were wrong every time — the ball images 18.1-24.3 px across
+    # this table (p1-p99), nearly all of it perspective within one frame, so a
+    # fixed ring lands on the limb at one end and inside the cap at the other.
+    # Hence the ratio, against ReferenceModel.radius_px.
+    whiteness_ring_lo: float = 0.55  # in ball radii
+    whiteness_ring_hi: float = 0.83
+    nominal_ball_radius_px: float = 21.9  # fallback only, for callers with no
+    # calibration (synthetic unit tests): the corpus-wide median of the
+    # predicted radius. Production always passes the per-pixel map.
+    whiteness_quad_floor: float = 0.50  # per-sample "reads white" level; the
+    # argmin of equal-error and of AUC across a 0.25-0.60 sweep, and
+    # independently the value at which this reproduces the HSV radial profile
+    # that found the ring.
     # Shadow rejection (measured on the 2026-07-27 corpus): a shadow darkens
     # the cloth multiplicatively, keeping its chroma direction — brightness
     # ratio ~0.7-0.9 vs. the reference with near-identical normalized RGB.
@@ -117,13 +141,59 @@ def _patch_rgb_means(
     return r, g, b
 
 
-def _whiteness(r: float, g: float, b: float) -> float:
-    """High for bright, unsaturated patches — the cue ball's signature."""
-    high = max(r, g, b)
-    if high <= 0.0:
+def _ring_whiteness(
+    bayer: npt.NDArray[np.uint8],
+    cx: float,
+    cy: float,
+    ball_radius_px: float,
+    cfg: DetectConfig,
+) -> float:
+    """Fraction of the ball's 0.55-0.83-radius annulus that reads white.
+
+    Sampled at 2x2 Bayer-quad resolution — ~140 samples per annulus, so no
+    demosaic is needed. A quad reads white when its *darkest* channel clears
+    ``whiteness_quad_floor``, which is exactly what "bright and unsaturated"
+    reduces to: the old score was ``(1 - (hi - lo) / hi) * hi / 255``, and that
+    algebra cancels to ``lo / 255`` for every non-black patch.
+
+    ``ball_radius_px`` is the radius predicted at this pixel from the
+    calibration (``ReferenceModel.radius_px``) — not a constant, because
+    perspective takes the ball from 18.1 to 24.3 px across this table and a
+    ring in fixed pixels therefore samples a different part of the sphere
+    depending on where it stands.
+
+    Position, not detection: this is a property of the pixels around a point,
+    so it can be evaluated anywhere — including at a track's own position, with
+    no blob to back it. That independence is why the annulus survived where
+    "require the white core to coincide with a ball detection" died (plan
+    §4.11): tying colour to a detection re-imports the detection's failures.
+    """
+    lo, hi = cfg.whiteness_ring_lo * ball_radius_px, cfg.whiteness_ring_hi * ball_radius_px
+    if hi <= lo:
         return 0.0
-    saturation = (high - min(r, g, b)) / high
-    return (1.0 - saturation) * (high / 255.0)
+    h, w = bayer.shape
+    r = int(hi) + 1
+    y0, y1 = max(0, int(cy) - r), min(h, int(cy) + r + 1)
+    x0, x1 = max(0, int(cx) - r), min(w, int(cx) + r + 1)
+    # BayerRG8 parity is absolute (R at even row/col), so snap the window start
+    # to even global parity — as _patch_rgb_means does — and the quads align.
+    y0 += y0 % 2
+    x0 += x0 % 2
+    patch = bayer[y0:y1, x0:x1]
+    ny, nx = patch.shape[0] // 2, patch.shape[1] // 2
+    if ny < 2 or nx < 2:
+        return 0.0
+    quads = patch[: 2 * ny, : 2 * nx].astype(np.float32)
+    red, blue = quads[0::2, 0::2], quads[1::2, 1::2]
+    green = (quads[0::2, 1::2] + quads[1::2, 0::2]) * 0.5
+    darkest = np.minimum(np.minimum(red, green), blue)
+    dy = (y0 + 2.0 * np.arange(ny, dtype=np.float32) + 0.5) - cy
+    dx = (x0 + 2.0 * np.arange(nx, dtype=np.float32) + 0.5) - cx
+    rr = dy[:, None] ** 2 + dx[None, :] ** 2
+    ring = (rr >= lo * lo) & (rr < hi * hi)
+    if not ring.any():
+        return 0.0  # ball too close to the frame edge to have an annulus
+    return float((darkest[ring] >= cfg.whiteness_quad_floor * 255.0).mean())
 
 
 def _is_shadow(
@@ -172,6 +242,7 @@ def detect_balls(
     config: DetectConfig | None = None,
     table_mask: npt.NDArray[np.uint8] | None = None,
     reference_bayer: npt.NDArray[np.uint8] | None = None,
+    radius_map: npt.NDArray[np.float32] | None = None,
 ) -> list[Detection]:
     """Find ball-like blobs in one frame. See module docstring for the gates.
 
@@ -181,6 +252,12 @@ def detect_balls(
     blob is the on-table stub of something reaching in from outside (cue
     stick, hand, arm) that the mask truncated into a deceptively ball-sized
     piece — the §2.3 lesson-5 identity thieves.
+
+    ``radius_map`` (optional) is the predicted ball radius at every pixel —
+    ``ReferenceModel.radius_px``, built from the calibration. The whiteness
+    annulus is measured in ball radii, so without it the sample falls back to
+    ``nominal_ball_radius_px`` and reads the wrong part of the sphere wherever
+    perspective disagrees with that nominal. Every production path supplies it.
     """
     cfg = config or DetectConfig()
     gray = bayer_to_gray(bayer)
@@ -208,10 +285,10 @@ def detect_balls(
         if min(bw, bh) < cfg.min_extent_px or max(bw, bh) > cfg.max_extent_px:
             continue
         cx, cy = float(centroids[i, 0]), float(centroids[i, 1])
-        r, g, b = _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px)
         if reference_bayer is not None:
+            rgb = _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px)
             ref_rgb = _patch_rgb_means(reference_bayer, cx, cy, cfg.patch_radius_px)
-            if _is_shadow((r, g, b), ref_rgb, cfg):
+            if _is_shadow(rgb, ref_rgb, cfg):
                 continue
         detections.append(
             Detection(
@@ -224,7 +301,15 @@ def detect_balls(
                     bw,
                     bh,
                 ),
-                whiteness=_whiteness(r, g, b),
+                whiteness=_ring_whiteness(
+                    bayer,
+                    cx,
+                    cy,
+                    cfg.nominal_ball_radius_px
+                    if radius_map is None
+                    else float(radius_map[int(cy), int(cx)]),
+                    cfg,
+                ),
                 merged=area > cfg.merged_area_px or max(bw, bh) > cfg.merged_extent_px,
             )
         )

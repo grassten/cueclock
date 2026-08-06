@@ -41,8 +41,13 @@ def _array(fill: int) -> npt.NDArray[np.uint8]:
     return np.full((HEIGHT, WIDTH), fill, dtype=np.uint8)
 
 
-def _reference(gray: int = 10, bayer: int = 20, mask: int = 1) -> ReferenceModel:
-    return ReferenceModel(gray=_array(gray), bayer=_array(bayer), mask=_array(mask))
+def _reference(gray: int = 10, bayer: int = 20, mask: int = 1, radius: int = 22) -> ReferenceModel:
+    return ReferenceModel(
+        gray=_array(gray),
+        bayer=_array(bayer),
+        mask=_array(mask),
+        radius_px=_array(radius).astype(np.float32),
+    )
 
 
 def _detection(cx: float, merged: bool = False) -> Detection:
