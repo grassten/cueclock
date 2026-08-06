@@ -6,6 +6,12 @@ the journal says "missed". What says it is `rack_shots` going *up* on a
 when no ShotTaken arrived since the previous settle. These tests pin that
 reading, and pin the two ways it can be read wrongly — racking settles in IDLE,
 and the first record of a session having nothing to compare against.
+
+The phantom half has no such compensation to read — the engine believes a
+phantom, so it confesses nothing — and these tests pin what stands in for it:
+four symptoms of a freeze that no strike earned, and the boundary between the
+two that are reported as candidates and the two that are reported beside them
+because each is shared with a different failure.
 """
 
 import json
@@ -47,6 +53,11 @@ def settle(t: float, rack: int, state: str = "RUNNING") -> dict[str, Any]:
 
 def heartbeat(hz: float, rack: int = 0) -> dict[str, Any]:
     return {"kind": "detect_heartbeat", "hz": hz, "rack_shots": rack, "state": "RUNNING"}
+
+
+def command(kind: str, rack: int, state: str) -> dict[str, Any]:
+    """An operator key. `state` is what the clock reported *after* answering it."""
+    return {"kind": kind, "rack_shots": rack, "state": state}
 
 
 # ---------- the core reading ----------

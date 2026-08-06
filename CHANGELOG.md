@@ -232,6 +232,60 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 71 — the other half of the error rate: the clock
+  freezes when nothing was struck):** checkpoint 70 gave misses a denominator by
+  reading back the clock's own compensation. The mirror error had none, and it
+  turns out to be roughly half the size of the miss problem and completely
+  unexamined.
+
+  A phantom cannot be *proven* from the journal — the engine believes the
+  phantom, so it confesses nothing, and positions are recorded only through the
+  events they produced. What can be measured is a freeze whose surroundings are
+  physically wrong for a shot, and `server/report.py` now reports four such
+  symptoms: **no roll-out** (froze and released with nothing in between),
+  **snap-back** (froze again before a ball could have been addressed),
+  **split freeze** (a second strike arrived past the longest roll-out ever
+  measured, so the freeze and the roll-out belong to different strikes) and
+  **left frozen** (never released; an operator key had to rescue the clock).
+
+  Across all 764 shots: **13 phantom candidates (1.70%)**, plus **8 split
+  freezes** and — the number worth reading twice — **14 clocks that froze and
+  never released on their own.** Against a 3.27% miss rate, the clock is doing
+  the wrong thing appreciably more often than the miss number alone says.
+
+  The last two are counted apart because each is **shared with a different
+  failure and the journal cannot say which it saw**: a split freeze reads
+  identically to a real shot whose *settle* was missed, and a left-frozen clock
+  reads identically to SET UP pressed over a live roll-out.
+
+  Constants anchored, as ever: `PHANTOM_ADDRESS_S` 2.5 s (below this there was
+  no time to address a ball) and `PHANTOM_LEAD_S` 8.62 s (the longest roll-out
+  ever measured, 2026-08-03 session). **Read the count as a comparator, not an
+  absolute** — recompute it before and after a detection change and watch it
+  move. As an absolute it is only an upper bound on those four symptoms, and it
+  is neither a floor nor a ceiling: the one phantom in this history ever
+  verified against frames (2026-08-01 11:14:49, mid-racking, 19 s before the
+  break it then swallowed — checkpoint 28) is a *split freeze*, and a phantom
+  that freezes two seconds before the real strike is journal-indistinguishable
+  from a clean shot.
+
+  Validation is thin and stated as such: the retired "I shot" key marked 29
+  human-confirmed strikes across two 2026-08-03 sessions and the candidate rules
+  fire on **none** of them — zero false positives out of 29, which is too small
+  to bound the rate (a proxy wrong every time it fired would still clear 29
+  shots 61% of the time). The deck's PHANTOM reason key has been live since
+  2026-08-01 and has **never been pressed**, against 10 MISSED presses in the
+  same span: that bounds the *noticeable* phantom near zero and corroborates
+  nothing below it, since every candidate released the clock within 3 s — a blip
+  on the wall, not something worth walking over to flag.
+
+  Reader-only: no detection code touched, nothing runs live, and a journal
+  reader cannot move the clock. 370 unit tests green, ruff clean, mypy --strict
+  clean. Written to judge an OR-path trade that was then measured and abandoned
+  (see `~/Desktop/cueclock-accuracy-plan.md` §4a); kept because phantoms are one
+  of only two numbers that define accuracy and half of what it found had never
+  been counted at all.
+
 - **2026-08-05 (checkpoint 70 — the denominator was already in the journal; the
   key that asked for it is retired):** Steven, after nine days of clip triage:
   *"I'm still seeing accuracy issues almost every rack... are we gonna keep

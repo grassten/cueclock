@@ -35,15 +35,56 @@ the system of record, so the rate is recomputed from it on demand — which mean
 it survives a crash, a `kill -9`, a dead deck daemon, and can be recomputed
 over every session ever recorded the day the reader improves.
 
+## The opposite error, and why it is only ever a candidate
+
+A **phantom** is the mirror image: the clock freezes on a `ShotTaken` that no
+strike produced. There is no compensation to read back for it — the engine
+believes the phantom, so it confesses nothing — and the journal records
+positions only through the events they produced. So a phantom cannot be
+*proven* here. What can be measured is a freeze whose surroundings are
+physically wrong for a shot, and this module reports four such symptoms
+(measurements in the constants below):
+
+    no roll-out    froze and released with nothing in between
+    snap-back      froze again before a ball could have been addressed
+    split freeze   froze, then a second strike arrived past the longest
+                   roll-out ever measured — the freeze and the roll-out
+                   belong to different strikes
+    left frozen    never released; an operator key had to rescue the clock
+
+The first two are the headline "phantom candidates". The last two are counted
+apart because each is **shared with a different failure** and the journal
+cannot say which it saw: a split freeze reads identically to a real shot whose
+*settle* was missed, and a left-frozen clock reads identically to the operator
+pressing SET UP over a live roll-out.
+
 ## Honest limits
 
-- **A floor, not a ceiling.** A shot whose *settle* was also missed leaves no
-  trace here at all.
-- **Phantoms are candidates, not verdicts.** A frozen clock with no shot behind
-  it cannot be proven from the journal. What can be measured is an implausibly
-  short shot→settle interval, and that is reported as a review candidate.
-- **The press stream is gone**, so the two 2026-08-03 sessions that carry
-  `ground_truth_press` records are read here like any other: by compensation.
+- **A floor, not a ceiling** for misses. A shot whose *settle* was also missed
+  leaves no trace here at all.
+- **The phantom count is neither a floor nor a ceiling.** Each candidate may be
+  a real shot with unlucky timing, and the whole population is undercounted:
+  the *one* phantom in this history that was ever verified against frames
+  (2026-08-01 11:14:49, mid-racking, 19 s before the break it then swallowed —
+  CHANGELOG checkpoint 28) is a split freeze, and a phantom that freezes the
+  clock two seconds before the real strike leaves a journal record that is
+  indistinguishable from a clean shot. Read the number as a **comparator**:
+  recompute it before and after a detection change and watch it move. Read as
+  an absolute it is only an upper bound on the symptoms listed above.
+- **Validated only against 29 shots.** The retired "I shot" key marked two
+  2026-08-03 sessions; every one of those 29 strikes is human-confirmed real
+  (13 pressed, 6 more confirmed by Steven as forgotten presses at triage, plus
+  10 in the second session) and the candidate rules fire on none of them. That
+  is zero false positives out of 29 — too small to bound the false-positive
+  rate, since a proxy that was wrong every time it fired would still clear 29
+  shots 61% of the time. The presses themselves are read here like any other
+  record: by compensation.
+- **The flag stream corroborates nothing either way.** The deck's PHANTOM
+  reason key has been live since 2026-08-01 22:59 and has never been pressed,
+  against 10 MISSED presses in the same span. That bounds the *noticeable*
+  phantom near zero, and says nothing about the candidates below — every one
+  of them released the clock again within 3 s, which is a blip on the wall, not
+  something to walk over and flag.
 """
 
 import json
@@ -73,12 +114,43 @@ GATED_SHOT_KINDS = {
 # session to date, 12% opened with a miss inside this many shots.
 OPENING_SHOTS = 3
 
+COMMAND_PREFIX = "cmd_"
+
 # Shot → settle below this is a phantom *candidate*: the clock froze and
 # released with no time for a roll-out. Anchored to the measured roll-out range
 # on real shots — 2.27-8.62 s (2026-08-03 session, `logs/session-20260803-121204`)
 # — so 1 s sits far below the shortest real one. A review candidate, never a
 # verdict: the journal cannot prove a phantom.
 PHANTOM_SETTLE_S = 1.0
+
+# Previous settle → the strike that froze the clock again, below which the
+# freeze is a phantom candidate: the balls stopped and the clock re-froze
+# before anyone could have walked over and addressed a ball.
+#
+# Anchored to the only strikes on record a human confirmed: the 29 marked with
+# the retired "I shot" key (2026-08-03, `session-20260803-121204` +
+# `-124627`), whose fastest address was **5.55 s**. This sits at less than half
+# of that. For scale, all 724 measurable addresses in `logs/` have a median of
+# 12.9 s and only 9 fall below this line.
+#
+# The two mechanisms that produce a sub-2.5 s address are both phantoms, which
+# is why the floor is worth having: a settle that fired over a ball still
+# creeping, whose continued creep then re-reads as a strike (CHANGELOG
+# checkpoint 28 pinned one at 0.7 s, clock stuck in MOTION for 17 s after); and
+# a hand entering the frame the moment the table goes quiet.
+PHANTOM_ADDRESS_S = 2.5
+
+# Within one freeze, first strike → last strike, above which the two cannot be
+# the same ball motion: the longest shot→settle roll-out ever measured is
+# 8.62 s (same 2026-08-03 session), so a second `ShotTaken` arriving later than
+# that is a separate physical event and the freeze started before it.
+#
+# Counted apart from the headline candidates on purpose. A real shot whose
+# settle was missed, followed by the next real shot, writes exactly these
+# records — measured both ways in the same history, and the timing does not
+# separate them (the confirmed 2026-08-01 phantom fired 19.1 s early, and the
+# median address is 12.9 s, so "too long to be one shot" fits either story).
+PHANTOM_LEAD_S = 8.62
 
 # Detect-rate floor for calling a shot's detection starved. The live loop runs
 # 70-78 Hz healthy (stride 2 of the camera's 156 fps); flag dumps and corpus
@@ -109,16 +181,44 @@ class Shot:
     index: int  # 1-based within the session
     t: float | None  # capture clock, at the settle
     seen: bool  # False = the strike was missed and the settle stood in
-    settle_gap_s: float | None  # strike → settle, when the strike was seen
+    settle_gap_s: float | None  # last strike → settle, when the strike was seen
     hz: float | None  # detect rate reported just before it
+    # Previous settle → the strike that *froze* the clock. Deliberately the
+    # first strike of the freeze rather than the last: a freeze is opened once,
+    # and everything after it is a re-fire the clock discards (`ShotClock.
+    # shot_taken` returns early in MOTION), so only the first one is the event
+    # whose plausibility is in question.
+    address_gap_s: float | None = None
+    # First strike → last strike inside one freeze. 0.0 when nothing re-fired.
+    freeze_lead_s: float | None = None
 
     @property
     def starved(self) -> bool:
         return self.hz is not None and self.hz < STARVED_HZ
 
     @property
-    def phantom_candidate(self) -> bool:
+    def no_rollout(self) -> bool:
+        """Froze and released with no time for a ball to travel."""
         return self.settle_gap_s is not None and self.settle_gap_s < PHANTOM_SETTLE_S
+
+    @property
+    def snap_back(self) -> bool:
+        """Froze again before the previous settle could have been walked to."""
+        return self.address_gap_s is not None and self.address_gap_s < PHANTOM_ADDRESS_S
+
+    @property
+    def split_freeze(self) -> bool:
+        """The freeze and the roll-out belong to different strikes.
+
+        Ambiguous with a missed *settle* by construction — see `PHANTOM_LEAD_S`
+        — so it is reported beside the candidates, never inside them.
+        """
+        return self.freeze_lead_s is not None and self.freeze_lead_s > PHANTOM_LEAD_S
+
+    @property
+    def phantom_candidate(self) -> bool:
+        """The two symptoms with no second reading. Still a candidate, not a verdict."""
+        return self.no_rollout or self.snap_back
 
 
 @dataclass
@@ -133,6 +233,11 @@ class SessionReport:
     gated: dict[str, int] = field(default_factory=dict)
     hz: list[float] = field(default_factory=list)
     torn_lines: int = 0
+    # Freezes an operator key had to rescue, because no settle ever released
+    # them. Not `Shot`s and not in `total`: a shot here is a settle, and these
+    # never reached one. See `left_frozen` in the module docstring for why the
+    # count is a symptom rather than a phantom.
+    left_frozen: int = 0
 
     @property
     def total(self) -> int:
@@ -160,6 +265,20 @@ class SessionReport:
     def phantom_candidates(self) -> list[Shot]:
         return [s for s in self.shots if s.phantom_candidate]
 
+    @property
+    def phantom_rate(self) -> float | None:
+        """Candidates over shots — the same denominator the miss rate uses.
+
+        Comparable to `miss_rate` on purpose: the whole reason to measure this
+        is that a second strike path OR-ed into the first trades one for the
+        other, and a trade needs both numbers on one scale.
+        """
+        return len(self.phantom_candidates) / self.total if self.total else None
+
+    @property
+    def split_freezes(self) -> list[Shot]:
+        return [s for s in self.shots if s.split_freeze]
+
 
 def _number(record: dict[str, object], key: str) -> float | None:
     value = record.get(key)
@@ -174,7 +293,9 @@ def build(path: Path) -> SessionReport:
     """
     report = SessionReport(path=path)
     prev_rack: float | None = None
-    pending_shot_t: float | None = None
+    pending_shot_t: float | None = None  # newest strike of the open freeze
+    freeze_open_t: float | None = None  # the strike that opened it
+    last_settle_t: float | None = None  # previous settle the clock acted on
     last_hz: float | None = None
 
     for line in path.read_text().splitlines():
@@ -197,7 +318,19 @@ def build(path: Path) -> SessionReport:
                 last_hz = hz
                 report.hz.append(hz)
         elif kind == SHOT_KIND:
-            pending_shot_t = _number(record, "frame_t") or _number(record, "t")
+            shot_t = _number(record, "frame_t") or _number(record, "t")
+            if pending_shot_t is None:
+                # First strike since the last release: this is the one the
+                # clock acted on. Later ones land in MOTION and are discarded.
+                freeze_open_t = shot_t
+            pending_shot_t = shot_t
+        elif isinstance(kind, str) and kind.startswith(COMMAND_PREFIX):
+            if pending_shot_t is not None and record.get("state") != "MOTION":
+                # A command is journaled *after* the clock has answered it, so
+                # a non-MOTION state here means this key took the clock out of
+                # a freeze that no settle ever ended.
+                report.left_frozen += 1
+                pending_shot_t = freeze_open_t = None
         elif kind == SCRATCH_KIND:
             report.scratches += 1
         elif kind == FLAG_KIND:
@@ -221,6 +354,19 @@ def build(path: Path) -> SessionReport:
                     if seen and settle_t is not None and pending_shot_t is not None
                     else None
                 )
+                # A missed strike has no freeze, so it has neither an address
+                # to judge nor a lead to measure — both stay None rather than
+                # borrowing the previous shot's numbers.
+                address = (
+                    freeze_open_t - last_settle_t
+                    if seen and freeze_open_t is not None and last_settle_t is not None
+                    else None
+                )
+                lead = (
+                    pending_shot_t - freeze_open_t
+                    if seen and pending_shot_t is not None and freeze_open_t is not None
+                    else None
+                )
                 report.shots.append(
                     Shot(
                         index=len(report.shots) + 1,
@@ -228,9 +374,12 @@ def build(path: Path) -> SessionReport:
                         seen=seen,
                         settle_gap_s=gap,
                         hz=last_hz,
+                        address_gap_s=address,
+                        freeze_lead_s=lead,
                     )
                 )
-                pending_shot_t = None
+                pending_shot_t = freeze_open_t = None
+                last_settle_t = settle_t
 
         if rack is not None:
             prev_rack = rack
@@ -249,11 +398,15 @@ def find_journals(logs_dir: Path, since_s: float | None = None) -> list[Path]:
 def summary_detail(report: SessionReport) -> dict[str, object]:
     """The `session_summary` journal record's payload."""
     rate = report.miss_rate
+    phantom = report.phantom_rate
     return {
         "shots": report.total,
         "missed": len(report.missed),
         "miss_rate": round(rate, 4) if rate is not None else None,
         "opening_miss": report.opening_miss,
+        "phantom_candidates": len(report.phantom_candidates),
+        "phantom_rate": round(phantom, 4) if phantom is not None else None,
+        "left_frozen": report.left_frozen,
         "scratches": report.scratches,
         "flags": report.flags,
     }
@@ -261,6 +414,11 @@ def summary_detail(report: SessionReport) -> dict[str, object]:
 
 def _rate(report: SessionReport) -> str:
     rate = report.miss_rate
+    return f"{rate:6.2%}" if rate is not None else "     —"
+
+
+def _phantom_rate(report: SessionReport) -> str:
+    rate = report.phantom_rate
     return f"{rate:6.2%}" if rate is not None else "     —"
 
 
@@ -289,11 +447,40 @@ def format_session(report: SessionReport) -> str:
         )
     out.append("")
 
-    if report.phantom_candidates:
-        out.append(
-            f"  phantom candidates {len(report.phantom_candidates)}   "
-            f"(settled <{PHANTOM_SETTLE_S:.0f}s after the strike — review, not a verdict)"
+    candidates = report.phantom_candidates
+    out.append(
+        f"  phantom candidates {len(candidates)}   "
+        f"{_phantom_rate(report).strip()}   (review, not a verdict)"
+    )
+    if candidates:
+        marks = ", ".join(
+            f"#{s.index}" + (f" @{s.t:.0f}s" if s.t is not None else "") for s in candidates
         )
+        out.append(f"    at               {marks}")
+        for label, kept in (
+            (
+                f"no roll-out (settled <{PHANTOM_SETTLE_S:.0f}s after the strike)",
+                [s for s in candidates if s.no_rollout],
+            ),
+            (
+                f"snap-back (froze <{PHANTOM_ADDRESS_S:.1f}s after the last settle)",
+                [s for s in candidates if s.snap_back],
+            ),
+        ):
+            if kept:
+                out.append(f"    {len(kept)} {label}")
+    # Beside the candidates, never inside them: each of these reads identically
+    # to a different failure, and the journal holds nothing that separates them.
+    if report.split_freezes:
+        out.append(
+            f"    {len(report.split_freezes)} split freeze(s): a second strike "
+            f">{PHANTOM_LEAD_S:.1f}s later carried the roll-out"
+        )
+        out.append("        — or the first shot's settle was missed; can't tell from here")
+    if report.left_frozen:
+        out.append(f"    {report.left_frozen} left frozen, rescued by an operator key")
+        out.append("        — or SET UP pressed over a live roll-out; can't tell from here")
+    out.append("")
     out.append(f"  scratches          {report.scratches}")
     if report.total:
         out.append(
@@ -320,19 +507,25 @@ def format_rollup(reports: list[SessionReport]) -> str:
     """Per-session table plus the total. The total is the number that matters."""
     played = [r for r in reports if r.total]
     out: list[str] = []
-    out.append(f"{'session':<34}{'shots':>7}{'missed':>8}{'miss':>8}{'scr':>6}{'flag':>6}")
-    out.append("-" * 69)
+    out.append(
+        f"{'session':<34}{'shots':>7}{'missed':>8}{'miss':>8}"
+        f"{'phant':>7}{'phan':>8}{'scr':>6}{'flag':>6}"
+    )
+    out.append("-" * 84)
     for report in played:
         out.append(
             f"{report.path.name:<34}{report.total:>7}{len(report.missed):>8}"
-            f"{_rate(report):>8}{report.scratches:>6}{report.flags:>6}"
+            f"{_rate(report):>8}{len(report.phantom_candidates):>7}"
+            f"{_phantom_rate(report):>8}{report.scratches:>6}{report.flags:>6}"
         )
     shots = sum(r.total for r in played)
     missed = sum(len(r.missed) for r in played)
+    phantoms = sum(len(r.phantom_candidates) for r in played)
     scratches = sum(r.scratches for r in played)
-    out.append("-" * 69)
+    out.append("-" * 84)
     out.append(
-        f"{'TOTAL':<34}{shots:>7}{missed:>8}{missed / shots if shots else 0:>7.2%}{scratches:>6}"
+        f"{'TOTAL':<34}{shots:>7}{missed:>8}{missed / shots if shots else 0:>7.2%}"
+        f"{phantoms:>7}{phantoms / shots if shots else 0:>7.2%}{scratches:>6}"
     )
     if not shots:
         return "\n".join(out)
@@ -346,6 +539,17 @@ def format_rollup(reports: list[SessionReport]) -> str:
         f"  bad first impression  {len(opening)}/{len(played)} sessions "
         f"({len(opening) / len(played):.0%}) opened with a miss in {OPENING_SHOTS} shots"
     )
+    # Both rates on one line because the pair is the point: a second strike
+    # path OR-ed into the first buys misses with phantoms, and neither number
+    # means anything without the other beside it.
+    out.append("")
+    out.append(f"  phantom candidates {phantoms / shots:.2%}   ({phantoms} of {shots})")
+    splits = sum(len(r.split_freezes) for r in played)
+    frozen = sum(r.left_frozen for r in played)
+    if splits or frozen:
+        out.append(
+            f"  also, shared with other failures: {splits} split freezes, {frozen} left frozen"
+        )
     if scratches:
         out.append(f"  scratches          {scratches}   (1 per {shots / scratches:.0f} shots)")
     return "\n".join(out)
