@@ -56,7 +56,7 @@ from cueclock.capture.clip import FRAMES_NAME, META_NAME
 from cueclock.vision.detect import DetectConfig, Detection
 from cueclock.vision.pipeline import ReferenceModel
 
-SCHEMA = 1
+SCHEMA = 2  # 2: Detection.recovered (checkpoint 72)
 DEFAULT_CACHE_DIR = Path(".detect-cache.nosync")
 """Repo-local and gitignored. The `.nosync` suffix is load-bearing, not
 decoration: iCloud syncs Desktop and stamps `UF_HIDDEN` on what it touches,
@@ -130,6 +130,7 @@ class DetectionCache:
             cx, cy, area = data["cx"], data["cy"], data["area"]
             whiteness, churn = data["whiteness"], data["churn"]
             merged, bbox = data["merged"], data["bbox"]
+            recovered = data["recovered"]
         if int(counts.sum()) != len(cx):
             raise ValueError(f"{path.name}: counts sum to {counts.sum()} but hold {len(cx)} rows")
 
@@ -152,6 +153,7 @@ class DetectionCache:
                             ),
                             whiteness=float(whiteness[i]),
                             merged=bool(merged[i]),
+                            recovered=bool(recovered[i]),
                         )
                         for i in range(lo, hi)
                     ],
@@ -197,6 +199,7 @@ class DetectionCache:
                         [np.nan if c is None else c for _, c in flat], dtype=np.float64
                     ),
                     merged=np.asarray([d.merged for d, _ in flat], dtype=np.bool_),
+                    recovered=np.asarray([d.recovered for d, _ in flat], dtype=np.bool_),
                     bbox=np.asarray([d.bbox for d, _ in flat], dtype=np.int32).reshape(-1, 4),
                 )
                 fh.flush()

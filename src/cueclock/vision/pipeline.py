@@ -162,6 +162,7 @@ class VisionPipeline:
                     whiteness=d.whiteness,
                     churn=c,
                     merged=d.merged,
+                    recovered=d.recovered,
                 )
                 for p, d, c in zip(mm, detections, churn, strict=True)
             ]

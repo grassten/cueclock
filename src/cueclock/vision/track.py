@@ -46,6 +46,10 @@ class Observation:
     merged: bool = False  # oversized blob (detect.Detection.merged): either a
     # motion streak or the stick/hand merged in — centroid untrustworthy on a
     # still ball
+    recovered: bool = False  # a ball-sized core dug out of a component the
+    # detector's gates rejected (detect.Detection.recovered). Presence
+    # evidence and nothing else: it may keep an existing track alive, but it
+    # never founds one, and it never feeds position, velocity or whiteness.
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,11 @@ class _Track:
     raw_speed: float = 0.0
     churn: float | None = None  # EMA of observed appearance churn
     last_obs: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0))  # t, x, y
+    last_presence: float = 0.0  # last time ANY evidence said this ball is
+    # still there — a real observation, or a recovered core dug out of a
+    # rejected blob. The coast budget runs against this, not `last_obs`: a
+    # ball held under the cue is seen but not measurable, and dying while
+    # visible is the failure this exists to prevent.
     last_obs_merged: bool = False  # the observation that last updated this
     # track was an oversized (merged) blob — a moving track fed exclusively
     # by these is inseparable from a hand/stick (the carried-ball signature)
@@ -125,6 +134,26 @@ class BallTracker:
             matched_tracks.add(ti)
             matched_obs.add(oi)
             track, obs = self._tracks[ti], observations[oi]
+            if obs.recovered:
+                # A core dug out of a rejected blob (the addressed ball, glued
+                # to the shaft and the bridge hand). It carries one bit — "a
+                # ball is here" — so it may only refresh the coast budget of a
+                # track that is already **stationary**. A moving track gets
+                # nothing: sustaining one on recovered evidence is how a
+                # hand-carried ball keeps a phantom alive indefinitely
+                # (pickup_snatch_0801), and an addressed ball is stationary by
+                # definition, so the restriction costs the motivating case
+                # nothing. Either way the observation is consumed, so a core
+                # can never found a track of its own.
+                if (
+                    track.hits >= cfg.birth_frames
+                    and hypot(track.vx, track.vy) < cfg.still_speed_mms
+                ):
+                    track.vx = track.vy = 0.0
+                    track.raw_speed = 0.0
+                    track.t = t
+                    track.last_presence = t
+                continue
             if (
                 obs.merged
                 and track.hits >= cfg.birth_frames
@@ -153,7 +182,7 @@ class BallTracker:
         for ti, track in enumerate(self._tracks):
             still = hypot(track.vx, track.vy) < cfg.still_speed_mms
             budget = cfg.still_coast_s if still else cfg.coast_s
-            if ti in matched_tracks or t - track.last_obs[0] <= budget:
+            if ti in matched_tracks or t - track.last_presence <= budget:
                 if ti not in matched_tracks:
                     if still:
                         # a still ball does not move unseen — freeze it, so a
@@ -170,19 +199,21 @@ class BallTracker:
 
         # ---- unmatched observations: tentative new tracks ----
         for oi, obs in enumerate(observations):
-            if oi not in matched_obs:
-                self._tracks.append(
-                    _Track(
-                        track_id=self._next_id,
-                        x=obs.x_mm,
-                        y=obs.y_mm,
-                        t=t,
-                        whiteness=obs.whiteness,
-                        last_obs=(t, obs.x_mm, obs.y_mm),
-                        last_obs_merged=obs.merged,
-                    )
+            if oi in matched_obs or obs.recovered:
+                continue  # a recovered core never founds a track — see Observation
+            self._tracks.append(
+                _Track(
+                    track_id=self._next_id,
+                    x=obs.x_mm,
+                    y=obs.y_mm,
+                    t=t,
+                    whiteness=obs.whiteness,
+                    last_obs=(t, obs.x_mm, obs.y_mm),
+                    last_presence=t,
+                    last_obs_merged=obs.merged,
                 )
-                self._next_id += 1
+            )
+            self._next_id += 1
 
         confirmed = [tr for tr in self._tracks if tr.hits >= cfg.birth_frames]
         self._resolve_cue(t, confirmed)
@@ -232,6 +263,7 @@ class BallTracker:
             else:
                 track.churn += cfg.churn_ema * (obs.churn - track.churn)
         track.last_obs = (t, obs.x_mm, obs.y_mm)
+        track.last_presence = t
         track.last_obs_merged = obs.merged
 
     def _resolve_cue(self, t: float, confirmed: list[_Track]) -> None:
