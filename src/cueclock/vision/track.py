@@ -121,7 +121,19 @@ class BallTracker:
         pairs: list[tuple[float, int, int]] = []
         for ti, track in enumerate(self._tracks):
             px, py = track.predict(t)
+            still = hypot(track.vx, track.vy) < cfg.still_speed_mms
             for oi, obs in enumerate(observations):
+                if obs.recovered and not still:
+                    # A recovered core is presence evidence for a *stationary*
+                    # ball and nothing else, so it must not even compete for a
+                    # moving track. Letting it into the pair list is a real
+                    # bug, not a wasted match: pairing is greedy by distance,
+                    # so a core lying nearer a rolling ball than that ball's
+                    # own detection steals the match, the track is left to
+                    # coast, and a ball still rolling at ~100 mm/s reads as
+                    # still. Measured on hanger_pot_0801: settle fired at
+                    # 12.85 s against a table that kept moving until 13.36.
+                    continue
                 d = hypot(obs.x_mm - px, obs.y_mm - py)
                 if d <= cfg.gate_mm:
                     pairs.append((d, ti, oi))
