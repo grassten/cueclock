@@ -1002,6 +1002,87 @@ def test_phantom_flag_handoff_does_not_fire_mid_scatter() -> None:
     assert ShotTaken not in map(type, sim.run(0.5))
 
 
+def test_break_outruns_the_handoff_radius_and_still_fires() -> None:
+    # break_outrun_0805: the radius is a *distance* budget, and a ball struck
+    # hard enough spends the whole budget while it is invisible. Measured on
+    # the live break — the cue left its rest at 4.724 s at 3720 mm/s, was not
+    # observed on a single frame after that, and the track that carried it
+    # onward was born three frames later 320 mm out at 7221 mm/s. Every other
+    # handoff gate passed at that frame (dwell 4.67 s, born after the cue went
+    # dark, quiet table, no mover near the rest); the strike was refused by
+    # 70 mm of geometry anchored on a 2281 mm/s emergence. Live the clock sat
+    # in IDLE through the whole rack and Steven had to press Restart.
+    #
+    # Inside the occlusion the honest bound is what the ball's own speed can
+    # account for, so that becomes the reach.
+    sim = rack()
+    sim.run(3.0)
+    sim.occlude(CUE)  # struck and gone: never observed again
+    sim.run(3 * DT)  # dark for three frames, as measured
+    sim.place(REBORN, 820.0, 500.0)  # 320 mm out — past the 250 mm radius
+    sim.merge(REBORN)  # struck out of an address, inseparable from the stick
+    sim.velocity(REBORN, 7200.0, 0.0)
+    assert ShotTaken in types(sim.run(0.3))
+
+
+def test_slow_emergence_beyond_the_radius_is_still_refused() -> None:
+    # The mirror, on the discriminator itself: identical geometry, identical
+    # occlusion, identical merge — only the speed differs. At 3000 mm/s the
+    # ball cannot have covered 320 mm in the three frames it was dark, so the
+    # rest no longer vouches for it and the radius stands. Without this the
+    # reach would just be a bigger constant.
+    sim = rack()
+    sim.run(3.0)
+    sim.occlude(CUE)
+    sim.run(3 * DT)
+    sim.place(REBORN, 820.0, 500.0)
+    sim.merge(REBORN)
+    sim.velocity(REBORN, 3000.0, 0.0)
+    assert ShotTaken not in types(sim.run(0.3))
+
+
+def test_break_burying_itself_in_the_rack_still_fires() -> None:
+    # The second half of break_outrun_0805, and the reason widening the reach
+    # alone changed nothing: the candidate opened, travelled 1483 mm, and was
+    # then killed by the handoff observation floor at exactly
+    # handoff_confirm_min_s. That floor asks "is a hand losing this ball?",
+    # and on a break the answer is a false yes — by 0.20 s the cue has reached
+    # the rack and the tracker loses it inside the scatter it caused. Measured
+    # at the gate frame: 0.56 observed, *below* cue_grab_0801's 0.64 and
+    # pickup_newborn_0801's 0.69, so the fraction cannot be loosened.
+    #
+    # Speed is what separates: nothing that must stay rejected reads above
+    # 2968 mm/s and no real break reads below 7371. Held inside the plain
+    # radius here so the reach is not the variable under test.
+    sim = rack()
+    sim.run(3.0)
+    sim.occlude(CUE)
+    sim.run(0.2)
+    sim.place(REBORN, 600.0, 500.0)  # emerges inside the plain 250 mm radius
+    sim.merge(REBORN)
+    sim.velocity(REBORN, 6000.0, 0.0)
+    sim.run(0.09)  # clean cloth, as far as the rack
+    sim.flicker(REBORN)  # then buried: observed a third of the time
+    assert ShotTaken in types(sim.run(0.25))
+
+
+def test_ordinary_speed_emergence_that_keeps_vanishing_does_not_fire() -> None:
+    # The mirror. Same rest, same radius, same merge, same flicker — an
+    # ordinary 900 mm/s emergence that keeps disappearing is the hand the
+    # floor was built for (cue_grab_0801, pickup_newborn_0801), and it must
+    # still be refused. Only the speed is exempt, not the flicker.
+    sim = rack()
+    sim.run(3.0)
+    sim.occlude(CUE)
+    sim.run(0.2)
+    sim.place(REBORN, 600.0, 500.0)
+    sim.merge(REBORN)
+    sim.velocity(REBORN, 900.0, 0.0)
+    sim.run(0.09)
+    sim.flicker(REBORN)
+    assert ShotTaken not in types(sim.run(0.25))
+
+
 def test_stroke_gear_behind_the_departing_cue_does_not_reject_strike() -> None:
     # stroke_gear_veto_0802 / stroke_gear_margin_0802: the stroke's own
     # merged stick/bridge blob stamps *inside* carom_reach_mm — measured

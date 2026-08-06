@@ -232,6 +232,98 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-05 (checkpoint 68 — the break that outran its own budget):** Steven
+  came down to test checkpoint 66 and the very first break was missed. One
+  `flag_missed` dump, ground truth his: a **normal-power break**. The journal is
+  unambiguous — the clock sat IDLE at 60.0 s for the whole rack, and there is no
+  `vision_shot_taken` record at all, not even a `vision_shot_taken_ignored_idle`,
+  so `modes.py`'s break gate never got a vote to reject. He pressed Restart to
+  start the match, and every one of the 14 shots after that was detected. The
+  detect loop ran 77–78 Hz throughout with uniform 12.8 ms frame gaps in the
+  ring, so nothing here is contention. Warm and cold both reproduce.
+
+  Not a checkpoint 66 regression: 66's shelve is what let the handoff run at all
+  here. It ran, and was refused by a gate that predates it.
+
+  **A distance budget a fast ball spends while invisible.** The flag-borne open
+  is correct — the cue dwells 4.67 s, steps off its rest at 4.724 s at
+  3720 mm/s, a candidate opens. It is then never observed again, and the track
+  carrying it onward is born three frames later **320 mm from the rest at
+  7221 mm/s**. Every handoff gate passes at that frame — born after the cue went
+  dark, 0.038 s step gap, quiet table, no mover near the rest — and
+  `strike_handoff_radius_mm` refuses it by 70 mm. That radius was anchored on a
+  2281 mm/s emergence (`flag_missed_2`, 193 mm); a break simply outruns it
+  before anything can see the ball. Distance is the wrong currency. Inside the
+  occlusion the honest bound is physics — the ball cannot be further than its
+  own speed carried it while unseen — so that becomes the reach, with
+  `handoff_reach_margin` (1.5) covering what the product under-counts. Measured
+  `d_rest/(raw × dark)` at the rescue frame of every real break in the corpus:
+  1.14, 1.16, 1.18.
+
+  The window is `strike_step_max_s` — **no new constant**, and the corpus says
+  it is the right one. Across every handoff impulse the radius currently
+  refuses, cue-dark time splits the population with nothing in between: the
+  three real breaks sit at 0.038–0.102 s, and the nearest thing that must stay
+  refused is 0.742 s (`parked_vote_strike_0801`), then 2.9 s
+  (`ball_in_hand_pickup_0801`) and 6.5 s (`parked_vote_newborn_0805`). Measured
+  from `_cue_last_obs_t` alone, deliberately *not* the `max(...)` the step gate
+  uses — a flag parked on some other still ball keeps that stamp fresh
+  indefinitely, which is exactly how those long-dark rows get that far.
+
+  **And the floor that reads a rack as a hand.** Widening the reach alone
+  changed nothing. The candidate opened, travelled 1483 mm, and was killed at
+  exactly `handoff_confirm_min_s` by the observation floor — the carried-ball
+  gate that asks whether a hand keeps losing this ball. On a break the answer is
+  a false yes: by 0.20 s the cue has reached the rack and the tracker loses it
+  inside the scatter it caused. The whole population reaching that floor,
+  corpus-wide, by observed fraction at the gate frame: 0.31 `shaft_adjust`,
+  **0.56 this break**, 0.64 `cue_grab_0801`, 0.69 `break_underread_0801` and
+  `pickup_newborn_0801`, 0.81 `break_0801`, 1.00 ×5. So the fraction cannot be
+  loosened — the real break reads *worse* than the grab and the pickup it exists
+  to reject — and neither can the unbroken observed run off the open frame
+  (7 frames against 9 for the grab, 11 for the pickup). Speed separates, and by
+  a wide margin: everything that must stay rejected tops out at 2968 mm/s, every
+  break starts at 7371. A hand cannot move a ball that fast — the quickest
+  hand-driven ball measured anywhere in the corpus is `scratch_replace`'s throw
+  at 3179 mm/s (checkpoint 66) — and at break speed occlusion is expected rather
+  than suspicious. `handoff_obs_floor_exempt_mms` = 5000, 1.6× over that throw
+  and 1.5× under the slowest real break.
+
+  The break now fires at 4.967 s, 0.243 s after the stroke, reading 9923 mm/s —
+  4× the IDLE break floor, so the clock would have started.
+
+  **It also closes a gap that had been pinned as unfixable.**
+  `break_underread_0801` — the 2026-08-01 break the live gate ate at 705 mm/s —
+  carried `shots` unasserted with the comment "a cold replay never confirms this
+  break at all (the streak dies before the candidate can follow it)". The streak
+  did not die: it outran the radius (born 305 mm out at 6977 mm/s) and was then
+  killed a second time by the observation floor. It now fires at 1.075 s reading
+  9469 mm/s, and its `EXPECTED` is asserted hard. That is an independent second
+  case for the true class, recorded a week before the failure that explained it.
+
+  Scenario added: `break_outrun_0805` (1 shot, 0 scratches, 1 settle), with
+  bespoke tests pinning the fire to the stroke and the reported speed above the
+  break floor, plus the same speed assertion for `break_underread_0801`. Four
+  unit tests, each paired with its mirror so the pin lands on the discriminator:
+  the 320 mm emergence fires at 7200 mm/s and is still refused at 3000, and the
+  flickering emergence fires at 6000 mm/s and is still refused at 900. Both
+  "must fire" tests verified failing on the pre-fix engine.
+
+  Goldens: **two moved, both breaks, no other clip's timeline shifted.**
+  `break_underread_0801` gained its ShotTaken. `break_0801` fires 45 ms later
+  (12.974 → 13.019) and anchors on ball 4 instead of ball 0, because the handoff
+  now claims the slot the shelve released; the reported speed is **identical**
+  (7371.4193 mm/s), the settle is unchanged, and 45 ms is nothing against a 30 s
+  clock. Accepted rather than special-cased — telling a doomed candidate from a
+  blinking one at that instant is precisely what checkpoint 66 established
+  cannot be done.
+
+  **Honest limit:** the reach margin and the speed exemption are both anchored
+  on three real breaks. A break slow enough to read under 5000 mm/s at the gate
+  frame — a deliberately soft break — would still be refused by the observation
+  floor if its cue vanished into the rack. Nothing in the corpus is that shot
+  yet. 441 tests pass cold in 5:56.
+
 - **2026-08-05 (checkpoint 67 — the rack you just played, not the one you just
   racked):** first live use of the held Replay key (checkpoint 65) failed, and
   everything about it worked except the anchor. Steven ran a rack out, pressed

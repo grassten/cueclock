@@ -1,0 +1,17 @@
+{
+  "scenario": "break_outrun_0805",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 4.9668,
+      "ball_id": 4,
+      "speed_mms": 9922.997,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 12.9355
+    }
+  ]
+}

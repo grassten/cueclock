@@ -211,6 +211,20 @@ class EventConfig:
     # tolerates that handoff:
     strike_handoff_gap_s: float = 0.35  # max unstill gap between rest and impulse
     strike_handoff_radius_mm: float = 250.0  # max impulse distance from the rest spot
+    # ...but a radius is a distance budget, and a ball struck hard enough
+    # outruns it while it is invisible (checkpoint 67). The 2026-08-05 live
+    # break: the cue left its rest at 4.724 s, went dark for three frames, and
+    # founded a new track 320 mm out at 7221 mm/s — refused by a budget
+    # anchored on a 2281 mm/s handoff (flag_missed_2, 193 mm). Distance is the
+    # wrong currency; the invariant is *time* since the cue was last seen, and
+    # inside that the honest bound is physics — the ball cannot be further
+    # than its own speed carried it while unseen. This margin covers what that
+    # product under-counts: the cue was already moving when last observed, and
+    # a newborn's raw speed comes off a centroid smeared across ~43 mm of
+    # exposure. Measured d_rest/(raw*dark) on the rescue frame of every real
+    # break in the corpus — 1.14 (break_underread_0801), 1.16 (the live
+    # break), 1.18 (break_0801) — so 1.5 keeps ~27% headroom over the worst.
+    handoff_reach_margin: float = 1.5
     # The candidate's trajectory axis is seeded from the cue's displacement
     # off its rest spot at open time. On the impulse's first frame that vector
     # is not motion evidence: filter lag and the stick merging into the blob
@@ -362,6 +376,29 @@ class EventConfig:
     # `strike_confirm_window_s` for the confirm to land, and 0.2 s is nothing
     # against a 30 s clock (same trade as newborn_confirm_min_s).
     handoff_confirm_min_s: float = 0.20
+    # ...except that a break's cue is not on open cloth by the time the floor
+    # is read. It has already reached the rack, and the tracker loses it inside
+    # the scatter it caused (checkpoint 67). The whole population that reaches
+    # this floor, corpus-wide, by observed fraction at the gate frame:
+    #
+    #   0.31 shaft_adjust    0.56 the live break   0.64 cue_grab_0801
+    #   0.69 break_underread_0801 / pickup_newborn_0801    0.81 break_0801
+    #   1.00 x5 (scratch_shot_0801, phantom_flag_strike_0805, and the
+    #            three 0805 scenarios)
+    #
+    # So the fraction cannot simply be loosened: the live break reads 0.56,
+    # *below* both the grab and the pickup it exists to reject. Nor can the
+    # unbroken observed run off the open frame — 7 frames for the break
+    # against 9 for the grab and 11 for the pickup. Speed is what separates,
+    # by an order the corpus leaves no doubt about: everything that must stay
+    # rejected tops out at 2968 mm/s (shaft_adjust) and every break starts at
+    # 7371 (break_0801, then 9469 and 9923). A hand cannot move a ball this
+    # fast — the quickest hand-driven ball measured anywhere in the corpus is
+    # scratch_replace's throw at 3179 mm/s (checkpoint 66) — and at this speed
+    # occlusion is expected rather than suspicious, because the ball crosses
+    # the table and buries itself in other balls inside the window. 5000 sits
+    # 1.6x above that throw and 1.5x below the slowest real break.
+    handoff_obs_floor_exempt_mms: float = 5000.0
     # Flicker filter: hand/stick fragments pass the detector's geometry gates
     # only intermittently, so their tracks are mostly coasted — measured 7-43%
     # observed on the flagged live captures (missed_strike_0731,
@@ -1084,6 +1121,7 @@ class EventEngine:
         raw: float,
         rest: tuple[float, float, float],
         follow_ball: bool,
+        reach_mm: float | None = None,
     ) -> Literal["opened", "rejected", "too_far"]:
         """Open a rest-anchored candidate: dwell + carom guard + axis seed.
 
@@ -1098,6 +1136,12 @@ class EventEngine:
         `too_far` is reported instead of a plain rejection so the caller can
         fall through to the birth evidence — an impulse beyond the handoff
         radius means the rest may be anchored to the wrong ball entirely.
+
+        `reach_mm` overrides that radius for a caller that can account for the
+        distance some other way (`_maybe_open_handoff`, which knows how long
+        the ball was invisible). The direction seed is always taken from the
+        rest anchor regardless — widening the reach changes what is admitted,
+        never where the trajectory is measured from.
         """
         cfg = self._cfg
         rest_t0, rest_x, rest_y = rest
@@ -1135,7 +1179,7 @@ class EventEngine:
                 continue  # the stroke's own gear, behind the departing cue
             return "rejected"  # carom guard: a mover reached the rest spot
         norm = hypot(dx, dy)
-        if norm > cfg.strike_handoff_radius_mm:
+        if norm > (cfg.strike_handoff_radius_mm if reach_mm is None else reach_mm):
             return "too_far"
         if norm < cfg.strike_dir_seed_min_mm:
             return "rejected"  # too little displacement to trust as a direction
@@ -1240,7 +1284,34 @@ class EventEngine:
             # ball_in_hand_pickup_0801) out of a path that skips the
             # carried-ball gates. No constant: it is an ordering test.
             return
-        opened = self._open_from_rest(t, ball, raw, self._cue_rest, follow_ball=True)
+        # How far the ball is allowed to be from the rest. The plain radius is
+        # a distance budget and a break outruns it during its own occlusion:
+        # the cue leaves at 7000+ mm/s, is dark for three frames, and founds
+        # its new track 320 mm out — the strike was never near the rest by the
+        # time anything could see it (checkpoint 67, the 2026-08-05 live break;
+        # the same refusal is on record for break_underread_0801 at 305 mm and
+        # break_0801 at 330 mm, both of which survived only on the flag-borne
+        # fire). Inside the occlusion the ball's own speed accounts for the
+        # distance, so that becomes the budget.
+        #
+        # The window is `strike_step_max_s` — no new constant, and the corpus
+        # says it is the right one. Across every handoff impulse the radius
+        # currently refuses, cue-dark time splits the population in two with
+        # nothing in between: the three real breaks sit at 0.038-0.102 s, and
+        # the nearest thing that must stay refused is 0.742 s
+        # (parked_vote_strike_0801), then 2.9 s (ball_in_hand_pickup_0801) and
+        # 6.5 s (parked_vote_newborn_0805) — a 7x gap with the step window in
+        # the middle of it. Measured from `_cue_last_obs_t` alone, deliberately
+        # *not* the `max(...)` the step gate above uses: a flag parked on some
+        # other still ball keeps that stamp fresh indefinitely, which is
+        # exactly how those three long-dark rows get this far.
+        dark = t - self._cue_last_obs_t
+        reach = cfg.strike_handoff_radius_mm
+        if dark <= cfg.strike_step_max_s:
+            reach = max(reach, raw * dark * cfg.handoff_reach_margin)
+        opened = self._open_from_rest(
+            t, ball, raw, self._cue_rest, follow_ball=True, reach_mm=reach
+        )
         if opened == "opened" and self._candidate is not None:
             self._candidate.handoff = True
 
@@ -1551,12 +1622,21 @@ class EventEngine:
                 # than killed, so a real strike that is briefly flat still has
                 # the rest of its window.
                 return []
-            if not self._observed_since(cue, candidate.t0):
+            if (
+                not self._observed_since(cue, candidate.t0)
+                and candidate.impulse_raw < cfg.handoff_obs_floor_exempt_mms
+            ):
                 # A hand keeps losing the ball it is carrying (fingers wrap it,
                 # long coast runs): measured 0.64 / 0.69 / 0.22 observed over
                 # this window against 1.00 on both real handoff strikes. This
                 # is the only carried-ball gate the path has, since the merged
                 # one cannot apply.
+                #
+                # A ball at break speed is exempt: it is losing observations
+                # because it has arrived in the rack, not because something is
+                # holding it. See `handoff_obs_floor_exempt_mms` for the
+                # measurement — the floor reads *worse* on the live break than
+                # on the grab it exists to reject, so speed has to carry it.
                 self._candidate = None
                 return []
         if candidate.newborn:

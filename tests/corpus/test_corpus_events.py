@@ -237,12 +237,15 @@ EXPECTED: dict[
     "cue_grab_0801": (1, 0, 1, 1),
     # break_underread: a real break (frame-verified rack explosion) whose
     # live ShotTaken read 705 mm/s — the white streaked too fast to be
-    # *observed*, and the IDLE break gate ate the rack's opening shot. A
-    # cold replay never confirms this break at all (the streak dies before
-    # the candidate can follow it): pinned as the honest gap, shots
-    # unasserted. The kinematic speed bound (unit-tested) fixes the
-    # live-shaped underread when the candidate does confirm.
-    "break_underread_0801": (None, 0, 1),
+    # *observed*, and the IDLE break gate ate the rack's opening shot. For a
+    # week this was pinned as an honest gap with shots unasserted, because a
+    # cold replay never confirmed the break at all. Checkpoint 67 closed it:
+    # the streak did not "die", it outran the handoff radius while invisible
+    # (born 305 mm off the rest at 6977 mm/s) and was then killed a second
+    # time by the observation floor as it buried itself in the rack. It now
+    # fires at 1.075 s reading 9469 mm/s — 3.8x the IDLE break floor. Asserted
+    # hard now: this is the shot the live gate ate.
+    "break_underread_0801": (1, 0, 1),
     # lone_roller: a soft strike out of a white+brown touching pair; the
     # white rolls to the left cushion, rebounds and rests — the ONLY mover,
     # and its track is a newborn (not roster), so nothing could latch table
@@ -410,6 +413,23 @@ EXPECTED: dict[
     # where the cue had actually been seen 0.109 s earlier. Measured from the
     # last observation it passes, and the strike lands 0.31 s after the impulse.
     "late_emergence_strike_0805": (1, 0, 1, 1),
+    # break_outrun: Steven's first break of the next session, flagged at the
+    # table. A normal-power break (his words) that the clock sat straight
+    # through — IDLE at 60.0 for the whole rack, no ShotTaken in the journal
+    # at all, so the break gate never even got a vote to reject; he had to
+    # press Restart to start the match. Detection was healthy throughout
+    # (77-78 Hz, uniform 12.8 ms frame gaps in the ring), so nothing here is
+    # contention.
+    #
+    # Two gates refused it in series, and fixing either alone changes nothing.
+    # The cue left its rest at 4.724 s, was never observed again, and its
+    # continuation was born three frames later 320 mm out at 7221 mm/s — past
+    # a 250 mm radius anchored on a 2281 mm/s emergence. Widen that and the
+    # candidate opens, travels 1483 mm, and is killed at 0.20 s by the
+    # observation floor: by then the cue is inside the rack it just scattered
+    # and reads 0.56 observed, worse than the hand-grab the floor exists to
+    # reject. Pins both — one shot, at break speed, from a rack explosion.
+    "break_outrun_0805": (1, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -457,6 +477,7 @@ REFERENCES: dict[str, str] = {
     "phantom_candidate_block_0805": "empty_table_0801",
     "parked_vote_newborn_0805": "empty_table_0801",
     "late_emergence_strike_0805": "empty_table_0801",
+    "break_outrun_0805": "empty_table_0801",
 }
 
 
@@ -621,6 +642,68 @@ def test_break_0801_speed_clears_the_idle_gate() -> None:
     events = _run_clip("break_0801", _reference_model("empty_table_0729"))
     shots = [e for e in events if isinstance(e, ShotTaken)]
     assert len(shots) == 1
+    assert shots[0].speed_mms is not None
+    assert shots[0].speed_mms >= MATCH_BREAK_FLOOR_MMS, f"break read {shots[0].speed_mms:.0f}"
+
+
+def test_break_outrun_fires_at_the_stroke() -> None:
+    """A break the clock sat straight through, and the shape it failed in.
+
+    break_outrun_0805, 2026-08-05 21:52, flagged at the table on Steven's
+    first break of the session: ground truth is a normal-power break, and the
+    journal shows the clock IDLE at 60.0 s through the whole rack with no
+    ShotTaken recorded at all. Detection was healthy (77-78 Hz), so this is
+    not contention — and the only thing vision emitted was the settle at
+    12.936 s, the missed-strike marker.
+
+    The cue steps off a 4.67 s dwell at 4.724 s and is never observed again;
+    the track that carries it onward is born at 4.762 s, 320 mm from the rest
+    at 7221 mm/s. Counts alone would stay green if the shot arrived a second
+    late, so the timing is what is pinned: the strike belongs to the stroke.
+    """
+    if not (CLIPS / "break_outrun_0805").exists():
+        pytest.skip("clip break_outrun_0805 not recorded")
+    events = _run_clip("break_outrun_0805", _reference_model("empty_table_0801"))
+    shots = [e for e in events if isinstance(e, ShotTaken)]
+    assert len(shots) == 1, f"expected one break, got {[round(s.t, 3) for s in shots]}"
+    assert 4.7 <= shots[0].t <= 5.1, f"break fired at {shots[0].t:.3f}s, stroke was 4.724s"
+
+
+def test_break_outrun_speed_clears_the_idle_gate() -> None:
+    """The break must also start the match, not just be seen.
+
+    Same rule as `test_break_0801_speed_clears_the_idle_gate`: out of a fresh
+    rack the IDLE gate only opens on a break, so a ShotTaken that reads low is
+    the same failure to Steven as no ShotTaken at all — the clock stays dead
+    and he has to press at the table. Reads 9923 mm/s here, 4x the floor.
+    """
+    from cueclock.clock.modes import MATCH_BREAK_FLOOR_MMS
+
+    if not (CLIPS / "break_outrun_0805").exists():
+        pytest.skip("clip break_outrun_0805 not recorded")
+    events = _run_clip("break_outrun_0805", _reference_model("empty_table_0801"))
+    shots = [e for e in events if isinstance(e, ShotTaken)]
+    assert len(shots) == 1
+    assert shots[0].speed_mms is not None
+    assert shots[0].speed_mms >= MATCH_BREAK_FLOOR_MMS, f"break read {shots[0].speed_mms:.0f}"
+
+
+def test_break_underread_speed_clears_the_idle_gate() -> None:
+    """The break this clip is named for — the one the live gate ate at 705 mm/s.
+
+    Pinned as an honest gap for a week (cold replay confirmed no break at
+    all), and closed by checkpoint 67: the streak did not die, it outran the
+    handoff radius while invisible and was then killed by the observation
+    floor inside the rack. Now fires reading 9469 mm/s. This asserts the part
+    that actually mattered at the table — that the clock would have started.
+    """
+    from cueclock.clock.modes import MATCH_BREAK_FLOOR_MMS
+
+    if not (CLIPS / "break_underread_0801").exists():
+        pytest.skip("clip break_underread_0801 not recorded")
+    events = _run_clip("break_underread_0801", _reference_model("empty_table_0801"))
+    shots = [e for e in events if isinstance(e, ShotTaken)]
+    assert len(shots) == 1, f"expected one break, got {[round(s.t, 3) for s in shots]}"
     assert shots[0].speed_mms is not None
     assert shots[0].speed_mms >= MATCH_BREAK_FLOOR_MMS, f"break read {shots[0].speed_mms:.0f}"
 
