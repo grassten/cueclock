@@ -42,6 +42,12 @@ class BallState:
     raw_speed_mms: float | None = None  # one-step speed (impulse-grade); None → speed_mms
     observed: bool = True  # False while the tracker is coasting this ball
     # through an occlusion — the position is then an extrapolation, not evidence
+    present: bool = True  # an observation matched this ball this frame, even
+    # one whose contents were discarded (a still ball merged with the stick is
+    # observed=False, present=True: something is measurably there, covering
+    # it). observed implies present; present=False means the tracker matched
+    # nothing at all and the ball's very existence is an extrapolation —
+    # a claim that must not found a cue rest (§5.1(b))
     merged: bool = False  # this frame's observation was an oversized (merged)
     # blob: the ball is inseparable from a hand/stick or streaking. Meaningful
     # only when observed; the newborn-strike confirm reads it (a hand-carried
@@ -496,6 +502,13 @@ class _StrikeCandidate:
     parked: bool = False
     last_raw: float | None = None
     ball_id: int | None = None
+    opened_on: int | None = None  # the track id the candidate's target had at
+    # open time. A flag-following candidate (ball_id=None) advances on
+    # whatever holds the cue flag, and the whiteness vote can move the flag
+    # to a *different track* mid-confirm — the candidate's displacement is
+    # then measured across an identity switch, not along one ball's travel.
+    # The dispatch in `update` kills the candidate when that happens and
+    # makes the new holder re-qualify from scratch (see the comment there).
     impulse_raw: float = 0.0  # max raw speed seen while the candidate lives.
     # Not just the opening sample: on a handoff strike the open-frame raw is
     # averaged across the address-occlusion gap and reads far low (the
@@ -743,7 +756,46 @@ class EventEngine:
             if target is not None:
                 events.extend(self._advance_candidate(t, target))
         elif cue is not None and self._cue_id_streak >= cfg.cue_id_debounce_frames:
-            if self._candidate is not None:
+            if self._candidate is not None and self._candidate.opened_on not in (
+                None,
+                cue.ball_id,
+            ):
+                # The debounced flag moved to a DIFFERENT track while a
+                # flag-following candidate was open. Advancing would measure
+                # displacement from the old holder's rest to the new holder's
+                # position — track-switch inheritance, not ball travel. On a
+                # struck cue reborn past the association gate that number is
+                # honest (the same ball, continuing); on a snatched cue
+                # re-detected in a moving hand it is a phantom (the annulus
+                # correctly follows the physical ball into the hand, and
+                # pickup_snatch_0801 fired a 6108 mm/s "shot" — the identity
+                # got *better* and exposed that this path never re-judges a
+                # switch). Kinematics cannot separate those two in-window
+                # (yank 2068→5470 vs 2327→5473, both collinear), so the
+                # candidate dies and the new holder re-qualifies through the
+                # handoff path — the one built for "a young track claims the
+                # old rest". Its gates judge exactly this pair: the
+                # quiet-table latch (a grab's drag latches motion before the
+                # birth; a stroke's one-frame yank does not — measured on
+                # this pair), the born-after-dark ordering, the dark-scaled
+                # reach, and a confirm with no merged gate — a genuinely
+                # struck rebirth streaks, and streaks are merge-flagged
+                # (break_underread_0801 died 4/9 merged in the newborn
+                # confirm when routed there). The ordering must run on the
+                # OLD holder's timeline: _cue_last_obs_t already tracks the
+                # new holder, which is observed by construction.
+                old_id = self._candidate.opened_on
+                self._candidate = None
+                raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
+                old_hist = self._history.get(old_id) if old_id is not None else None
+                last_obs_old = (
+                    None
+                    if old_hist is None
+                    else next((p[0] for p in reversed(old_hist.positions) if p[3]), None)
+                )
+                if raw >= cfg.strike_impulse_mms and last_obs_old is not None:
+                    self._maybe_open_handoff(t, cue, raw, last_obs_t=last_obs_old)
+            elif self._candidate is not None:
                 events.extend(self._advance_candidate(t, cue))
             else:
                 self._maybe_open_candidate(t, cue)
@@ -1072,20 +1124,29 @@ class EventEngine:
                 # A cue at rest that moved since the disarm: rest cycle
                 # complete, the next fast newborn may be a strike again.
                 self._newborn_disarmed_at = None
-            if self._cue_rest is None:
-                self._cue_rest = (t, cue.x_mm, cue.y_mm)
-            elif (
+            if self._cue_rest is None or (
                 hypot(cue.x_mm - self._cue_rest[1], cue.y_mm - self._cue_rest[2])
                 > cfg.strike_handoff_radius_mm
             ):
-                # The flag jumped to a different still ball (the whiteness
-                # vote wanders when the real cue is occluded): that is a new
-                # rest, not the old one relocated — dwell credit restarts.
-                # A genuinely creeping cue moves ~0.5 mm between stamps and
-                # never trips this.
-                self._cue_rest = (t, cue.x_mm, cue.y_mm)
+                # Founding a rest — from nothing, or because the flag jumped
+                # to a different still ball (a jump is a new rest, not the old
+                # one relocated: dwell credit restarts; a genuinely creeping
+                # cue moves ~0.5 mm between stamps and never trips this).
+                # Either way it is a claim about where a ball IS, so it needs
+                # presence evidence. Without the guard, a flag-holder coasting
+                # on nothing after a fire cleared the rest would found a fresh
+                # one at its phantom position and accrue dwell on zero
+                # evidence — the re-arm that mints a second ShotTaken when the
+                # flag finally transfers to the real ball (§4.14).
+                if cue.present:
+                    self._cue_rest = (t, cue.x_mm, cue.y_mm)
             else:
                 self._cue_rest = (self._cue_rest[0], cue.x_mm, cue.y_mm)
+            # The still-stamp refreshes even without presence — load-bearing:
+            # the real strike on phantom_flag_strike_0805 arrives 0.128 s
+            # after the phantom went dark, against strike_step_max_s = 0.12,
+            # and only survives because _maybe_open_handoff reads a fresh
+            # still-stamp off the coasting holder (§4.14, trap 2).
             self._cue_last_still_t = t
         elif self._cue_rest is not None and t - self._cue_last_still_t > cfg.strike_handoff_gap_s:
             self._cue_rest = None
@@ -1196,11 +1257,21 @@ class EventEngine:
             x_open=ball.x_mm,
             y_open=ball.y_mm,
             ball_id=ball.ball_id if follow_ball else None,
+            opened_on=ball.ball_id,
         )
         return "opened"
 
-    def _maybe_open_handoff(self, t: float, ball: BallState, raw: float) -> None:
+    def _maybe_open_handoff(
+        self, t: float, ball: BallState, raw: float, last_obs_t: float | None = None
+    ) -> None:
         """Phantom-flag handoff strike (flag_missed_2, checkpoint 64).
+
+        `last_obs_t` overrides `_cue_last_obs_t` for the flag-switch
+        re-qualification (see the dispatch in `update`): there the flag has
+        *already* moved to the reborn track, so `_cue_last_obs_t` tracks the
+        new holder and the ordering/dark tests below would measure the wrong
+        timeline. The caller passes the OLD holder's last observed time —
+        the moment the departing cue actually went dark.
 
         The addressed cue's own track can be frozen at its rest spot and keep
         the whiteness vote while the ball is struck and gone. Three mechanisms
@@ -1235,6 +1306,7 @@ class EventEngine:
         admissible, exactly as it is for an ordinary streaking shot.
         """
         cfg = self._cfg
+        obs_t = self._cue_last_obs_t if last_obs_t is None else last_obs_t
         if self._cue_rest is None:
             return
         if raw < cfg.newborn_impulse_mms:
@@ -1270,10 +1342,16 @@ class EventEngine:
         # bounds is how long after the cue vanished its continuation may
         # surface — the occlusion coast. A shaft/hand push keeps the cue in
         # view and founds no new track, so it never reaches this path at all.
-        if t - max(self._cue_last_still_t, self._cue_last_obs_t) > cfg.strike_step_max_s:
-            return
         born = self._first_seen.get(ball.ball_id)
-        if born is None or born <= self._cue_last_obs_t:
+        # In re-qualify mode the impulse "arrived" when the continuation
+        # track SURFACED, not when the vote's debounce let the kill run —
+        # the debounce adds 1-2 frames of bookkeeping latency, and billing
+        # it to the occlusion budget refused late_emergence_strike_0805 by
+        # 2 ms (dark 0.109 s at birth, 0.122 s at the kill frame).
+        arrival = t if last_obs_t is None else (t if born is None else born)
+        if arrival - max(self._cue_last_still_t, obs_t) > cfg.strike_step_max_s:
+            return
+        if born is None or born <= obs_t:
             # The identity claim, and the whole reason this path may trust a
             # merged emergence: the cue went dark and *then* this track
             # appeared, so it is the cue's continuation rather than a
@@ -1305,7 +1383,7 @@ class EventEngine:
         # *not* the `max(...)` the step gate above uses: a flag parked on some
         # other still ball keeps that stamp fresh indefinitely, which is
         # exactly how those three long-dark rows get this far.
-        dark = t - self._cue_last_obs_t
+        dark = arrival - obs_t
         reach = cfg.strike_handoff_radius_mm
         if dark <= cfg.strike_step_max_s:
             reach = max(reach, raw * dark * cfg.handoff_reach_margin)
@@ -1373,6 +1451,7 @@ class EventEngine:
             newborn=True,
             last_raw=raw,
             ball_id=cue.ball_id if follow_ball else None,
+            opened_on=cue.ball_id,
             impulse_raw=raw,
             x_open=cue.x_mm,
             y_open=cue.y_mm,
@@ -1479,6 +1558,7 @@ class EventEngine:
             newborn=True,
             last_raw=raw,
             ball_id=ball.ball_id,
+            opened_on=ball.ball_id,
             impulse_raw=raw,
             x_open=ball.x_mm,
             y_open=ball.y_mm,

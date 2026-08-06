@@ -100,6 +100,12 @@ class _Track:
     last_obs_merged: bool = False  # the observation that last updated this
     # track was an oversized (merged) blob — a moving track fed exclusively
     # by these is inseparable from a hand/stick (the carried-ball signature)
+    last_present: float = 0.0  # last time ANY observation matched this track,
+    # including the merged-still branch that discards the observation's
+    # contents. Coarser than last_obs on purpose: last_obs answers "when did
+    # we last measure the ball", this answers "when was there last evidence
+    # the ball exists at all" — a coasting track has neither, an addressed
+    # ball merged with the stick has this but not last_obs (§5.1(b))
 
     def predict(self, t: float) -> tuple[float, float]:
         dt = t - self.t
@@ -137,6 +143,7 @@ class BallTracker:
             matched_tracks.add(ti)
             matched_obs.add(oi)
             track, obs = self._tracks[ti], observations[oi]
+            track.last_present = t  # either branch below counts as evidence
             if (
                 obs.merged
                 and track.hits >= cfg.birth_frames
@@ -192,6 +199,7 @@ class BallTracker:
                         whiteness=obs.whiteness,
                         last_obs=(t, obs.x_mm, obs.y_mm),
                         last_obs_merged=obs.merged,
+                        last_present=t,
                     )
                 )
                 self._next_id += 1
@@ -207,6 +215,7 @@ class BallTracker:
                 raw_speed_mms=tr.raw_speed,
                 is_cue=tr.track_id == self._cue_id,
                 observed=tr.last_obs[0] == t,
+                present=tr.last_present == t,
                 merged=tr.last_obs[0] == t and tr.last_obs_merged,
                 churn=tr.churn if tr.last_obs[0] == t else None,
             )
