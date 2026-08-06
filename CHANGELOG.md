@@ -232,6 +232,87 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-06 (checkpoint 72 — nine detection hypotheses dead, the phantom
+  traced to identity, and goldens made readable):** a full accuracy session run
+  against `~/Desktop/cueclock-accuracy-plan.md`. The headline is a category
+  elimination, not a fix.
+  - **Every hypothesis about *seeing better* is null.** Adding to the four
+    already dead (cue stick as trigger / as veto / tip standoff, stride 1):
+    ball recovery inside rejected components (**E1**, built end-to-end,
+    corpus-green, cue-track continuity **33/47 → 33/47**, +0.57 ms/frame);
+    "require a white core to back onto a ball detection" (single-core frames
+    59.7% → 65.4%, but never-lost **23/47 → 13/47** and
+    `occluded_address_0731` collapses to none = 0.53 — it re-imports the
+    detection failure it was valuable for being independent of). Two more
+    supposed defect classes turned out not to exist: late settles were already
+    fixed by checkpoint 35 (**3.98% → 0.54%** over 10 s; the plan's "~4%,
+    nobody has looked" was pre/post-fix journals pooled), and there is no
+    false-scratch population (the 7 RUNNING-state scratches fire 1.74–5.40 s
+    after their shot, inside the MOTION population's own range — ordinary
+    scratches that confirmed a few tenths after the settle).
+  - **Why E1 is inert, having been right about the mechanism.** `detect_balls`
+    really does delete the addressed cue ball — measured over 3 270 address
+    frames, 3.1% border rule, 0.9% extent, and **0.0%** with no component
+    covering the ball. But the gaps are 0.04–0.20 s and `still_coast_s = 3.0`
+    already absorbs them, so nothing downstream ever noticed.
+  - **The real mechanism, traced to pixels.** On `phantom_flag_strike_0805`
+    (Steven: a behind-the-back shot, shaft and shadow left lying across the
+    vacated spot) the flag holder is **matched to nothing** from 0.13 s before
+    the strike until a second after it, surviving purely on the 3 s
+    still-coast, holding whiteness 0.735 that cannot decay because there are no
+    observations to decay it — while the real cue ball, born moving at
+    2602 mm/s, has its own whiteness frozen by `whiteness_freeze_mms` and can
+    never clear 0.735 + the 0.05 switch margin. Three defects compound, and
+    none of them is detection.
+  - **And the score is sampled from the wrong place.** `patch_radius_px = 10`
+    reads a 21×21 patch at the centroid — the specular cap, where every glossy
+    ball under an overhead light is white. ("The palest yellow reads
+    deceptively white" is a fact about the sample, not the yellow ball.) Radial
+    profile of **148 718 detections** in 3 px rings: at **12–18 px** the cue
+    ball reads p50 **0.911** against object balls' **0.036** — 25× separation,
+    a 0.60 threshold keeping 80.3% and admitting 1.16%. Inside 6 px every ball
+    is white; outside 18 px limb shading takes the cue ball itself to 0.45. Both
+    bounds forced by data. **This is the live work** (plan §5.1, E6), with the
+    hazard already measured: the naive stale-holder rule moves the flag
+    correctly *and* mints a second `ShotTaken` at 11.329 s.
+  - **Shipped: `tests/corpus/goldens.py` reports every difference, not the
+    first** (one-at-a-time triage is a rerun loop at ~5 min a lap), renders
+    golden vs actual as an aligned table with deltas in context, names the three
+    causes a red golden can have, and writes the full report to
+    `tests/goldens/.failures/<scenario>.txt` (gitignored, per scenario so xdist
+    workers cannot collide) so a truncated capture never costs a rerun.
+    `pyproject.toml` gains `-ra --tb=long`.
+  - **Shipped: `track.py` — a recovered core must not compete for a moving
+    track.** Found by *reading* a red battery instead of reverting it. Greedy
+    pairing let a core lying nearer a rolling ball than its own detection steal
+    the match, leaving the track to coast, so a mover read as still and
+    `hanger_pot_0801` settled 1.7 s early — against a table still moving at
+    ~100 mm/s (both configs agree the last supra-floor frame is t = 13.364).
+    Two of that battery's three diffs were same-event/same-time/
+    different-magnitude: invisible as a pass/fail count, which is the argument
+    for goldens.
+  - **Two methodological rules recorded in `tests/README.md`:** *calibrate a
+    gate on the distribution it will actually see* (setting the recovery band
+    from clean isolated balls rather than from cores inside rejected components
+    would have put the floor at 0.4 and admitted 3× the clutter — a fused ball
+    is not eroded at the fusion boundary, a free-standing one is); and *a red
+    corpus is a diff to read, not a verdict*. Also why cold runs keep getting
+    paid: the cache keys on `detect.py`'s bytes (correctly), but `track.py` and
+    `events.py` are deliberately outside it — editing both in one loop is what
+    forces cold runs. Land the detect-side change once, warm the cache, iterate
+    downstream at ~21 s.
+  - **E1 reverted, deliberately.** Continuity measured 33/47 in all three
+    configurations — baseline, recovery with the association bug, and recovery
+    with it fixed — with no flips and no shot-count changes. Correct, green and
+    inert is not a reason to carry ~10% of the detect budget, and a
+    `recover=False` flag would be dead code in a repo that will be
+    open-sourced. `src/` therefore ends this session byte-identical to
+    checkpoint 71: **no detection behaviour changed.** The implementation
+    survives in history at `22137c5` / `cf2a2a0` if §5.1 ever needs a detection
+    at the addressed ball — §4.11's white2 result suggests it will not.
+  - **Corpus:** 441 passed cold with the change in, no golden changes; 370 unit
+    tests green after the revert. ruff + mypy clean throughout.
+
 - **2026-08-05 (checkpoint 71 — the other half of the error rate: the clock
   freezes when nothing was struck):** checkpoint 70 gave misses a denominator by
   reading back the clock's own compensation. The mirror error had none, and it
