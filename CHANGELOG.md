@@ -232,6 +232,63 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-06 (checkpoint 75 — the hub learns the break, §13's E8/E9 land):**
+  Seven flag dumps triaged from today's two sessions. Three were checkpoint 74's
+  own clips, already promoted but left in staging by a `cp`-not-`mv` — deleted.
+  The four new ones divided exactly along §13.0's Pareto, and the fixes went
+  where §13.1 says discrimination is cheap: the hub. (a) **E8, fired tier,
+  live:** an armed rack's IDLE settle with break-scale rearrangement plus *any*
+  ShotTaken fire since SET UP — including the sub-floor fires the break gate
+  eats — counts the break and starts the 60 s window (`break_adjudicated`).
+  Anchored: quiet-baseline rearrangement probe (`rearrange2_probe.py`) measures
+  breaks at 7-12 balls involved, ordinary settles 1-2, pickups 1, corpus
+  racking zero settles at all; the fired floor sits at 5, the fire must be
+  within 15 s of its settle (longest measured roll-out 8.62 s). Journal mining:
+  84 eaten IDLE fires across 31 sessions, 15 manually rescued (flag_missed_7's
+  1981 mm/s among them); the dark-flight clip's own 443 mm/s fire + involved-12
+  settle now adjudicates in unit test. (b) **E8, dark tier, shadow:** a no-fire
+  break-scale settle only journals `break_dark_candidate` — the pack-resolve
+  racking settle is appear-heavy exactly like a break and the corpus cannot
+  price it (racking is settle-silent there; live sessions log ~3 IDLE settles
+  each, rearrangement never recorded until now). Every settle now journals its
+  rearrangement, so the next sessions ARE the measurement; flip the tier live
+  when racking settles prove to stay under 8. (c) **E9 expiry hold:** vision
+  exports an identity-free motion bit (observed raw ≥ settle floor on two
+  consecutive reports — a coasting phantom cannot hold it); GRACE re-arms to a
+  full window while it is set, so the buzzer can never sound through live
+  flight (flag_missed_6 reached EXPIRED mid-roll-out at 19:20). (d) **E9
+  frozen-clock watchdog:** MOTION with the bit low for 12 s (settle-latency
+  p99 8.5 s, longest roll-out 8.62 s) synthesizes the lost settle,
+  journal-marked `settle_synthesized` (14 operator rescues over 30 sessions).
+  (e) **The settle backstop** (`break_dark_total_0806`, promoted from
+  flag_missed_4; Steven's ground truth: a full 15-ball break, whole flight
+  in-ring at ~70 Hz, zero engine events warm AND cold): the racked pack never
+  confirms a single track, the scatter erupts as rosterless newborns, and the
+  engine's per-track/roster channels all sleep. The pipeline now keeps an
+  identity-free quiet-layout baseline (smoothed-speed calm + present-layout
+  step; raw is sub-noise at 78 Hz and dead pack tracks coast at remembered
+  ~0 speed — both lessons measured on this clip) and emits the BallsSettled
+  the engine provably missed when the quiet layout rearranged ≥ 5 balls
+  (same measured line as adjudication; a ball-in-hand replacement moves 1 and
+  must never reset a live clock). Backstop settles carry a journal mark; the
+  named test pins mechanism + break scale and is built to go red the day the
+  tracker layer starts seeing this clip itself (§13.6 news, retire
+  deliberately). (f) `report` grew the break class: auto-caught vs
+  press-rescued breaks, dark candidates, synthesized settles — the instrument
+  §13.0 faulted can no longer go blind to the head of the Pareto. flag_missed_5
+  (mid-rack soft-roll miss, settle-rescued live) deleted: §13.0's self-healing
+  class, E7's queue, no new mechanism. **Prediction (§13.9): presses at
+  rack_shots 0 (13-22 per 30 sessions, 15-25% of racks) drop to ~0 for fired
+  breaks; ~2 sessions of racking data price the dark tier. The mid-rack miss
+  rate (3.14% over 1243 shots tonight) is NOT predicted to move — E8/E9 are
+  felt-failure fixes, not strike-detection fixes.** Corpus 3 red / 453 green
+  (the same three deliberate reds as checkpoint 74; break_dark_flight's red is
+  now redundant with the hub adjudication test and should move to the hub per
+  §13.5(3) — needs Steven's sign-off). Unit suite +12 (grace hold, watchdog,
+  adjudication tiers, staleness, armed-fire clearing). Warm snapshots recorded
+  before this checkpoint are fingerprint-refused (pipeline.py changed) —
+  expected, all seven dumps were warm-replayed before the core was touched.
+
 - **2026-08-06 (checkpoint 74 — the first annulus live session: three flagged
   misses, three mechanisms, two fixed):** Steven's 20-minute session flagged a break
   the clock sat through, a missed soft roll, and a missed cluster shot. Ring dumps

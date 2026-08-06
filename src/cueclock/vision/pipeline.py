@@ -20,6 +20,7 @@ cold. Still pure: bytes in/out, no file I/O.
 import hashlib
 import pickle  # nosec B403 — state snapshots only; loaded blobs are our own dumps
 from dataclasses import dataclass
+from math import hypot
 from typing import cast
 
 import cv2
@@ -36,8 +37,79 @@ from cueclock.vision.detect import (
     build_reference,
     detect_balls,
 )
-from cueclock.vision.events import BallState, Event, EventConfig, EventEngine
+from cueclock.vision.events import BallsSettled, BallState, Event, EventConfig, EventEngine
 from cueclock.vision.track import BallTracker, Observation, TrackConfig
+
+
+@dataclass(frozen=True)
+class RearrangeSummary:
+    """How much a settle rearranged the table (accuracy plan §13.2).
+
+    Computed against the last quiet layout before the motion episode — the
+    positions of every ``present`` track on the most recent frame where no
+    ball reported raw speed at or above the engine's own still definition
+    (``settle_floor_mms``). Balls are greedy-matched by distance; a matched
+    ball displaced past ``moving_enter_mm`` counts as moved, an unmatched
+    current ball as appeared (a break un-merges the racked pack, so most of
+    a break's scatter lands here), an unmatched baseline ball as vanished
+    (pockets, pickups).
+
+    This rides beside the event stream rather than on ``BallsSettled``
+    itself so the corpus goldens — which serialize every event field — stay
+    byte-identical until §13.5's verdict tiering makes regenerating them
+    cheap. The hub reads it as evidence; nothing in the vision layer acts
+    on it (§13.1).
+    """
+
+    moved: int
+    appeared: int
+    vanished: int
+    moved_mm: float
+
+    @property
+    def involved(self) -> int:
+        """Balls the episode touched — the break-vs-racking headline number."""
+        return self.moved + self.appeared + self.vanished
+
+
+# The settle backstop's rearrangement floor (flag_missed_4, 2026-08-06): a
+# full 15-ball break can scatter entirely *between* track identities — every
+# pack track dies at impact, every settled ball is a newborn — so the event
+# engine's per-track displacement latch never trips and neither fire nor
+# settle is emitted. The quiet-to-quiet layout diff is identity-free and sees
+# it trivially (12+ balls involved). The floor is the same measured line the
+# hub's break adjudication uses (breaks 7-12 involved; racking placement
+# cycles 1-3; a ball-in-hand replacement exactly 1, and a settle on one of
+# those in RUNNING would reset a live clock — §9 constraint 1), so placement
+# and racking stay exactly as event-silent as checkpoints 28-56 left them.
+SETTLE_BACKSTOP_MIN_INVOLVED = 5
+
+
+def _match_rearrange(
+    prev: list[tuple[float, float]], cur: list[tuple[float, float]], moved_mm: float
+) -> RearrangeSummary:
+    """Greedy nearest-pair matching — n is ~16, O(n² log n) is nothing."""
+    dists = sorted(
+        (hypot(p[0] - c[0], p[1] - c[1]), i, j)
+        for i, p in enumerate(prev)
+        for j, c in enumerate(cur)
+    )
+    used_p: set[int] = set()
+    used_c: set[int] = set()
+    moved_dists: list[float] = []
+    for d, i, j in dists:
+        if i in used_p or j in used_c:
+            continue
+        used_p.add(i)
+        used_c.add(j)
+        if d > moved_mm:
+            moved_dists.append(d)
+    return RearrangeSummary(
+        moved=len(moved_dists),
+        appeared=len(cur) - len(used_c),
+        vanished=len(prev) - len(used_p),
+        moved_mm=sum(moved_dists),
+    )
 
 
 def build_table_mask(reference_bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -157,11 +229,36 @@ class VisionPipeline:
             else ReferenceModel.build(reference, calibration)
         )
         self.detect_config = detect_config or DetectConfig()
+        self.event_config = event_config or EventConfig()
         self._tracker = BallTracker(track_config)
-        self._engine = EventEngine(event_config)
+        self._engine = EventEngine(self.event_config)
         self._prev_gray: npt.NDArray[np.uint8] | None = None
         self._advanced = 0
         self.last_balls: list[BallState] = []  # diagnostics for analyze/scoreboard
+        # E9's identity-free table-motion bit (accuracy plan §13.3): some
+        # confirmed track was *observed* at or above the engine's still floor
+        # on two consecutive reports. Observed-only on purpose — a coasting
+        # phantom repeating its last velocity forever must not be able to
+        # hold the bit high, because the frozen-clock class it guards is
+        # often exactly a phantom's aftermath.
+        self.last_motion = False
+        self._supra: dict[int, bool] = {}  # ball_id → last observed report was supra-floor
+        # E8's settle rearrangement: the quiet-layout baseline the summary
+        # diffs against. Slides forward on quiet frames while no episode is
+        # pending, freezes the moment anything moves, resets after each
+        # settle. The pending latch matters: a settle fires only after
+        # dwell-seconds of renewed quiet, so a baseline that kept sliding
+        # through that stillness would reach the settled layout first and
+        # every summary would read zero.
+        self._settled_baseline: list[tuple[float, float]] | None = None
+        self._rearrange_pending = False
+        self._quiet_since: float | None = None
+        self._prev_present: list[tuple[float, float]] | None = None
+        self.last_settle_rearrange: RearrangeSummary | None = None
+        # True when the most recent BallsSettled was the pipeline's backstop
+        # rather than the engine's own — journaled by the hub so triage sees
+        # the engine's miss instead of a clean settle.
+        self.last_settle_backstop = False
 
     def process(self, t: float, bayer: npt.NDArray[np.uint8]) -> list[Event]:
         detections, churn = self.detect(bayer)
@@ -221,7 +318,83 @@ class VisionPipeline:
         self._advanced += 1
         balls = self._tracker.update(t, observations)
         self.last_balls = balls
-        return self._engine.update(t, balls)
+        events = self._engine.update(t, balls)
+
+        floor = self.event_config.settle_floor_mms
+        raws = {
+            b.ball_id: (b.speed_mms if b.raw_speed_mms is None else b.raw_speed_mms)
+            for b in balls
+            if b.observed
+        }
+        self.last_motion = any(
+            raw >= floor and self._supra.get(ball_id, False) for ball_id, raw in raws.items()
+        )
+        self._supra = {ball_id: raw >= floor for ball_id, raw in raws.items()}
+
+        present = [(b.x_mm, b.y_mm) for b in balls if b.present]
+        settled = any(isinstance(e, BallsSettled) for e in events)
+        if settled:
+            self.last_settle_rearrange = _match_rearrange(
+                self._settled_baseline or present,
+                present,
+                self.event_config.moving_enter_mm,
+            )
+            self.last_settle_backstop = False
+        # Quiet needs two things, because speed alone lies here (the
+        # flag_missed_4 lesson): a breaking pack's tracks die at impact and
+        # coast at their remembered ~0 speed while the in-flight balls are
+        # too fast to ever confirm — the confirmed-track view reads calm
+        # through the whole scatter. So quiet = no ball carries a supra-floor
+        # *smoothed* speed (raw is one-step: 40 mm/s is half a millimetre
+        # per frame at 78 Hz, under centroid noise, so a settled 11-ball
+        # table never reads raw-calm) AND the present layout took no step
+        # since the previous frame (a present ball vanishing, appearing, or
+        # standing displaced IS the motion, whichever track claims to be
+        # calm). Zero-ball frames are not stillness evidence (mid-scatter
+        # detection desert), mirroring the engine's own rule.
+        calm = bool(balls) and all(b.speed_mms < floor for b in balls)
+        layout_step = (
+            self._prev_present is not None
+            and _match_rearrange(
+                self._prev_present, present, self.event_config.moving_enter_mm
+            ).involved
+            > 0
+        )
+        self._prev_present = present
+        quiet = calm and not layout_step
+        self._quiet_since = (self._quiet_since or t) if quiet else None
+        if (
+            not settled
+            and self._rearrange_pending
+            and not self._engine.table_moving
+            and self._quiet_since is not None
+            and t - self._quiet_since >= self.event_config.settle_dwell_s
+        ):
+            # Settle backstop (see SETTLE_BACKSTOP_MIN_INVOLVED): pixel-level
+            # motion came and went without the engine latching an episode.
+            # If the quiet layout provably rearranged at break scale, the
+            # settle happened whether or not any track lived to show it.
+            # Below the floor the episode is released either way — a frozen
+            # baseline must not inflate some much-later settle's diff.
+            summary = _match_rearrange(
+                self._settled_baseline or present,
+                present,
+                self.event_config.moving_enter_mm,
+            )
+            if summary.involved >= SETTLE_BACKSTOP_MIN_INVOLVED:
+                self.last_settle_rearrange = summary
+                self.last_settle_backstop = True
+                events = [*events, BallsSettled(t)]
+            settled = True
+        if settled:
+            self._settled_baseline = present
+            self._rearrange_pending = False
+        elif quiet:
+            if not self._rearrange_pending:
+                self._settled_baseline = present
+        elif balls:
+            self._rearrange_pending = True
+        return events
 
     def dump_state(self) -> bytes:
         """Serialize the mutable state for warm replay (`analyze --warm`).
@@ -253,6 +426,11 @@ class VisionPipeline:
                 "engine": self._engine,
                 "prev_gray": self._prev_gray,
                 "last_balls": self.last_balls,
+                "supra": self._supra,
+                "settled_baseline": self._settled_baseline,
+                "rearrange_pending": self._rearrange_pending,
+                "quiet_since": self._quiet_since,
+                "prev_present": self._prev_present,
             },
             protocol=pickle.HIGHEST_PROTOCOL,
         )
@@ -264,3 +442,8 @@ class VisionPipeline:
         self._engine = state["engine"]
         self._prev_gray = state["prev_gray"]
         self.last_balls = state["last_balls"]
+        self._supra = state.get("supra", {})
+        self._settled_baseline = state.get("settled_baseline")
+        self._rearrange_pending = state.get("rearrange_pending", False)
+        self._quiet_since = state.get("quiet_since")
+        self._prev_present = state.get("prev_present")

@@ -637,3 +637,133 @@ def test_run_out_still_ignores_vision_under_the_kill_switch() -> None:
         client.post("/api/vision/off")
         asyncio.run(hub.shot_taken(t=1.0, speed_mms=4000.0))
         assert client.get("/api/state").json()["state"] == "IDLE"
+
+
+# ---------- E8 break adjudication + E9 hub guards (2026-08-06, plan §13.2/§13.3) ----------
+
+
+def _summary(moved: int = 0, appeared: int = 0, vanished: int = 0, moved_mm: float = 0.0):
+    from cueclock.vision.pipeline import RearrangeSummary
+
+    return RearrangeSummary(moved=moved, appeared=appeared, vanished=vanished, moved_mm=moved_mm)
+
+
+def test_break_adjudicated_from_eaten_fire_and_break_scale_settle() -> None:
+    """E8's fired tier: the exact shape of today's morning break (dark_flight).
+
+    The fire read 443 mm/s — in-flight tracks under-read 2-4x — so the IDLE
+    floor ate it and the clock sat through the break. The settle 3.8 s later
+    rearranged 12 balls (probe-measured: moved 1 / appeared 11, 381 mm).
+    Fire at any speed + break-scale settle = the break, counted at the rest,
+    which is when WNT §5 starts the 60 s window anyway.
+    """
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.shot_taken(speed_mms=443.0))  # eaten by the floor
+    assert hub.clock.state is State.IDLE
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11, moved_mm=381.0)))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.rack_shots == 1  # the break is counted, not confessed
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "break_adjudicated" in kinds
+
+
+def test_small_settle_after_eaten_fire_stays_idle() -> None:
+    # A placement settle (1-2 balls) after racking noise: racking must never
+    # start the clock (checkpoint 28's phantom, the named E8 hazard).
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.shot_taken(speed_mms=1471.0))  # rack-gather roll, eaten
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=2, moved_mm=190.0)))
+    assert hub.clock.state is State.IDLE
+    assert hub.clock.rack_shots == 0
+
+
+def test_dark_break_scale_settle_is_shadow_only() -> None:
+    """The no-fire tier journals a candidate but must not move the clock.
+
+    Its one unpriced hazard is a racking settle — the pack resolving from a
+    merged blob is appear-heavy exactly like a break — so it ships as a
+    journal mark and the next sessions' rearrangement records decide whether
+    it goes live.
+    """
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11, moved_mm=381.0)))
+    assert hub.clock.state is State.IDLE
+    assert hub.clock.rack_shots == 0
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "break_dark_candidate" in kinds
+    assert "break_adjudicated" not in kinds
+
+
+def test_stale_fire_does_not_arm_adjudication() -> None:
+    # A fire arms only the settle of its own episode (longest measured
+    # fire->settle roll-out is 8.62 s); an old racking blip must not convert
+    # a later big settle. With the fire stale, the settle falls through to
+    # the shadow tier.
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.shot_taken(speed_mms=1000.0))
+    assert hub._idle_fire is not None
+    stamp, speed = hub._idle_fire
+    hub._idle_fire = (stamp - 20.0, speed)  # age it past the 15 s window
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11, moved_mm=381.0)))
+    assert hub.clock.state is State.IDLE
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "break_dark_candidate" in kinds
+
+
+def test_mid_rack_settles_never_adjudicate() -> None:
+    # Adjudication is armed-rack-only: once the break is counted, IDLE can
+    # recur (pause) but a big settle there is not a break.
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.shot_taken(speed_mms=5000.0))  # real break, passes floor
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=2, appeared=9, moved_mm=300.0)))
+    assert hub.clock.rack_shots == 1
+    asyncio.run(hub.pause())  # operator holds the clock
+    asyncio.run(hub.shot_taken(speed_mms=443.0))
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11, moved_mm=381.0)))
+    assert hub.clock.state is State.IDLE  # held means held
+    assert hub.clock.rack_shots == 1
+
+
+def test_operator_commands_clear_the_armed_fire() -> None:
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.shot_taken(speed_mms=1000.0))
+    assert hub._idle_fire is not None
+    asyncio.run(hub.reset())
+    assert hub._idle_fire is None
+
+
+def test_frozen_clock_watchdog_synthesizes_the_lost_settle() -> None:
+    """E9's watchdog: MOTION quiet past 12 s self-heals (plan §13.3).
+
+    14 clocks over 30 sessions were left frozen in MOTION until an operator
+    key rescued them. With the motion bit low past the watchdog, the hub
+    synthesizes the settle the vision layer lost; the journal mark keeps the
+    miss visible to triage and to `report`.
+    """
+    hub = Hub()
+    asyncio.run(hub.start())
+    asyncio.run(hub.shot_taken(speed_mms=5000.0))
+    assert hub.clock.state is State.MOTION
+    hub._watch_frozen_clock(1000.0)  # anchors MOTION entry
+    hub._watch_frozen_clock(1011.9)  # inside the window
+    assert hub.clock.state is State.MOTION
+    hub._watch_frozen_clock(1012.1)  # past it
+    assert hub.clock.state is State.RUNNING
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "settle_synthesized" in kinds
+
+
+def test_watchdog_defers_while_motion_bit_high() -> None:
+    hub = Hub()
+    asyncio.run(hub.start())
+    asyncio.run(hub.shot_taken(speed_mms=5000.0))
+    hub._watch_frozen_clock(1000.0)
+    hub._table_motion = True  # balls genuinely rolling
+    hub._watch_frozen_clock(1020.0)
+    assert hub.clock.state is State.MOTION  # no synthetic settle over real motion

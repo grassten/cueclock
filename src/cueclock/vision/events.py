@@ -586,6 +586,12 @@ class _BallHistory:
 class EventEngine:
     """Feed per-frame track states; collect events. See module docstring."""
 
+    @property
+    def table_moving(self) -> bool:
+        """Is a motion episode latched? Read by the pipeline's settle backstop
+        so it never speaks over an episode the engine is already tracking."""
+        return self._table_moving
+
     def __init__(self, config: EventConfig | None = None) -> None:
         self._cfg = config or EventConfig()
         self._history: dict[int, _BallHistory] = {}

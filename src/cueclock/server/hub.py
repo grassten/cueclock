@@ -11,6 +11,7 @@ import json
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import WebSocket
 
@@ -26,7 +27,57 @@ from cueclock.clock import (
 from cueclock.server.journal import SessionJournal
 from cueclock.server.score import MatchScore
 
+if TYPE_CHECKING:
+    # Type-only: importing the vision stack at runtime would drag cv2/numpy
+    # into the bare server. The hub reads the summary as plain evidence.
+    from cueclock.vision.pipeline import RearrangeSummary
+
 BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
+
+# E9 frozen-clock watchdog (accuracy plan §13.3): MOTION with the vision
+# motion bit low for this long synthesizes the settle the vision layer lost.
+# Anchored: the corpus settle-latency distribution puts p99 at ~8.5 s and the
+# longest measured real roll-out at 8.62 s (report.PHANTOM_LEAD_S), so 12 s is
+# past every real settle with margin while still healing a frozen clock
+# before the player has to walk over. Journal-marked `settle_synthesized` so
+# triage still sees the underlying miss.
+FROZEN_WATCHDOG_SECONDS = 12.0
+
+# E8 break adjudication (accuracy plan §13.2): out of an armed rack the break
+# is a settle-time decision — WNT §5 makes the break untimed and starts the
+# 60 s window when the balls come to rest, so there is nothing to catch in
+# flight. A settle whose rearrangement is break-scale counts the break:
+#
+#   * with a ShotTaken fire since the rack armed — at ANY speed, including
+#     the sub-floor fires the IDLE gate eats (84 across 31 sessions; 15 of
+#     them needed a manual rescue press, with eaten fires measured from
+#     443 up to 13059 mm/s) — a moderate rearrangement floor suffices.
+#   * with no fire at all (the dark-flight class: motion that happens
+#     between track identities), only an overwhelming rearrangement would
+#     count — currently SHADOW-ONLY (`break_dark_candidate` journal mark,
+#     no clock action) because its one hazard is unmeasurable offline.
+#
+# The rearrangement floors are anchored to the 2026-08-06 corpus probe
+# (`rearrange2_probe.py`, quiet-anchored baselines): breaks involve 7-12
+# balls (7, 7, 8, 10, 12 across the well-founded runs), ordinary shots 1-2,
+# pickups 1, and racking/placement clips never settle at all — so 5 clears
+# every ordinary settle with the same margin it gives every measured break.
+# The named hazard this policy is measured against is the 2026-08-01
+# racking countdown (checkpoint 28). Corpus racking is event-silent, but
+# live sessions do log ~3 IDLE settles per session whose rearrangement was
+# never recorded — that unpriced population is why the dark tier stays
+# shadow, and every settle now journals its rearrangement so the next
+# session prices it. Worst case for the fired tier, pre-accepted in the
+# plan (§13.4): a spurious IDLE→MOTION during racking costs one SET UP
+# press, against 13-22 missed-break presses per 30 sessions today.
+BREAK_FIRED_MIN_INVOLVED = 5
+BREAK_DARK_MIN_INVOLVED = 8
+# A fire arms adjudication only for the settle of its own motion episode:
+# the longest measured fire→settle roll-out is 8.62 s (report.PHANTOM_LEAD_S;
+# the dark-flight break settles 7.8 s after its fire), so 15 s covers every
+# real break while refusing to let stale racking noise arm a much later
+# settle.
+BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
 
 # `detect_heartbeat` journal cadence: often enough to bracket a starvation
 # window (a flag-dump write measurably halved the detect rate for ~10 s —
@@ -113,6 +164,18 @@ class Hub:
         self._detect_frames = 0
         self._detect_last: tuple[float, float] | None = None  # (frame_t, mono when processed)
         self._heartbeat_prev: tuple[float, int] | None = None  # (mono, frames) at last line
+        # E9: the vision motion bit (note_motion, camera thread) and the two
+        # monotonic stamps its policies compare against — when the bit was
+        # last high, and when the clock last entered MOTION. Both feed the
+        # frozen-clock watchdog; the bit itself also holds GRACE open.
+        self._table_motion = False
+        self._motion_high_mono: float | None = None
+        self._motion_entered_mono: float | None = None
+        # E8: the newest ShotTaken that landed while the clock sat in IDLE —
+        # at any speed, before the break floor gate. (mono, speed_mms). The
+        # adjudicated settle reads it as its fired-tier evidence; operator
+        # commands that move the clock clear it.
+        self._idle_fire: tuple[float, float | None] | None = None
         # When the last shot was seen, monotonic — the instant replay's anchor
         # (`GET /api/replay_anchors`). Stamped for every ShotTaken the vision core
         # emits, *before* the kill switch / mode / break gates: those decide
@@ -217,15 +280,53 @@ class Hub:
     async def tick_loop(self) -> None:
         while True:
             now = time.monotonic()
-            snapshot = self.clock.tick(now)
+            snapshot = self.clock.tick(now, motion=self._table_motion)
             if snapshot.state != self._journal_state:
                 # GRACE/EXPIRED/auto-restart transitions happen inside tick.
                 self._log("tick_transition")
+            self._watch_frozen_clock(now)
             self._maybe_heartbeat(now)
             await self.broadcast(snapshot)
             await asyncio.sleep(BROADCAST_INTERVAL_SECONDS)
 
     # ---------- detect-loop telemetry (journal heartbeat) ----------
+
+    def note_motion(self, moving: bool) -> None:
+        """Camera-thread stamp: the vision layer's table-motion bit (§13.3).
+
+        Identity-free evidence, not an event: the pipeline computes it from
+        raw per-track speeds with none of the event layer's roster or rest
+        machinery, which is what lets it catch that machinery lying. Same
+        threading contract as :meth:`note_frame` — attribute rebinding only.
+        """
+        self._table_motion = moving
+        if moving:
+            self._motion_high_mono = time.monotonic()
+
+    def _watch_frozen_clock(self, now: float) -> None:
+        """E9: synthesize the settle a frozen MOTION clock is waiting for.
+
+        MOTION with the motion bit low for `FROZEN_WATCHDOG_SECONDS` means
+        the vision layer latched a shot (real or phantom) and lost the
+        settle: nothing is moving, and without help the clock stays frozen
+        until an operator key rescues it (14 of those over 30 sessions).
+        The synthesized settle rides the normal compensation path — a shot
+        with no strike still gets counted — and journals its own kind so
+        triage sees the underlying miss rather than a clean settle.
+        """
+        if self.clock.state is not State.MOTION:
+            self._motion_entered_mono = None
+            return
+        if self._motion_entered_mono is None:
+            self._motion_entered_mono = now
+        anchor = self._motion_entered_mono
+        if self._motion_high_mono is not None:
+            anchor = max(anchor, self._motion_high_mono)
+        if self._table_motion or now - anchor < FROZEN_WATCHDOG_SECONDS:
+            return
+        self.clock.balls_settled(now)
+        self._log("settle_synthesized", quiet_s=round(now - anchor, 2))
+        self._motion_entered_mono = None
 
     def note_frame(self, frame_t: float) -> None:
         """Camera-thread stamp: one detect frame processed, captured at ``frame_t``.
@@ -270,22 +371,26 @@ class Hub:
 
     async def start(self) -> None:
         self.clock.start(time.monotonic())
+        self._idle_fire = None
         self._log("cmd_start")
         await self.broadcast(self.clock.snapshot())
 
     async def pause(self) -> None:
         self.clock.pause()
+        self._idle_fire = None
         self._log("cmd_pause")
         await self.broadcast(self.clock.snapshot())
 
     async def reset(self) -> None:
         self.clock.reset()
+        self._idle_fire = None
         self._log("cmd_reset")
         await self.broadcast(self.clock.snapshot())
 
     async def new_rack(self) -> None:
         now = time.monotonic()
         self.clock.new_rack(now)
+        self._idle_fire = None
         # SET UP *arms* the next shot to become the replay anchor; it does not
         # retire the old one. Until the break lands there is nothing on the
         # table to watch, so the rack worth replaying is still the one that
@@ -296,11 +401,13 @@ class Hub:
 
     async def restart(self) -> None:
         self.clock.restart(time.monotonic())
+        self._idle_fire = None
         self._log("cmd_restart")
         await self.broadcast(self.clock.snapshot())
 
     async def push(self) -> None:
         self.clock.push(time.monotonic())
+        self._idle_fire = None
         self._log("cmd_push")
         await self.broadcast(self.clock.snapshot())
 
@@ -329,6 +436,7 @@ class Hub:
         except KeyError:
             return False
         self.clock.set_ruleset(ruleset)
+        self._idle_fire = None
         self._log("cmd_ruleset", ruleset=self.clock.ruleset.name)
         await self.broadcast(self.clock.snapshot())
         return True
@@ -345,6 +453,7 @@ class Hub:
         except KeyError:
             return False
         self.clock.set_mode(mode)
+        self._idle_fire = None
         self._log("cmd_mode", mode=self.clock.mode.name)
         await self.broadcast(self.clock.snapshot())
         return True
@@ -394,6 +503,14 @@ class Hub:
             self._log("vision_shot_taken_no_clock", **detail)
             return  # no_clock mode: still journaled as evidence, never clocked
         floor = self.clock.mode.break_floor_mms
+        if self.clock.state is State.IDLE:
+            # E8 evidence, stamped before the floor gate: whatever the gate
+            # decides, a fire happened out of IDLE, and the settle that
+            # follows may adjudicate it as the break (`balls_settled`).
+            # In-flight tracks under-read speed 2-4x, so the fires the floor
+            # eats are mostly real breaks — 15 of the 84 eaten fires on
+            # record needed a manual rescue press.
+            self._idle_fire = (time.monotonic(), speed_mms)
         if (
             self.clock.state is State.IDLE
             and floor is not None
@@ -408,16 +525,93 @@ class Hub:
         self._log("vision_shot_taken", **detail)
         await self.broadcast(self.clock.snapshot())
 
-    async def balls_settled(self, t: float | None = None) -> None:
+    async def balls_settled(
+        self,
+        t: float | None = None,
+        rearrange: "RearrangeSummary | None" = None,
+        backstop: bool = False,
+    ) -> None:
+        detail: dict[str, object] = {"t": t, "frame_t": t}
+        if backstop:
+            # The pipeline's quiet-rearrangement backstop emitted this settle
+            # because the event engine slept through the whole episode
+            # (flag_missed_4: a 15-ball break, zero engine events). Marked so
+            # triage and `report` see the engine's miss, not a clean settle.
+            detail["backstop"] = True
+        if rearrange is not None:
+            detail["involved"] = rearrange.involved
+            detail["moved"] = rearrange.moved
+            detail["appeared"] = rearrange.appeared
+            detail["vanished"] = rearrange.vanished
+            detail["moved_mm"] = round(rearrange.moved_mm)
         if not self.vision_enabled:
-            self._log("vision_balls_settled_killed", t=t, frame_t=t)
+            self._log("vision_balls_settled_killed", **detail)
             return  # kill switch, as above
         if not self.clock.mode.clock_live:
-            self._log("vision_balls_settled_no_clock", t=t, frame_t=t)
+            self._log("vision_balls_settled_no_clock", **detail)
             return  # journaled, not clocked — as above
-        self.clock.balls_settled(time.monotonic())
-        self._log("vision_balls_settled", t=t, frame_t=t)
+        now = time.monotonic()
+        if self._adjudicate_break(now, rearrange):
+            # E8: an armed rack's settle with break-scale rearrangement IS
+            # the break (WNT §5 starts the 60 s window at the rest, so
+            # nothing was ever lost by deciding here). Count the shot, then
+            # let the settle below start the first-shot window.
+            self.clock.shot_taken()
+            if self._rack_pending or self._rack_break_mono is None:
+                self._rack_break_mono = now  # replay anchor, as in shot_taken
+                self._rack_pending = False
+        self.clock.balls_settled(now)
+        self._log("vision_balls_settled", **detail)
         await self.broadcast(self.clock.snapshot())
+
+    def _adjudicate_break(self, now: float, rearrange: "RearrangeSummary | None") -> bool:
+        """E8 (§13.2): should this IDLE settle be counted as the break?
+
+        Policy, not detection: the event layer emits whatever fires it can
+        honestly confirm, and this is the one place that decides what an
+        armed rack's settle means. Two tiers, both anchored to the corpus
+        rearrangement probe (constants above): a fire of *any* speed since
+        the rack armed plus a moderate scatter, or — for the dark-flight
+        class, where the whole break happens between track identities — an
+        overwhelming scatter alone. Racking placements settle 1-3 balls at
+        a time and never arm a fire faster than 15 s before their settle,
+        so the 2026-08-01 racking-countdown hazard fails both tiers.
+        """
+        if self.clock.state is not State.IDLE:
+            return False
+        if not (self.clock.mode.rack_scoped and self.clock.rack_shots == 0):
+            return False  # only an armed rack has a break to adjudicate
+        if rearrange is None:
+            return False
+        fired = (
+            self._idle_fire is not None
+            and now - self._idle_fire[0] <= BREAK_FIRE_SETTLE_MAX_SECONDS
+        )
+        if fired and rearrange.involved >= BREAK_FIRED_MIN_INVOLVED:
+            speed = self._idle_fire[1] if self._idle_fire is not None else None
+            self._log(
+                "break_adjudicated",
+                tier="fired",
+                involved=rearrange.involved,
+                moved_mm=round(rearrange.moved_mm),
+                fire_speed=round(speed) if speed is not None else None,
+            )
+            self._idle_fire = None
+            return True
+        if not fired and rearrange.involved >= BREAK_DARK_MIN_INVOLVED:
+            # Shadow only (E5's philosophy, §13.3): the no-fire tier's one
+            # unmeasured hazard is a racking settle — the pack resolving from
+            # a merged blob into singles is appear-heavy exactly like a break,
+            # and the corpus cannot price it because corpus racking never
+            # settles at all. The journal mark makes the next few sessions
+            # the measurement; flip it live when racking settles prove to
+            # stay under the floor.
+            self._log(
+                "break_dark_candidate",
+                involved=rearrange.involved,
+                moved_mm=round(rearrange.moved_mm),
+            )
+        return False
 
     async def scratch_seen(self, t: float | None = None) -> None:
         # No clock action in v1 (CHANGELOG decision) — journal only.

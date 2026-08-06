@@ -99,6 +99,13 @@ SCRATCH_KIND = "vision_scratch"
 FLAG_KIND = "flag_dump"
 HEARTBEAT_KIND = "detect_heartbeat"
 SUMMARY_KIND = "session_summary"
+# E8/E9 hub-policy marks (2026-08-06, accuracy plan §13.2/§13.3). The break
+# class joined this report the day the hub learned to adjudicate it, so the
+# instrument can never again be blind to the head of the Pareto (a missed
+# break in IDLE never confessed — §13.0).
+BREAK_ADJUDICATED_KIND = "break_adjudicated"
+BREAK_DARK_CANDIDATE_KIND = "break_dark_candidate"
+SETTLE_SYNTHESIZED_KIND = "settle_synthesized"
 
 # Emitted-then-gated shots. "Vision saw it, the clock declined it" is a
 # different bug from "vision never saw it", and only the second is a miss.
@@ -233,6 +240,18 @@ class SessionReport:
     gated: dict[str, int] = field(default_factory=dict)
     hz: list[float] = field(default_factory=list)
     torn_lines: int = 0
+    # The break class (§13.0's Pareto head), visible at last. Auto-caught =
+    # the hub adjudicated an armed rack's settle as the break; manual = a
+    # restart press had to count it (rack_shots jumped 0→1 on the command);
+    # dark candidates = shadow marks from the no-fire tier, the measurement
+    # that decides whether it goes live.
+    breaks_adjudicated: int = 0
+    break_presses: int = 0
+    dark_candidates: int = 0
+    # E9's watchdog confessions: settles the hub synthesized because MOTION
+    # sat motion-free past the watchdog. Counted inside `shots` (the clock
+    # acted on them) and surfaced separately here.
+    settles_synthesized: int = 0
     # Freezes an operator key had to rescue, because no settle ever released
     # them. Not `Shot`s and not in `total`: a shot here is a settle, and these
     # never reached one. See `left_frozen` in the module docstring for why the
@@ -297,6 +316,7 @@ def build(path: Path) -> SessionReport:
     freeze_open_t: float | None = None  # the strike that opened it
     last_settle_t: float | None = None  # previous settle the clock acted on
     last_hz: float | None = None
+    adjudicated_pending = False  # break_adjudicated seen; the next settle is a caught break
 
     for line in path.read_text().splitlines():
         line = line.strip()
@@ -325,6 +345,12 @@ def build(path: Path) -> SessionReport:
                 freeze_open_t = shot_t
             pending_shot_t = shot_t
         elif isinstance(kind, str) and kind.startswith(COMMAND_PREFIX):
+            if kind == "cmd_restart" and rack == 1 and prev_rack == 0:
+                # Restart with no shot counted this rack counts the break
+                # (`ShotClock.restart`) — this press IS the manual rescue of
+                # a missed break, the failure class `report` was blind to
+                # until 2026-08-06 (§13.0).
+                report.break_presses += 1
             if pending_shot_t is not None and record.get("state") != "MOTION":
                 # A command is journaled *after* the clock has answered it, so
                 # a non-MOTION state here means this key took the clock out of
@@ -335,20 +361,31 @@ def build(path: Path) -> SessionReport:
             report.scratches += 1
         elif kind == FLAG_KIND:
             report.flags += 1
+        elif kind == BREAK_ADJUDICATED_KIND:
+            report.breaks_adjudicated += 1
+            adjudicated_pending = True
+        elif kind == BREAK_DARK_CANDIDATE_KIND:
+            report.dark_candidates += 1
         elif isinstance(kind, str) and kind in GATED_SHOT_KINDS:
             label = GATED_SHOT_KINDS[kind]
             report.gated[label] = report.gated.get(label, 0) + 1
-        elif kind == SETTLE_KIND:
+        elif kind in (SETTLE_KIND, SETTLE_SYNTHESIZED_KIND):
             if record.get("state") == "IDLE":
                 # Racking motion: `balls_settled` returned early, so the clock
                 # never counted it and it is not a shot.
                 report.racking_settles += 1
+                adjudicated_pending = False
             else:
+                if kind == SETTLE_SYNTHESIZED_KIND:
+                    report.settles_synthesized += 1
                 settle_t = _number(record, "frame_t") or _number(record, "t")
                 # The engine bumped the count at the settle ⇒ no strike was
                 # seen. The first record of a session has nothing to compare
-                # against, so it is credited as seen.
-                seen = prev_rack is None or rack is None or rack <= prev_rack
+                # against, so it is credited as seen. A settle the hub just
+                # adjudicated as the break bumps the count too, but by being
+                # *caught*, not confessed — that is the opposite of a miss.
+                seen = adjudicated_pending or prev_rack is None or rack is None or rack <= prev_rack
+                adjudicated_pending = False
                 gap = (
                     settle_t - pending_shot_t
                     if seen and settle_t is not None and pending_shot_t is not None
@@ -409,6 +446,10 @@ def summary_detail(report: SessionReport) -> dict[str, object]:
         "left_frozen": report.left_frozen,
         "scratches": report.scratches,
         "flags": report.flags,
+        "breaks_adjudicated": report.breaks_adjudicated,
+        "break_presses": report.break_presses,
+        "dark_candidates": report.dark_candidates,
+        "settles_synthesized": report.settles_synthesized,
     }
 
 
@@ -481,6 +522,21 @@ def format_session(report: SessionReport) -> str:
         out.append(f"    {report.left_frozen} left frozen, rescued by an operator key")
         out.append("        — or SET UP pressed over a live roll-out; can't tell from here")
     out.append("")
+    if report.breaks_adjudicated or report.break_presses or report.dark_candidates:
+        out.append(
+            f"  breaks             {report.breaks_adjudicated} auto-caught / "
+            f"{report.break_presses} rescued by press"
+            + (
+                f"   ({report.dark_candidates} dark candidates, shadow)"
+                if report.dark_candidates
+                else ""
+            )
+        )
+    if report.settles_synthesized:
+        out.append(
+            f"  settles synthesized {report.settles_synthesized}   "
+            "(frozen-clock watchdog; the underlying miss is counted above)"
+        )
     out.append(f"  scratches          {report.scratches}")
     if report.total:
         out.append(
@@ -552,4 +608,16 @@ def format_rollup(reports: list[SessionReport]) -> str:
         )
     if scratches:
         out.append(f"  scratches          {scratches}   (1 per {shots / scratches:.0f} shots)")
+    adjudicated = sum(r.breaks_adjudicated for r in played)
+    presses = sum(r.break_presses for r in played)
+    dark = sum(r.dark_candidates for r in played)
+    if adjudicated or presses or dark:
+        out.append("")
+        out.append(
+            f"  breaks             {adjudicated} auto-caught / {presses} rescued by press"
+            + (f"   ({dark} dark candidates, shadow)" if dark else "")
+        )
+    synthesized = sum(r.settles_synthesized for r in played)
+    if synthesized:
+        out.append(f"  settles synthesized {synthesized}   (frozen-clock watchdog)")
     return "\n".join(out)

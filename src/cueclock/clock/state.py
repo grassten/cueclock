@@ -262,8 +262,19 @@ class ShotClock:
 
     # ---------- time ----------
 
-    def tick(self, now: float) -> Snapshot:
-        """Advance to ``now``; returns the broadcast payload."""
+    def tick(self, now: float, motion: bool = False) -> Snapshot:
+        """Advance to ``now``; returns the broadcast payload.
+
+        ``motion`` is the vision layer's identity-free table-motion bit
+        (accuracy plan §13.3). Its one power is refusing the GRACE→EXPIRED
+        transition: a buzzer through live ball flight is a false foul — the
+        worst felt failure, 2 in 30 sessions — while a false ``motion`` only
+        delays the buzzer by however long the flicker lasts. So while it is
+        set, the grace window holds at full; the settle that follows rescues
+        the shot through the existing compensation in :meth:`balls_settled`.
+        It deliberately cannot stop RUNNING from reaching zero (a countdown
+        that pauses whenever something rolls is a different, wrong clock).
+        """
         dt = now - self._last_tick
         self._last_tick = now
 
@@ -283,7 +294,13 @@ class ShotClock:
                 self.state = State.GRACE
                 self._grace_left = self.ruleset.grace_seconds
         elif self.state is State.GRACE:
-            self._grace_left -= dt
+            if motion:
+                # Balls are moving: the missed strike's settle is coming.
+                # Re-arm rather than merely pause so the buzzer always gets a
+                # full, motion-free grace window before it sounds.
+                self._grace_left = self.ruleset.grace_seconds
+            else:
+                self._grace_left -= dt
             if self._grace_left <= 0.0:
                 self.state = State.EXPIRED
                 self._expired_for = 0.0

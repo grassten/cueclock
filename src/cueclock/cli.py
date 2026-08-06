@@ -348,6 +348,7 @@ def _cmd_calibrate(args: argparse.Namespace) -> int:
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
     from cueclock.vision.calibration import TableCalibration
+    from cueclock.vision.events import BallsSettled
     from cueclock.vision.pipeline import VisionPipeline
 
     cal_path = Path(args.calibration)
@@ -414,7 +415,17 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         t = t_offset + float(reader.timestamps[i])
         for event in pipeline.process(t, reader.frame(i)):
             n_events += 1
-            print(f"{t:7.3f}s  {type(event).__name__}")
+            extra = ""
+            if isinstance(event, BallsSettled) and pipeline.last_settle_rearrange is not None:
+                s = pipeline.last_settle_rearrange
+                extra = (
+                    f"  [rearrange: involved {s.involved} "
+                    f"(moved {s.moved} / appeared {s.appeared} / vanished {s.vanished}) "
+                    f"{s.moved_mm:.0f} mm]"
+                )
+                if pipeline.last_settle_backstop:
+                    extra += "  [BACKSTOP — the engine slept through this episode]"
+            print(f"{t:7.3f}s  {type(event).__name__}{extra}")
         if args.verbose and t >= next_status:
             next_status = t + 1.0
             cue = next((b for b in pipeline.last_balls if b.is_cue), None)
@@ -652,7 +663,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 t, ball_id=event.ball_id, speed_mms=event.speed_mms, newborn=event.newborn
             )
         elif isinstance(event, BallsSettled):
-            coro = hub.balls_settled(t)
+            # The rearrangement summary set by the same process() call that
+            # emitted this settle — the hub's E8 break-adjudication evidence.
+            coro = hub.balls_settled(
+                t,
+                rearrange=vision.last_settle_rearrange,
+                backstop=vision.last_settle_backstop,
+            )
         else:
             # Scratch: journaled only — no clock action in v1 (CHANGELOG.md decision)
             coro = hub.scratch_seen(t)
@@ -721,6 +738,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                 # Detect-loop heartbeat stamp (attribute-only;
                                 # the Hub's tick loop journals it every ~5 s).
                                 hub.note_frame(t)
+                                # E9 motion bit — same attribute-only contract.
+                                hub.note_motion(vision.last_motion)
                                 if ring_capacity > 0 and t >= next_snap_t:
                                     # Warm-replay snapshot (~1 Hz in camera
                                     # time — see STATE_SNAPSHOT_PERIOD_S).

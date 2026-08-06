@@ -1,0 +1,10 @@
+{
+  "scenario": "break_dark_total_0806",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "BallsSettled",
+      "t": 18.5104
+    }
+  ]
+}

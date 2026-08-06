@@ -478,3 +478,43 @@ def test_next_mode_cycles_and_wraps() -> None:
         seen.append(next_mode(seen[-1]))
     assert seen == ["match", "run_out", "no_clock", "match"]
     assert next_mode("garbage") == "match"
+
+
+def test_grace_holds_while_table_motion_then_expires_clean() -> None:
+    """E9 expiry hold (accuracy plan §13.3): no buzzer through live flight.
+
+    A missed strike lets the countdown run to zero mid-shot; the false foul
+    at the end of GRACE was the worst felt failure on record (2 of 30
+    sessions, and live on 2026-08-06 19:20 the clock reached EXPIRED through
+    a real roll-out — flag_missed_6). While the vision motion bit is set the
+    grace window re-arms to full, so the buzzer only ever sounds after a
+    complete, motion-free grace period. RUNNING is deliberately unaffected:
+    a countdown that pauses whenever something rolls is a different clock.
+    """
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.tick(31.0)  # zero crossed -> GRACE
+    assert clock.state is State.GRACE
+    grace = clock.ruleset.grace_seconds
+    # Motion holds it open far past the grace window (10 Hz tick cadence)...
+    t = 31.0
+    for _ in range(int(20 * grace * 10)):
+        t += 0.1
+        clock.tick(t, motion=True)
+    assert clock.state is State.GRACE
+    # ...and once motion clears, expiry needs one full quiet grace window,
+    # counted from the last moving tick — not the remnant of the old one.
+    quiet_start = t
+    while clock.state is State.GRACE:
+        t += 0.1
+        clock.tick(t, motion=False)
+    assert clock.state is State.EXPIRED
+    assert t - quiet_start >= grace
+
+
+def test_running_still_reaches_zero_during_motion() -> None:
+    # The hold is GRACE-scoped: motion must not freeze the countdown itself.
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.tick(31.0, motion=True)
+    assert clock.state is State.GRACE

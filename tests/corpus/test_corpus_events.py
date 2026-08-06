@@ -460,6 +460,19 @@ EXPECTED: dict[
     # (twelve discriminators measured, all failed — accuracy plan
     # 2026-08-06).
     "break_dark_flight_0806": (1, 0, 1, 1),
+    # The fully dark break (flag_missed_4, 2026-08-06 18:08Z; Steven's ground
+    # truth: a full-power break off a fresh 15-ball rack, whole flight
+    # in-ring at ~70 Hz). Cold, the racked pack never confirms a single track
+    # — one confirmed ball on the whole pre-break table — so when the scatter
+    # erupts into 12-18 fast newborns, none has roster tenure and the engine
+    # never latches motion: zero events, warm and cold. Ground truth is ONE
+    # shot; `shots` stays unasserted (not 0 — that would canonize the miss)
+    # until the strike class is solved at the tracker layer (accuracy plan
+    # §13.6). What IS pinned: exactly one settle — the pipeline's
+    # quiet-rearrangement backstop, the identity-free layer that certifies
+    # "the quiet layout is not the layout that was quiet before" when every
+    # track-level channel slept. The named backstop test pins its mechanism.
+    "break_dark_total_0806": (None, 0, 1, 1),
     # A soft-medium positional shot (~450 mm/s roll, 560 mm) missed live.
     # The cue emerged from a long address occlusion as a stick-merge split
     # whose centroid reads slow — first honest raw at age 0.179, debounced
@@ -530,6 +543,7 @@ REFERENCES: dict[str, str] = {
     "break_dark_flight_0806": "empty_table_0801",
     "occluded_roll_0806": "empty_table_0801",
     "cluster_rest_shot_0806": "empty_table_0801",
+    "break_dark_total_0806": "empty_table_0801",
 }
 
 
@@ -919,3 +933,44 @@ def test_parked_vote_newborn_confirms_on_travel_not_speed() -> None:
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the parked-vote birth miss is back"
     assert 11.31 <= shots[0] <= 11.8, f"shot at {shots[0]:.2f}s — parked confirm tiers broken"
+
+
+def test_break_dark_total_settles_via_the_backstop() -> None:
+    """The identity-free settle backstop must certify the fully dark break.
+
+    break_dark_total_0806: a 15-ball break whose every channel slept — the
+    racked pack never confirms a track cold (one confirmed ball on the whole
+    pre-break table), the scatter erupts as rosterless newborns, the engine
+    never latches motion, and live the session emitted nothing between the
+    SET UP press and Steven's flag. The backstop is the layer that cannot be
+    fooled by identity, because it uses none: the quiet layout after the
+    scatter (11 present balls) is provably not the quiet layout before it
+    (1), and that difference IS the settle.
+
+    Pins: exactly one settle, emitted by the backstop (not the engine), with
+    break-scale rearrangement. If the engine ever starts settling this clip
+    itself, the backstop assertion goes red — deliberately: that flip is
+    tracker-layer news (accuracy plan §13.6) and the pin should be retired
+    at that checkpoint, not silently absorbed.
+    """
+    name = "break_dark_total_0806"
+    if not (CLIPS / name).exists():
+        pytest.skip(f"clip {name} not recorded")
+    from cueclock.capture.clip import ClipReader
+    from cueclock.vision.pipeline import VisionPipeline
+
+    pipeline = VisionPipeline(_calibration(), _reference_model("empty_table_0801"))
+    reader = ClipReader(CLIPS / name)
+    indices = reader.detect_indices()
+    frames = _detections(reader, CLIPS / name, pipeline, indices)
+    settles: list[tuple[float, bool, int]] = []
+    for i, (detections, churn) in zip(indices, frames, strict=True):
+        for event in pipeline.advance(float(reader.timestamps[i]), detections, churn):
+            if isinstance(event, BallsSettled):
+                summary = pipeline.last_settle_rearrange
+                involved = summary.involved if summary is not None else 0
+                settles.append((event.t, pipeline.last_settle_backstop, involved))
+    assert len(settles) == 1, f"expected the one backstop settle, got {settles}"
+    _t, backstop, involved = settles[0]
+    assert backstop, "the engine settled this itself — tracker news, retire this pin deliberately"
+    assert involved >= 8, f"backstop fired at involved {involved} — not break-scale evidence"
