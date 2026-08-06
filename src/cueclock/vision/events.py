@@ -231,6 +231,20 @@ class EventConfig:
     # break in the corpus — 1.14 (break_underread_0801), 1.16 (the live
     # break), 1.18 (break_0801) — so 1.5 keeps ~27% headroom over the worst.
     handoff_reach_margin: float = 1.5
+    # Flag-switch re-qualification vs the table-motion latch (checkpoint 74).
+    # A hard stroke's departing cue can itself latch _table_moving before its
+    # track dies (power_shot: 44 mm observed yank), and the latch then blocks
+    # the very continuation it certifies — circular. The physics that breaks
+    # the circle: after the ~1 ms tip contact only friction acts, so a struck
+    # ball CANNOT re-appear faster than its departure was last measured; a
+    # carried ball can, because the hand keeps accelerating it. Measured:
+    # power_shot re-appears at 1.03x its old track's max observed raw
+    # (5854 vs 5698), the pickup_snatch_0801 carry at 2.37x (5506 vs 2327).
+    # 1.5 is the geometric middle. Applied ONLY when the latch is up — the
+    # latch doubles as the certificate that the departure's speed was
+    # measured from real observed displacement (break_0801's 21 mm remnant
+    # yank never latches, and its under-read 2068 never faces this test).
+    handoff_speed_gain_max: float = 1.5
     # The candidate's trajectory axis is seeded from the cue's displacement
     # off its rest spot at open time. On the impulse's first frame that vector
     # is not motion evidence: filter lag and the stick merging into the blob
@@ -524,9 +538,12 @@ class _StrikeCandidate:
 
 @dataclass
 class _BallHistory:
-    # (t, x, y, observed, merged) — observed=False rows are coasted
-    # extrapolations; merged marks oversized-blob observations
-    positions: deque[tuple[float, float, float, bool, bool]] = field(default_factory=deque)
+    # (t, x, y, observed, merged, raw_mms) — observed=False rows are coasted
+    # extrapolations; merged marks oversized-blob observations; raw_mms is the
+    # one-step raw speed, kept because filtered positions absorb only ~30% of
+    # a departure step and cannot reconstruct how fast a dying track was last
+    # *measured* going (the flag-switch re-qualification needs exactly that)
+    positions: deque[tuple[float, float, float, bool, bool, float]] = field(default_factory=deque)
 
 
 class EventEngine:
@@ -721,11 +738,29 @@ class EventEngine:
             # own target can read far low on a handoff strike: the 2026-08-01
             # gated break advanced on the old track's remnant (2072 mm/s peak)
             # while the reborn cue measurably flew 5300-5500.
-            fast = [
-                b.speed_mms if b.raw_speed_mms is None else b.raw_speed_mms
-                for b in balls
-                if b.observed
-            ]
+            # A one-step raw speed is the difference of two centroids, so a
+            # single corrupt centroid (stick/shadow merged into the blob,
+            # association jitter) fakes exactly one spike — real fast travel
+            # sustains across steps. Each ball contributes min(current raw,
+            # its previous observed raw): the gated break's reborn cue reads
+            # 5300-5500 on consecutive steps and passes untouched, while the
+            # merged yanks that were being reported as the shot's speed
+            # (late_emergence_strike_0805: a 3687 spike between 1195 and 551,
+            # published as golden 3888.8; address_chatter_miss_0801: 8152 on
+            # a 1409 mm/s shot) never repeat and are suppressed.
+            fast = []
+            for b in balls:
+                if not b.observed:
+                    continue
+                cur = b.speed_mms if b.raw_speed_mms is None else b.raw_speed_mms
+                hist = self._history.get(b.ball_id)
+                prev = (
+                    None
+                    if hist is None
+                    else next((p[5] for p in reversed(hist.positions) if p[3]), None)
+                )
+                if prev is not None:
+                    fast.append(min(cur, prev))
             if fast:
                 self._candidate.impulse_raw = max(self._candidate.impulse_raw, max(fast))
         # A parked-vote candidate is the weakest claim the engine can hold and
@@ -793,7 +828,19 @@ class EventEngine:
                     if old_hist is None
                     else next((p[0] for p in reversed(old_hist.positions) if p[3]), None)
                 )
-                if raw >= cfg.strike_impulse_mms and last_obs_old is not None:
+                # The old holder's own departure can latch _table_moving,
+                # which would block its continuation inside the handoff —
+                # circular, the departure IS the strike evidence. When the
+                # latch is up, the physics test stands in for it: a struck
+                # ball cannot re-appear faster than its departure was last
+                # measured (see handoff_speed_gain_max).
+                quiet_enough = not self._table_moving
+                if not quiet_enough and old_hist is not None:
+                    old_raws = [p[5] for p in old_hist.positions if p[3]]
+                    quiet_enough = bool(old_raws) and raw <= (
+                        max(old_raws[-4:]) * cfg.handoff_speed_gain_max
+                    )
+                if raw >= cfg.strike_impulse_mms and last_obs_old is not None and quiet_enough:
                     self._maybe_open_handoff(t, cue, raw, last_obs_t=last_obs_old)
             elif self._candidate is not None:
                 events.extend(self._advance_candidate(t, cue))
@@ -914,7 +961,16 @@ class EventEngine:
         # ---- table moving / settled (per-ball displacement over windows) ----
         for ball in balls:
             history = self._history.setdefault(ball.ball_id, _BallHistory())
-            history.positions.append((t, ball.x_mm, ball.y_mm, ball.observed, ball.merged))
+            history.positions.append(
+                (
+                    t,
+                    ball.x_mm,
+                    ball.y_mm,
+                    ball.observed,
+                    ball.merged,
+                    ball.speed_mms if ball.raw_speed_mms is None else ball.raw_speed_mms,
+                )
+            )
             while history.positions and history.positions[0][0] < t - cfg.settle_creep_window_s:
                 history.positions.popleft()
             self._last_translate.setdefault(ball.ball_id, t)
@@ -1183,6 +1239,15 @@ class EventEngine:
             # just-axis-killed candidate is the exception — the tug that
             # opened it already burned the still-stamp window (see
             # _axis_killed_t) and the honest impulse arrives right behind.
+            #
+            # MEASURED AND REVERTED (2026-08-06): parking these fallback
+            # opens when the still-story is stale — to send the crowned
+            # ball-in-hand roll of parked_vote_strike_0801 to the travel
+            # confirm — costs two real strikes outright (lone_roller_0801,
+            # occluded_address_0731: rolls under 600 mm) and delays two more
+            # by 0.33-0.45 s. A stale still-story is the occluded-address
+            # class's defining feature, not a placement signature; do not
+            # re-propose staleness as the separator.
             self._maybe_open_newborn(t, cue, raw)
             return
         if self._open_from_rest(t, cue, raw, self._cue_rest, follow_ball=False) == "too_far":
@@ -1336,10 +1401,14 @@ class EventEngine:
             return
         if self._newborn_disarmed_at is not None:
             return
-        if self._table_moving:
+        if self._table_moving and last_obs_t is None:
             # Same latch guard as the other two scan paths: mid-scatter, a
             # reborn ball's impulse near the cue's stale rest is a carom or
-            # streak churn, not a strike.
+            # streak churn, not a strike. In re-qualify mode the caller has
+            # already applied the departure-speed physics test that stands in
+            # for this latch (handoff_speed_gain_max) — the latch there is
+            # usually the old holder's own departure, and the carom guard
+            # below still refuses any OTHER mover that reached the rest.
             return
         # Ramp, not a step — but measured from the last moment the cue was
         # *visible*, not from a still-stamp that stopped advancing precisely
@@ -1402,7 +1471,14 @@ class EventEngine:
         dark = arrival - obs_t
         reach = cfg.strike_handoff_radius_mm
         if dark <= cfg.strike_step_max_s:
-            reach = max(reach, raw * dark * cfg.handoff_reach_margin)
+            # Eligibility is the TRUE occlusion length (birth-anchored in
+            # re-qualify mode), but the travel budget must cover the ball's
+            # motion through the frame actually being evaluated — in
+            # re-qualify mode that is 1-2 debounce frames after the birth,
+            # and a 5854 mm/s power shot covers another 74 mm in them
+            # (power_shot: 411 mm from the rest at the kill frame against a
+            # birth-anchored budget of 334).
+            reach = max(reach, raw * (t - obs_t) * cfg.handoff_reach_margin)
         opened = self._open_from_rest(
             t, ball, raw, self._cue_rest, follow_ball=True, reach_mm=reach
         )
@@ -1617,19 +1693,16 @@ class EventEngine:
             self._candidate = None  # impulse without follow-through: not a shot
             return []
         raw = cue.speed_mms if cue.raw_speed_mms is None else cue.raw_speed_mms
-        if (
-            candidate.parked
-            and cue.is_cue
-            and self._cue_id_streak >= self._cfg.cue_id_debounce_frames
-        ):
-            # The vote's corroboration arrived mid-confirm: the candidate's
-            # own ball now holds the debounced cue flag, so the reason it was
-            # parked — "the vote does not corroborate this ball" — is gone,
-            # and it earns back the ordinary confirm. A streak-frozen
-            # whiteness cannot fake this (the flag needs the floor and the
-            # switch margin), and a stick/hand blob never clears the 0.50
-            # floor at all.
-            candidate.parked = False
+        # NOTE (2026-08-06): an un-park-on-crowning rule was built here —
+        # "the candidate's ball won the debounced vote mid-confirm, so the
+        # parked state's premise is gone" — and measured to have ZERO
+        # dependents: the battery is byte-identical with and without it,
+        # because every crowned emergence in the corpus is crowned BEFORE its
+        # candidate opens (the annulus votes in 1-2 frames) and so never
+        # opens parked. Worse, identity is not strike evidence: the one thing
+        # the rule would have un-parked live is a crowned ball-in-hand
+        # placement roll (parked_vote_strike_0801, 256 mm of travel), whose
+        # refusal is the travel confirm the un-park would bypass. Removed.
         if candidate.newborn:
             # Carried-ball gates (measured on scratch_replace): a hand-carried
             # cue's raw speed is erratic between adjacent frames while a

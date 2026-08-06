@@ -8,10 +8,10 @@
     },
     {
       "type": "ShotTaken",
-      "t": 10.3177,
-      "ball_id": 3,
-      "speed_mms": 1409.6901,
-      "newborn": true
+      "t": 10.1897,
+      "ball_id": 4,
+      "speed_mms": 8152.5844,
+      "newborn": false
     },
     {
       "type": "BallsSettled",
