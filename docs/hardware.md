@@ -101,12 +101,18 @@ locally via **Syphon** — a GPU texture handoff, not streaming.
 ```
 grab thread (BayerRG8 @ 156 fps)
   ├─ detection path (every 2nd frame ≈ 78 Hz, distorted pixels)
-  └─ display branch @ ~30 fps:
+  └─ display branch @ ~60 fps (own thread — DisplayWorker):
        debayer (COLOR_BayerBG2BGR_EA, 0.22 ms)
        → cv2.remap undistort (rails-fit map, ~2 ms)
        → Syphon publish (Metal texture)
   ⇒ OBS "Syphon Client" source → scenes → Fullscreen Projector on the TV
 ```
+
+- **The display branch runs on its own thread** (`DisplayWorker`,
+  `display/syphon_out.py`) since 2026-08-07: the grab loop only hands over a
+  copy of the Bayer frame (~0.3 ms). Published inline, the 60 fps branch cost
+  the detect loop a third of its cadence (77 → 51 Hz). 30 fps was cheap
+  enough to hide the same cost; 60 was not.
 
 - **Quality debayer belongs here, not in detection**: edge-aware (`_EA`) is
   effectively free at display rate; VNG is slower *and* not better in OpenCV.
@@ -146,19 +152,23 @@ grab thread (BayerRG8 @ 156 fps)
 - Syphon Client — the overhead table feed.
 - Video Capture Device → **Camo Camera** — the iPhone side angle over USB,
   owned by OBS directly (Camo Studio on the mini + the Camo app on the phone,
-  manual focus/exposure/WB locks). It replaced the wireless **iPhone
+  manual focus/exposure/WB locks; 1080p60 in Camo Studio since 2026-08-07 —
+  the 60 fps ceiling, Camo's 4K formats are 30 fps). It replaced the wireless **iPhone
   Continuity Camera** source on 2026-08-01: Continuity looked washed out with
   blotching (iPhone auto tone-mapping/AF, no manual controls) and it died
   mid-session once without reconnecting, which cost two triage passes chasing
   a vision bug that wasn't one (CHANGELOG 2026-08-01).
 - Browser source `http://localhost:8000/shotclock?view=bar` — **the bar**: one
-  transparent **1334×1080** source at (0, 0) carrying the clock *and* the
-  scoreboard, drawn as a 160 px plinth along the bottom of the side-angle
-  column with the clock in its right-hand cell (issue #23, 2026-08-03). Enable
+  transparent **2668×2160** source at (0, 0) carrying the clock *and* the
+  scoreboard, drawn as a plinth (160 px in the page's 1334-wide reference
+  geometry; the page scales itself to the source width — `fitBar()` in
+  `shotclock.html` — so text rasterizes at the source's native resolution)
+  along the bottom of the side-angle column with the clock in its right-hand
+  cell (issue #23, 2026-08-03; resized for the 4K canvas 2026-08-07). Enable
   **"Control audio via OBS"** *and* set its Audio Monitoring to **"Monitor Only
   (mute output)"** — this is the source that sounds the cues on the TV, while
   what gets *recorded* is the room, from Mic/Aux. Every other pairing of those
-  two switches fails somewhere (Part D). 1334 is the seam where the overhead strip
+  two switches fails somewhere (Part D). 2668 is the seam where the overhead strip
   begins, so nothing it draws can reach the table.
   Clock and score come from one page because the drain runs the full width of
   the bar, crossing from the score area into the clock cell, and no overlay can
@@ -183,9 +193,11 @@ actually runs — the original plan called them *Table* / *Clock*):
   dead source shows no chrome at all rather than an empty plinth over the
   table.
 - **Shot Clock** (full-screen shot clock, readable from anywhere): a browser
-  source `http://localhost:8000/shotclock?view=full&audio=off` sized to the
-  full canvas (1920×1080), the bar alongside if a score is wanted (add it with
-  `&audio=off` too). It renders just a huge bare number — broadcast style —
+  source `http://localhost:8000/shotclock?view=full&audio=off` at its drawn
+  size (2668×1500 at (0, 312), filling the side-angle column beside the
+  overhead strip — the view's type is vh/vw-sized, so a native-size source is
+  all it takes to render sharp), the bar alongside if a score is wanted (add
+  it with `&audio=off` too). It renders just a huge bare number — broadcast style —
   transparent background over the scene's black; add a color/shape source
   behind it only if a panel color is ever wanted. `audio=off` because the bar
   already sounds the cues (OBS keeps non-visible browser sources running, so
@@ -206,10 +218,12 @@ actually runs — the original plan called them *Table* / *Clock*):
   on the badge `restart_when_active: false` (the deck loads that page itself,
   before the cut — a reload triggered *by* the cut shows the previous replay's
   last frame, which is a blacked-out one, for the half second it takes).
-  Nothing is cropped: the overhead in a recording is a ~586×1080 portrait strip
-  already downscaled to 57%, so filling a 16:9 canvas from it would be a 3.3×
-  upscale of a downscale. Playing the composed frame 1:1 is pixel-native and
-  carries both angles. A full-screen overhead replay is available any time by
+  Nothing is cropped: the buffer records the *output* resolution (1080p60 —
+  §B3), so a replay filling the 4K canvas is a plain 2× upscale of the whole
+  composed frame — same on-wall size, same recorded detail the pre-4K rig
+  had. The overhead inside it is still a ~590×1080 portrait strip; blowing
+  that strip up alone to fill 16:9 would be a further 3.3× upscale of a
+  downscale, so the composed frame plays whole and carries both angles. A full-screen overhead replay is available any time by
   making the overhead the main *live* view — the buffer only ever holds what
   was on the TV.
 
@@ -220,8 +234,17 @@ actually runs — the original plan called them *Table* / *Clock*):
   reconnect only helps *after* a successful page load) — the checkbox heals
   it on the next scene switch. Same reason the start order is server first,
   then OBS (enforced automatically once the §C4 session toggle is built).
-- Canvas 1920×1080 — **settled 2026-08-02** (judged on the TV): 1080p crop,
-  not 1200p letterbox. Keep color range consistent end-to-end (Full/Full or
+- Canvas **3840×2160 @ 60**, output (scaled) resolution **1920×1080** —
+  since 2026-08-07. The TV is a 4K panel driven at native 3840×2160: a
+  1080p canvas got upscaled 2× by the projector and every browser-source
+  pixel became a soft 2×2 blob (the pixelated scoreboard). The canvas is
+  what the Fullscreen Projector renders, so the wall now gets native 4K;
+  the *output* resolution feeds the encoders, and it stays 1080p because
+  encoding the 4K60 canvas continuously (replay buffer) measurably starved
+  the detect loop (~72 → ~50 Hz). Replays therefore record 1080p60 and
+  upscale on playback — the same picture recordings had before. The crop
+  geometry is the 2026-08-02 judgement (1080p crop, not 1200p letterbox),
+  doubled. Keep color range consistent end-to-end (Full/Full or
   Limited/Limited — a mismatch shows as crushed blacks on the blue cloth).
 - Grade on the Syphon source with Color Correction or Apply LUT;
   starter LUTs in `assets/obs/` (`cueclock-tone.cube` is the dialed-in table

@@ -160,6 +160,8 @@ def run_command(reference: str = DEFAULT_REFERENCE) -> tuple[str, ...]:
         reference,
         "--host",
         "0.0.0.0",  # nosec B104: LAN-only rig; /control is used from a phone
+        "--fps",
+        "60",  # the TV runs 4K60 (2026-08-07); the CLI default is still 30
     )
 
 

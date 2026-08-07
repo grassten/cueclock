@@ -490,7 +490,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.audio.listener import ExtensionListener
     from cueclock.capture.camera import EXPOSURE_US, GAIN, open_camera
     from cueclock.capture.ring import FrameRing
-    from cueclock.display.syphon_out import SyphonOutput
+    from cueclock.display.syphon_out import DisplayWorker
     from cueclock.server.app import create_app
     from cueclock.server.hub import Hub
     from cueclock.vision.calibration import TableCalibration
@@ -712,7 +712,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # is cadence-agnostic, so skipped frames only cost samples.
             cam.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
             try:
-                with SyphonOutput(args.name, *display.out_size) as out:
+                # Publishing runs on its own thread: inline at 60 fps it cost
+                # the detect loop a third of its cadence (77 -> 51 Hz,
+                # 2026-08-07). The loop below only copies the Bayer frame.
+                with DisplayWorker(display.to_rgba, args.name, *display.out_size) as out:
                     t0_ns: int | None = None
                     frame_i = 0
                     next_display = 0.0
@@ -780,7 +783,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             frame_i += 1
                             if t >= next_display:
                                 next_display = t + display_period
-                                out.publish(display.to_rgba(frame), pump_seconds=0.001)
+                                out.offer(frame)
                             if args.verbose and t >= next_status:
                                 next_status = t + 1.0
                                 cue = next((b for b in vision.last_balls if b.is_cue), None)

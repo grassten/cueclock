@@ -232,6 +232,44 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-07 (checkpoint 81 — 4K60 presentation: sharp scoreboard, 60 fps feeds):**
+  The scoreboard read pixelated on the wall because the TV is a 4K panel
+  (macOS drives it at native 3840×2160@60) and the canvas was 1080p — the
+  projector upscaled every browser-source pixel into a soft 2×2 blob. Steven
+  raised the canvas to 3840×2160@60 and set Camo to 60 fps; this checkpoint
+  is everything downstream of that. Overlay: the bar source becomes
+  **2668×2160 native** — `?view=bar`'s px-exact geometry now scales itself
+  to the source width (`fitBar()`, a body transform: not CSS `zoom`, whose
+  viewport-unit behaviour shifted across CEF versions), so the type rasters
+  at 4K. Found en route: OBS injects `body { margin: 0px auto }` into every
+  browser source, which silently centres any body narrower than the
+  viewport — the bar rendered 667 px off-seam until an inline `margin: 0`
+  outranked it. Full-clock view + replay badge are vh/vw-sized and just got
+  native-size sources; `setup_obs_replay.py` canvas constants follow.
+  Camera path: the deck's canonical `run` argv gains `--fps 60` (CLI default
+  stays 30). Publishing inline at 60 starved detection — **77 → 51 Hz**, a
+  third of the cadence — so the display branch moved to its own thread
+  (`DisplayWorker`, `display/syphon_out.py`): the grab loop hands over a
+  ~0.3 ms Bayer copy, drop-oldest, Syphon server lives on the worker (its
+  runloop answers discovery). Second thief: encoding the 4K60 canvas for the
+  replay buffer cost another ~20 Hz, so Settings → Video keeps **output
+  (scaled) resolution at 1920×1080** — the projector renders the canvas
+  (wall stays native 4K) while recordings/replays encode 1080p60 like the
+  old rig; buffer memory cap re-sized for 60 fps (est. 2.0 MB/s, measure and
+  tighten). Steady state after both: **~72–74 Hz** detect with the buffer
+  running (the last ~4 Hz vs the 77 baseline is OBS compositing 4K60 +
+  Camo 60 — machine-wide, not in the loop). Verified through OBS's own
+  renderer (`GetSourceScreenshot` of the bar at 2668×2160: plinth spans
+  0..2667, text native-sharp) and journal heartbeats across the A/B
+  (buffer-off ~70–73, buffer-at-1080p60 ~72–74). Session cycled through
+  `SessionManager` so the deck key kept ownership (pidfile re-adopt).
+  Startup drift warning note: today's ~73 px readings were **Steven's
+  laptop sitting on the left rail** crossing the cloth/cushion boundary the
+  rail-fit measures (rectified frame is otherwise square); the chronic
+  10–19 px warn-level drift predates today and still deserves a §E2
+  reference refresh some empty-table day. Docs: hardware.md §B1/§B3,
+  README launch command, cli.md `--fps` row.
+
 - **2026-08-07 (checkpoint 80 — solo panel: run_out/no_clock trade players for pace, #30):**
   The bar stops showing a two-player score in the two modes that have one
   player. Decided on mockups (Option D of four): in `run_out` / `no_clock` the

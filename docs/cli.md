@@ -335,7 +335,7 @@ access and starve this daemon.
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--fps` | `30.0` | display publish rate (detection rate is unaffected) |
+| `--fps` | `30.0` | display publish rate (detection rate is unaffected; publishing runs on its own thread in `run`). The production launch passes `--fps 60` — the deck's Session key and the README command both carry it (TV runs 4K60, 2026-08-07) |
 | `--name` | `cueclock` | Syphon server name (what the OBS Syphon Client source selects) |
 | `--undistort` | `config/display_undistort.json` | |
 | `--no-undistort` | off | publish distorted frames |

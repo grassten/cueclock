@@ -21,7 +21,10 @@ Two integration facts learned the hard way (2026-07-27, syphon-python 0.1.1):
   ~2 s, no trip to the source properties needed.
 """
 
+import threading
 import time
+import traceback
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -97,3 +100,72 @@ class SyphonOutput:
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
+
+
+class DisplayWorker:
+    """Debayers, undistorts and publishes display frames on its own thread.
+
+    At 60 fps the inline display branch starved the detect loop: one publish
+    is ~10 ms of debayer + remap + Metal upload, and every millisecond of it
+    blocked the grab loop — detection fell from ~77 Hz to ~51 Hz when `run
+    --fps 60` published inline (measured 2026-08-07). Here the detect loop
+    only hands over a copy of the raw Bayer frame (~0.3 ms); the heavy work
+    happens on this thread, whose OpenCV/numpy calls release the GIL.
+
+    Drop-oldest by design: only the newest offered frame is ever published,
+    so a slow publish costs a display frame, never backpressure on detection.
+
+    The SyphonOutput is constructed *inside* the thread: a Syphon server
+    answers discovery on the runloop of the thread that created it (module
+    docstring), so the server must live on the thread that pumps.
+    """
+
+    def __init__(
+        self,
+        to_rgba: Callable[[npt.NDArray[np.uint8]], npt.NDArray[np.uint8]],
+        name: str,
+        width: int,
+        height: int,
+    ) -> None:
+        self._to_rgba = to_rgba
+        self._name = name
+        self._size = (width, height)
+        self._cond = threading.Condition()
+        self._latest: npt.NDArray[np.uint8] | None = None
+        self._stop = False
+        self._thread = threading.Thread(target=self._loop, name="display", daemon=True)
+
+    def offer(self, bayer: npt.NDArray[np.uint8]) -> None:
+        """Hand the newest frame over; copies, because pylon reuses the buffer."""
+        frame = bayer.copy()
+        with self._cond:
+            self._latest = frame
+            self._cond.notify()
+
+    def _loop(self) -> None:
+        try:
+            with SyphonOutput(self._name, *self._size) as out:
+                while True:
+                    with self._cond:
+                        while self._latest is None and not self._stop:
+                            self._cond.wait()
+                        if self._stop:
+                            return
+                        frame = self._latest
+                        self._latest = None
+                    if frame is None:
+                        continue
+                    out.publish(self._to_rgba(frame), pump_seconds=0.001)
+        except Exception:  # a dead display must not kill detection
+            print("display worker died — TV feed frozen, detection unaffected:", flush=True)
+            traceback.print_exc()
+
+    def __enter__(self) -> "DisplayWorker":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        with self._cond:
+            self._stop = True
+            self._cond.notify()
+        self._thread.join(timeout=5.0)

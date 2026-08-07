@@ -46,19 +46,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from cueclock.deck import obsws
 from cueclock.deck.replay import BADGE_INPUT, BUFFER_TARGET_S, MEDIA_INPUT, SCENE_NAME, SPEED
 
-CANVAS_W = 1920
-CANVAS_H = 1080
+CANVAS_W = 3840
+CANVAS_H = 2160
 TRANSITION = "Fade"
 
-MB_PER_S = 0.66
-"""Measured size of one second of program output (`replay.BUFFER_TARGET_S`).
+MB_PER_S = 2.0
+"""Estimated size of one second of program output (`replay.BUFFER_TARGET_S`).
 
 Used to size the *other* buffer limit: OBS caps the replay buffer by time
 **and** by memory, whichever binds first, and the memory one is silent — a
 buffer set to ten minutes that only ever holds seven looks like a bug in the
 seek, not like a setting. So the memory cap is set from the time target rather
 than left where it was, and reported in seconds, which is the unit the failure
-would be noticed in."""
+would be noticed in.
+
+0.66 was *measured* on the 1080p30 canvas (two clips). Since 2026-08-07 the
+canvas is 4K60 but the encoders still see 1080p — at 60 fps (Settings →
+Video → Output resolution stays 1920x1080; encoding the full 4K60 canvas
+stole ~20 Hz from the detect loop, hardware.md §B3). Doubled frame rate on a
+quality-based encoder (Simple/HQ, apple_h264) is at most 2x the rate on this
+mostly-static scene — 2.0 is a planning ceiling, not a measurement.
+Re-measure from the first few 60 fps replay files and tighten."""
 
 SIZE_HEADROOM = 1.5
 """How much slack the memory cap gets over the measured rate.

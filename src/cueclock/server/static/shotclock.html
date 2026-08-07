@@ -150,10 +150,15 @@
            and so was burned into every replay) and the old `/score` bar
            (which was centred on the canvas and lay across the overhead strip).
 
-           Geometry is canvas-pixel exact for a **1334x1080 browser source at
-           (0, 0)**: 1334 is the seam where the overhead strip begins, and
-           nothing here may cross it. Every number below is measured off the
-           mockups the design was settled on. ===================== */
+           Geometry is authored px-exact on a **1334-wide reference layout**;
+           `fitBar()` below scales the page to the actual source width, so on
+           the 4K canvas the source is **2668x2160 at (0, 0)** and the text
+           rasterizes at the source's native resolution instead of OBS
+           upscaling a 1334 px raster (the scoreboard read pixelated on the
+           TV until 2026-08-07). The source's right edge is the seam where
+           the overhead strip begins, and nothing here may cross it. Every
+           number below is measured off the mockups the design was settled
+           on. ===================== */
 
         body.bar {
             position: relative;
@@ -539,7 +544,8 @@
         const timerText = document.getElementById('timer-text');
 
         // ?view=bar  — the live scene's bottom bar: clock cell + scoreboard,
-        //              one 1334x1080 source at (0, 0) (docs/hardware.md §B3).
+        //              one source at (0, 0) spanning the side-angle column —
+        //              2668x2160 on the 4K canvas (docs/hardware.md §B3).
         //              Clock and score render from one page because the drain
         //              runs the full width of the bar, crossing from the score
         //              area into the clock cell, and no overlay can span two
@@ -552,7 +558,28 @@
         const view = params.get('view');
         if (view === 'full') document.body.classList.add('full');
         const barView = view === 'bar';
-        if (barView) document.body.classList.add('bar');
+        if (barView) {
+            document.body.classList.add('bar');
+            // The bar CSS is authored on a 1334-wide reference. Scale the
+            // whole page to the real source width with a transform (not CSS
+            // `zoom`, whose viewport-unit interaction changed across CEF
+            // versions) so the plinth's px geometry holds and text rasters
+            // at the source's native resolution.
+            const fitBar = () => {
+                const k = window.innerWidth / 1334;
+                document.body.style.transformOrigin = '0 0';
+                document.body.style.transform = `scale(${k})`;
+                document.body.style.width = '1334px';
+                document.body.style.height = `${window.innerHeight / k}px`;
+                // OBS injects `body { margin: 0px auto; }` into every browser
+                // source; on a body narrower than the viewport that `auto`
+                // centres it (the bar rendered 667 px right of the seam on
+                // 2026-08-07). Inline style outranks the injected sheet.
+                document.body.style.margin = '0';
+            };
+            fitBar();
+            window.addEventListener('resize', fitBar);
+        }
         const audioEnabled = !['off', '0'].includes(params.get('audio'));
 
         // ---------------- Audio cues (Web Audio API) ----------------

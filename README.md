@@ -62,7 +62,7 @@ recorded-clip replay tests are deterministic.
 ```bash
 # the session (camera + vision + clock + server + Syphon display):
 uv run python -m cueclock.cli run --rectify \
-    --reference tests/clips/empty_table_0801 --host 0.0.0.0
+    --reference tests/clips/empty_table_0801 --host 0.0.0.0 --fps 60
 
 # the Stream Deck daemon (normally installed as a launchd agent):
 uv run python -m cueclock.cli deck
