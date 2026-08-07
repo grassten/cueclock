@@ -9,8 +9,11 @@ Semantics are the spec recovered from the old app (``docs/design.md``
 One deliberate change from the old implementation: no internal clock. Every
 time-dependent method takes ``now`` (monotonic seconds), so the machine is
 deterministic under test and replay. The vision events ``shot_taken`` /
-``balls_settled`` replace the old ``motion_start`` / ``motion_end`` names;
-``scratch`` intentionally does not touch the clock (see ``CHANGELOG.md``).
+``balls_settled`` replace the old ``motion_start`` / ``motion_end`` names.
+The confirmed ``scratch`` verdict still does not touch the clock (see
+``CHANGELOG.md``), but since checkpoint 78 (#25) the hub applies a
+:meth:`hold` over the fresh countdown while a scratch *candidate* stands
+un-refuted — the player is at the ball return, not the table.
 
 Rack context (added 2026-07-31 for WNT match play): the clock counts shots per
 rack so the WNT §5 first-shot allowance works — 60 s for the first shot after
@@ -72,6 +75,11 @@ class ShotClock:
         self._cues_fired: set[str] = set()
         self._grace_left = 0.0
         self._expired_for = 0.0
+        # Post-scratch grace (#25): while now < _hold_until, a RUNNING
+        # countdown does not decrement. Set only by hold(); cleared by every
+        # path that starts a fresh countdown, so a hold can never leak into
+        # the next shot's clock.
+        self._hold_until = 0.0
 
     @property
     def rack_shots(self) -> int:
@@ -100,6 +108,7 @@ class ShotClock:
             self.remaining = float(self.current_base())
             self._cues_fired.clear()
         self.state = State.RUNNING
+        self._hold_until = 0.0
         self._last_tick = now
 
     def pause(self) -> None:
@@ -115,6 +124,7 @@ class ShotClock:
         self.remaining = float(self.current_base())
         self._cues_fired.clear()
         self.last_cue = None
+        self._hold_until = 0.0
 
     def new_rack(self, now: float) -> None:
         """Per-rack scope reset — pressed between games.
@@ -130,6 +140,7 @@ class ShotClock:
         self.remaining = float(self.current_base())
         self._cues_fired.clear()
         self.last_cue = None
+        self._hold_until = 0.0
         self._last_tick = now
 
     def restart(self, now: float) -> None:
@@ -153,6 +164,7 @@ class ShotClock:
         self.state = State.RUNNING
         self._cues_fired.clear()
         self.last_cue = None
+        self._hold_until = 0.0
         self._last_tick = now
 
     def push(self, now: float) -> None:
@@ -174,6 +186,7 @@ class ShotClock:
             self.state = State.RUNNING
             self._cues_fired.clear()
             self.last_cue = None
+            self._hold_until = 0.0
             self._last_tick = now
 
     def set_ruleset(self, ruleset: Ruleset) -> None:
@@ -212,6 +225,34 @@ class ShotClock:
         self.last_cue = None
         self.state = State.RUNNING
         return True
+
+    # ---------- post-scratch grace (#25, checkpoint 78) ----------
+
+    def hold(self, now: float, seconds: float) -> None:
+        """Freeze a RUNNING countdown at its current value for ``seconds``.
+
+        The post-scratch grace: with no referee to spot the ball, the player
+        is walking to the return and fishing the cue out — the clock must not
+        run against the retrieval. Only meaningful over a running countdown;
+        any path that starts a fresh one clears it.
+        """
+        if self.state is State.RUNNING:
+            self._hold_until = now + seconds
+
+    def release_hold(self, now: float) -> bool:
+        """End an active hold early; True if one was actually holding.
+
+        The hub calls this on ScratchRefuted — the candidate was a potted
+        object ball wearing the crown, nobody is at the return, and the
+        countdown resumes from wherever the hold froze it.
+        """
+        active = self.state is State.RUNNING and now < self._hold_until
+        self._hold_until = 0.0
+        return active
+
+    def holding(self, now: float) -> bool:
+        """Is a hold currently freezing the countdown?"""
+        return self.state is State.RUNNING and now < self._hold_until
 
     # ---------- vision events ----------
 
@@ -258,6 +299,7 @@ class ShotClock:
         self._cues_fired.clear()
         self.last_cue = None
         self.state = State.RUNNING
+        self._hold_until = 0.0
         self._last_tick = now
 
     # ---------- time ----------
@@ -282,7 +324,11 @@ class ShotClock:
 
         if self.state is State.RUNNING:
             prev = self.remaining
-            self.remaining = max(0.0, self.remaining - dt)
+            # A scratch hold absorbs the held portion of the interval: no
+            # decrement while now < _hold_until, exact resume on a tick that
+            # straddles the deadline (#25).
+            run_dt = min(dt, max(0.0, now - self._hold_until))
+            self.remaining = max(0.0, self.remaining - run_dt)
             # Edge-triggered urgency cues, fired exactly once per countdown.
             if prev > 10 and self.remaining <= 10 and "ten" not in self._cues_fired:
                 cue = "ten"

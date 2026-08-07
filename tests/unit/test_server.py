@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import cast
 
@@ -562,6 +563,94 @@ def test_scratch_adjudication_journals_its_evidence() -> None:
     assert refuted["witness_id"] == 4
     assert (refuted["x_mm"], refuted["y_mm"]) == (1205, 498)
     assert refuted["whiteness"] == 0.912
+
+
+# ---------- post-scratch grace (#25, checkpoint 78) ----------
+
+
+def _candidate(hub: Hub, t: float) -> None:
+    asyncio.run(
+        hub.scratch_candidate(
+            t,
+            x_mm=60.0,
+            y_mm=80.0,
+            pocket_x_mm=0.0,
+            pocket_y_mm=0.0,
+            whiteness=0.5,
+            color_age_s=0.0,
+        )
+    )
+
+
+def _shot_and_settle(hub: Hub) -> None:
+    hub.clock.start(time.monotonic())
+    asyncio.run(hub.shot_taken(3.0))
+    asyncio.run(hub.balls_settled(4.0))
+    assert hub.clock.state is State.RUNNING
+
+
+def test_scratch_candidate_holds_the_fresh_countdown() -> None:
+    """#25: an un-refuted candidate freezes the countdown the settle already
+    started (scratch_shot_0801's order: settle first, candidate 0.6 s later);
+    a refutation releases it. Both actions journal."""
+    hub = Hub()
+    _shot_and_settle(hub)
+    _candidate(hub, 5.0)
+    assert hub.clock.holding(time.monotonic())
+    by_kind = {r["kind"]: r for r in hub.journal.tail(60.0)}
+    assert by_kind["scratch_hold"]["hold_s"] == 5.0
+    asyncio.run(hub.scratch_refuted(6.0, witness_id=1, x_mm=0.0, y_mm=0.0, whiteness=0.9))
+    assert not hub.clock.holding(time.monotonic())
+    assert "scratch_hold_released" in {r["kind"] for r in hub.journal.tail(60.0)}
+
+
+def test_scratch_candidate_before_settle_holds_at_the_settle() -> None:
+    """shot_debug's order: the candidate lands during MOTION (balls still
+    rolling), so the settle that follows starts its countdown already held."""
+    hub = Hub()
+    hub.clock.start(time.monotonic())
+    asyncio.run(hub.shot_taken(3.0))
+    _candidate(hub, 4.0)
+    assert hub.clock.state is State.MOTION
+    assert not hub.clock.holding(time.monotonic())  # nothing running to hold
+    asyncio.run(hub.balls_settled(6.0))
+    assert hub.clock.holding(time.monotonic())
+
+
+def test_scratch_hold_is_granted_once_per_candidate() -> None:
+    """A candidate that outlives a whole shot cycle (blocked census riding
+    toward the vision core's 30 s horizon) must not also hold the next
+    shot's clock: one grant, at the first opportunity."""
+    hub = Hub()
+    _shot_and_settle(hub)
+    _candidate(hub, 5.0)
+    hub.clock.release_hold(time.monotonic())  # the 5 s elapse
+    asyncio.run(hub.shot_taken(8.0))
+    asyncio.run(hub.balls_settled(12.0))  # candidate still unresolved
+    assert not hub.clock.holding(time.monotonic())
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert kinds.count("scratch_hold") == 1
+
+
+def test_confirmed_scratch_keeps_the_hold() -> None:
+    """The verdict closes the candidate without touching the countdown — by
+    census-completion time the retrieval the hold covers is underway."""
+    hub = Hub()
+    _shot_and_settle(hub)
+    _candidate(hub, 5.0)
+    asyncio.run(hub.scratch_seen(5.5))
+    assert hub.clock.holding(time.monotonic())
+
+
+def test_scratch_hold_respects_the_kill_switch() -> None:
+    """The hold is gated exactly like the events that move the clock: with
+    vision killed the candidate stays journaled evidence, nothing more."""
+    hub = Hub()
+    _shot_and_settle(hub)
+    hub.vision_enabled = False
+    _candidate(hub, 5.0)
+    assert not hub.clock.holding(time.monotonic())
+    assert "vision_scratch_candidate" in {r["kind"] for r in hub.journal.tail(60.0)}
 
 
 def test_detect_heartbeat_reports_hz_and_frame_age() -> None:

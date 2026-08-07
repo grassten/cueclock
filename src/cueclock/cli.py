@@ -671,8 +671,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 backstop=vision.last_settle_backstop,
             )
         elif isinstance(event, ScratchCandidate):
-            # Two-stage verdict (#26): candidate and refutation are journaled
-            # evidence; only the confirmed Scratch below is the verdict.
+            # Two-stage verdict (#26): the candidate also grants the #25
+            # post-scratch hold, which a refutation releases; the confirmed
+            # Scratch below stays journal-only.
             coro = hub.scratch_candidate(
                 t,
                 x_mm=event.x_mm,
@@ -691,7 +692,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 whiteness=event.whiteness,
             )
         else:
-            # Scratch: journaled only — no clock action in v1 (CHANGELOG.md decision)
+            # Scratch (confirmed verdict): journaled only — the clock action
+            # lives on the candidate/refuted pair above (#25)
             coro = hub.scratch_seen(t)
         asyncio.run_coroutine_threadsafe(coro, loop).add_done_callback(_surface)
 

@@ -78,6 +78,15 @@ BREAK_DARK_MIN_INVOLVED = 8
 # real break while refusing to let stale racking noise arm a much later
 # settle.
 BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
+# Post-scratch grace (#25): how long an un-refuted ScratchCandidate freezes
+# the fresh countdown — the walk to the return, fish the cue out, place it.
+# The issue's own spec (5 s), not a measurement; the felt number to revisit
+# from live sessions if it reads short on the wall. Policy shape (§13): the
+# candidate grants it, a refutation releases it early (typically same-frame
+# for a false scratch, so a phantom never visibly touches the clock), and
+# each candidate grants at most once — the confirmed Scratch verdict itself
+# still never moves the clock.
+SCRATCH_HOLD_SECONDS = 5.0
 
 # `detect_heartbeat` journal cadence: often enough to bracket a starvation
 # window (a flag-dump write measurably halved the detect rate for ~10 s —
@@ -195,6 +204,13 @@ class Hub:
         # anchor older than the buffer.
         self._rack_break_mono: float | None = None
         self._rack_pending = False  # SET UP seen: the next shot is the break
+        # #25 bookkeeping: a ScratchCandidate stands un-refuted (the vision
+        # core guarantees exactly one verdict per candidate, within its 30 s
+        # horizon), and whether it has already spent its one hold grant —
+        # a candidate that outlives a whole shot cycle must not hold the
+        # *next* shot's clock too.
+        self._scratch_candidate_open = False
+        self._scratch_hold_done = False
         # Called after a *granted* extension has been broadcast, because the
         # overlay answers that broadcast by speaking "Extension called" out of
         # the TV. `cueclock run` points it at the mic listener's mute window:
@@ -562,6 +578,10 @@ class Hub:
                 self._rack_pending = False
         self.clock.balls_settled(now)
         self._log("vision_balls_settled", **detail)
+        # #25: the scratch's candidate can precede its settle (shot_debug:
+        # candidate 9.54 s, settle 11.92 s) — the fresh countdown this settle
+        # just started is the one the retrieval needs held.
+        self._maybe_hold_for_scratch()
         await self.broadcast(self.clock.snapshot())
 
     def _adjudicate_break(self, now: float, rearrange: "RearrangeSummary | None") -> bool:
@@ -614,10 +634,12 @@ class Hub:
         return False
 
     async def scratch_seen(self, t: float | None = None) -> None:
-        # No clock action in v1 (CHANGELOG decision) — journal only. Since
-        # #26 this is the *confirmed* verdict: a candidate the whiteness
-        # census could not refute. Journals without candidate records predate
+        # The confirmed verdict never moves the clock — the hold (#25) was
+        # already granted on the candidate, and by census-completion time the
+        # retrieval is underway. Since #26 this is a candidate the whiteness
+        # census could not refute; journals without candidate records predate
         # the split and stay what they always were — an upper bound.
+        self._scratch_candidate_open = False
         self._log("vision_scratch", t=t, frame_t=t)
 
     async def scratch_candidate(
@@ -631,8 +653,10 @@ class Hub:
         whiteness: float | None,
         color_age_s: float | None,
     ) -> None:
-        # Two-stage scratch verdict (#26), evidence half: journal only, so a
-        # live candidate is auditable from the journal alone.
+        # Two-stage scratch verdict (#26), evidence half — always journaled,
+        # so a live candidate is auditable from the journal alone.
+        self._scratch_candidate_open = True
+        self._scratch_hold_done = False
         self._log(
             "vision_scratch_candidate",
             t=t,
@@ -644,12 +668,18 @@ class Hub:
             whiteness=round(whiteness, 3) if whiteness is not None else None,
             color_age_s=round(color_age_s, 2) if color_age_s is not None else None,
         )
+        # #25: the candidate usually lands ~0.3-1.3 s *after* the settle
+        # already started the next countdown (scratch_shot_0801: settle 5.73,
+        # candidate 6.37) — hold that countdown now. The other order (candidate
+        # during MOTION, shot_debug's shape) is covered in balls_settled.
+        self._maybe_hold_for_scratch()
 
     async def scratch_refuted(
         self, t: float, *, witness_id: int, x_mm: float, y_mm: float, whiteness: float
     ) -> None:
         # The witness's position and reading ride along so any refutation
         # can be spot-audited against footage later.
+        self._scratch_candidate_open = False
         self._log(
             "vision_scratch_refuted",
             t=t,
@@ -659,3 +689,27 @@ class Hub:
             y_mm=round(y_mm),
             whiteness=round(whiteness, 3),
         )
+        # #25: nobody is at the return — resume the countdown immediately.
+        # For a typical false scratch the refutation is same-frame with the
+        # candidate, so the grant/release pair never visibly touches the wall.
+        if self.clock.release_hold(time.monotonic()):
+            self._log("scratch_hold_released")
+            await self.broadcast(self.clock.snapshot())
+
+    def _maybe_hold_for_scratch(self) -> None:
+        """Grant the one #25 hold this candidate is entitled to, if due now.
+
+        Gated exactly like the events that move the clock: the kill switch
+        and `no_clock` mode must also keep the hold off it. RUNNING-only by
+        way of ShotClock.hold — in MOTION the countdown is frozen anyway and
+        the settle that ends it re-invokes this.
+        """
+        if self._scratch_hold_done or not self._scratch_candidate_open:
+            return
+        if not self.vision_enabled or not self.clock.mode.clock_live:
+            return
+        if self.clock.state is not State.RUNNING:
+            return
+        self.clock.hold(time.monotonic(), SCRATCH_HOLD_SECONDS)
+        self._scratch_hold_done = True
+        self._log("scratch_hold", hold_s=SCRATCH_HOLD_SECONDS)

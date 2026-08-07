@@ -232,6 +232,32 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-07 (checkpoint 78 — post-scratch grace, #25):** The clock no longer
+  runs against the walk to the ball return. Built on checkpoint 77's verdict
+  split exactly as planned there: an un-refuted `ScratchCandidate` grants a 5 s
+  hold over the fresh countdown (`ShotClock.hold` — RUNNING simply doesn't
+  decrement, no new state, nothing on the overlay surface), `ScratchRefuted`
+  releases it early — typically same-frame, so a refuted phantom never visibly
+  touches the wall, which is what makes this safe to ship the day after the
+  adjudicator and would have been indefensible before it (~29 candidates a
+  session would each have frozen the clock). The confirmed `Scratch` verdict
+  still never moves the clock (the 2026-07-27 decision survives for the
+  verdict; the *candidate* is what drives policy, per §13). One grant per
+  candidate at the first opportunity — candidate-after-settle holds
+  immediately (scratch_shot_0801's order, candidate trails its settle by
+  0.64 s), candidate-during-MOTION holds at the settle (shot_debug's order) —
+  so a blocked census riding toward the 30 s horizon cannot also hold the
+  next shot's clock. Every countdown-starting path (settle, start, restart,
+  push, reset, new rack) clears the hold; straddling ticks resume exactly.
+  Gated like every clock-moving event (kill switch, `no_clock` — the
+  candidate stays journaled evidence either way). 5 s is the issue's spec,
+  not a measurement — a felt number, flagged in the config comment for
+  revisiting from the wall. Journal kinds (additive): `scratch_hold`
+  (hold_s) / `scratch_hold_released`. Unit suite 399 green (+9: hold
+  freeze/straddle/release/leak/IDLE pins on the state machine; grant orders,
+  once-per-candidate, verdict-keeps-hold, kill-switch on the hub). Vision
+  core untouched — no corpus impact, goldens unmoved.
+
 - **2026-08-07 (checkpoint 77 — scratch becomes a two-stage verdict, #26):** The
   scratch channel over-counted ~6x (Steven's ground truth: ~5 real in a session
   that journaled 29) because a potted object ball mis-crowned as the cue passes

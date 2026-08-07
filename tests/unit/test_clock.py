@@ -518,3 +518,47 @@ def test_running_still_reaches_zero_during_motion() -> None:
     clock.start(now=0.0)
     clock.tick(31.0, motion=True)
     assert clock.state is State.GRACE
+
+
+# ---------- post-scratch grace (#25, checkpoint 78) ----------
+
+
+def test_scratch_hold_freezes_a_running_countdown() -> None:
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.tick(now=2.0)  # 28 left
+    clock.hold(now=2.0, seconds=5.0)
+    assert clock.tick(now=6.0).time == 28  # held: no decrement
+    assert clock.holding(6.0)
+    # A tick straddling the 7.0 s deadline counts exactly the portion after it.
+    assert clock.tick(now=9.0).time == 26
+    assert not clock.holding(9.0)
+
+
+def test_release_hold_resumes_immediately() -> None:
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.hold(now=0.0, seconds=5.0)
+    assert clock.tick(now=2.0).time == 30
+    assert clock.release_hold(now=2.0)  # was actively holding
+    assert clock.tick(now=4.0).time == 28
+    assert not clock.release_hold(now=4.0)  # nothing left to release
+
+
+def test_hold_does_not_leak_into_the_next_countdown() -> None:
+    # Every path that starts a fresh countdown clears the hold — a scratch
+    # hold granted this shot must never freeze the next shot's clock.
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.hold(now=0.0, seconds=20.0)
+    clock.shot_taken()
+    clock.balls_settled(now=1.0)
+    assert clock.tick(now=4.0).time == 27
+
+
+def test_hold_is_running_only() -> None:
+    # No countdown, nothing to hold: an IDLE hold call must not arm anything.
+    clock = make_clock()
+    clock.hold(now=0.0, seconds=5.0)
+    clock.start(now=0.0)
+    assert clock.tick(now=3.0).time == 27
