@@ -10,10 +10,12 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from cueclock.clock import ALIASES, MODES, RULESETS
+from cueclock.server import fargo
 from cueclock.server.hub import Hub
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -203,6 +205,25 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
         hub.score.adjust(player, 1 if op == "increment" else -1)  # floors at 0
         await hub.score_changed()
         return JSONResponse({"ok": True, "score": hub.score.as_dict()})
+
+    @app.get("/api/fargo/search")
+    async def api_fargo_search(q: str = "") -> JSONResponse:
+        """Proxy FargoRate's player search for the control page (issue #27).
+
+        Lives here because dashboard.fargorate.com sends no CORS headers, so
+        the browser can't ask it directly. Read-only against a third party —
+        an upstream failure is a 502 the page renders as "Fargo unreachable",
+        never an error that touches the clock or the score.
+        """
+        if not q.strip():
+            return JSONResponse({"ok": False, "error": "empty query"}, status_code=400)
+        try:
+            players = await fargo.search(q.strip())
+        except httpx.HTTPError as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"fargorate unreachable: {exc}"}, status_code=502
+            )
+        return JSONResponse({"ok": True, "players": players})
 
     @app.post("/api/vision/on")
     async def api_vision_on() -> dict[str, object]:

@@ -343,6 +343,17 @@
         body.bar .pname.left  { left: 36px; }
         body.bar .pname.right { right: 326px; margin-right: -2px; }
 
+        /* Fargo rating (issue #27): rides the name row, one step quieter
+           than the name so the hierarchy stays name > rating. Empty span
+           when no rating is set — no reserved space, nothing to hide. */
+        body.bar .pname .pfargo {
+            margin-left: 13px;
+            font-size: 17px;
+            letter-spacing: 1px;
+            opacity: 0.62;
+            font-variant-numeric: tabular-nums;
+        }
+
         /* Each of the three laid out on its own whole-pixel x rather than
            centred as a flex row: a 1 px rule inside a centred box lands on a
            half pixel, and half a hairline antialiases to nothing. */
@@ -403,11 +414,11 @@
         <div class="gauge"><div class="gauge-fill" id="gauge-fill"></div></div>
 
         <div class="scores no-race" id="scores">
-            <div class="pname left" id="bar-p1-name"></div>
+            <div class="pname left"><span id="bar-p1-name"></span><span class="pfargo" id="bar-p1-fargo"></span></div>
             <span class="pts p1" id="bar-p1-score">0</span>
             <span class="tally-rule"></span>
             <span class="pts p2" id="bar-p2-score">0</span>
-            <div class="pname right" id="bar-p2-name"></div>
+            <div class="pname right"><span id="bar-p2-name"></span><span class="pfargo" id="bar-p2-fargo"></span></div>
             <div class="race" id="bar-race"></div>
         </div>
 
@@ -590,6 +601,10 @@
             if (!sc) return;
             document.getElementById('bar-p1-name').innerText = sc.p1.name;
             document.getElementById('bar-p2-name').innerText = sc.p2.name;
+            // Fargo rating rides with the name, dimmer, nothing when unset
+            // (issue #27). `?? ''` also covers pre-#27 payloads with no key.
+            document.getElementById('bar-p1-fargo').innerText = sc.p1.fargo ?? '';
+            document.getElementById('bar-p2-fargo').innerText = sc.p2.fargo ?? '';
             setBarScore('p1', sc.p1.score);
             setBarScore('p2', sc.p2.score);
             scoresEl.classList.toggle('no-race', sc.race_to == null);

@@ -343,6 +343,7 @@ source = { editable = "." }
 dependencies = [
     { name = "androidtvremote2" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pillow" },
@@ -357,7 +358,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
@@ -369,6 +369,7 @@ dev = [
 requires-dist = [
     { name = "androidtvremote2", specifier = ">=0.3.1" },
     { name = "fastapi", specifier = ">=0.140.6" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "numpy" },
     { name = "opencv-python" },
     { name = "pillow", specifier = ">=12.3.0" },
@@ -383,7 +384,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },

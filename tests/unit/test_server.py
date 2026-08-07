@@ -5,13 +5,14 @@ import json
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
 from fastapi import WebSocket
 from fastapi.testclient import TestClient
 
 import cueclock.server.app as server_app
 from cueclock.clock import State
-from cueclock.server import create_app
+from cueclock.server import create_app, fargo
 from cueclock.server.hub import Hub
 from cueclock.server.score import MatchScore
 
@@ -44,8 +45,8 @@ def test_state_snapshot_shape() -> None:
         assert snap["base"] == 30
         assert snap["vision"] is True
         assert snap["score"] == {
-            "p1": {"name": "PLAYER 1", "score": 0},
-            "p2": {"name": "PLAYER 2", "score": 0},
+            "p1": {"name": "PLAYER 1", "score": 0, "fargo": None},
+            "p2": {"name": "PLAYER 2", "score": 0, "fargo": None},
             "race_to": None,
         }
 
@@ -314,11 +315,12 @@ def test_score_persistence_round_trip(tmp_path: Path) -> None:
     with TestClient(create_app(score_path=path)) as client:
         client.post("/api/score/p1/increment")
         client.post("/api/score/config", json={"p2_name": "VISITOR", "race_to": 7})
+        client.post("/api/score/config", json={"p2_fargo": 471})
     # A fresh server (mid-match crash restart) reloads the same score.
     with TestClient(create_app(score_path=path)) as client:
         assert client.get("/api/score").json() == {
-            "p1": {"name": "PLAYER 1", "score": 1},
-            "p2": {"name": "VISITOR", "score": 0},
+            "p1": {"name": "PLAYER 1", "score": 1, "fargo": None},
+            "p2": {"name": "VISITOR", "score": 0, "fargo": 471},
             "race_to": 7,
         }
 
@@ -327,9 +329,87 @@ def test_score_corrupt_file_falls_back_to_defaults(tmp_path: Path) -> None:
     path = tmp_path / "score.json"
     path.write_text("{not json")
     score = MatchScore(path=path)
-    assert score.as_dict()["p1"] == {"name": "PLAYER 1", "score": 0}
+    assert score.as_dict()["p1"] == {"name": "PLAYER 1", "score": 0, "fargo": None}
     score.adjust("p1", 1)  # next mutation rewrites a clean file
     assert MatchScore(path=path).p1_score == 1
+
+
+def test_score_fargo_set_and_cleared_by_rename() -> None:
+    """A rating belongs to a name (issue #27): renaming clears it."""
+    with make_client() as client:
+        client.post("/api/score/config", json={"p1_name": "STEVEN"})
+        resp = client.post("/api/score/config", json={"p1_fargo": 471}).json()
+        assert resp["score"]["p1"]["fargo"] == 471
+        # Same name again — the rating stays put.
+        resp = client.post("/api/score/config", json={"p1_name": "STEVEN"}).json()
+        assert resp["score"]["p1"]["fargo"] == 471
+        # Scores reset keeps the rating (next match, same players).
+        assert client.post("/api/score/reset").json()["score"]["p1"]["fargo"] == 471
+        # A different name means a different person: stale rating dropped.
+        resp = client.post("/api/score/config", json={"p1_name": "HANK"}).json()
+        assert resp["score"]["p1"]["fargo"] is None
+        # Name + rating in one update is the pick flow — both land.
+        resp = client.post("/api/score/config", json={"p2_name": "SHANE", "p2_fargo": 847}).json()
+        assert resp["score"]["p2"] == {"name": "SHANE", "score": 0, "fargo": 847}
+        # Explicit null clears (the "not established" case).
+        resp = client.post("/api/score/config", json={"p2_fargo": None}).json()
+        assert resp["score"]["p2"]["fargo"] is None
+
+
+def test_fargo_search_normalizes_upstream_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The proxy flattens FargoRate's rows to what the pick-list renders."""
+
+    async def fake_fetch(q: str) -> dict[str, object]:
+        assert q == "John Smith"
+        return {
+            "value": [
+                {
+                    "firstName": "John",
+                    "lastName": "Smith",
+                    "location": "Des Moines IA",
+                    "effectiveRating": "404",
+                    "robustness": "1318",
+                },
+                # Provisional: under 200 recorded games.
+                {
+                    "firstName": "JOHNATHON",
+                    "lastName": "SMITH",
+                    "location": "OK",
+                    "effectiveRating": "365",
+                    "robustness": "4",
+                },
+                # Unparseable rating: nothing to display, row dropped.
+                {"firstName": "J", "lastName": "S", "effectiveRating": None},
+            ]
+        }
+
+    monkeypatch.setattr(fargo, "_fetch", fake_fetch)
+    with make_client() as client:
+        resp = client.get("/api/fargo/search", params={"q": "John Smith"}).json()
+    assert resp["ok"] is True
+    assert resp["players"] == [
+        {"name": "John Smith", "location": "Des Moines IA", "rating": 404, "established": True},
+        {"name": "JOHNATHON SMITH", "location": "OK", "rating": 365, "established": False},
+    ]
+
+
+def test_fargo_search_upstream_failure_is_502(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FargoRate down must degrade to "no rating", never break the page."""
+
+    async def fake_fetch(q: str) -> dict[str, object]:
+        raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr(fargo, "_fetch", fake_fetch)
+    with make_client() as client:
+        resp = client.get("/api/fargo/search", params={"q": "Steven Asten"})
+    assert resp.status_code == 502
+    assert resp.json()["ok"] is False
+
+
+def test_fargo_search_empty_query_is_400() -> None:
+    with make_client() as client:
+        assert client.get("/api/fargo/search", params={"q": "  "}).status_code == 400
+        assert client.get("/api/fargo/search").status_code == 400
 
 
 def test_idle_break_gate() -> None:

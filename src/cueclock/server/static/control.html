@@ -97,6 +97,21 @@
         input[type="text"]:focus { outline: none; border-color: var(--accent); }
         input::placeholder { color: #55606C; }
 
+        /* ---- Fargo lookup (issue #27) ---- */
+        .fargo-badge { color: var(--accent); margin-left: 6px; }
+        .fargo-results { display: flex; flex-direction: column; gap: 6px; max-height: 244px; overflow-y: auto; }
+        .fargo-results button {
+            display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+            padding: 10px 12px; font-size: 14px; font-weight: 500; text-align: left;
+        }
+        .fargo-results .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fargo-results .who .loc { color: var(--slate); }
+        .fargo-results .rating {
+            font-variant-numeric: tabular-nums; font-weight: 700; white-space: nowrap;
+        }
+        .fargo-results .rating .prov { color: var(--slate); font-weight: 500; font-size: 12px; }
+        .fargo-results .note { color: var(--slate); font-size: 13px; }
+
         .stepper { display: flex; align-items: stretch; gap: 8px; }
         .stepper button { min-width: 52px; font-size: 21px; padding: 8px 0; }
         .stepper .val {
@@ -147,8 +162,9 @@
         <h2>Match</h2>
         <div class="players">
             <div class="player">
-                <label for="p1-name">Player 1</label>
-                <input type="text" id="p1-name" placeholder="Player 1" onchange="postConfig()">
+                <label for="p1-name">Player 1<span class="fargo-badge" id="p1-fargo-badge" hidden></span></label>
+                <input type="text" id="p1-name" placeholder="Player 1" onchange="nameChanged('p1')">
+                <div class="fargo-results" id="p1-fargo-results" hidden></div>
                 <div class="stepper">
                     <button aria-label="Player 1 minus one" onclick="post('/api/score/p1/decrement')">&minus;</button>
                     <div class="val" id="p1-score">–</div>
@@ -156,8 +172,9 @@
                 </div>
             </div>
             <div class="player">
-                <label for="p2-name">Player 2</label>
-                <input type="text" id="p2-name" placeholder="Player 2" onchange="postConfig()">
+                <label for="p2-name">Player 2<span class="fargo-badge" id="p2-fargo-badge" hidden></span></label>
+                <input type="text" id="p2-name" placeholder="Player 2" onchange="nameChanged('p2')">
+                <div class="fargo-results" id="p2-fargo-results" hidden></div>
                 <div class="stepper">
                     <button aria-label="Player 2 minus one" onclick="post('/api/score/p2/decrement')">&minus;</button>
                     <div class="val" id="p2-score">–</div>
@@ -288,8 +305,89 @@
         document.getElementById('p2-score').innerText = sc.p2.score;
         syncInput('p1-name', sc.p1.name);
         syncInput('p2-name', sc.p2.name);
+        renderFargoBadge('p1', sc.p1.fargo);
+        renderFargoBadge('p2', sc.p2.fargo);
         raceTo = sc.race_to;
         document.getElementById('race-to').innerText = raceTo == null ? '–' : raceTo;
+    }
+
+    // ---- Fargo lookup (issue #27) ----
+    // Entering a name searches FargoRate (via the server proxy — the
+    // dashboard sends no CORS headers) and offers the matches under the
+    // input. Picking one attaches the rating; the pick is always a human
+    // tap, never automatic, because the location column is the only thing
+    // that separates fifty John Smiths. The server clears a rating whenever
+    // its name changes, so skipping or dismissing needs no cleanup here.
+    function renderFargoBadge(p, fargo) {
+        const el = document.getElementById(p + '-fargo-badge');
+        el.hidden = fargo == null;
+        el.innerText = fargo == null ? '' : `· Fargo ${fargo}`;
+    }
+    function fargoNote(panel, text) {
+        panel.innerHTML = '';
+        const note = document.createElement('button');
+        note.className = 'ghost note';
+        note.textContent = text;
+        note.onclick = () => { panel.hidden = true; };
+        panel.appendChild(note);
+        panel.hidden = false;
+    }
+    function fargoRow(p, panel, pl) {
+        const btn = document.createElement('button');
+        btn.onclick = () => pickFargo(p, panel, pl.rating);
+        const who = document.createElement('span');
+        who.className = 'who';
+        who.textContent = pl.name + ' ';
+        const loc = document.createElement('span');
+        loc.className = 'loc';
+        loc.textContent = pl.location;
+        who.appendChild(loc);
+        const rating = document.createElement('span');
+        rating.className = 'rating';
+        rating.textContent = String(pl.rating);
+        if (!pl.established) {
+            rating.append(' ');
+            const prov = document.createElement('span');
+            prov.className = 'prov';
+            prov.textContent = 'prov';
+            rating.appendChild(prov);
+        }
+        btn.append(who, rating);
+        return btn;
+    }
+    async function nameChanged(p) {
+        await postConfig();
+        const name = document.getElementById(p + '-name').value.trim();
+        const panel = document.getElementById(p + '-fargo-results');
+        if (!name) { panel.hidden = true; return; }
+        fargoNote(panel, 'Searching Fargo…');
+        let res = null;
+        try {
+            res = await fetch('/api/fargo/search?q=' + encodeURIComponent(name)).then(x => x.json());
+        } catch (e) {}
+        // The operator may have retyped while we waited — stale results lie.
+        if (document.getElementById(p + '-name').value.trim() !== name) return;
+        if (!res || !res.ok) { fargoNote(panel, 'Fargo unreachable — tap to dismiss'); return; }
+        if (!res.players.length) { fargoNote(panel, 'No Fargo match — tap to dismiss'); return; }
+        panel.innerHTML = '';
+        // 20 is plenty to scroll on a phone; past that the fix is a fuller name.
+        for (const pl of res.players.slice(0, 20)) panel.appendChild(fargoRow(p, panel, pl));
+        const skip = document.createElement('button');
+        skip.className = 'ghost note';
+        skip.textContent = res.players.length > 20
+            ? `${res.players.length} matches — refine the name, or skip the rating`
+            : 'Not them / no rating — skip';
+        skip.onclick = () => { panel.hidden = true; };
+        panel.appendChild(skip);
+        panel.hidden = false;
+    }
+    async function pickFargo(p, panel, rating) {
+        panel.hidden = true;
+        await fetch('/api/score/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [p + '_fargo']: rating }),
+        });
     }
     async function postConfig(race) {
         await fetch('/api/score/config', {

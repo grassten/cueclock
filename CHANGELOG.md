@@ -232,7 +232,26 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
-- **2026-08-06 (checkpoint 75 — the hub learns the break, §13's E8/E9 land):**
+- **2026-08-06 (checkpoint 76 — FargoRate on the scorecard, #27):** Entering a
+  player name on the control page now searches FargoRate and offers the matches
+  in a pick-list under the input — name + location left, rating right,
+  sub-200-robustness ratings marked `prov` (FargoRate's own established
+  threshold), a skip row for unlisted players. Attaching is always a human tap,
+  never automatic, even on a single result: the location column is the only
+  thing that separates the fifty John Smiths the API returns. The rating rides
+  the score payload (`fargo` per player), badges the control-page label, and
+  sits one step quieter than the name on the bar scoreboard. Server side:
+  `GET /api/fargo/search` proxies `dashboard.fargorate.com/api/indexsearch`
+  (no CORS headers upstream, so the browser can't ask directly; httpx moved
+  dev→main deps), 502 on upstream failure — an outage degrades to "no rating",
+  never touches clock or score. `/api/score/config` gains `p1_fargo`/`p2_fargo`
+  (int sets, null clears); a name change without a rating in the same update
+  clears the old one — a rating belongs to a name. Persisted with the score,
+  survives `score/reset` (next match, same players). Unit suite +5 (normalize,
+  502, empty query, clear-on-rename, persistence); detection untouched, corpus
+  not rerun. Not visually verified on the wall: OBS was closed overnight — the
+  no-rating bar renders pixel-identical to before, so only the with-rating
+  layout needs a glance.
   Seven flag dumps triaged from today's two sessions. Three were checkpoint 74's
   own clips, already promoted but left in staging by a `cp`-not-`mv` — deleted.
   The four new ones divided exactly along §13.0's Pareto, and the fixes went
