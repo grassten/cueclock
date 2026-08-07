@@ -251,7 +251,10 @@ survive unchanged in `design.md`.
   502, empty query, clear-on-rename, persistence); detection untouched, corpus
   not rerun. Not visually verified on the wall: OBS was closed overnight — the
   no-rating bar renders pixel-identical to before, so only the with-rating
-  layout needs a glance.
+  layout needs a glance. Follow-up (2026-08-07, live feedback): an explicit
+  Fargo button beside each name field — the `change` trigger never fires for
+  a name that is already right (Steven's persisted name retyped identically
+  searched nothing while a fresh name beside it worked first try).
   Seven flag dumps triaged from today's two sessions. Three were checkpoint 74's
   own clips, already promoted but left in staging by a `cp`-not-`mv` — deleted.
   The four new ones divided exactly along §13.0's Pareto, and the fixes went

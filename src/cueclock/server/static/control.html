@@ -99,6 +99,12 @@
 
         /* ---- Fargo lookup (issue #27) ---- */
         .fargo-badge { color: var(--accent); margin-left: 6px; }
+        .namerow { display: flex; gap: 8px; }
+        .namerow input { flex: 1; min-width: 0; }
+        .namerow .fargo-go {
+            padding: 0 14px; font-size: 12px; font-weight: 700;
+            letter-spacing: 1.2px; text-transform: uppercase; color: var(--slate);
+        }
         .fargo-results { display: flex; flex-direction: column; gap: 6px; max-height: 244px; overflow-y: auto; }
         .fargo-results button {
             display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
@@ -163,7 +169,13 @@
         <div class="players">
             <div class="player">
                 <label for="p1-name">Player 1<span class="fargo-badge" id="p1-fargo-badge" hidden></span></label>
-                <input type="text" id="p1-name" placeholder="Player 1" onchange="nameChanged('p1')">
+                <!-- The button exists because onchange alone is undiscoverable
+                     and never fires for a name that is already right (a
+                     persisted name retyped identically is not a change). -->
+                <div class="namerow">
+                    <input type="text" id="p1-name" placeholder="Player 1" onchange="nameChanged('p1')">
+                    <button class="fargo-go" onclick="fargoSearch('p1')">Fargo</button>
+                </div>
                 <div class="fargo-results" id="p1-fargo-results" hidden></div>
                 <div class="stepper">
                     <button aria-label="Player 1 minus one" onclick="post('/api/score/p1/decrement')">&minus;</button>
@@ -173,7 +185,10 @@
             </div>
             <div class="player">
                 <label for="p2-name">Player 2<span class="fargo-badge" id="p2-fargo-badge" hidden></span></label>
-                <input type="text" id="p2-name" placeholder="Player 2" onchange="nameChanged('p2')">
+                <div class="namerow">
+                    <input type="text" id="p2-name" placeholder="Player 2" onchange="nameChanged('p2')">
+                    <button class="fargo-go" onclick="fargoSearch('p2')">Fargo</button>
+                </div>
                 <div class="fargo-results" id="p2-fargo-results" hidden></div>
                 <div class="stepper">
                     <button aria-label="Player 2 minus one" onclick="post('/api/score/p2/decrement')">&minus;</button>
@@ -357,6 +372,9 @@
     }
     async function nameChanged(p) {
         await postConfig();
+        fargoSearch(p);
+    }
+    async function fargoSearch(p) {
         const name = document.getElementById(p + '-name').value.trim();
         const panel = document.getElementById(p + '-fargo-results');
         if (!name) { panel.hidden = true; return; }
