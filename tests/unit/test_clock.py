@@ -345,7 +345,7 @@ def test_push_during_motion_arms_the_following_settle() -> None:
 
 
 def test_settle_in_idle_is_ignored() -> None:
-    # Racking after Set up genuinely moves and settles balls; the countdown
+    # Racking after New Rack genuinely moves and settles balls; the countdown
     # must wait for the break (2026-07-31 live failure).
     clock = make_clock("wnt_9ball")
     clock.new_rack(now=0.0)

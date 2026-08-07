@@ -217,7 +217,7 @@
 
     <!-- Clock: the same vocabulary as the deck (hardware.md §C2), because this
          is the deck's fallback surface and the two must not disagree.
-         Set up: you're racking or throwing balls back up — clock parks,
+         New Rack: you're racking or throwing balls back up — clock parks,
          extensions refill, shot count zeroes. Push: 9-ball push-out call.
          Start N: the clock is wrong and you're about to shoot — fresh
          countdown running now, labelled with the time it will hand you. -->
@@ -232,7 +232,7 @@
         </div>
         <div class="grid">
             <button class="primary" id="start-n" onclick="post('/api/restart')">Start</button>
-            <button onclick="post('/api/rack')">Set up</button>
+            <button onclick="post('/api/rack')">New Rack</button>
             <button onclick="post('/api/push')">Push</button>
             <button onclick="post('/api/extension')">Extension</button>
             <button onclick="post('/api/pause')">Pause</button>

@@ -434,7 +434,7 @@ def test_a_tap_still_plays_the_last_shot_out_of_a_rack_length_buffer(
 def test_a_rack_that_has_not_started_plays_the_buffer_rather_than_failing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # `no_clock` has no SET UP key, so `rack_age_s` can be null while shots
+    # `no_clock` has no New Rack key, so `rack_age_s` can be null while shots
     # are being taken. A press still shows something.
     fake = FakeObs()
     fake.install(monkeypatch)

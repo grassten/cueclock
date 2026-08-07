@@ -68,7 +68,7 @@ FROZEN_WATCHDOG_SECONDS = 12.0
 # never recorded — that unpriced population is why the dark tier stays
 # shadow, and every settle now journals its rearrangement so the next
 # session prices it. Worst case for the fired tier, pre-accepted in the
-# plan (§13.4): a spurious IDLE→MOTION during racking costs one SET UP
+# plan (§13.4): a spurious IDLE→MOTION during racking costs one New Rack
 # press, against 13-22 missed-break presses per 30 sessions today.
 BREAK_FIRED_MIN_INVOLVED = 5
 BREAK_DARK_MIN_INVOLVED = 8
@@ -195,7 +195,7 @@ class Hub:
         self._last_shot_mono: float | None = None
         # Where the rack worth replaying starts — the other anchor the Replay
         # key seeks to, on a *held* press ("play the whole rack" rather than
-        # "play that shot"). It is the **break**, never the racking: SET UP only
+        # "play that shot"). It is the **break**, never the racking: New Rack only
         # *arms* the next shot to become it. So between racking and breaking the
         # anchor is still the rack that just ended, which is the whole point —
         # you run out, you rack up, and then you ask to see how you did it.
@@ -203,7 +203,7 @@ class Hub:
         # back as the buffer goes" — the same answer it already gives for an
         # anchor older than the buffer.
         self._rack_break_mono: float | None = None
-        self._rack_pending = False  # SET UP seen: the next shot is the break
+        self._rack_pending = False  # New Rack seen: the next shot is the break
         # #25 bookkeeping: a ScratchCandidate stands un-refuted (the vision
         # core guarantees exactly one verdict per candidate, within its 30 s
         # horizon), and whether it has already spent its one hold grant —
@@ -245,18 +245,18 @@ class Hub:
     def rack_age(self) -> float | None:
         """Seconds since the last break, or None if none has been seen.
 
-        Always the break, never the SET UP press — see the stamps in
+        Always the break, never the New Rack press — see the stamps in
         `__init__`. An age rather than a timestamp for the same reason
         `last_shot_age` is one: the caller is another process.
 
-        Between a SET UP press and the break that answers it this still reports
+        Between a New Rack press and the break that answers it this still reports
         the *previous* rack, deliberately. A table that has just been racked has
         nothing on it to watch, and the rack you want at that moment is the one
         you just played. Reporting the press instead was the live failure of
-        2026-08-05: SET UP, then a held Replay 2.0 s later, cued 595.1 s into a
+        2026-08-05: New Rack, then a held Replay 2.0 s later, cued 595.1 s into a
         598.5 s file and put 3.4 s of an empty table on the wall.
 
-        `no_clock` has no SET UP key at all, so out there this is the first
+        `no_clock` has no New Rack key at all, so out there this is the first
         shot of the session until something racks. That is the honest answer:
         a drill has no racks, and the deck's fallback (the whole buffer) is
         what "the rack" means when nothing has declared one.
@@ -407,7 +407,7 @@ class Hub:
         now = time.monotonic()
         self.clock.new_rack(now)
         self._idle_fire = None
-        # SET UP *arms* the next shot to become the replay anchor; it does not
+        # New Rack *arms* the next shot to become the replay anchor; it does not
         # retire the old one. Until the break lands there is nothing on the
         # table to watch, so the rack worth replaying is still the one that
         # just ended — see `rack_age`.
@@ -506,8 +506,8 @@ class Hub:
             detail["speed"] = round(speed_mms)
         self._last_shot_mono = time.monotonic()  # replay anchor — before every gate
         if self._rack_pending or self._rack_break_mono is None:
-            # The break: the first shot after a SET UP press, or the session's
-            # first shot (a `no_clock` drill has no SET UP key at all). From
+            # The break: the first shot after a New Rack press, or the session's
+            # first shot (a `no_clock` drill has no New Rack key at all). From
             # here on the rack replay opens on it, and the previous rack is
             # released. Ungated for the same reason as above.
             self._rack_break_mono = self._last_shot_mono

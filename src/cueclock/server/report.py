@@ -56,7 +56,7 @@ The first two are the headline "phantom candidates". The last two are counted
 apart because each is **shared with a different failure** and the journal
 cannot say which it saw: a split freeze reads identically to a real shot whose
 *settle* was missed, and a left-frozen clock reads identically to the operator
-pressing SET UP over a live roll-out.
+pressing New Rack over a live roll-out.
 
 ## Honest limits
 
@@ -539,7 +539,7 @@ def format_session(report: SessionReport) -> str:
         out.append("        — or the first shot's settle was missed; can't tell from here")
     if report.left_frozen:
         out.append(f"    {report.left_frozen} left frozen, rescued by an operator key")
-        out.append("        — or SET UP pressed over a live roll-out; can't tell from here")
+        out.append("        — or New Rack pressed over a live roll-out; can't tell from here")
     out.append("")
     if report.breaks_adjudicated or report.break_presses or report.dark_candidates:
         out.append(

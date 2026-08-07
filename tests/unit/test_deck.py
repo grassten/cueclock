@@ -158,7 +158,8 @@ def test_every_key_carries_its_group_stripe() -> None:
 
 def test_the_clock_group_is_exactly_the_keys_that_leave_with_the_clock() -> None:
     clock_keys = {k.name for k in LAYOUT if k.group is Group.CLOCK}
-    assert clock_keys == set(BY_NAME) - visible_names(NO_CLOCK) - {"ruleset", "setup", "p1", "p2"}
+    non_clock = {"ruleset", "new_rack", "p1", "p2"}
+    assert clock_keys == set(BY_NAME) - visible_names(NO_CLOCK) - non_clock
     for key in LAYOUT:
         if key.group is Group.CLOCK:
             assert key.modes is not None and key.modes <= CLOCKED, key.name

@@ -177,7 +177,7 @@ def test_html_pages_served() -> None:
 def test_vision_events_drive_clock() -> None:
     """The `cueclock run` wiring: a shot freezes the clock, its settle restarts it.
 
-    A settle in IDLE is a no-op — racking after Set up produces genuine
+    A settle in IDLE is a no-op — racking after New Rack produces genuine
     settles and must not start the countdown; the untimed break enters via
     ShotTaken (IDLE → MOTION) instead.
     """
@@ -761,7 +761,7 @@ def test_the_rack_anchor_is_the_break_and_stays_there_for_the_rack() -> None:
 def test_setting_up_keeps_the_rack_you_just_played_until_the_next_break() -> None:
     """The live failure of 2026-08-05, which is the common press.
 
-    You run out, you press SET UP, you hold Replay to watch how you did it.
+    You run out, you press New Rack, you hold Replay to watch how you did it.
     Retiring the anchor on the press cued 595.1 s into a 598.5 s file and put
     3.4 s of the empty table you had just cleared on the wall.
     """
@@ -780,7 +780,7 @@ def test_setting_up_keeps_the_rack_you_just_played_until_the_next_break() -> Non
 
 
 def test_the_rack_anchor_survives_the_gates_the_shot_anchor_does() -> None:
-    # Same reasoning as the shot anchor: a drill in `no_clock` has no SET UP
+    # Same reasoning as the shot anchor: a drill in `no_clock` has no New Rack
     # key, so its first shot is what "this rack" can mean out there.
     app = create_app()
     hub: Hub = app.state.hub

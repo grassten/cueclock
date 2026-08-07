@@ -50,7 +50,7 @@ class Group(Enum):
     """What a key's stripe colour says about how much time you have."""
 
     CLOCK = STRIPE_CLOCK  # seconds matter — extension, push, start
-    MATCH = STRIPE_MATCH  # between racks, no pressure — score, set up, ruleset
+    MATCH = STRIPE_MATCH  # between racks, no pressure — score, new rack, ruleset
     EVIDENCE = STRIPE_EVIDENCE  # flag and its reasons
     SYSTEM = STRIPE_SYSTEM  # session, mode, replay
 
@@ -355,17 +355,17 @@ LAYOUT: tuple[Key, ...] = (
     ),
     # --- the match: bottom row, blue block ---
     Key(3, 1, "ruleset", Group.MATCH, Cycle("ruleset"), modes=CLOCKED),
-    # One word for both clocked modes: racking is setting up, and so is
-    # throwing fifteen balls back up. Clock parks, extensions refill, shot
-    # count zeroes.
+    # One key for both clocked modes: racking a fresh rack and throwing
+    # fifteen balls back up are the same act to the clock. Clock parks,
+    # extensions refill, shot count zeroes.
     Key(
         3,
         2,
-        "setup",
+        "new_rack",
         Group.MATCH,
-        ApiPost("/api/rack", "SET", "ERROR"),
+        ApiPost("/api/rack", "RACK", "ERROR"),
         modes=CLOCKED,
-        text="SET\nUP",
+        text="NEW\nRACK",
     ),
     Key(3, 3, "p1", Group.MATCH, ScoreAdjust("p1"), modes=RACKED),
     Key(3, 4, "p2", Group.MATCH, ScoreAdjust("p2"), modes=RACKED),

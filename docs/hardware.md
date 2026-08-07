@@ -320,7 +320,7 @@ row 1   SESSION      MODE         START 30     PUSH         EXT ••
 row 2   REPLAY       FLAG         (·)          (·)          (·)
         ▁▁grey▁▁     ▁purple▁      ← the reason page unfolds here →
 
-row 3   RULESET      SET UP       P1  3        P2  2        (free)
+row 3   RULESET      NEW RACK     P1  3        P2  2        (free)
         ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
 
@@ -331,11 +331,11 @@ row 3   RULESET      SET UP       P1  3        P2  2        (free)
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left**, so the pool reads before the press instead of after a red `NO EXT`. Never removed inside a clocked mode — a spent pool shows as empty pips, which are the only readout of how many remain | `EXT` + one pip per extension, flashes `OK` / `NO EXT` | match, run out |
-| 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at the last break and plays that rack — including after SET UP, until the new rack is broken. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
+| 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at the last break and plays that rack — including after a New Rack press, until the new rack is broken. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
 | 2,2 | **Flag** | Opens the reason page at 2,3–2,5. The dump fires from whichever reason is pressed | `FLAG` → `WHY?` | always |
 | 2,3–2,5 | **Phantom / Missed / Other** | `POST /api/dump?label=flag_phantom` etc. Only visible while the page is open | `PHANTOM` / `MISSED` / `OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | reason page only |
 | 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` | current over next: `8-BALL`/`FINAL 10` | match, run out |
-| 3,2 | **Set up** | `POST /api/rack` — you're not shooting, you're setting up: clock parks, extensions refill, shot count zeroes. One word for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `SET UP`, flashes `SET` / `ERROR` | match, run out |
+| 3,2 | **New Rack** | `POST /api/rack` — you're not shooting, you're building the next rack: clock parks, extensions refill, shot count zeroes. One key for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `NEW RACK`, flashes `RACK` / `ERROR` | match, run out |
 | 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
 | 3,4 | **P2** | as P1 | `P2` over the score | match |
 | 3,5 | *(free)* | Held **I shot** (`POST /api/groundtruth`, #19) from 2026-08-02 until **2026-08-05, when it was removed**. The key was correct in every respect except the one that mattered: it asked the player to do something on every shot, and it was pressed in 2 sessions out of 29. The denominator it existed to provide was already in the journal — `ShotClock.balls_settled` bumps `rack_shots` exactly when vision missed the strike — so `cueclock report` now derives the miss rate with nothing asked of the table (`server/report.py`). The endpoint 404s on purpose, per the `/score` rule | — | — |
@@ -602,13 +602,13 @@ has to stay one press with nothing to read; the cost is that a tap now fires on
 gesture is acknowledged before the TV changes.
 
 **The rack anchor is the break, and only ever the break** (amended 2026-08-05,
-checkpoint 67). SET UP **arms** the next shot to become it rather than stamping
+checkpoint 67). New Rack **arms** the next shot to become it rather than stamping
 itself, so a rack replay opens on the break instead of on a minute of building a
 triangle — *and* keeps pointing at the rack you just played until the new one is
 actually broken. That second half is the common press: you run out, you rack up,
 then you hold Replay to see how you did it. Taking the press as the anchor made
 that press show the empty table you had just cleared (live failure below).
-`no_clock` has no SET UP key, so out there the anchor is the session's first shot
+`no_clock` has no New Rack key, so out there the anchor is the session's first shot
 until something racks — and a null anchor (or one older than the buffer) plays as
 much of the buffer as there is, the same fallback a stale shot anchor already had.
 
