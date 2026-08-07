@@ -2,13 +2,18 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Shot Clock Control</title>
     <style>
         /* The phone surface. Same palette as the wall overlay (issue #23), so
            the thing in your hand and the thing on the TV read as one product.
-           Nothing here is new capability — every control below already existed
-           on this page or on the deck; what changed is that you can find them. */
+
+           Two tabs for the page's two jobs: Play is everything touched
+           mid-game (clock keys, score bumps) laid out for a thumb — big
+           targets, nothing to scroll past; Setup is everything touched once a
+           match (names, Fargo, race, session). The old single scroll put the
+           clock keys below the fold on a phone, which is exactly when they
+           are needed in a hurry. */
         :root {
             color-scheme: dark;
             --ink: #0B0E13;
@@ -21,16 +26,19 @@
             --alarm: #FF4D4D;
             --text: #EDF1F5;
         }
-        * { box-sizing: border-box; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
         body {
             margin: 0;
-            padding: 20px 16px 64px;
+            /* Bottom padding clears the fixed tab bar plus the home indicator. */
+            padding: 16px 16px calc(84px + env(safe-area-inset-bottom));
             background: var(--ink);
             color: var(--text);
             font-family: -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', sans-serif;
             -webkit-font-smoothing: antialiased;
         }
-        .wrap { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+        .wrap { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+        main { display: flex; flex-direction: column; gap: 16px; }
+        [hidden] { display: none !important; }
 
         header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
         h1 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: .2px; }
@@ -50,17 +58,39 @@
             text-transform: uppercase; color: var(--slate); margin: 0;
         }
 
+        /* Touch first: :active is the feedback that actually exists on a
+           phone; :hover only ever fires on the Mac. touch-action kills the
+           double-tap-zoom delay on what is essentially a button panel. */
+        button {
+            background: #1A1F29; color: var(--text); border: 1px solid var(--line-strong);
+            border-radius: 9px; padding: 13px 10px; font-size: 15px; font-weight: 600;
+            cursor: pointer; font-family: inherit; touch-action: manipulation;
+            transition: background .12s, border-color .12s;
+        }
+        button:hover { background: #222836; }
+        button:active { background: #2A3140; }
+        button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        button.primary { background: var(--accent); border-color: var(--accent); color: #04121F; }
+        button.primary:hover { background: #3D97DA; }
+        button.primary:active { background: #4DA3E2; }
+        button.ghost { background: transparent; }
+        /* Destructive controls are outlined, never filled: a red slab beside
+           Start is a thing you hit by accident at the table. */
+        button.danger { color: var(--alarm); border-color: rgba(255,77,77,.4); background: transparent; }
+        button.danger:hover, button.danger:active { background: rgba(255,77,77,.1); }
+
+        /* ---- Play tab ---- */
         /* The clock readout wears the same face as the wall, so the two can
            never disagree about what the clock is doing. */
-        .readout { display: flex; align-items: center; gap: 18px; }
-        .readout .num {
-            font-size: 68px; font-weight: 700; line-height: .9;
+        .bigclock { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 4px 0; }
+        .bigclock .meta { display: flex; align-items: center; gap: 12px; }
+        .bigclock .num {
+            font-size: clamp(88px, 28vw, 120px); font-weight: 700; line-height: .9;
             font-variant-numeric: tabular-nums;
         }
-        .readout .num.urgent { color: var(--alarm); }
-        .readout .meta { display: flex; flex-direction: column; gap: 4px; }
+        .bigclock .num.urgent { color: var(--alarm); }
         .pill {
-            align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: 1.6px;
+            font-size: 11px; font-weight: 700; letter-spacing: 1.6px;
             text-transform: uppercase; padding: 4px 10px; border-radius: 999px;
             border: 1px solid var(--line-strong); color: var(--slate);
         }
@@ -68,23 +98,37 @@
         .pill.alarm { color: var(--alarm); border-color: rgba(255,77,77,.45); }
         .sub { font-size: 13px; color: var(--slate); }
 
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 9px; }
-        button {
-            background: #1A1F29; color: var(--text); border: 1px solid var(--line-strong);
-            border-radius: 9px; padding: 13px 10px; font-size: 15px; font-weight: 600;
-            cursor: pointer; font-family: inherit; transition: background .12s, border-color .12s;
-        }
-        button:hover { background: #222836; }
-        button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-        button.primary { background: var(--accent); border-color: var(--accent); color: #04121F; }
-        button.primary:hover { background: #3D97DA; }
-        button.ghost { background: transparent; }
-        /* Destructive controls are outlined, never filled: a red slab beside
-           Start is a thing you hit by accident at the table. */
-        button.danger { color: var(--alarm); border-color: rgba(255,77,77,.4); background: transparent; }
-        button.danger:hover { background: rgba(255,77,77,.1); }
+        /* In-play keys, sized for eyes-on-the-table taps (HIG floor is 44pt;
+           these are deliberately past it). Same vocabulary as the deck
+           (hardware.md §C2) — this is its fallback surface and the two must
+           not disagree. New Rack: racking / throwing balls back up. Push:
+           9-ball push-out call. Start N: the clock is wrong and you're about
+           to shoot — fresh countdown running now, labelled with the time it
+           will hand you. */
+        .keys { display: flex; flex-direction: column; gap: 10px; }
+        .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button.xl { min-height: 60px; font-size: 18px; }
+        button.lg { min-height: 54px; font-size: 16px; }
 
-        .players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .scorerow { display: flex; align-items: center; gap: 12px; }
+        .scorerow .who {
+            flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; font-size: 15px; font-weight: 600;
+        }
+        .scorerow .who .fargo-badge { font-size: 12px; font-weight: 500; }
+        .mini { display: flex; align-items: stretch; gap: 8px; }
+        .mini button { min-width: 48px; min-height: 48px; font-size: 20px; padding: 0; }
+        .mini .val {
+            min-width: 52px; display: flex; align-items: center; justify-content: center;
+            background: var(--field); border: 1px solid var(--line); border-radius: 9px;
+            font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums;
+        }
+        .racechip {
+            text-align: center; font-size: 12px; letter-spacing: 1.4px;
+            text-transform: uppercase; color: var(--slate);
+        }
+
+        /* ---- Setup tab ---- */
         .player { display: flex; flex-direction: column; gap: 9px; }
         label {
             font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
@@ -123,11 +167,10 @@
         .stepper .val {
             flex: 1; display: flex; align-items: center; justify-content: center;
             background: var(--field); border: 1px solid var(--line); border-radius: 9px;
-            font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums;
+            font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums;
         }
         .race { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .race .stepper { flex: 1; min-width: 210px; }
-        .race .stepper .val { font-size: 24px; }
         .hint { font-size: 12.5px; color: var(--slate); margin: 0; }
 
         .field { display: flex; flex-direction: column; gap: 7px; }
@@ -148,8 +191,28 @@
 
         .danger-row { display: flex; justify-content: flex-end; }
 
+        /* ---- Tab bar ---- */
+        /* Fixed to the bottom because that is the reach zone a thumb owns;
+           safe-area padding keeps it off the home indicator. */
+        .tabbar {
+            position: fixed; bottom: 0; left: 0; right: 0; display: flex;
+            background: rgba(11,14,19,.94); backdrop-filter: blur(8px);
+            border-top: 1px solid var(--line);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        .tabbar button {
+            flex: 1; background: none; border: none; border-radius: 0;
+            color: var(--slate); font-size: 11px; font-weight: 700;
+            letter-spacing: 1.2px; text-transform: uppercase;
+            padding: 10px 0 12px; display: flex; flex-direction: column;
+            align-items: center; gap: 3px;
+        }
+        .tabbar button:hover, .tabbar button:active { background: rgba(255,255,255,.04); }
+        .tabbar button .glyph { font-size: 20px; line-height: 1; }
+        .tabbar button.active { color: var(--accent); }
+
         @media (max-width: 460px) {
-            .players, .two { grid-template-columns: 1fr; }
+            .two { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -161,114 +224,143 @@
         <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">Connecting</span></div>
     </header>
 
-    <!-- Match first: it is what this page gets opened on a phone to do, and
-         until now it was the last thing on a long scroll under the vision
-         kill switch. -->
-    <section>
-        <h2>Match</h2>
-        <div class="players">
-            <div class="player">
-                <label for="p1-name">Player 1<span class="fargo-badge" id="p1-fargo-badge" hidden></span></label>
-                <!-- The button exists because onchange alone is undiscoverable
-                     and never fires for a name that is already right (a
-                     persisted name retyped identically is not a change). -->
-                <div class="namerow">
-                    <input type="text" id="p1-name" placeholder="Player 1" onchange="nameChanged('p1')">
-                    <button class="fargo-go" onclick="fargoSearch('p1')">Fargo</button>
+    <!-- Play: the mid-game surface. Loads first because a page grabbed in a
+         hurry must never be on the wrong tab.
+         No Reset clock key: the deck never had one and the journals show 7
+         presses ever, all in the rig's first three days (bug recovery, since
+         fixed). The /api/reset endpoint stays — design.md §2.1. -->
+    <main id="view-play">
+            <section>
+                <div class="bigclock">
+                    <div class="meta">
+                        <span class="pill" id="state">—</span>
+                        <span class="sub" id="extensions"></span>
+                    </div>
+                    <div class="num" id="time">–</div>
                 </div>
-                <div class="fargo-results" id="p1-fargo-results" hidden></div>
-                <div class="stepper">
-                    <button aria-label="Player 1 minus one" onclick="post('/api/score/p1/decrement')">&minus;</button>
-                    <div class="val" id="p1-score">–</div>
-                    <button aria-label="Player 1 plus one" onclick="post('/api/score/p1/increment')">+</button>
+                <div class="keys">
+                    <button class="primary xl" id="start-n" onclick="post('/api/restart')">Start</button>
+                    <div class="grid2">
+                        <button class="lg" onclick="post('/api/rack')">New Rack</button>
+                        <button class="lg" onclick="post('/api/extension')">Extension</button>
+                    </div>
+                    <div class="grid2">
+                        <button onclick="post('/api/push')">Push</button>
+                        <button onclick="post('/api/pause')">Pause</button>
+                    </div>
                 </div>
-            </div>
-            <div class="player">
-                <label for="p2-name">Player 2<span class="fargo-badge" id="p2-fargo-badge" hidden></span></label>
-                <div class="namerow">
-                    <input type="text" id="p2-name" placeholder="Player 2" onchange="nameChanged('p2')">
-                    <button class="fargo-go" onclick="fargoSearch('p2')">Fargo</button>
+            </section>
+
+            <section>
+                <h2>Score</h2>
+                <div class="scorerow">
+                    <span class="who"><span id="p1-row-name">Player 1</span><span class="fargo-badge" id="p1-row-fargo" hidden></span></span>
+                    <div class="mini">
+                        <button aria-label="Player 1 minus one" onclick="post('/api/score/p1/decrement')">&minus;</button>
+                        <div class="val" id="p1-score">–</div>
+                        <button aria-label="Player 1 plus one" onclick="post('/api/score/p1/increment')">+</button>
+                    </div>
                 </div>
-                <div class="fargo-results" id="p2-fargo-results" hidden></div>
-                <div class="stepper">
-                    <button aria-label="Player 2 minus one" onclick="post('/api/score/p2/decrement')">&minus;</button>
-                    <div class="val" id="p2-score">–</div>
-                    <button aria-label="Player 2 plus one" onclick="post('/api/score/p2/increment')">+</button>
+                <div class="scorerow">
+                    <span class="who"><span id="p2-row-name">Player 2</span><span class="fargo-badge" id="p2-row-fargo" hidden></span></span>
+                    <div class="mini">
+                        <button aria-label="Player 2 minus one" onclick="post('/api/score/p2/decrement')">&minus;</button>
+                        <div class="val" id="p2-score">–</div>
+                        <button aria-label="Player 2 plus one" onclick="post('/api/score/p2/increment')">+</button>
+                    </div>
                 </div>
-            </div>
-        </div>
+                <div class="racechip" id="race-chip"></div>
+            </section>
+    </main>
 
-        <!-- A stepper, not <input type="number">: on a phone that control is
-             either two tiny arrows or a whole numeric keyboard, for a value
-             that is almost always 5, 7 or 9. -->
-        <div class="race">
-            <label for="race-to" style="min-width:64px">Race to</label>
-            <div class="stepper">
-                <button aria-label="Race to, one fewer" onclick="stepRace(-1)">&minus;</button>
-                <div class="val" id="race-to">–</div>
-                <button aria-label="Race to, one more" onclick="stepRace(1)">+</button>
-            </div>
-            <button class="ghost" onclick="clearRace()">Clear</button>
-        </div>
-        <p class="hint">Cleared means casual &mdash; the wall hides the race line entirely.</p>
+    <!-- Setup: touched once a match. -->
+    <main id="view-setup" hidden>
+            <section>
+                <h2>Players</h2>
+                <div class="player">
+                    <label for="p1-name">Player 1<span class="fargo-badge" id="p1-fargo-badge" hidden></span></label>
+                    <!-- The button exists because onchange alone is undiscoverable
+                         and never fires for a name that is already right (a
+                         persisted name retyped identically is not a change). -->
+                    <div class="namerow">
+                        <input type="text" id="p1-name" placeholder="Player 1" onchange="nameChanged('p1')">
+                        <button class="fargo-go" onclick="fargoSearch('p1')">Fargo</button>
+                    </div>
+                    <div class="fargo-results" id="p1-fargo-results" hidden></div>
+                </div>
+                <div class="player">
+                    <label for="p2-name">Player 2<span class="fargo-badge" id="p2-fargo-badge" hidden></span></label>
+                    <div class="namerow">
+                        <input type="text" id="p2-name" placeholder="Player 2" onchange="nameChanged('p2')">
+                        <button class="fargo-go" onclick="fargoSearch('p2')">Fargo</button>
+                    </div>
+                    <div class="fargo-results" id="p2-fargo-results" hidden></div>
+                </div>
 
-        <div class="danger-row"><button class="danger" onclick="resetScores()">Reset scores</button></div>
-    </section>
+                <!-- A stepper, not <input type="number">: on a phone that control is
+                     either two tiny arrows or a whole numeric keyboard, for a value
+                     that is almost always 5, 7 or 9. -->
+                <div class="race">
+                    <label for="race-to" style="min-width:64px">Race to</label>
+                    <div class="stepper">
+                        <button aria-label="Race to, one fewer" onclick="stepRace(-1)">&minus;</button>
+                        <div class="val" id="race-to">–</div>
+                        <button aria-label="Race to, one more" onclick="stepRace(1)">+</button>
+                    </div>
+                    <button class="ghost" onclick="clearRace()">Clear</button>
+                </div>
+                <p class="hint">Cleared means casual &mdash; the wall hides the race line entirely.</p>
 
-    <!-- Clock: the same vocabulary as the deck (hardware.md §C2), because this
-         is the deck's fallback surface and the two must not disagree.
-         New Rack: you're racking or throwing balls back up — clock parks,
-         extensions refill, shot count zeroes. Push: 9-ball push-out call.
-         Start N: the clock is wrong and you're about to shoot — fresh
-         countdown running now, labelled with the time it will hand you. -->
-    <section>
-        <h2>Clock</h2>
-        <div class="readout">
-            <div class="num" id="time">–</div>
-            <div class="meta">
-                <span class="pill" id="state">—</span>
-                <span class="sub" id="extensions"></span>
-            </div>
-        </div>
-        <div class="grid">
-            <button class="primary" id="start-n" onclick="post('/api/restart')">Start</button>
-            <button onclick="post('/api/rack')">New Rack</button>
-            <button onclick="post('/api/push')">Push</button>
-            <button onclick="post('/api/extension')">Extension</button>
-            <button onclick="post('/api/pause')">Pause</button>
-        </div>
-        <div class="danger-row"><button class="danger" onclick="post('/api/reset')">Reset clock</button></div>
-    </section>
+                <div class="danger-row"><button class="danger" onclick="resetScores()">Reset scores</button></div>
+            </section>
 
-    <section>
-        <h2>Session</h2>
-        <div class="two">
-            <div class="field">
-                <label for="ruleset">Ruleset</label>
-                <select id="ruleset" onchange="setRuleset(this.value)"></select>
-            </div>
-            <div class="field">
-                <!-- Session mode — orthogonal to the ruleset (design.md §2.1).
-                     match: rack rules + the break gate. run_out: no rack, so no
-                     first-shot allowance. no_clock: vision keeps journaling but
-                     never drives the clock. Mirrored here because the deck's
-                     Mode key is otherwise the only way out of no_clock. -->
-                <label for="mode">Mode</label>
-                <select id="mode" onchange="setMode(this.value)"></select>
-            </div>
-        </div>
-        <div class="vision">
-            <div class="txt">
-                <b>Vision</b>
-                <span class="hint">Off means shots and settles stop moving the clock.</span>
-            </div>
-            <button id="vision" onclick="toggleVision()">—</button>
-        </div>
-    </section>
+            <section>
+                <h2>Session</h2>
+                <div class="two">
+                    <div class="field">
+                        <label for="ruleset">Ruleset</label>
+                        <select id="ruleset" onchange="setRuleset(this.value)"></select>
+                    </div>
+                    <div class="field">
+                        <!-- Session mode — orthogonal to the ruleset (design.md §2.1).
+                             match: rack rules + the break gate. run_out: no rack, so no
+                             first-shot allowance. no_clock: vision keeps journaling but
+                             never drives the clock. Mirrored here because the deck's
+                             Mode key is otherwise the only way out of no_clock. -->
+                        <label for="mode">Mode</label>
+                        <select id="mode" onchange="setMode(this.value)"></select>
+                    </div>
+                </div>
+                <div class="vision">
+                    <div class="txt">
+                        <b>Vision</b>
+                        <span class="hint">Off means shots and settles stop moving the clock.</span>
+                    </div>
+                    <button id="vision" onclick="toggleVision()">—</button>
+                </div>
+            </section>
+    </main>
 
 </div>
 
+<nav class="tabbar">
+    <button class="active" id="tab-play" onclick="showTab('play')" aria-label="Play tab">
+        <span class="glyph">&#9201;</span>Play
+    </button>
+    <button id="tab-setup" onclick="showTab('setup')" aria-label="Setup tab">
+        <span class="glyph">&#9881;</span>Setup
+    </button>
+</nav>
+
 <script>
+    // ---- Tabs ----
+    function showTab(which) {
+        document.getElementById('view-play').hidden = which !== 'play';
+        document.getElementById('view-setup').hidden = which !== 'setup';
+        document.getElementById('tab-play').classList.toggle('active', which === 'play');
+        document.getElementById('tab-setup').classList.toggle('active', which === 'setup');
+    }
+
     async function post(url) {
         await fetch(url, { method: 'POST' });
     }
@@ -318,12 +410,16 @@
     function renderScore(sc) {
         document.getElementById('p1-score').innerText = sc.p1.score;
         document.getElementById('p2-score').innerText = sc.p2.score;
+        document.getElementById('p1-row-name').innerText = sc.p1.name || 'Player 1';
+        document.getElementById('p2-row-name').innerText = sc.p2.name || 'Player 2';
         syncInput('p1-name', sc.p1.name);
         syncInput('p2-name', sc.p2.name);
         renderFargoBadge('p1', sc.p1.fargo);
         renderFargoBadge('p2', sc.p2.fargo);
         raceTo = sc.race_to;
         document.getElementById('race-to').innerText = raceTo == null ? '–' : raceTo;
+        document.getElementById('race-chip').innerText =
+            raceTo == null ? 'Casual — no race' : `Race to ${raceTo}`;
     }
 
     // ---- Fargo lookup (issue #27) ----
@@ -334,9 +430,12 @@
     // that separates fifty John Smiths. The server clears a rating whenever
     // its name changes, so skipping or dismissing needs no cleanup here.
     function renderFargoBadge(p, fargo) {
-        const el = document.getElementById(p + '-fargo-badge');
-        el.hidden = fargo == null;
-        el.innerText = fargo == null ? '' : `· Fargo ${fargo}`;
+        const label = document.getElementById(p + '-fargo-badge');
+        label.hidden = fargo == null;
+        label.innerText = fargo == null ? '' : `· Fargo ${fargo}`;
+        const row = document.getElementById(p + '-row-fargo');
+        row.hidden = fargo == null;
+        row.innerText = fargo == null ? '' : `· ${fargo}`;
     }
     function fargoNote(panel, text) {
         panel.innerHTML = '';

@@ -232,6 +232,26 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-07 (checkpoint 82 — control page: mobile-first Play/Setup tabs, #31):**
+  `/control` was one long scroll with Match first, which on a phone put the
+  clock readout astride the fold and every clock key under it — mid-rack,
+  the moment the page gets grabbed in a hurry, Start needed a scroll before
+  it could be tapped, and `:hover`-only feedback never fires on touch. The
+  page is now two tabs matching its two jobs (picked from mockups, option B
+  of three): **Play**, the default so the page is never on the wrong tab
+  mid-rack — big centred readout, full-width rack-aware `Start N`, New Rack
+  / Extension / Push / Pause at ≥54 px, both score bumpers with names +
+  Fargo badges, race chip, all inside one-handed thumb reach — and
+  **Setup**, touched once a match: names + Fargo lookup, race stepper,
+  score reset, ruleset / mode, vision toggle. Mobile plumbing regardless of
+  tab: fixed bottom tab bar padded by `env(safe-area-inset-bottom)`,
+  `:active` press feedback, `touch-action: manipulation`, ≥48 px targets
+  (HIG 44 pt / Material 48 dp). All JS behaviour carried over unchanged —
+  Fargo search/pick flow, don't-clobber-while-editing input sync, deck
+  dropdown re-sync, WS reconnect. No new endpoints; the Reset clock button
+  is dropped from the page per the issue's design (the endpoint itself is
+  untouched — the deck and API still have it).
+
 - **2026-08-07 (checkpoint 81 — 4K60 presentation: sharp scoreboard, 60 fps feeds):**
   The scoreboard read pixelated on the wall because the TV is a 4K panel
   (macOS drives it at native 3840×2160@60) and the canvas was 1080p — the
