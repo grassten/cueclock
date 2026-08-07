@@ -494,7 +494,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.server.app import create_app
     from cueclock.server.hub import Hub
     from cueclock.vision.calibration import TableCalibration
-    from cueclock.vision.events import BallsSettled, ShotTaken
+    from cueclock.vision.events import BallsSettled, ScratchCandidate, ScratchRefuted, ShotTaken
     from cueclock.vision.pipeline import VisionPipeline
 
     cal_path = Path(args.calibration)
@@ -669,6 +669,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 t,
                 rearrange=vision.last_settle_rearrange,
                 backstop=vision.last_settle_backstop,
+            )
+        elif isinstance(event, ScratchCandidate):
+            # Two-stage verdict (#26): candidate and refutation are journaled
+            # evidence; only the confirmed Scratch below is the verdict.
+            coro = hub.scratch_candidate(
+                t,
+                x_mm=event.x_mm,
+                y_mm=event.y_mm,
+                pocket_x_mm=event.pocket_x_mm,
+                pocket_y_mm=event.pocket_y_mm,
+                whiteness=event.whiteness,
+                color_age_s=event.color_age_s,
+            )
+        elif isinstance(event, ScratchRefuted):
+            coro = hub.scratch_refuted(
+                t,
+                witness_id=event.witness_id,
+                x_mm=event.x_mm,
+                y_mm=event.y_mm,
+                whiteness=event.whiteness,
             )
         else:
             # Scratch: journaled only — no clock action in v1 (CHANGELOG.md decision)

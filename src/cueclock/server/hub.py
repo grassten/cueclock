@@ -614,5 +614,48 @@ class Hub:
         return False
 
     async def scratch_seen(self, t: float | None = None) -> None:
-        # No clock action in v1 (CHANGELOG decision) — journal only.
+        # No clock action in v1 (CHANGELOG decision) — journal only. Since
+        # #26 this is the *confirmed* verdict: a candidate the whiteness
+        # census could not refute. Journals without candidate records predate
+        # the split and stay what they always were — an upper bound.
         self._log("vision_scratch", t=t, frame_t=t)
+
+    async def scratch_candidate(
+        self,
+        t: float,
+        *,
+        x_mm: float,
+        y_mm: float,
+        pocket_x_mm: float,
+        pocket_y_mm: float,
+        whiteness: float | None,
+        color_age_s: float | None,
+    ) -> None:
+        # Two-stage scratch verdict (#26), evidence half: journal only, so a
+        # live candidate is auditable from the journal alone.
+        self._log(
+            "vision_scratch_candidate",
+            t=t,
+            frame_t=t,
+            x_mm=round(x_mm),
+            y_mm=round(y_mm),
+            pocket_x_mm=round(pocket_x_mm),
+            pocket_y_mm=round(pocket_y_mm),
+            whiteness=round(whiteness, 3) if whiteness is not None else None,
+            color_age_s=round(color_age_s, 2) if color_age_s is not None else None,
+        )
+
+    async def scratch_refuted(
+        self, t: float, *, witness_id: int, x_mm: float, y_mm: float, whiteness: float
+    ) -> None:
+        # The witness's position and reading ride along so any refutation
+        # can be spot-audited against footage later.
+        self._log(
+            "vision_scratch_refuted",
+            t=t,
+            frame_t=t,
+            witness_id=witness_id,
+            x_mm=round(x_mm),
+            y_mm=round(y_mm),
+            whiteness=round(whiteness, 3),
+        )

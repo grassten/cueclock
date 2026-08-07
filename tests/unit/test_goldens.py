@@ -14,7 +14,13 @@ from dataclasses import dataclass
 
 import pytest
 
-from cueclock.vision.events import BallsSettled, Scratch, ShotTaken
+from cueclock.vision.events import (
+    BallsSettled,
+    Scratch,
+    ScratchCandidate,
+    ScratchRefuted,
+    ShotTaken,
+)
 from tests.corpus import goldens
 
 
@@ -135,7 +141,13 @@ def test_every_event_type_round_trips() -> None:
     """
     from cueclock.vision import events as events_module
 
-    variants = [ShotTaken(t=1.0), BallsSettled(t=2.0), Scratch(t=3.0)]
+    variants = [
+        ShotTaken(t=1.0),
+        BallsSettled(t=2.0),
+        Scratch(t=3.0),
+        ScratchCandidate(t=4.0, x_mm=0.0, y_mm=0.0, pocket_x_mm=0.0, pocket_y_mm=0.0),
+        ScratchRefuted(t=5.0, witness_id=1, x_mm=0.0, y_mm=0.0, whiteness=0.9),
+    ]
     names = {type(e).__name__ for e in variants}
     declared = {
         name

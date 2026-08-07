@@ -55,6 +55,13 @@ class BallState:
     churn: float | None = None  # smoothed appearance churn inside the ball's
     # own disk (spin shows here; a still ball shows only sensor noise);
     # None when unobserved or no sample yet
+    whiteness: float | None = None  # the tracker's slow whiteness EMA for this
+    # track (annulus metric, freeze-guarded during fast motion). The scratch
+    # census reads it (#26): at rest it converges to the per-frame ring read
+    # within ~0.3 s. None = unknown (synthetic tests) — never witness-grade.
+    color_age_s: float | None = None  # seconds since that EMA last folded in a
+    # sample (motion freeze + occlusion both stall it). Candidate forensics:
+    # says how stale the dying crown's color evidence was. None = no sample.
 
 
 @dataclass(frozen=True)
@@ -83,7 +90,37 @@ class Scratch:
     t: float
 
 
-Event = ShotTaken | BallsSettled | Scratch
+@dataclass(frozen=True)
+class ScratchCandidate:
+    """Stage one of the two-stage scratch verdict (#26): the reappear watch
+    expired on a cue track lost near a pocket. Evidence, never a verdict —
+    exactly one Scratch or ScratchRefuted follows once the whiteness census
+    resolves it (see ``_adjudicate_scratch``). Journaled so every live
+    verdict carries its trigger evidence."""
+
+    t: float
+    x_mm: float  # death spot: the cue's last *observed* position
+    y_mm: float
+    pocket_x_mm: float  # center of the pocket zone the death spot fell in
+    pocket_y_mm: float
+    whiteness: float | None = None  # dead track's whiteness EMA when last observed
+    color_age_s: float | None = None  # how stale that EMA was (motion freeze)
+
+
+@dataclass(frozen=True)
+class ScratchRefuted:
+    """A ScratchCandidate killed by positive evidence: a roster ball born
+    before the cue died, still and observed, reading cue-grade whiteness.
+    The cue never left the table — a potted object ball wore the crown."""
+
+    t: float
+    witness_id: int
+    x_mm: float  # where the witness sat when it refuted, for spot-audits
+    y_mm: float
+    whiteness: float
+
+
+Event = ShotTaken | BallsSettled | Scratch | ScratchCandidate | ScratchRefuted
 
 
 @dataclass(frozen=True)
@@ -509,6 +546,46 @@ class EventConfig:
     # blob, whose centroid drifts past the table edge as the ball goes down
     # (cue seen at 57+ mm outside the corner in the corpus scratch clip)
     pocket_zone_radius_mm: float = 120.0
+    # Two-stage verdict (#26, 2026-08-07). The reappear watch above acquits
+    # hangers, but a potted *object ball* mis-crowned as the cue passes every
+    # gate honestly — it died near a pocket while moving, and it genuinely
+    # never reappears. Live journals confessed a ~6x over-count from exactly
+    # this shape. The one fact the watch never checks is the one that
+    # matters: after a real scratch there is NO cue on the table until the
+    # player replaces it; after a false one the real cue is sitting right
+    # there. So the watch's output is a ScratchCandidate, and the verdict
+    # waits (scratch is log-only — latency is free) for a whiteness census:
+    #
+    #   - REFUTE on positive evidence only: one roster ball, judgeable,
+    #     still + observed, whiteness EMA >= the floor, born before the dead
+    #     track's last observation. "No cue-grade ball visible" proves
+    #     nothing — the corpus shows the real cue absent from the census for
+    #     a 41 s occluded address (drill_shot_0801).
+    #   - CONFIRM on complete census: table quiet and every live roster ball
+    #     observed, none qualifying. All three corpus scratches reach this
+    #     within ~1-3.5 s of the candidate, so they still confirm in-clip.
+    #   - The birth gate is mandatory: a hand-placed replacement cue reads
+    #     0.880 within ~1 s of landing (scratch_replace) — a witness born
+    #     after the cue died must never refute, or every replaced real
+    #     scratch gets acquitted.
+    #
+    # Floor 0.72: corpus-wide sweep of the rest-EMA (2026-08-07, every
+    # confirmed track at observed stillness across all 62 scenarios). The
+    # sustained never-crowned ceiling is 0.613 (a stripe at rest, white face
+    # up, 595 samples; pool p99 0.542) and the real cue's converged rest
+    # band bottoms at ~0.83-0.87 — 0.72 is the corridor midpoint, 0.11 clear
+    # both ways. One single-frame flash track read 1.000; the judgeable +
+    # roster witness gates exclude that class structurally. Known leak,
+    # priced: a real cue at rest in deep top-rail shade reads 0.53
+    # (cluster_rest_shot_0806) and cannot refute — that false scratch
+    # stands, which is exactly today's behavior, never a new failure mode.
+    scratch_witness_whiteness: float = 0.72
+    # Fallback horizon from the candidate latch if the census never
+    # completes (perma-occlusion): confirm, preserving the pre-#26 upper-
+    # bound behavior. 30 s covers the measured live tail with headroom —
+    # across all 15 sessions, 68/68 scratch candidates had a settle within
+    # 19.4 s of the trigger (p90 5.5 s).
+    scratch_verdict_horizon_s: float = 30.0
     table_length_mm: float = 1930.0
     table_width_mm: float = 965.0
 
@@ -657,11 +734,20 @@ class EventEngine:
         # step gate for one strike_step_max_s window.
         self._axis_killed_t: float | None = None
         self._cue_last_seen: tuple[float, float, float, float] | None = None  # (t, x, y, speed)
+        # Color forensics for the same observation: (whiteness EMA, its age).
+        # Snapshotted into the ScratchCandidate so every live verdict records
+        # how convincing — and how stale — the dying crown's color evidence was.
+        self._cue_last_color: tuple[float | None, float | None] = (None, None)
         self._cue_lost_while_moving = False
         self._scratch_fired = False
-        # A latched but unpublished scratch: (trigger_t, x, y) of the cue's
-        # last observed position. Resolved by _resolve_pending_scratch.
-        self._pending_scratch: tuple[float, float, float] | None = None
+        # A latched but unpublished scratch: (trigger_t, x, y, last_obs_t) of
+        # the cue's last observed position. Resolved by _resolve_pending_scratch.
+        self._pending_scratch: tuple[float, float, float, float] | None = None
+        # A published ScratchCandidate awaiting its verdict: (latch_t,
+        # cutoff_t). cutoff_t is the dead track's last observation — the
+        # witness birth gate (#26): any track born at or after that moment
+        # could be the hand-placed replacement and must never refute.
+        self._scratch_open: tuple[float, float] | None = None
         # Per-ball last time it visibly translated (first sighting counts):
         # bounds how long the spin-churn gate may hold settle (spin_watch_s).
         self._last_translate: dict[int, float] = {}
@@ -1245,6 +1331,7 @@ class EventEngine:
         # 359 mm from the pocket, coasted death 89 mm from it).
         if cue is not None and cue.observed:
             self._cue_last_seen = (t, cue.x_mm, cue.y_mm, cue.speed_mms)
+            self._cue_last_color = (cue.whiteness, cue.color_age_s)
             self._cue_lost_while_moving = False
             if self._pending_scratch is None:
                 self._scratch_fired = False  # cue back on the table re-arms the latch
@@ -1261,6 +1348,10 @@ class EventEngine:
             if (
                 self._cue_lost_while_moving
                 and not self._scratch_fired
+                and self._scratch_open is None  # one candidate at a time (#26):
+                # overlap would need a candidate still unresolved when the
+                # *next* shot's cue dies — live, 68/68 resolved a settle
+                # within 19.4 s, well inside any shot cycle
                 and t - last_t >= cfg.cue_lost_latch_s
                 and self._near_pocket(last_x, last_y)
             ):
@@ -1268,9 +1359,10 @@ class EventEngine:
                 # at the death spot, which means the cue stopped in the jaw
                 # rather than dropping. See scratch_confirm_s.
                 self._scratch_fired = True
-                self._pending_scratch = (t, last_x, last_y)
+                self._pending_scratch = (t, last_x, last_y, last_t)
 
         events.extend(self._resolve_pending_scratch(t, balls))
+        events.extend(self._adjudicate_scratch(t, balls))
         return events
 
     # ---------- strike helpers ----------
@@ -2199,12 +2291,13 @@ class EventEngine:
     # ---------- scratch helpers ----------
 
     def _resolve_pending_scratch(self, t: float, balls: list[BallState]) -> list[Event]:
-        """Publish or cancel a latched scratch once the evidence is in.
+        """Publish a ScratchCandidate, or cancel the latch, once the evidence is in.
 
         A ball observed at the spot where the cue vanished means it never
         left the table — it stopped hanging in the jaw, which is a legal shot
         (hanger_pot_0801). Anything else, after `scratch_confirm_s`, is a
-        genuine scratch.
+        scratch *candidate* — the verdict itself waits for the whiteness
+        census (#26, see `_adjudicate_scratch`).
 
         Cancelling restores the same state as seeing the cue directly: the
         ball sitting there *is* the cue, so `_cue_last_seen` follows it. That
@@ -2215,7 +2308,7 @@ class EventEngine:
         if pending is None:
             return []
         cfg = self._cfg
-        trigger_t, x, y = pending
+        trigger_t, x, y, cutoff_t = pending
         nearest = min(
             (b for b in balls if b.observed),
             key=lambda b: hypot(b.x_mm - x, b.y_mm - y),
@@ -2228,9 +2321,69 @@ class EventEngine:
             self._scratch_fired = False
             self._cue_lost_while_moving = False
             self._cue_last_seen = (t, nearest.x_mm, nearest.y_mm, nearest.speed_mms)
+            self._cue_last_color = (nearest.whiteness, nearest.color_age_s)
             return []
         if t - trigger_t >= cfg.scratch_confirm_s:
             self._pending_scratch = None
+            self._scratch_open = (trigger_t, cutoff_t)
+            pocket_x, pocket_y = min(cfg.pocket_centers(), key=lambda p: hypot(x - p[0], y - p[1]))
+            whiteness, color_age_s = self._cue_last_color
+            return [
+                ScratchCandidate(
+                    t,
+                    x_mm=x,
+                    y_mm=y,
+                    pocket_x_mm=pocket_x,
+                    pocket_y_mm=pocket_y,
+                    whiteness=whiteness,
+                    color_age_s=color_age_s,
+                )
+            ]
+        return []
+
+    def _adjudicate_scratch(self, t: float, balls: list[BallState]) -> list[Event]:
+        """Resolve an open ScratchCandidate: refute, confirm, or keep waiting.
+
+        The question the reappear watch never asks (#26): is the cue still on
+        the table? Refutation takes positive evidence only — one roster ball,
+        judgeable, still and observed, reading cue-grade whiteness, born
+        before the dead track's last observation (the birth gate that keeps a
+        hand-placed replacement from acquitting a real scratch). Confirmation
+        takes a complete census: a quiet table with every live roster ball
+        observed and none qualifying. Neither arriving by the horizon
+        confirms too — absence of evidence keeps today's upper-bound bias.
+        Thresholds and their anchors: see the config block.
+        """
+        open_ = self._scratch_open
+        if open_ is None:
+            return []
+        cfg = self._cfg
+        latch_t, cutoff_t = open_
+        for b in balls:
+            if not b.observed or b.ball_id not in self._roster:
+                continue
+            if self._first_seen.get(b.ball_id, float("inf")) >= cutoff_t:
+                continue  # born after the cue died: could be the replacement
+            if b.speed_mms >= cfg.settle_floor_mms or not self._judgeable(b):
+                continue
+            if b.whiteness is not None and b.whiteness >= cfg.scratch_witness_whiteness:
+                self._scratch_open = None
+                return [
+                    ScratchRefuted(
+                        t,
+                        witness_id=b.ball_id,
+                        x_mm=b.x_mm,
+                        y_mm=b.y_mm,
+                        whiteness=b.whiteness,
+                    )
+                ]
+        if not self._table_moving and self._is_still(t, balls):
+            live_roster = [b for b in balls if b.ball_id in self._roster]
+            if live_roster and all(b.observed for b in live_roster):
+                self._scratch_open = None
+                return [Scratch(t)]
+        if t - latch_t >= cfg.scratch_verdict_horizon_s:
+            self._scratch_open = None
             return [Scratch(t)]
         return []
 

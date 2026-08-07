@@ -94,6 +94,9 @@ class _Track:
     vy: float = 0.0
     hits: int = 1
     whiteness: float = 0.0
+    color_t: float | None = None  # when the whiteness EMA last took a sample
+    # (birth counts; the freeze and occlusions stall it) — the event layer's
+    # scratch forensics read staleness from this via BallState.color_age_s
     raw_speed: float = 0.0
     churn: float | None = None  # EMA of observed appearance churn
     last_obs: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0))  # t, x, y
@@ -197,6 +200,7 @@ class BallTracker:
                         y=obs.y_mm,
                         t=t,
                         whiteness=obs.whiteness,
+                        color_t=t,
                         last_obs=(t, obs.x_mm, obs.y_mm),
                         last_obs_merged=obs.merged,
                         last_present=t,
@@ -218,6 +222,8 @@ class BallTracker:
                 present=tr.last_present == t,
                 merged=tr.last_obs[0] == t and tr.last_obs_merged,
                 churn=tr.churn if tr.last_obs[0] == t else None,
+                whiteness=tr.whiteness,
+                color_age_s=t - tr.color_t if tr.color_t is not None else None,
             )
             for tr in confirmed
         ]
@@ -247,6 +253,7 @@ class BallTracker:
         track.hits += 1
         if track.raw_speed < cfg.whiteness_freeze_mms:
             track.whiteness += cfg.whiteness_ema * (obs.whiteness - track.whiteness)
+            track.color_t = t
         if obs.churn is not None:
             if track.churn is None:
                 track.churn = obs.churn

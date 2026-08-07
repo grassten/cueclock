@@ -232,6 +232,56 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-07 (checkpoint 77 — scratch becomes a two-stage verdict, #26):** The
+  scratch channel over-counted ~6x (Steven's ground truth: ~5 real in a session
+  that journaled 29) because a potted object ball mis-crowned as the cue passes
+  every latch gate *honestly* — it dies near a pocket while moving and genuinely
+  never reappears; the reappear watch acquits only hangers. The one unchecked
+  fact: after a real scratch there is no cue on the table until the player
+  replaces it; after a false one the real cue is sitting right there. Scratch is
+  log-only, so the verdict now waits for a **whiteness census** (design.md §4.2,
+  plan on issue #26). The watch's confirm emits `ScratchCandidate` (death spot,
+  pocket, the dying crown's whiteness EMA + staleness — every live verdict
+  journals its trigger evidence); refutation takes **positive evidence only** —
+  a roster ball, judgeable, still + observed, whiteness EMA ≥ 0.72, born before
+  the dead track's last observation → `ScratchRefuted` with the witness's
+  position and reading; confirmation takes a **complete census** — quiet table,
+  every live roster ball observed, none qualifying → `Scratch`; a census still
+  incomplete 30 s after the latch confirms (absence of evidence must not
+  acquit — `drill_shot_0801` hides the real cue from the census for a 41 s
+  address). Anchors, all measured today: floor 0.72 sits mid-corridor between
+  the corpus-wide sustained never-crowned rest-EMA ceiling 0.613 (a white-face-
+  up stripe; pool p99 0.542 over 495 tracks) and the real cue's converged rest
+  band ≥ ~0.83 (`~/Desktop/cueclock-accuracy-probes/scratch_floor_sweep.py`,
+  cache-served, measuring the exact EMA the gate reads); horizon 30 s covers
+  68/68 live candidates' trigger→settle tail (max 19.4 s, p90 5.5 s, all 15
+  sessions). The **birth gate is mandatory** and held on real pixels:
+  `scratch_replace`'s hand-placed replacement reads 0.880 within ~1 s, sits in
+  the census, and the Scratch stands. The known leak is priced, not hidden: a
+  real cue in deep top-rail shade reads 0.53 (`cluster_rest_shot_0806`) and
+  cannot refute — that false candidate confirms, i.e. status quo; every gate
+  leans toward not refuting because a failed refutation costs nothing new while
+  a false one eats a real scratch. Plumbing: `BallState` gains `whiteness` /
+  `color_age_s` (tracker EMA passthrough, behavior-neutral alone); journal
+  kinds `vision_scratch_candidate` / `vision_scratch_refuted` beside the kept
+  `vision_scratch` verdict (strictly additive); `report` prints candidates/
+  refuted and stamps journals without candidate records `(upper bound: pre-#26
+  journal)`; session-stats skill updated to match. Goldens: `Scratch.t` is now
+  census completion — `shot_debug` 9.54 → 11.92 s (waits out the rolling
+  6-ball), `scratch_replace` 5.03 → 8.46 s, `scratch_shot_0801` unchanged to
+  the millisecond (table already quiet); all three confirm in-clip, counts
+  unchanged, no other golden moved. The false population still has no corpus
+  representative — that is *why* the battery stayed green through a 6x live
+  over-count — so the measure of this checkpoint is the next 1–2 sessions'
+  journals (prediction: a Hank-scale session's 29 raw drops to ≤8 confirmed,
+  every refutation carrying auditable witness evidence). E7 (crown identity)
+  remains the upstream cause; adjudication works regardless of why the crown
+  was wrong. Unblocks #25 via "candidate un-refuted at its settle". Unit suite
+  390 green (+6: refute/birth-gate/junk-witness/horizon pins, hub journal
+  shapes, report tallies); corpus cold: the three scratch goldens moved as
+  cited, the two checkpoint-73 standing reds (`parked_vote_strike_0801`,
+  `stroke_tug_strike_0801`) unchanged, stash-verified pre-existing.
+
 - **2026-08-06 (checkpoint 76 — FargoRate on the scorecard, #27):** Entering a
   player name on the control page now searches FargoRate and offers the matches
   in a pick-list under the input — name + location left, rating right,

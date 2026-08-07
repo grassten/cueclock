@@ -14,6 +14,16 @@
       "t": 5.7285
     },
     {
+      "type": "ScratchCandidate",
+      "t": 6.3686,
+      "x_mm": 69.8363,
+      "y_mm": 87.0835,
+      "pocket_x_mm": 0.0,
+      "pocket_y_mm": 0.0,
+      "whiteness": 0.5289,
+      "color_age_s": 0.0
+    },
+    {
       "type": "Scratch",
       "t": 6.3686
     }

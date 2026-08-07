@@ -178,6 +178,25 @@ def test_scratches_and_flags_are_tallied(tmp_path: Path) -> None:
     assert (report.scratches, report.flags) == (1, 1)
 
 
+def test_scratch_adjudication_records_are_tallied(tmp_path: Path) -> None:
+    """#26: candidates/refutations count beside the confirmed verdict, and
+    their presence is what marks a journal's scratch count as adjudicated
+    rather than the pre-#26 upper bound."""
+    path = journal(
+        tmp_path,
+        shot(10.0, 1),
+        settle(14.0, 1),
+        {"kind": "vision_scratch_candidate", "t": 15.0, "rack_shots": 1},
+        {"kind": "vision_scratch_refuted", "t": 16.0, "rack_shots": 1},
+        shot(20.0, 2),
+        settle(24.0, 2),
+        {"kind": "vision_scratch_candidate", "t": 25.0, "rack_shots": 2},
+        {"kind": "vision_scratch", "t": 26.0, "rack_shots": 2},
+    )
+    report = build(path)
+    assert (report.scratch_candidates, report.scratch_refuted, report.scratches) == (2, 1, 1)
+
+
 # ---------- robustness: the journal is written by a process that gets killed ----------
 
 

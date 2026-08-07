@@ -10,11 +10,21 @@
       "newborn": false
     },
     {
-      "type": "Scratch",
-      "t": 9.5368
+      "type": "ScratchCandidate",
+      "t": 9.5368,
+      "x_mm": 1876.7096,
+      "y_mm": 82.3568,
+      "pocket_x_mm": 1930.0,
+      "pocket_y_mm": 0.0,
+      "whiteness": 0.5038,
+      "color_age_s": 0.0
     },
     {
       "type": "BallsSettled",
+      "t": 11.9178
+    },
+    {
+      "type": "Scratch",
       "t": 11.9178
     }
   ]

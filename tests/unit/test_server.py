@@ -530,6 +530,40 @@ def test_vision_events_journal_frame_t() -> None:
     assert by_kind["vision_scratch"]["frame_t"] == 5.75
 
 
+def test_scratch_adjudication_journals_its_evidence() -> None:
+    """The two-stage verdict's evidence records (#26) are journal-auditable.
+
+    A candidate carries its death spot, pocket and the dying crown's color
+    forensics; a refutation carries the witness's position and reading — so
+    any live verdict can be spot-checked against footage without a dump.
+    """
+    hub = Hub()
+    asyncio.run(
+        hub.scratch_candidate(
+            6.0,
+            x_mm=57.2,
+            y_mm=-12.9,
+            pocket_x_mm=0.0,
+            pocket_y_mm=0.0,
+            whiteness=0.874,
+            color_age_s=1.23,
+        )
+    )
+    asyncio.run(hub.scratch_refuted(8.5, witness_id=4, x_mm=1204.6, y_mm=498.2, whiteness=0.912))
+    by_kind = {r["kind"]: r for r in hub.journal.tail(60.0)}
+    candidate = by_kind["vision_scratch_candidate"]
+    assert candidate["frame_t"] == 6.0
+    assert (candidate["x_mm"], candidate["y_mm"]) == (57, -13)
+    assert (candidate["pocket_x_mm"], candidate["pocket_y_mm"]) == (0, 0)
+    assert candidate["whiteness"] == 0.874
+    assert candidate["color_age_s"] == 1.23
+    refuted = by_kind["vision_scratch_refuted"]
+    assert refuted["frame_t"] == 8.5
+    assert refuted["witness_id"] == 4
+    assert (refuted["x_mm"], refuted["y_mm"]) == (1205, 498)
+    assert refuted["whiteness"] == 0.912
+
+
 def test_detect_heartbeat_reports_hz_and_frame_age() -> None:
     """`detect_heartbeat` journals effective detect Hz + newest-frame age.
 

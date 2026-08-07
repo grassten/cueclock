@@ -7,7 +7,16 @@ scenarios get re-tested against real recorded clips once the corpus exists.
 
 from math import hypot
 
-from cueclock.vision import BallsSettled, BallState, Event, EventEngine, Scratch, ShotTaken
+from cueclock.vision import (
+    BallsSettled,
+    BallState,
+    Event,
+    EventEngine,
+    Scratch,
+    ScratchCandidate,
+    ScratchRefuted,
+    ShotTaken,
+)
 
 DT = 1 / 80  # nominal detection cadence (frame timestamps; the engine is cadence-agnostic)
 
@@ -29,6 +38,7 @@ class Sim:
         self.flickering: set[int] = set()
         self.merged_ids: set[int] = set()
         self.churn: dict[int, float] = {}
+        self.whiteness: dict[int, float] = {}
         self._frame = 0
 
     def place(self, ball_id: int, x: float, y: float) -> None:
@@ -65,6 +75,11 @@ class Sim:
         """Appearance churn inside the ball's own disk (spin shows here)."""
         self.churn[ball_id] = value
 
+    def paint(self, ball_id: int, whiteness: float) -> None:
+        """Give the ball a tracker whiteness EMA (the scratch census reads
+        it). Unpainted balls report None — never witness-grade."""
+        self.whiteness[ball_id] = whiteness
+
     def velocity(self, ball_id: int, vx: float, vy: float) -> None:
         self.balls[ball_id][2:] = [vx, vy]
 
@@ -96,6 +111,7 @@ class Sim:
                         observed=observed,
                         merged=observed and ball_id in self.merged_ids,
                         churn=self.churn.get(ball_id),
+                        whiteness=self.whiteness.get(ball_id),
                     )
                 )
             events += self.engine.update(self.t, states)
@@ -353,9 +369,11 @@ def test_scratch_latched_during_motion() -> None:
     # The scratch is *latched* here but published a scratch_confirm_s later
     # (#6, 2026-08-02) — the delay is what lets a cue that merely stopped in
     # the jaw cancel its own phantom by reappearing. Nothing turns up at this
-    # death spot, so the verdict stands; it just lands after the settle now.
+    # death spot, so the candidate stands — and with the table quiet, every
+    # roster ball observed and none reading cue-grade white, the census
+    # completes on the spot and confirms it (#26).
     assert types(sim.run(0.8)) == [BallsSettled]
-    assert types(sim.run(0.8)) == [Scratch]
+    assert types(sim.run(0.8)) == [ScratchCandidate, Scratch]
     sim.place(CUE, 500.0, 500.0)  # ball in hand: replaced on the table
     assert sim.run(1.0) == []  # no re-scratch, no extra settle
 
@@ -507,9 +525,9 @@ def scratch_prelude() -> Sim:
     sim.remove(CUE)
     # Latched immediately, published a scratch_confirm_s later (#6) — so the
     # settle now lands first. Nothing reappears at the death spot, so the
-    # verdict stands.
+    # candidate stands and the quiet-table census confirms it at once (#26).
     assert types(sim.run(0.8)) == [BallsSettled]
-    assert types(sim.run(0.8)) == [Scratch]
+    assert types(sim.run(0.8)) == [ScratchCandidate, Scratch]
     sim.run(1.0)  # table quiet; no cue-flagged track exists
     return sim
 
@@ -530,7 +548,9 @@ def test_cue_stopping_in_the_jaw_is_not_a_scratch() -> None:
     sim.remove(CUE)  # track lost over the pocket mouth
     sim.run(0.5)  # latched, not yet published
     sim.place(7, 55.0, 45.0)  # the ball was there all along: reborn as a new id
-    assert Scratch not in map(type, sim.run(2.0))
+    events = sim.run(2.0)
+    assert Scratch not in map(type, events)
+    assert ScratchCandidate not in map(type, events)  # cancelled pre-candidate
 
 
 def test_a_different_ball_near_the_pocket_does_not_cancel_a_scratch() -> None:
@@ -567,6 +587,89 @@ def test_the_vote_finding_another_ball_does_not_cancel_a_scratch() -> None:
     sim.run(0.5)
     sim.cue_id = OBJ  # the vote parks on a ball far from the death spot
     assert Scratch in map(type, sim.run(2.0))
+
+
+def test_false_scratch_refuted_by_the_resting_cue() -> None:
+    # #26's reason to exist: a potted object ball mis-crowned as the cue
+    # passes every latch gate honestly — it died near a pocket while moving,
+    # and it genuinely never reappears. The live journals confessed a ~6x
+    # over-count from exactly this shape. The one fact the reappear watch
+    # never checks: the real cue is still sitting on the table, reading
+    # cue-grade white. One witness — roster, judgeable, still, observed,
+    # born before the death — kills the candidate.
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)  # the crown, wrongly, on a potted stripe
+    sim.place(OBJ, 1200.0, 500.0)  # the real cue, at rest all along
+    sim.paint(OBJ, 0.9)
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    assert types(sim.run(0.65)) == [ShotTaken]
+    sim.remove(CUE)
+    events = sim.run(3.0)
+    assert ScratchCandidate in map(type, events)
+    assert ScratchRefuted in map(type, events)
+    assert Scratch not in map(type, events)
+
+
+def test_replacement_cue_does_not_refute_a_real_scratch() -> None:
+    # The mandatory birth gate: scratch_replace measured the hand-placed
+    # replacement reading 0.880 within ~1 s of landing — witness-grade
+    # white, and meaningless, because it was born after the cue died. It
+    # must not refute; the census completes around it and the Scratch
+    # stands.
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)
+    sim.place(OBJ, 1200.0, 500.0)
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    assert types(sim.run(0.65)) == [ShotTaken]
+    sim.remove(CUE)
+    sim.run(0.5)  # latched; still inside the reappear watch
+    sim.place(7, 900.0, 700.0)  # ball in hand, far from the death spot
+    sim.paint(7, 0.9)
+    events = sim.run(3.0)
+    assert Scratch in map(type, events)
+    assert ScratchRefuted not in map(type, events)
+
+
+def test_flicker_junk_cannot_refute_a_scratch() -> None:
+    # The corpus sweep's one witness-grade outlier was a single-frame flash
+    # track reading 1.000. A witness must be roster-admitted, judgeable,
+    # still and observed — hand/stick flicker (7-43% observed) fails the
+    # judgeable bar however white it reads, so a real scratch still
+    # confirms past it.
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)
+    sim.place(OBJ, 1200.0, 500.0)
+    sim.place(9, 800.0, 800.0)
+    sim.paint(9, 1.0)  # reads pure white whenever it is seen at all...
+    sim.flicker(9)  # ...but it is junk: ~33% observed
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    assert types(sim.run(0.65)) == [ShotTaken]
+    sim.remove(CUE)
+    events = sim.run(3.0)
+    assert Scratch in map(type, events)
+    assert ScratchRefuted not in map(type, events)
+
+
+def test_blocked_census_confirms_at_the_horizon() -> None:
+    # Refute only on positive evidence: a census that never completes (the
+    # corpus shows the cue absent from it for an entire 41 s occluded
+    # address) cannot acquit anything. The verdict falls back to confirming
+    # at the horizon — the pre-#26 upper-bound bias, deliberately kept.
+    sim = Sim()
+    sim.place(CUE, 500.0, 40.0)
+    sim.place(OBJ, 1200.0, 500.0)
+    sim.run(1.0)
+    sim.velocity(CUE, -700.0, 0.0)
+    assert types(sim.run(0.65)) == [ShotTaken]
+    sim.remove(CUE)
+    sim.occlude(OBJ)  # the census can never complete: OBJ is never observed
+    early = sim.run(28.0)  # horizon is 30 s from the latch (~1.95 s here)
+    assert ScratchCandidate in map(type, early)
+    assert Scratch not in map(type, early)
+    assert Scratch in map(type, sim.run(5.0))
 
 
 def test_shot_from_pocket_jaw_after_scratch_fires() -> None:

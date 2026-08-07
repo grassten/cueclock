@@ -297,6 +297,15 @@ Four things about reading it:
 - **A miss below ~50 Hz is not a vision failure.** Flag dumps and corpus
   batteries starve the detect loop; those misses are counted separately so
   contention never gets mistaken for a detection bug.
+- **Scratch counts come in two vintages (2026-08-07, #26).** A journal carrying
+  `vision_scratch_candidate` records is adjudicated: `vision_scratch` there is a
+  candidate the whiteness census could not refute, and the report prints
+  candidates/refuted beside it. A journal without them predates the two-stage
+  verdict and its count is an **upper bound** — the channel over-counted ~6x
+  (potted object balls mis-crowned as the cue); the report marks those lines
+  `(upper bound: pre-#26 journal)`. Even adjudicated counts lean high by design:
+  every gate prefers failing to refute (status quo) over falsely refuting a
+  real scratch.
 
 Retired 2026-08-05: the ground-truth key (#19) and its press-vs-detection diff.
 One key pressed every shot was the right idea and the wrong mechanism — it was

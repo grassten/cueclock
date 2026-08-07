@@ -96,6 +96,12 @@ from statistics import median
 SETTLE_KIND = "vision_balls_settled"
 SHOT_KIND = "vision_shot_taken"
 SCRATCH_KIND = "vision_scratch"
+# Two-stage scratch verdict (#26): candidate/refuted are the evidence trail;
+# SCRATCH_KIND is the confirmed verdict. Journals with no candidate records
+# predate the split — their scratch count is the old upper bound (~6x, per
+# the live confession) and must be read as such.
+SCRATCH_CANDIDATE_KIND = "vision_scratch_candidate"
+SCRATCH_REFUTED_KIND = "vision_scratch_refuted"
 FLAG_KIND = "flag_dump"
 HEARTBEAT_KIND = "detect_heartbeat"
 SUMMARY_KIND = "session_summary"
@@ -235,6 +241,13 @@ class SessionReport:
     path: Path
     shots: list[Shot] = field(default_factory=list)
     scratches: int = 0
+    # The two-stage scratch verdict's evidence records (#26). A journal with
+    # candidates carries adjudicated scratch counts — `scratches` there is a
+    # measurement, not the pre-#26 upper bound. candidates == refuted +
+    # confirmed once every candidate has resolved (a session cut mid-verdict
+    # can be one short).
+    scratch_candidates: int = 0
+    scratch_refuted: int = 0
     flags: int = 0
     racking_settles: int = 0
     gated: dict[str, int] = field(default_factory=dict)
@@ -359,6 +372,10 @@ def build(path: Path) -> SessionReport:
                 pending_shot_t = freeze_open_t = None
         elif kind == SCRATCH_KIND:
             report.scratches += 1
+        elif kind == SCRATCH_CANDIDATE_KIND:
+            report.scratch_candidates += 1
+        elif kind == SCRATCH_REFUTED_KIND:
+            report.scratch_refuted += 1
         elif kind == FLAG_KIND:
             report.flags += 1
         elif kind == BREAK_ADJUDICATED_KIND:
@@ -445,6 +462,8 @@ def summary_detail(report: SessionReport) -> dict[str, object]:
         "phantom_rate": round(phantom, 4) if phantom is not None else None,
         "left_frozen": report.left_frozen,
         "scratches": report.scratches,
+        "scratch_candidates": report.scratch_candidates,
+        "scratch_refuted": report.scratch_refuted,
         "flags": report.flags,
         "breaks_adjudicated": report.breaks_adjudicated,
         "break_presses": report.break_presses,
@@ -537,7 +556,15 @@ def format_session(report: SessionReport) -> str:
             f"  settles synthesized {report.settles_synthesized}   "
             "(frozen-clock watchdog; the underlying miss is counted above)"
         )
-    out.append(f"  scratches          {report.scratches}")
+    if report.scratch_candidates:
+        out.append(
+            f"  scratches          {report.scratches}   "
+            f"({report.scratch_candidates} candidates, {report.scratch_refuted} refuted)"
+        )
+    else:
+        # No candidate records: a pre-#26 journal, where every vision_scratch
+        # confirmed unadjudicated — an upper bound (~6x live), not a count.
+        out.append(f"  scratches          {report.scratches}   (upper bound: pre-#26 journal)")
     if report.total:
         out.append(
             f"    rate             1 per {report.total / max(report.scratches, 1):.0f} shots"
@@ -607,7 +634,17 @@ def format_rollup(reports: list[SessionReport]) -> str:
             f"  also, shared with other failures: {splits} split freezes, {frozen} left frozen"
         )
     if scratches:
-        out.append(f"  scratches          {scratches}   (1 per {shots / scratches:.0f} shots)")
+        candidates = sum(r.scratch_candidates for r in played)
+        refuted = sum(r.scratch_refuted for r in played)
+        adjudication = (
+            f"   ({candidates} candidates, {refuted} refuted)"
+            if candidates
+            else "   (upper bound: pre-#26 journals)"
+        )
+        out.append(
+            f"  scratches          {scratches}   (1 per {shots / scratches:.0f} shots)"
+            + adjudication
+        )
     adjudicated = sum(r.breaks_adjudicated for r in played)
     presses = sum(r.break_presses for r in played)
     dark = sum(r.dark_candidates for r in played)

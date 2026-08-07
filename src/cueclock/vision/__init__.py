@@ -11,6 +11,8 @@ from cueclock.vision.events import (
     EventConfig,
     EventEngine,
     Scratch,
+    ScratchCandidate,
+    ScratchRefuted,
     ShotTaken,
 )
 
@@ -21,5 +23,7 @@ __all__ = [
     "EventConfig",
     "EventEngine",
     "Scratch",
+    "ScratchCandidate",
+    "ScratchRefuted",
     "ShotTaken",
 ]
