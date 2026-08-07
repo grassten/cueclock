@@ -232,6 +232,32 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-07 (checkpoint 79 — scoreboard fitment: centred lockups, Fargo labeled, #29):**
+  Two defects Steven flagged after #27 put the rating on the bar. The vertical
+  one: a race line lifted the *entire* name/score row to y=72 with `RACE TO N`
+  hung at 122 under the score only, so the names read as centred in a top band
+  with dead space beneath them ("two stacked containers"); no-race sat at 84 —
+  the bar's vertical grammar changed with state and only one of the two states
+  was actually centred. The rating itself was a 17 px span baseline-aligned to
+  the 24 px name at 62% opacity: sagging ~2.5 px below the name's optical
+  centre, unlabeled, and living inside the name's 400 px ellipsis container so
+  a long name would truncate into its own rating. The fix is one rule: **every
+  column of the bar is a lockup centred on the content zone's centre (y=84;
+  the gauge owns the top 8 px), and the names never move.** The rating became
+  its own labeled line under the name (`FARGO 471` — 11 px slate label, 18 px
+  near-white number, shared baseline), the convention FargoRate's LMS overlays
+  and Pro Billiard Series coverage use: a label attached to the number, not
+  context. With a race, digits (cy 69) + race line (115) centre as a pair; a
+  player with no rating shows the name line alone; with no ratings at all
+  `.no-fargo` recentres both names to 84, which is exactly the pre-#27 layout.
+  Design settled on mockups from the #23 pipeline
+  (`~/Desktop/cueclock-mockups/render_fargo.py`, `fargo-fitment-*.png`);
+  verified rendered through OBS's own CEF — cache-refresh +
+  `GetSourceScreenshot` of the bar source, which needs no studio mode while
+  the source is hot in program (detect hz dipped 77.8→53.9 during the reload
+  and recovered to 76.9; table IDLE throughout; recording checked off first).
+  `?view=bar` only; square/full views untouched; no API or payload change.
+
 - **2026-08-07 (checkpoint 78 — post-scratch grace, #25):** The clock no longer
   runs against the walk to the ball return. Built on checkpoint 77's verdict
   split exactly as planned there: an un-refuted `ScratchCandidate` grants a 5 s

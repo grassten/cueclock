@@ -317,18 +317,24 @@
         body.bar .plinth.grace   .cell-divider,
         body.bar .plinth.expired .cell-divider { display: none; }
 
-        /* ---- the match: quieter than the clock, so the ratio reads ---- */
+        /* ---- the match: quieter than the clock, so the ratio reads ----
+           One rule governs the vertical fitment (issue #29): every column
+           is a lockup centred on the content zone's centre — y=84, since
+           the gauge owns the bar's top 8 px. The names never move; only
+           the centre column rearranges when a race line is set. Before
+           this, a race lifted the *whole* row to 72 and the names read as
+           centred in a top band with dead space under them. */
         body.bar .scores {
             display: block;
             position: absolute;
             inset: 0;
-            --row-y: 72px; /* with a race line the row lifts to make room */
+            --row-y: 69px; /* score digits; with the race line at 115 the pair centres at 84 */
         }
         body.bar .scores.no-race { --row-y: 84px; }
 
         body.bar .pname {
             position: absolute;
-            top: var(--row-y);
+            top: 72px; /* name line of the name+rating lockup (spans ~58..109 → centre 84) */
             transform: translateY(-50%);
             max-width: 400px;
             font-size: 24px;
@@ -340,19 +346,40 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        /* No rating on either side: the lockup is just the name — recentre it. */
+        body.bar .scores.no-fargo .pname { top: 84px; }
         body.bar .pname.left  { left: 36px; }
         body.bar .pname.right { right: 326px; margin-right: -2px; }
 
-        /* Fargo rating (issue #27): rides the name row, one step quieter
-           than the name so the hierarchy stays name > rating. Empty span
-           when no rating is set — no reserved space, nothing to hide. */
-        body.bar .pname .pfargo {
-            margin-left: 13px;
-            font-size: 17px;
-            letter-spacing: 1px;
-            opacity: 0.62;
-            font-variant-numeric: tabular-nums;
+        /* Fargo rating (issue #27, refit in #29): its own labeled line under
+           the name — the convention FargoRate's LMS overlays and Pro Billiard
+           Series coverage use — instead of an unlabeled number sagging off
+           the name's baseline. Label and number share a baseline; hierarchy
+           stays score digits > name > rating. Living outside .pname also
+           means a long name ellipsizes in its own box, not into its rating. */
+        body.bar .pfargo {
+            position: absolute;
+            top: 98px;
+            transform: translateY(-50%);
+            font-weight: 700;
+            white-space: nowrap;
         }
+        body.bar .pfargo.left  { left: 36px; }
+        body.bar .pfargo.right { right: 326px; }
+        /* A player with no rating shows the name line alone. */
+        body.bar .pfargo.empty { display: none; }
+        body.bar .pfargo .flabel {
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: var(--slate);
+            margin-right: 6px; /* letter-spacing already trails the O: 6+2 = the 8 px gap */
+        }
+        body.bar .pfargo .fnum {
+            font-size: 18px;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.92);
+        }
+        body.bar .pfargo.right .fnum { margin-right: -1px; } /* flush at x=1008, same trick as .pname.right */
 
         /* Each of the three laid out on its own whole-pixel x rather than
            centred as a flex row: a 1 px rule inside a centred box lands on a
@@ -388,7 +415,7 @@
         body.bar .race {
             position: absolute;
             left: 522px;
-            top: 122px;
+            top: 115px; /* digits at 69 + race here: the pair spans ~45..124, centre 84 */
             transform: translate(-50%, -50%);
             font-size: 15px;
             font-weight: 700;
@@ -413,12 +440,14 @@
 
         <div class="gauge"><div class="gauge-fill" id="gauge-fill"></div></div>
 
-        <div class="scores no-race" id="scores">
-            <div class="pname left"><span id="bar-p1-name"></span><span class="pfargo" id="bar-p1-fargo"></span></div>
+        <div class="scores no-race no-fargo" id="scores">
+            <div class="pname left"><span id="bar-p1-name"></span></div>
+            <div class="pfargo left empty" id="bar-p1-fargo-row"><span class="flabel">FARGO</span><span class="fnum" id="bar-p1-fargo"></span></div>
             <span class="pts p1" id="bar-p1-score">0</span>
             <span class="tally-rule"></span>
             <span class="pts p2" id="bar-p2-score">0</span>
-            <div class="pname right"><span id="bar-p2-name"></span><span class="pfargo" id="bar-p2-fargo"></span></div>
+            <div class="pname right"><span id="bar-p2-name"></span></div>
+            <div class="pfargo right empty" id="bar-p2-fargo-row"><span class="flabel">FARGO</span><span class="fnum" id="bar-p2-fargo"></span></div>
             <div class="race" id="bar-race"></div>
         </div>
 
@@ -575,6 +604,12 @@
             document.getElementById('mode-label').innerHTML = 'NO<br>CLOCK';
         }
 
+        function setFargo(key, value) {
+            document.getElementById('bar-' + key + '-fargo').innerText = value ?? '';
+            document.getElementById('bar-' + key + '-fargo-row')
+                .classList.toggle('empty', value == null);
+        }
+
         function setBarScore(key, value) {
             const el = document.getElementById('bar-' + key + '-score');
             el.innerText = value;
@@ -601,10 +636,14 @@
             if (!sc) return;
             document.getElementById('bar-p1-name').innerText = sc.p1.name;
             document.getElementById('bar-p2-name').innerText = sc.p2.name;
-            // Fargo rating rides with the name, dimmer, nothing when unset
-            // (issue #27). `?? ''` also covers pre-#27 payloads with no key.
-            document.getElementById('bar-p1-fargo').innerText = sc.p1.fargo ?? '';
-            document.getElementById('bar-p2-fargo').innerText = sc.p2.fargo ?? '';
+            // Fargo rating (issues #27/#29): a labeled line under the name.
+            // The line vanishes for a player with no rating (`== null` also
+            // covers pre-#27 payloads with no key), and with no ratings at
+            // all the names recentre via .no-fargo.
+            setFargo('p1', sc.p1.fargo);
+            setFargo('p2', sc.p2.fargo);
+            scoresEl.classList.toggle('no-fargo',
+                sc.p1.fargo == null && sc.p2.fargo == null);
             setBarScore('p1', sc.p1.score);
             setBarScore('p2', sc.p2.score);
             scoresEl.classList.toggle('no-race', sc.race_to == null);
