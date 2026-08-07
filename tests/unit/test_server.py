@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import httpx
@@ -12,6 +13,7 @@ from fastapi import WebSocket
 from fastapi.testclient import TestClient
 
 import cueclock.server.app as server_app
+import cueclock.server.hub as hub_module
 from cueclock.clock import State
 from cueclock.server import create_app, fargo
 from cueclock.server.hub import Hub
@@ -41,10 +43,14 @@ def test_state_snapshot_shape() -> None:
             "cue",
             "vision",
             "score",
+            # The solo panel (#30): null in match, pace numbers in run_out,
+            # rep counters in no_clock.
+            "solo",
         }
         assert snap["mode"] == "match"
         assert snap["base"] == 30
         assert snap["vision"] is True
+        assert snap["solo"] is None
         assert snap["score"] == {
             "p1": {"name": "PLAYER 1", "score": 0, "fargo": None},
             "p2": {"name": "PLAYER 2", "score": 0, "fargo": None},
@@ -970,3 +976,88 @@ def test_watchdog_defers_while_motion_bit_high() -> None:
     hub._table_motion = True  # balls genuinely rolling
     hub._watch_frozen_clock(1020.0)
     assert hub.clock.state is State.MOTION  # no synthetic settle over real motion
+
+
+# ---------- the solo panel (#30) ----------
+
+
+def _freeze_hub_time(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Pin the hub module's clock; advance it by mutating the returned cell.
+
+    Patches the hub's own `time` binding rather than `time.monotonic`
+    globally, so asyncio's loop clock (and everything else) stays real.
+    """
+    now = [1000.0]
+    monkeypatch.setattr(hub_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    return now
+
+
+def test_solo_panel_paces_a_run_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LAST/AVG are wall time from each countdown's start to the shot that ends it.
+
+    The opening shot comes out of IDLE with no countdown over it, so it counts
+    in SHOTS but never in the pace — there is nothing honest to time it against.
+    """
+    now = _freeze_hub_time(monkeypatch)
+    hub = Hub()
+    asyncio.run(hub.set_mode("run_out"))
+    assert hub.payload()["solo"] == {"shots": 0, "last_s": None, "avg_s": None}
+
+    asyncio.run(hub.shot_taken(speed_mms=900.0))  # opening shot: untimed
+    now[0] += 3.0
+    asyncio.run(hub.balls_settled())  # countdown starts — the pace timer opens
+    now[0] += 8.2
+    asyncio.run(hub.shot_taken(speed_mms=1500.0))
+    now[0] += 2.0
+    asyncio.run(hub.balls_settled())
+    now[0] += 5.0
+    asyncio.run(hub.shot_taken(speed_mms=1500.0))
+    assert hub.payload()["solo"] == {"shots": 3, "last_s": 5.0, "avg_s": 6.6}
+
+    # A New Rack is a fresh fifteen thrown up: the whole panel rescopes.
+    asyncio.run(hub.new_rack())
+    assert hub.payload()["solo"] == {"shots": 0, "last_s": None, "avg_s": None}
+
+
+def test_solo_pace_times_from_restart_and_ignores_placement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = _freeze_hub_time(monkeypatch)
+    hub = Hub()
+    asyncio.run(hub.set_mode("run_out"))
+    asyncio.run(hub.restart())  # the deck's Start key
+    now[0] += 4.0
+    asyncio.run(hub.shot_taken(speed_mms=1500.0))
+    solo = cast(dict[str, object], hub.payload()["solo"])
+    assert solo["last_s"] == 4.0
+
+    # Placement motion while IDLE settles for real but times nothing: the
+    # settle is ignored by the clock, so it must not open a pace timer either.
+    asyncio.run(hub.reset())
+    asyncio.run(hub.balls_settled())
+    now[0] += 9.9
+    asyncio.run(hub.shot_taken(speed_mms=900.0))  # from IDLE: untimed
+    solo = cast(dict[str, object], hub.payload()["solo"])
+    assert solo["last_s"] == 4.0  # unchanged
+
+
+def test_solo_panel_counts_a_drill(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = _freeze_hub_time(monkeypatch)
+    hub = Hub()
+    asyncio.run(hub.set_mode("no_clock"))
+    now[0] += 130.0
+    asyncio.run(hub.shot_taken(speed_mms=1200.0))
+    asyncio.run(hub.shot_taken(speed_mms=1200.0))
+    assert hub.payload()["solo"] == {"reps": 2, "elapsed_s": 130.0}
+
+    # The kill switch outranks the counter, like every other vision consumer.
+    asyncio.run(hub.set_vision(False))
+    asyncio.run(hub.shot_taken(speed_mms=1200.0))
+    asyncio.run(hub.set_vision(True))
+    assert cast(dict[str, object], hub.payload()["solo"])["reps"] == 2
+
+    # Leaving and returning rescopes: the panel is this drill, not the day.
+    asyncio.run(hub.set_mode("match"))
+    assert hub.payload()["solo"] is None
+    asyncio.run(hub.set_mode("no_clock"))
+    assert hub.payload()["solo"] == {"reps": 0, "elapsed_s": 0.0}

@@ -30,6 +30,7 @@
         .plinth { display: contents; }
         .gauge,
         .scores,
+        .stats,
         .cell-divider,
         .mode-eyebrow { display: none; }
 
@@ -427,6 +428,66 @@
         }
         /* Casual play has no target, so it says nothing at all. */
         body.bar .scores.no-race .race { display: none; }
+
+        /* ---- the solo panel (#30): run_out / no_clock ----
+           Both are single-player, so a two-player score is noise there; the
+           same area instead carries what a solo session actually generates —
+           pace against the clock in run_out, reps and table time in a drill.
+           The plinth, gauge and clock cell do not move, so cycling modes
+           changes the words, never the furniture. Fitment is the match's own
+           rule (#29): each stat is a label-over-number lockup centred on the
+           content zone's centre — label 15 px at 55, number 48 px at 96, the
+           pair spans ~47..120 → centre 84 — in the bar's two existing text
+           voices (the eyebrow's, the score digits'). */
+        body.bar .plinth.solo .scores { display: none; }
+        body.bar .plinth.solo .stats { display: block; }
+        body.bar .stats {
+            position: absolute;
+            inset: 0;
+        }
+        body.bar .stat { position: absolute; top: 0; bottom: 0; }
+        /* Even x-thirds / x-quarters of the 1044 px score zone, so two stats
+           and three stats each read as their own settled layout. */
+        body.bar .stats.n3 .stat:nth-child(1) { left: 261px; }
+        body.bar .stats.n3 .stat:nth-child(2) { left: 522px; }
+        body.bar .stats.n3 .stat:nth-child(3) { left: 783px; }
+        body.bar .stats.n2 .stat:nth-child(1) { left: 348px; }
+        body.bar .stats.n2 .stat:nth-child(2) { left: 696px; }
+        body.bar .stats.n2 .stat:nth-child(3) { display: none; }
+        body.bar .stat-label {
+            position: absolute;
+            left: 0;
+            top: 55px;
+            transform: translate(-50%, -50%);
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            padding-left: 4px; /* re-centre: letter-spacing also trails the last glyph */
+            color: var(--slate);
+            white-space: nowrap;
+        }
+        body.bar .stat-value {
+            position: absolute;
+            left: 0;
+            top: 96px;
+            transform: translate(-50%, -50%);
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1;
+            color: #fff;
+            white-space: nowrap;
+        }
+        body.bar .stat-value .unit {
+            font-size: 26px;
+            color: var(--slate);
+            margin-left: 4px;
+        }
+        /* No number yet (LAST/AVG before the first timed shot): a quiet dash,
+           same size so nothing shifts when the real number arrives. */
+        body.bar .stat-value.blank { color: var(--slate); opacity: 0.5; }
+        /* Same one-shot glow the score digits use, on the count stats only —
+           a rep landing mid-drill should be visible from the table. */
+        body.bar .stat-value.pulse { animation: bar-score-pulse 0.9s ease-out; }
     </style>
 </head>
 <body>
@@ -449,6 +510,15 @@
             <div class="pname right"><span id="bar-p2-name"></span></div>
             <div class="pfargo right empty" id="bar-p2-fargo-row"><span class="flabel">FARGO</span><span class="fnum" id="bar-p2-fargo"></span></div>
             <div class="race" id="bar-race"></div>
+        </div>
+
+        <!-- The solo panel (#30). Three fixed slots; the n2/n3 class on the
+             container picks the grid and hides the spare, so the DOM never
+             changes shape across modes. -->
+        <div class="stats n3" id="stats">
+            <div class="stat"><div class="stat-label" id="stat-l1"></div><div class="stat-value" id="stat-v1"></div></div>
+            <div class="stat"><div class="stat-label" id="stat-l2"></div><div class="stat-value" id="stat-v2"></div></div>
+            <div class="stat"><div class="stat-label" id="stat-l3"></div><div class="stat-value" id="stat-v3"></div></div>
         </div>
 
         <div class="cell-divider"></div>
@@ -595,9 +665,18 @@
         const gaugeFill = document.getElementById('gauge-fill');
         const eyebrowEl = document.getElementById('mode-eyebrow');
         const raceEl = document.getElementById('bar-race');
+        const statsEl = document.getElementById('stats');
+        const statCells = [1, 2, 3].map(n => ({
+            label: document.getElementById('stat-l' + n),
+            value: document.getElementById('stat-v' + n),
+        }));
         // Last shown score per player, so a change pulses but the first paint
         // doesn't.
         const shownScore = { p1: null, p2: null };
+        // Same idea for the count stat (slot 1), reset on mode change so
+        // re-entering a mode doesn't pulse its first paint.
+        let shownCount = null;
+        let shownSoloMode = null;
 
         if (barView) {
             // Two lines in the bar's cell; one line everywhere else.
@@ -621,8 +700,64 @@
             shownScore[key] = value;
         }
 
+        // ---- the solo panel (#30) ----
+        // One stat cell: slate label over white number, seconds get a quiet
+        // unit, a missing number is a dash. Values are server floats/ints, so
+        // innerHTML never carries anything but this page's own markup.
+        function setStat(i, label, value, unit) {
+            const cell = statCells[i];
+            cell.label.innerText = label;
+            cell.value.classList.toggle('blank', value == null);
+            cell.value.innerHTML = value == null
+                ? '&mdash;'
+                : value + (unit ? '<span class="unit">' + unit + '</span>' : '');
+        }
+
+        function fmtElapsed(s) {
+            const total = Math.floor(s ?? 0);
+            const pad = n => String(n).padStart(2, '0');
+            const m = Math.floor(total / 60) % 60;
+            const h = Math.floor(total / 3600);
+            return h ? h + ':' + pad(m) + ':' + pad(total % 60)
+                     : m + ':' + pad(total % 60);
+        }
+
+        function renderSolo(state) {
+            const soloMode = state.mode === 'run_out' || state.mode === 'no_clock';
+            if (soloMode && state.mode !== shownSoloMode) shownCount = null;
+            shownSoloMode = soloMode ? state.mode : null;
+            if (!soloMode) return false;
+            statsEl.className = 'stats ' + (state.mode === 'no_clock' ? 'n2' : 'n3');
+            const solo = state.solo;
+            if (!solo) {
+                // Old server, new page: no numbers to show, so the panel is
+                // simply quiet — the scoreboard still correctly stands down.
+                statCells.forEach(c => { c.label.innerText = ''; c.value.innerText = ''; });
+                return true;
+            }
+            let count;
+            if (state.mode === 'run_out') {
+                count = solo.shots ?? 0;
+                setStat(0, 'SHOTS', count, null);
+                setStat(1, 'LAST', solo.last_s == null ? null : solo.last_s.toFixed(1), 'S');
+                setStat(2, 'AVG', solo.avg_s == null ? null : solo.avg_s.toFixed(1), 'S');
+            } else {
+                count = solo.reps ?? 0;
+                setStat(0, 'REPS', count, null);
+                setStat(1, 'TIME', fmtElapsed(solo.elapsed_s), null);
+            }
+            if (shownCount !== null && shownCount !== count) {
+                const el = statCells[0].value;
+                el.classList.remove('pulse');
+                void el.offsetWidth;
+                el.classList.add('pulse');
+            }
+            shownCount = count;
+            return true;
+        }
+
         function renderBar(state) {
-            plinthEl.className = 'plinth ' + barPhase(state);
+            plinthEl.className = 'plinth ' + barPhase(state) + (renderSolo(state) ? ' solo' : '');
             eyebrowEl.innerText = (state.mode ?? '').replace(/_/g, ' ').toUpperCase();
 
             // The gauge reads time against whatever a fresh countdown would

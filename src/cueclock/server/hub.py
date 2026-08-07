@@ -211,6 +211,21 @@ class Hub:
         # *next* shot's clock too.
         self._scratch_candidate_open = False
         self._scratch_hold_done = False
+        # Solo panel (#30): run_out and no_clock are single-player, so the
+        # bar's scoreboard area shows session numbers instead of a match
+        # score. All of it is wall-clock bookkeeping, which is why it lives
+        # here and not in the pure clock. Pace: `_pace_since_mono` stamps the
+        # start of each fresh countdown, and the ShotTaken that ends it
+        # records how long the shot actually took — wall time, so a scratch
+        # hold or an extension honestly lengthens the shot that used it.
+        self._pace_since_mono: float | None = None
+        self._pace_last_s: float | None = None
+        self._pace_sum_s = 0.0
+        self._pace_shots = 0
+        # Drill counters: ShotTaken fires seen while no_clock (approximate —
+        # they inherit detection accuracy) and when the mode was entered.
+        self._drill_reps = 0
+        self._mode_entered_mono = time.monotonic()
         # Called after a *granted* extension has been broadcast, because the
         # overlay answers that broadcast by speaking "Extension called" out of
         # the TV. `cueclock run` points it at the mic listener's mute window:
@@ -266,13 +281,46 @@ class Hub:
         return time.monotonic() - self._rack_break_mono
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
-        """The composed broadcast/state payload: clock + `vision` + `score`."""
+        """The composed broadcast/state payload: clock + `vision` + `score` + `solo`."""
         snap = snapshot if snapshot is not None else self.clock.snapshot()
         return {
             **snap.as_dict(),
             "vision": self.vision_enabled,
             "score": self.score.as_dict(),
+            "solo": self._solo(),
         }
+
+    def _solo(self) -> dict[str, object] | None:
+        """The solo panel's numbers (#30) — pace in run_out, reps in no_clock.
+
+        None in match, where the scoreboard is the panel. `shots` is the
+        clock's own rack counter, so it inherits the missed-strike settle
+        compensation for free; `last_s`/`avg_s` are None until the first
+        *timed* shot — the opening shot of a run-out starts from IDLE with no
+        countdown over it, so there is nothing honest to report for it.
+        """
+        mode = self.clock.mode.name
+        if mode == "run_out":
+            return {
+                "shots": self.clock.rack_shots,
+                "last_s": round(self._pace_last_s, 1) if self._pace_last_s is not None else None,
+                "avg_s": round(self._pace_sum_s / self._pace_shots, 1)
+                if self._pace_shots
+                else None,
+            }
+        if mode == "no_clock":
+            return {
+                "reps": self._drill_reps,
+                "elapsed_s": round(time.monotonic() - self._mode_entered_mono, 1),
+            }
+        return None
+
+    def _reset_pace(self) -> None:
+        """Zero the pace aggregates — the panel's scope is one continuous run."""
+        self._pace_since_mono = None
+        self._pace_last_s = None
+        self._pace_sum_s = 0.0
+        self._pace_shots = 0
 
     # ---------- WebSocket clients ----------
 
@@ -341,6 +389,9 @@ class Hub:
         if self._table_motion or now - anchor < FROZEN_WATCHDOG_SECONDS:
             return
         self.clock.balls_settled(now)
+        # From MOTION a settle always lands RUNNING; the synthesized one
+        # starts a real countdown, so it opens the pace timer like any other.
+        self._pace_since_mono = now
         self._log("settle_synthesized", quiet_s=round(now - anchor, 2))
         self._motion_entered_mono = None
 
@@ -386,7 +437,11 @@ class Hub:
     # ---------- commands (each also broadcasts, per the "on every event" rule) ----------
 
     async def start(self) -> None:
-        self.clock.start(time.monotonic())
+        now = time.monotonic()
+        fresh = self.clock.state is not State.RUNNING  # resuming doesn't restart the pace
+        self.clock.start(now)
+        if fresh:
+            self._pace_since_mono = now
         self._idle_fire = None
         self._log("cmd_start")
         await self.broadcast(self.clock.snapshot())
@@ -394,12 +449,14 @@ class Hub:
     async def pause(self) -> None:
         self.clock.pause()
         self._idle_fire = None
+        self._pace_since_mono = None
         self._log("cmd_pause")
         await self.broadcast(self.clock.snapshot())
 
     async def reset(self) -> None:
         self.clock.reset()
         self._idle_fire = None
+        self._pace_since_mono = None
         self._log("cmd_reset")
         await self.broadcast(self.clock.snapshot())
 
@@ -412,18 +469,28 @@ class Hub:
         # table to watch, so the rack worth replaying is still the one that
         # just ended — see `rack_age`.
         self._rack_pending = True
+        # In run_out a New Rack is a fresh fifteen thrown up — the panel's
+        # pace numbers describe one run, so they restart with it.
+        self._reset_pace()
         self._log("cmd_new_rack")
         await self.broadcast(self.clock.snapshot())
 
     async def restart(self) -> None:
-        self.clock.restart(time.monotonic())
+        now = time.monotonic()
+        self.clock.restart(now)
         self._idle_fire = None
+        self._pace_since_mono = now
         self._log("cmd_restart")
         await self.broadcast(self.clock.snapshot())
 
     async def push(self) -> None:
-        self.clock.push(time.monotonic())
+        now = time.monotonic()
+        self.clock.push(now)
         self._idle_fire = None
+        if self.clock.state is State.RUNNING:
+            # During MOTION a push only re-arms the window; the settle that
+            # follows starts (and stamps) the fresh countdown itself.
+            self._pace_since_mono = now
         self._log("cmd_push")
         await self.broadcast(self.clock.snapshot())
 
@@ -453,6 +520,7 @@ class Hub:
             return False
         self.clock.set_ruleset(ruleset)
         self._idle_fire = None
+        self._reset_pace()  # the clock zeroed its rack scope; the panel follows
         self._log("cmd_ruleset", ruleset=self.clock.ruleset.name)
         await self.broadcast(self.clock.snapshot())
         return True
@@ -470,6 +538,10 @@ class Hub:
             return False
         self.clock.set_mode(mode)
         self._idle_fire = None
+        # A mode switch is a new activity: the whole solo panel rescopes.
+        self._reset_pace()
+        self._drill_reps = 0
+        self._mode_entered_mono = time.monotonic()
         self._log("cmd_mode", mode=self.clock.mode.name)
         await self.broadcast(self.clock.snapshot())
         return True
@@ -516,6 +588,7 @@ class Hub:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock
         if not self.clock.mode.clock_live:
+            self._drill_reps += 1  # the solo panel's REPS — approximate by design
             self._log("vision_shot_taken_no_clock", **detail)
             return  # no_clock mode: still journaled as evidence, never clocked
         floor = self.clock.mode.break_floor_mms
@@ -537,6 +610,16 @@ class Hub:
             # above. Speed only: the newborn half was removed at checkpoint 57.
             self._log("vision_shot_taken_ignored_idle", **detail)
             return
+        if self._pace_since_mono is not None and self.clock.state in (State.RUNNING, State.GRACE):
+            # Solo pace (#30): this shot ends the countdown the stamp opened.
+            # GRACE counts — the shot took longer than base, which is exactly
+            # what the number is for. Consumed here so a mid-motion re-fire
+            # cannot measure the same countdown twice.
+            took = self._last_shot_mono - self._pace_since_mono
+            self._pace_last_s = took
+            self._pace_sum_s += took
+            self._pace_shots += 1
+            self._pace_since_mono = None
         self.clock.shot_taken()
         self._log("vision_shot_taken", **detail)
         await self.broadcast(self.clock.snapshot())
@@ -577,6 +660,11 @@ class Hub:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
         self.clock.balls_settled(now)
+        if self.clock.state is State.RUNNING:
+            # Solo pace (#30): the fresh countdown this settle started is the
+            # next shot's timer. A settle the clock ignored (IDLE) stamps
+            # nothing — placement motion must not time a phantom shot.
+            self._pace_since_mono = now
         self._log("vision_balls_settled", **detail)
         # #25: the scratch's candidate can precede its settle (shot_debug:
         # candidate 9.54 s, settle 11.92 s) — the fresh countdown this settle

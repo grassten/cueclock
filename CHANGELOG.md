@@ -232,6 +232,33 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-07 (checkpoint 80 — solo panel: run_out/no_clock trade players for pace, #30):**
+  The bar stops showing a two-player score in the two modes that have one
+  player. Decided on mockups (Option D of four): in `run_out` / `no_clock` the
+  `.scores` block stands down and the same 1044 px zone carries per-mode stat
+  lockups — `SHOTS / LAST / AVG` in run_out (pace against the clock: wall time
+  from each fresh countdown's start to the ShotTaken that ends it, dash until
+  the first timed shot since the opening shot leaves IDLE untimed), `REPS /
+  TIME` in a drill (fires while `no_clock`, approximate by design; elapsed
+  since mode entry). Nothing else moves — plinth, gauge, divider and clock
+  cell are identical across modes, so the Mode key changes words, never
+  furniture, which was the continuity requirement. Fitment is #29's own rule
+  (label 15 px at 55 over number 48 px at 96, pair centred on y=84) in the
+  bar's two existing text voices; count stats reuse the score digits' pulse.
+  Server: the `/ws` + `/api/state` payload gains a strictly-additive `solo`
+  field (design.md §2.1) — `null` in match — composed in the hub, which owns
+  all the wall-clock bookkeeping (`_pace_since_mono` opens on settle/start/
+  restart/push and the E9 synthesized settle; consumed once per countdown so
+  a mid-motion re-fire can't double-measure; IDLE settles stamp nothing, so
+  placement can't time a phantom). Panel rescopes on mode switch and New
+  Rack; kill switch outranks REPS like every vision consumer. New page + old
+  server degrades to a quiet bar with the scoreboard correctly stood down.
+  Verified: 402 unit tests (+3), mypy --strict clean; match-mode wall render
+  screenshotted through OBS's own CEF (unchanged), solo states rendered
+  offscreen through WKWebView against the live server's page with injected
+  payloads (`scratchpad/snap_overlay.swift` pattern — see the overlay-check
+  memory). Square/full views untouched.
+
 - **2026-08-07 (checkpoint 79 — scoreboard fitment: centred lockups, Fargo labeled, #29):**
   Two defects Steven flagged after #27 put the rating on the bar. The vertical
   one: a race line lifted the *entire* name/score row to y=72 with `RACE TO N`
