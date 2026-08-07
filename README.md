@@ -9,7 +9,9 @@ TV, controlled from a Stream Deck. Everything runs on one Mac mini.
 
 ## Demo
 
-https://github.com/user-attachments/assets/af7e8c98-a67f-48dd-b12a-9e74381881af
+[![The break: the clock arms at 30, catches the strike, and restarts itself once the balls settle](docs/media/demo-preview.gif)](docs/media/demo.mp4?raw=true)
+
+**[▶ Full demo — 2:44, with sound](docs/media/demo.mp4?raw=true)**
 
 A real practice session: overhead and side-angle feeds composited with the live
 shot clock and scoreboard. The clock starts on the detected strike and resets on
