@@ -110,6 +110,10 @@ SUMMARY_KIND = "session_summary"
 # instrument can never again be blind to the head of the Pareto (a missed
 # break in IDLE never confessed — §13.0).
 BREAK_ADJUDICATED_KIND = "break_adjudicated"
+# Historical only: the dark tier's shadow mark, emitted between checkpoints 75
+# and #36 (2026-08-11) while the no-fire tier journalled instead of counting.
+# Live journals never carry it again — a dark catch is a `break_adjudicated`
+# with `tier="dark"` — but it stays parsed so old sessions still read right.
 BREAK_DARK_CANDIDATE_KIND = "break_dark_candidate"
 SETTLE_SYNTHESIZED_KIND = "settle_synthesized"
 # #33 the provisional shot: the latch froze a RUNNING countdown; the settle
@@ -584,7 +588,7 @@ def format_session(report: SessionReport) -> str:
             f"  breaks             {report.breaks_adjudicated} auto-caught / "
             f"{report.break_presses} rescued by press"
             + (
-                f"   ({report.dark_candidates} dark candidates, shadow)"
+                f"   ({report.dark_candidates} dark candidates — pre-#36 shadow)"
                 if report.dark_candidates
                 else ""
             )
@@ -700,7 +704,7 @@ def format_rollup(reports: list[SessionReport]) -> str:
         out.append("")
         out.append(
             f"  breaks             {adjudicated} auto-caught / {presses} rescued by press"
-            + (f"   ({dark} dark candidates, shadow)" if dark else "")
+            + (f"   ({dark} dark candidates — pre-#36 shadow)" if dark else "")
         )
     synthesized = sum(r.settles_synthesized for r in played)
     if synthesized:

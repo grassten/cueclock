@@ -31,17 +31,17 @@ computes it identically.
 |---|---|
 | **Strike detection** | Vision fired on the stroke itself. The raw number; E7 (tracker) territory. ~97% and flat as of 2026-08-06. |
 | **Clock accuracy incl. self-healing** | The clock ended in the right state with no human help. A self-healed miss (countdown ran a few seconds long, then the settle reset it — `report`'s confession mechanism) counts as success; only a false foul counts against it. |
-| **Break auto-catch** | The clock started off the break with no press: vision fires + (checkpoint 75+) E8 `break_adjudicated`. Denominator is `cmd_new_rack` presses. **The row checkpoint 75 predicts will move.** |
+| **Break auto-catch** | The clock started off the break with no press: vision fires + (checkpoint 75+) E8 `break_adjudicated`, **both tiers since #36 (2026-08-11)** — the dark tier now counts a no-fire break off the pack un-merging (`appeared >= 5`), which is the 15-25% of breaks that never started the clock. Denominator is `cmd_new_rack` presses. **The row #36 predicts will move.** |
 | **Hands-off play** | Shots minus every manual intervention: break-rescue presses, frozen-clock rescues, false fouls. The felt-accuracy headline (§13.9 judges the whole arc on this). |
 | **False fouls** | Buzzer sounded through a live shot. E9's grace hold should pin this at 0 from checkpoint 75 on — a nonzero value here is news, flag it. |
 | **Phantom candidates** | `report`'s review symptoms (no roll-out / snap-back). Candidates, never verdicts. |
 | **Scratches journaled** | Journals **with `vision_scratch_candidate` records** (checkpoint 77+, #26): `vision_scratch` is an adjudicated verdict — present it as a count, with candidates/refuted beside it (`report` prints all three). Journals **without** candidate records predate the two-stage verdict: **upper bound only**, over-counted ~6x (potted object balls mis-crowned as the cue; Steven ground truth 2026-08-06) — never present those as a real count. The adjudicator's one known leak keeps even new counts a slight over-bound: a real cue at rest in deep rail shade (0.53 whiteness vs the 0.72 witness floor) cannot refute its false candidate. |
 
 Rows that appear only when nonzero: **dark break candidates** (E8's no-fire
-tier — measured OFF 2026-08-10, #33 Part C: the armed-rack racking settle at
-21:07:56 sat inside the break population on both involved-count and
-settle-spread, so the tier stays journal-only until a discriminator separates
-on data), **settles synthesized** (E9 watchdog rescues), **provisional
+tier while it was shadow-only, checkpoint 75 → #36 — **historical, pre-2026-08-11
+journals only**; the tier went live in #36 keying on `appeared >= 5`, so a dark
+catch now counts inside break auto-catch as a `break_adjudicated` with
+`tier="dark"`), **settles synthesized** (E9 watchdog rescues), **provisional
 shots** (#33: latch freezes / reverted-not-a-shot / suppressed settles —
 reverts and suppressions are placements the clock now correctly ignores, not
 misses), **flags pressed** (each lands in the `triage-clips` loop).

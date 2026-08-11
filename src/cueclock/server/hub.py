@@ -54,9 +54,8 @@ FROZEN_WATCHDOG_SECONDS = 12.0
 #     them needed a manual rescue press, with eaten fires measured from
 #     443 up to 13059 mm/s) — a moderate rearrangement floor suffices.
 #   * with no fire at all (the dark-flight class: motion that happens
-#     between track identities), only an overwhelming rearrangement would
-#     count — currently SHADOW-ONLY (`break_dark_candidate` journal mark,
-#     no clock action) because its one hazard is unmeasurable offline.
+#     between track identities), the pack un-merging is the evidence — an
+#     appeared-count floor, live since #36 (see the dark-tier note below).
 #
 # The rearrangement floors are anchored to the 2026-08-06 corpus probe
 # (`rearrange2_probe.py`, quiet-anchored baselines): breaks involve 7-12
@@ -69,21 +68,61 @@ FROZEN_WATCHDOG_SECONDS = 12.0
 # costs one New Rack press, against 13-22 missed-break presses per 30
 # sessions today.
 #
-# THE DARK TIER STAYS OFF — measured blocker, not shadow (#33 Part C,
-# 2026-08-10). The unpriced racking population got priced and it REFUSED
-# both discriminators: the 21:07:56 armed-rack racking settle (ground truth
-# solid — the real break came ~15 s later, was missed, flagged as
-# flag_missed_2, and rescued by a Restart press) measured involved=12,
-# inside the break population (7-12), and settle-spread 1619 mm, inside the
-# break population there too (1103-1684 mm — a mid-racking gather settle is
-# table-wide: balls sit by pockets and rails waiting to be racked, so the
-# layout is not pack-local). No measured axis separates a racking gather
-# settle from a dark break; flipping would re-create the 2026-08-01 racking
-# countdown on the record's own evidence. The candidate mark and the
-# journaled spread keep accumulating both axes; re-open the flip only with
-# a discriminator that separates on data, not on hope.
+# THE DARK TIER IS LIVE, and it keys on `appeared` (#36, 2026-08-11).
+#
+# The claim that stood here until #36 — "no measured axis separates a racking
+# gather settle from a dark break, the tier stays off" — was FALSE, and how it
+# got here is worth keeping: the 21:07:56 settle it rested on was called
+# racking by inferring from when Steven pressed buttons afterwards. Replaying
+# the dump (`flag_missed_2`, warm and cold) shows 10 pack tracks dying inside
+# ~0.9 s and 13 newborns flying up to 1534 mm. Hand-placing balls does not do
+# that. 21:07:56 IS the missed break. Ground truth comes from the physics in a
+# replay, never from press timing.
+#
+# The separating axis is `appeared`, and the reason it separates is structural
+# rather than statistical: a break UN-MERGES the racked pack — balls the
+# detector could not resolve inside a blob acquire their own positions, which
+# is precisely what an unmatched current ball (`appeared`) is. Racking runs
+# the process backwards, singles merging into the pack, which lands in
+# `vanished`. So the axis keys on the un-merge itself and is independent of
+# how many balls the rack held — which the old `involved` floor was not.
+#
+# Measured over every journal carrying the field (111 settles across
+# 2026-08-07/08-10/08-11), IDLE-domain — the only domain this tier acts in:
+#
+#   9-ball breaks (4)                       appeared 5, 6, 6, 6
+#   8-ball breaks (corpus + live)           appeared 6, 7, 10, 10, 12
+#   every non-break IDLE settle (13)        appeared 0
+#     — racking gathers (mv=0 vn=6, the merge signature), placements up to
+#       1313 mm, a 2278 mm two-ball gather, cue positioning. Travel does not
+#       lift them off zero; only un-merging does.
+#
+# The 1-4 band is empty, so the floor of 5 sits under the lowest measured
+# break with the whole gap beneath it. `involved >= 8` is DEAD: all four
+# 9-ball breaks measure involved=7 and 9-ball racking measures 6, a one-ball
+# gap that no absolute or population-normalised floor survives.
+#
+# `pickup_snatch_0801` — the loudest hand event in the corpus, the clip that
+# priced this floor — measures appeared=6 and is NOT a counterexample: its
+# baseline is a single ball (the clip opens mid-action with no quiet layout
+# to anchor), so every ball resolving at the settle had nothing to match
+# against. Every corpus break clip is degenerate the same way (baselines
+# 1-2), which is why the live journals are the load-bearing record here and
+# the corpus anchors nothing on this axis. The mechanism is the check that
+# makes it safe: a hand kills tracks by OCCLUSION and they are reborn where
+# they already were, so against an anchored baseline they match and land as
+# moved/unchanged. `pickup_newborn_0801`, the one hand clip with an honest
+# baseline (5 balls -> 5), measures appeared=0 with 814 mm of travel.
+#
+# Two residuals, both accepted rather than solved:
+#   * a soft break that barely separates the pack reads low on `appeared` and
+#     stays missed — one press, exactly as today. The settle is journaled
+#     with its `appeared`, so the class is visible if it ever appears.
+#   * tearing a BUILT rack apart by hand un-merges the pack and is genuinely
+#     break-shaped here. Not in the live record; costs one New Rack press —
+#     the pre-accepted §13.4 worst case, and the right direction to fail.
 BREAK_FIRED_MIN_INVOLVED = 5
-BREAK_DARK_MIN_INVOLVED = 8
+BREAK_DARK_MIN_APPEARED = 5
 # A fire arms adjudication only for the settle of its own motion episode:
 # the longest measured fire→settle roll-out is 8.62 s (report.PHANTOM_LEAD_S;
 # the dark-flight break settles 7.8 s after its fire), so 15 s covers every
@@ -785,13 +824,14 @@ class Hub:
 
         Policy, not detection: the event layer emits whatever fires it can
         honestly confirm, and this is the one place that decides what an
-        armed rack's settle means. Two tiers, both anchored to the corpus
-        rearrangement probe (constants above): a fire of *any* speed since
-        the rack armed plus a moderate scatter, or — for the dark-flight
-        class, where the whole break happens between track identities — an
-        overwhelming scatter alone. Racking placements settle 1-3 balls at
-        a time and never arm a fire faster than 15 s before their settle,
-        so the 2026-08-01 racking-countdown hazard fails both tiers.
+        armed rack's settle means. Two tiers, both anchored above: a fire of
+        *any* speed since the rack armed plus a moderate scatter, or — for
+        the dark-flight class, where the whole break happens between track
+        identities — the pack un-merging, with no fire at all. The
+        2026-08-01 racking-countdown hazard fails both: racking settles 1-3
+        balls at a time (under the fired floor), never arms a fire within
+        15 s of its settle, and MERGES rather than un-merges, so every
+        racking settle on record measures appeared=0.
         """
         if self.clock.state is not State.IDLE:
             return False
@@ -808,24 +848,26 @@ class Hub:
             self._log(
                 "break_adjudicated",
                 tier="fired",
+                appeared=rearrange.appeared,
                 involved=rearrange.involved,
                 moved_mm=round(rearrange.moved_mm),
                 fire_speed=round(speed) if speed is not None else None,
             )
             self._idle_fire = None
             return True
-        if not fired and rearrange.involved >= BREAK_DARK_MIN_INVOLVED:
-            # Journal-only, and now by MEASUREMENT rather than caution: the
-            # racking hazard was priced on 2026-08-10 and refused both the
-            # involved floor and the settle-spread fallback — see the dark-
-            # tier blocker note above the constants. The mark (with spread
-            # journaled since #33) keeps accumulating the record.
+        if not fired and rearrange.appeared >= BREAK_DARK_MIN_APPEARED:
+            # The dark-flight class: the whole break happened between track
+            # identities, so there is no fire to arm the tier above. The pack
+            # un-merging is the evidence — see the appeared anchoring above.
             self._log(
-                "break_dark_candidate",
+                "break_adjudicated",
+                tier="dark",
+                appeared=rearrange.appeared,
                 involved=rearrange.involved,
                 moved_mm=round(rearrange.moved_mm),
                 spread_mm=round(rearrange.spread_mm),
             )
+            return True
         return False
 
     def _settle_not_a_shot(

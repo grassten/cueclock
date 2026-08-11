@@ -888,29 +888,64 @@ def test_small_settle_after_eaten_fire_stays_idle() -> None:
     assert hub.clock.rack_shots == 0
 
 
-def test_dark_break_scale_settle_is_shadow_only() -> None:
-    """The no-fire tier journals a candidate but must not move the clock.
+def test_dark_break_scale_settle_counts_the_break() -> None:
+    """The no-fire tier counts the break off the pack un-merging alone (#36).
 
-    Its one unpriced hazard is a racking settle — the pack resolving from a
-    merged blob is appear-heavy exactly like a break — so it ships as a
-    journal mark and the next sessions' rearrangement records decide whether
-    it goes live.
+    History, because the inversion matters: this test pinned the opposite
+    until 2026-08-11. The tier shipped shadow-only on the belief that its
+    hazard — a racking settle looking appear-heavy exactly like a break —
+    was unmeasurable offline, and #33 Part C then "confirmed" the blocker by
+    reading a settle's identity off press timing rather than off the physics
+    in its dump. The settle was the missed break. With the record re-mined,
+    every racking settle measures appeared=0 (racking MERGES the pack) and
+    every break measures >= 5, so the tier acts.
     """
     hub = Hub()
     asyncio.run(hub.new_rack())
     asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11, moved_mm=381.0)))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.rack_shots == 1  # counted exactly once
+    # ...and the settle started the WNT §5 first-shot window over it.
+    assert hub.clock.current_base() == hub.clock.ruleset.first_shot_seconds
+    assert hub.clock.remaining == pytest.approx(hub.clock.current_base(), abs=0.2)
+    tiers = [r.get("tier") for r in hub.journal.tail(60.0) if r["kind"] == "break_adjudicated"]
+    assert tiers == ["dark"]
+
+
+def test_dark_tier_ignores_a_racking_scale_settle() -> None:
+    # The 2026-08-01 racking-countdown hazard, in its measured shape: racking
+    # merges singles into the pack, so it lands in `vanished` and reads
+    # appeared=0 no matter how far the balls travelled (live gathers measured
+    # up to 2278 mm). Nothing may start the clock here.
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=0, vanished=6, moved_mm=2278.0)))
     assert hub.clock.state is State.IDLE
     assert hub.clock.rack_shots == 0
-    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
-    assert "break_dark_candidate" in kinds
-    assert "break_adjudicated" not in kinds
+    assert "break_adjudicated" not in [r["kind"] for r in hub.journal.tail(60.0)]
 
 
-def test_stale_fire_does_not_arm_adjudication() -> None:
-    # A fire arms only the settle of its own episode (longest measured
-    # fire->settle roll-out is 8.62 s); an old racking blip must not convert
-    # a later big settle. With the fire stale, the settle falls through to
-    # the shadow tier.
+def test_dark_tier_floor_is_the_appeared_count_not_involved() -> None:
+    # Two pins in one, both from the 2026-08-11 measurement. A big `involved`
+    # with appeared under the floor is not a break (the old involved>=8 floor
+    # would have fired here); and the floor sits at 5 because the lowest
+    # measured break — a 9-ball break, involved 7 — appeared exactly 5, with
+    # the 1-4 band empty across every journal on record.
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=4, appeared=4, vanished=4)))
+    assert hub.clock.state is State.IDLE
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=2, appeared=5, moved_mm=741.0)))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.rack_shots == 1
+
+
+def test_stale_fire_falls_through_to_the_dark_tier() -> None:
+    # A fire arms the FIRED tier only for the settle of its own episode (the
+    # longest measured fire->settle roll-out is 8.62 s); an old racking blip
+    # must not convert a later settle on its evidence. The settle is still
+    # break-shaped on its own, so the dark tier takes it — on the un-merge,
+    # not on the stale fire.
     hub = Hub()
     asyncio.run(hub.new_rack())
     asyncio.run(hub.shot_taken(speed_mms=1000.0))
@@ -918,9 +953,40 @@ def test_stale_fire_does_not_arm_adjudication() -> None:
     stamp, speed = hub._idle_fire
     hub._idle_fire = (stamp - 20.0, speed)  # age it past the 15 s window
     asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11, moved_mm=381.0)))
+    tiers = [r.get("tier") for r in hub.journal.tail(60.0) if r["kind"] == "break_adjudicated"]
+    assert tiers == ["dark"]
+    assert hub._idle_fire is not None  # the stale fire is not consumed by the dark tier
+
+
+def test_dark_tier_counts_a_backstop_settle_with_no_mover_evidence() -> None:
+    """Fail-open (#36 Part 3): the class this tier exists for is exactly the
+    one where the engine slept through the whole episode, so the settle
+    arrives from the pipeline backstop carrying no movers at all. Absence of
+    corroborating evidence must never block the verdict — that would silently
+    revert the dark-flight break to being missed.
+    """
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(
+        hub.balls_settled(
+            rearrange=_summary(moved=1, appeared=10, moved_mm=0.0), backstop=True, movers=[]
+        )
+    )
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.rack_shots == 1
+
+
+def test_dark_tier_respects_the_kill_switch_and_no_clock() -> None:
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    hub.vision_enabled = False
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11)))
     assert hub.clock.state is State.IDLE
-    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
-    assert "break_dark_candidate" in kinds
+    hub.vision_enabled = True
+    asyncio.run(hub.set_mode("no_clock"))
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=11)))
+    assert hub.clock.state is State.IDLE
+    assert "break_adjudicated" not in [r["kind"] for r in hub.journal.tail(60.0)]
 
 
 def test_mid_rack_settles_never_adjudicate() -> None:

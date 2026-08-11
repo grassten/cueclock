@@ -267,7 +267,14 @@ survive unchanged in `design.md`.
     open and counts. A refused settle reverts fire and freeze together:
     nothing counted, remaining restored to the tick; the engine's pickup
     discard (falling latch edge with no settle) reverts the same way.
-  * **Part C measured off:** the E8 dark tier's gating data arrived and
+  * **Part C measured off** — ⚠ **SUPERSEDED, and the claim below is false;
+    see checkpoint 84 (#36).** 21:07:56 is not a racking settle, it is the
+    missed break: its dump replays 10 pack tracks dying in ~0.9 s and 13
+    newborns flying up to 1534 mm. The identity was inferred from *when
+    Steven pressed buttons afterwards* instead of from the episode physics in
+    a dump that had already been replayed — the triage error this project
+    must not repeat. Kept verbatim below because the log is append-only:
+    the E8 dark tier's gating data arrived and
     refused both axes — the 21:07:56 armed-rack racking settle (ground
     truth: the real break came ~15 s later, was missed, flag_missed_2,
     Restart rescue) reads involved=12 and settle-spread 1619 mm, both inside

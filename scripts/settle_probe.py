@@ -194,6 +194,15 @@ def probe(name, reader, pipeline: VisionPipeline, indices, clip_dir: Path, t_off
                     "deaths_in_episode": [{"t": round(dt, 2), "id": did} for dt, did in deaths],
                     "spread_mm": round(spread),
                     "spread_involved": n_inv,
+                    # Issue #36: a bare `appeared` is uninterpretable without
+                    # knowing how many balls each layout resolved. A break's
+                    # appeared comes from the pack UN-MERGING (settled >>
+                    # baseline); a hand sweep's comes from balls dying and
+                    # being reborn at the same population. `None` baseline
+                    # means the clip never had a quiet layout to anchor to —
+                    # a degenerate measurement, not a zero.
+                    "baseline_n": None if pre_baseline is None else len(pre_baseline),
+                    "settled_n": len(present),
                 }
             )
             episode_start = None
