@@ -20,7 +20,7 @@ dist/
 # /Volumes/T7/pool_room_clips); tests/clips is a local symlink to it so every
 # code/doc path keeps working — see tests/README.md. No trailing slash: the
 # pattern must match the symlink. Clips are never published.
-models/
+models
 tests/clips
 .env
 
@@ -29,11 +29,14 @@ tests/clips
 # iCloud off it — see the note in capture/detect_cache.py.
 .detect-cache.nosync/
 
-# Mount-specific calibration artifacts (refit after every camera move)
-config/
+# Mount-specific calibration artifacts (refit after every camera move).
+# No trailing slash, same reason as tests/clips: a parallel worktree symlinks
+# this back to the main checkout, and a trailing slash would leave the symlink
+# untracked-but-not-ignored — one `git add -A` from committing a dead path.
+config
 
-# Session logs
-logs/
+# Session logs (symlinked in worktrees — see the note on config)
+logs
 
 # Working copy of a retired implementation plan. docs/accuracy-plan.md drove
 # checkpoints 53-58 and was deleted once they landed (its reasoning lives in

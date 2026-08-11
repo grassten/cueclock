@@ -69,15 +69,32 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   `events.py`/`track.py`, which is where nearly all accuracy work happens. Editing
   `detect.py` or `DetectConfig` invalidates every entry by design, so a cached run can
   never grade stale detections.
-- **A fresh git worktree is not a working repo here, and it fails silently.** Both
-  `tests/clips` (→ the T7) and `.venv` (→ `.venv.nosync/`) are *gitignored symlinks*, so a
-  new worktree has neither: every corpus test skips and the battery reports green having
-  graded nothing — an agent can honestly say "357 passed" while validating zero clips.
-  `.detect-cache.nosync/` is per-root too, so a worktree also starts cold. Before trusting
-  any run in one: recreate both symlinks (`.venv` must stay a symlink, never a real
-  directory), point `--detect-cache` at one shared absolute cache root, and **check the
-  test count and wall time** — a cold battery is ~4 min and ~400 tests; a 21 s run with no
-  shared cache means the corpus skipped.
+- **A fresh git worktree is not a working repo here, and it fails silently.** `tests/clips`
+  (→ the T7), `config/` (the mount calibration), `logs/`, `models/` and `.venv` are all
+  *gitignored*, so a new worktree has none of them: every corpus test skips and the battery
+  reports green having graded nothing — an agent can honestly say "357 passed" while
+  validating zero clips. **Always check the test count and wall time**: cold is ~5 min and
+  ~520 tests, cached ~30 s; much smaller or faster means the corpus skipped. The working
+  recipe (three parallel agents ran on it 2026-08-11 — keep worktrees *outside* `~/Desktop`,
+  since iCloud is what forced `.venv.nosync` in the first place):
+
+  ```sh
+  git worktree add ~/cueclock-wt/<name> -b wt/<name>
+  cd ~/cueclock-wt/<name>
+  ln -sfn /Volumes/T7/pool_room_clips tests/clips
+  for d in config logs models; do ln -sfn ~/Desktop/cueclock/$d $d; done
+  uv sync   # a real .venv is fine here — outside Desktop there is no iCloud to hide .pth
+  ./.venv/bin/python -m pytest tests -n 4 \
+      --detect-cache=/Users/steven/Desktop/cueclock/.detect-cache.nosync
+  ```
+
+  Two traps inside that recipe. **The `tests` positional is mandatory** — without it pytest
+  parses the cache path as a positional *before* `tests/conftest.py` registers the option,
+  roots itself at the main checkout and dies with "unrecognized arguments: --detect-cache".
+  And **share one absolute cache root**: `.detect-cache.nosync/` is per-root, so an unshared
+  worktree starts cold. Sharing is safe by design — the key covers `detect.py`,
+  `DetectConfig` and the reference digest, deliberately not `events.py`/`track.py`, and
+  entries land by atomic rename, so concurrent agents cannot corrupt each other.
 - Principles Steven has named explicitly: **KISS, YAGNI, DRY.** This repo will be
   open-sourced — write for a stranger reading it. v1 scope is clock + events + overlays
   (clock + scoreboard) + API + match mode (rack context, scores) + voice "extension";
