@@ -37,7 +37,14 @@ from cueclock.vision.detect import (
     build_reference,
     detect_balls,
 )
-from cueclock.vision.events import BallsSettled, BallState, Event, EventConfig, EventEngine
+from cueclock.vision.events import (
+    BallsSettled,
+    BallState,
+    Event,
+    EventConfig,
+    EventEngine,
+    SettleMover,
+)
 from cueclock.vision.track import BallTracker, Observation, TrackConfig
 
 
@@ -65,6 +72,13 @@ class RearrangeSummary:
     appeared: int
     vanished: int
     moved_mm: float
+    # Max pairwise distance across the involved balls' positions (vanished
+    # balls: where the baseline last had them). Journaled for E8's
+    # racking-vs-break record: the 2026-08-10 armed-rack racking settle
+    # measured 1619 mm — inside the break population (1103-1684 mm) — which
+    # is what keeps the dark tier off (#33 Part C); every journaled settle
+    # now accumulates both axes for free.
+    spread_mm: float = 0.0
 
     @property
     def involved(self) -> int:
@@ -97,6 +111,7 @@ def _match_rearrange(
     used_p: set[int] = set()
     used_c: set[int] = set()
     moved_dists: list[float] = []
+    involved_pos: list[tuple[float, float]] = []
     for d, i, j in dists:
         if i in used_p or j in used_c:
             continue
@@ -104,11 +119,22 @@ def _match_rearrange(
         used_c.add(j)
         if d > moved_mm:
             moved_dists.append(d)
+            involved_pos.append(cur[j])
+    involved_pos += [c for j, c in enumerate(cur) if j not in used_c]  # appeared
+    involved_pos += [p for i, p in enumerate(prev) if i not in used_p]  # vanished
+    spread = 0.0
+    if len(involved_pos) > 1:
+        spread = max(
+            hypot(a[0] - b[0], a[1] - b[1])
+            for k, a in enumerate(involved_pos)
+            for b in involved_pos[k + 1 :]
+        )
     return RearrangeSummary(
         moved=len(moved_dists),
         appeared=len(cur) - len(used_c),
         vanished=len(prev) - len(used_p),
         moved_mm=sum(moved_dists),
+        spread_mm=spread,
     )
 
 
@@ -259,6 +285,17 @@ class VisionPipeline:
         # rather than the engine's own — journaled by the hub so triage sees
         # the engine's miss instead of a clean settle.
         self.last_settle_backstop = False
+        # #33 settle evidence: the engine's per-mover episode travel/liveness
+        # for the most recent settle (empty for a backstop settle — the
+        # engine slept through that episode, there is no mover evidence).
+        self.last_settle_movers: list[SettleMover] = []
+
+    @property
+    def episode_active(self) -> bool:
+        """Is the engine's motion episode latched? (#33's provisional-freeze
+        trigger — the hardened roster-mover latch, deliberately not the raw
+        E9 motion bit, which gear can set during an ordinary address.)"""
+        return self._engine.table_moving
 
     def process(self, t: float, bayer: npt.NDArray[np.uint8]) -> list[Event]:
         detections, churn = self.detect(bayer)
@@ -340,6 +377,7 @@ class VisionPipeline:
                 self.event_config.moving_enter_mm,
             )
             self.last_settle_backstop = False
+            self.last_settle_movers = list(self._engine.last_settle_movers)
         # Quiet needs two things, because speed alone lies here (the
         # flag_missed_4 lesson): a breaking pack's tracks die at impact and
         # coast at their remembered ~0 speed while the in-flight balls are
@@ -384,6 +422,7 @@ class VisionPipeline:
             if summary.involved >= SETTLE_BACKSTOP_MIN_INVOLVED:
                 self.last_settle_rearrange = summary
                 self.last_settle_backstop = True
+                self.last_settle_movers = []
                 events = [*events, BallsSettled(t)]
             settled = True
         if settled:
@@ -431,6 +470,7 @@ class VisionPipeline:
                 "rearrange_pending": self._rearrange_pending,
                 "quiet_since": self._quiet_since,
                 "prev_present": self._prev_present,
+                "last_settle_movers": self.last_settle_movers,
             },
             protocol=pickle.HIGHEST_PROTOCOL,
         )
@@ -447,3 +487,4 @@ class VisionPipeline:
         self._rearrange_pending = state.get("rearrange_pending", False)
         self._quiet_since = state.get("quiet_since")
         self._prev_present = state.get("prev_present")
+        self.last_settle_movers = state.get("last_settle_movers", [])

@@ -86,6 +86,21 @@ class BallsSettled:
 
 
 @dataclass(frozen=True)
+class SettleMover:
+    """One episode mover's evidence at the settle (#33): how far the ball
+    actually traveled (episode origin -> last observed position) and whether
+    its track was still present when the table settled. Movers are roster
+    balls by construction — they were standing on the table before the
+    episode latched. Rides beside the event stream like the rearrangement
+    summary (``EventEngine.last_settle_movers``), so the corpus goldens stay
+    byte-identical; the hub reads it as evidence for the settle-time shot
+    adjudication and nothing in the vision layer acts on it (§13.1)."""
+
+    travel_mm: float
+    alive: bool
+
+
+@dataclass(frozen=True)
 class Scratch:
     t: float
 
@@ -673,6 +688,11 @@ class EventEngine:
         self._cfg = config or EventConfig()
         self._history: dict[int, _BallHistory] = {}
         self._table_moving = False
+        # #33 settle evidence: the most recent engine settle's episode movers
+        # (see SettleMover). Set in the settle branch just before the episode
+        # state clears; read by the pipeline the same way the rearrangement
+        # summary is.
+        self.last_settle_movers: list[SettleMover] = []
         self._all_still_since: float | None = None
         # Settle-dwell chatter guard (settle_stall_0801, the 2026-08-01
         # evening 12-16 s late-settle cluster): a corrupt observation stream
@@ -1280,6 +1300,20 @@ class EventEngine:
                     b.ball_id for b in balls if self._judgeable(b) or self._cluster_resident(b)
                 )
             if self._table_moving and t - self._all_still_since >= cfg.settle_dwell_s:
+                # #33 settle evidence, exported before the episode state is
+                # cleared: per-mover episode travel (origin -> last observed)
+                # and whether the track survived to the settle. A retrieval's
+                # lifted ball shows travel but alive=False; a real shot's
+                # surviving mover shows both — the hub's stun-pot guard.
+                present_ids = {b.ball_id for b in balls if b.present}
+                self.last_settle_movers = []
+                for mover_id, (ox, oy) in self._episode_origin.items():
+                    lx, ly = self._episode_last.get(mover_id, (ox, oy))
+                    self.last_settle_movers.append(
+                        SettleMover(
+                            travel_mm=hypot(lx - ox, ly - oy), alive=mover_id in present_ids
+                        )
+                    )
                 self._table_moving = False
                 self._roster = {
                     b.ball_id for b in balls if self._judgeable(b) or self._cluster_resident(b)
