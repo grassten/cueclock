@@ -139,6 +139,36 @@ BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
 # still never moves the clock.
 SCRATCH_HOLD_SECONDS = 5.0
 
+# #37 phantom rejection: how many balls the pre-episode quiet layout must have
+# resolved before an `involved == 0` reading is allowed to mean anything.
+#
+# `involved == 0` says two opposite things depending on where the baseline came
+# from (`RearrangeSummary.baseline_balls`): either the table is provably
+# unchanged, or the pipeline had no quiet layout and diffed the settled frame
+# against itself. `baseline_balls is None` separates those exactly, and is the
+# load-bearing half of this gate. The COUNT is the second half, and it covers a
+# subtler degeneracy: a baseline that exists but resolved almost nothing (a
+# racked pack the detector never split) can also read zero while balls scatter,
+# because both sides of the diff hold the same one or two tracks.
+#
+# Anchored on every settle the corpus produces (2026-08-11 probe, 55 settles
+# across 51 clips). Baselines that resolved 1-2 balls are all racked-pack or
+# mid-action clips where the layout was never really seen — `break_0801` 1,
+# `break_0801b` 1, `break_outrun_0805` 1, `pickup_snatch_0801` 1,
+# `break_dark_flight_0806` 2, `jaw_strike_0801` 2, `merge_yank_0731` 2.
+# Baselines of 3 and up are honest layouts of the table that was actually
+# there, including late-rack tables with genuinely few balls left
+# (`pot_scratch_nohold_0811` 3, `lone_roller_0801` 3, `cluster_shot_0801` 4,
+# `cluster_rest_shot_0806` 4, and the live phantom's own 4). So 3 is the lowest
+# floor that excludes every unresolved-pack baseline on record while still
+# covering the end of a rack, which is exactly where the live phantom happened.
+#
+# The residual, accepted rather than solved: a table down to two balls (cue and
+# the 8) cannot be adjudicated at all and every phantom on it stands, as today.
+# That is the failing-open direction, and the whole predicate is built to fail
+# that way — see `_settle_is_phantom`.
+QUIET_BASELINE_MIN_BALLS = 3
+
 # REMOVED 2026-08-11 (checkpoint 87, #38): the #33 Part A settle refusal and
 # its SHOTLIKE_MOVER_MIN_TRAVEL_MM floor. Recorded here because deleting a
 # guard silently is how it comes back.
@@ -766,6 +796,10 @@ class Hub:
             detail["vanished"] = rearrange.vanished
             detail["moved_mm"] = round(rearrange.moved_mm)
             detail["spread_mm"] = round(rearrange.spread_mm)
+            # #37: what the diff was taken against. Without it a journaled
+            # `involved=0` is unreadable after the fact — the 2026-08-11
+            # `flag_phantom` record had to be settled by replaying the dump.
+            detail["baseline"] = rearrange.baseline_balls
         if movers:
             detail["movers_alive"] = sum(m.alive for m in movers)
             detail["mover_max_mm"] = round(max(m.travel_mm for m in movers))
@@ -776,6 +810,11 @@ class Hub:
             self._log("vision_balls_settled_no_clock", **detail)
             return  # journaled, not clocked — as above
         now = time.monotonic()
+        # #37, decided before anything else touches the clock: was this
+        # episode a phantom? Evaluated against the state the settle ARRIVED
+        # in, which is what keeps it disjoint from the break adjudication
+        # below (that one acts only out of IDLE, this one only out of MOTION).
+        phantom = self._settle_is_phantom(rearrange, backstop)
         if self._adjudicate_break(now, rearrange):
             # E8: an armed rack's settle with break-scale rearrangement IS
             # the break (WNT §5 starts the 60 s window at the rest, so
@@ -785,7 +824,26 @@ class Hub:
             if self._rack_pending or self._rack_break_mono is None:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
-        moved_clock = self.clock.balls_settled(now)
+        moved_clock = self.clock.balls_settled(now, suppress=phantom)
+        if phantom:
+            # The provisional freeze is undone: no shot counted, the countdown
+            # resumes with exactly the remaining it froze at, and the pace
+            # measurement it was holding goes back to being an open stamp.
+            # Same resolution `episode_discarded` performs, from the other end
+            # of the episode — so it journals the same kind, and `report`
+            # tallies it as a revert without knowing this branch exists.
+            self._revert_pace()
+            self._provisional_open_mono = None
+            detail["rejected"] = "phantom"
+            self._log(
+                "shot_provisional_reverted",
+                t=t,
+                frame_t=t,
+                reason="phantom_settle",
+                baseline=rearrange.baseline_balls if rearrange is not None else None,
+                movers_alive=detail.get("movers_alive"),
+                mover_max_mm=detail.get("mover_max_mm"),
+            )
         if moved_clock:
             # The settle counted this episode's one shot (fired or
             # compensated): commit the pace measurement the provisional was
@@ -805,6 +863,68 @@ class Hub:
         # verdict about what this settle was may swallow it.
         self._maybe_hold_for_scratch()
         await self.broadcast(self.clock.snapshot())
+
+    def _settle_is_phantom(self, rearrange: "RearrangeSummary | None", backstop: bool) -> bool:
+        """#37: did this settle prove that no shot was taken?
+
+        The symmetric half of #33. That issue gave the clock a window — motion
+        onset through settle — and spent it in one direction only: a missed
+        strike is rescued by the freeze. An *invented* strike still stood,
+        froze the clock, counted a shot and reset the countdown. The mechanism
+        to undo it was already general (`ShotClock.balls_settled(suppress=)`,
+        plus the provisional revert path); only this predicate was missing.
+
+        **Positive evidence, never absence of it.** Refusing a real shot is
+        worse than tolerating a phantom — the countdown then runs through the
+        shooter's stroke, which is the failure #33 exists to kill, and it is
+        how #38's predicate died (3 fires in one session, 2 of them wrong).
+        So every clause here is a thing that was measured, and anything
+        missing or degraded fails open:
+
+        * **MOTION only.** The clock must be sitting on a provisional freeze,
+          which bounds the cost of being wrong to exactly what #33 already
+          accepts: the countdown resumes with the remaining it froze at. In
+          GRACE the same refusal would let the buzzer fire on a live shot (the
+          worst felt failure, 2 in 30 sessions); in IDLE a settle is a no-op
+          and the break has its own adjudication.
+        * **A real quiet baseline** of `QUIET_BASELINE_MIN_BALLS` or more —
+          see that constant. This is the trap #33 fell into: `involved == 0`
+          also means "there was no baseline", which is a zero by arithmetic.
+        * **The table is unchanged.** `involved == 0` against that baseline:
+          every ball the settle resolved greedy-matches a baseline ball within
+          `moving_enter_mm`, with none left over on either side. A shot always
+          rearranges something — measured over the whole corpus, every
+          honestly-anchored settle of a real shot reads 1 or more, including
+          the softest touches in the collection (`soft_touch_0731` 2,
+          `tip_bump` 2 involved balls). A phantom crowned on a hoodie, a cue
+          shaft, or a coasting track leaves the layout identical.
+        * **Not the pipeline's backstop settle**, which carries no episode at
+          all — and by construction cannot read zero anyway (it needs
+          `SETTLE_BACKSTOP_MIN_INVOLVED`). Stated rather than implied, because
+          the implication is the kind that quietly stops being true.
+
+        Two evidence axes the issue proposed are deliberately NOT here, both
+        because measuring them said no (2026-08-11 corpus probe):
+
+        * **Mover travel.** `SettleMover` carries per-mover episode travel and
+          survival, and it does not separate: real shots read 0 mm of
+          surviving-mover travel on 8 corpus clips (every mover died in the
+          scatter — `hanger_pot_0801`, `no_cue_strike_0801`, `soft_shot`…),
+          while the live phantom's surviving mover read 26 mm. Any floor that
+          rejects the phantom refuses real shots.
+        * **Roll-out length.** `report.PHANTOM_SETTLE_S` flags a sub-1 s
+          fire→settle as a phantom *candidate*, and promoting it to a verdict
+          would be a false refusal: `pot_scratch_nohold_0811` is a real pot
+          whose settle lands **0.73 s** after its fire. It also catches
+          neither proof case (1.37 s and 1.65 s). It stays a diagnostic.
+        """
+        if self.clock.state is not State.MOTION:
+            return False
+        if backstop or rearrange is None:
+            return False
+        if rearrange.baseline_balls is None or rearrange.baseline_balls < QUIET_BASELINE_MIN_BALLS:
+            return False
+        return rearrange.involved == 0
 
     def _adjudicate_break(self, now: float, rearrange: "RearrangeSummary | None") -> bool:
         """E8 (§13.2): should this IDLE settle be counted as the break?

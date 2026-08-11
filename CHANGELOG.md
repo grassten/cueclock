@@ -232,6 +232,145 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-11 (checkpoint 88 — #37 Part A: the settle learns to say no):**
+  #33 gave the clock a window — motion onset through settle — and spent it in
+  one direction only: a missed strike is rescued, an invented one still stood,
+  froze the clock, counted a shot and reset the countdown. The symmetric half
+  is live. `parked_vote_strike_0801` was the corpus's one standing red and is
+  **green**; the corpus is at **zero red**.
+  * **The trap first, because it is the whole problem.** `involved == 0`
+    against the pipeline's rearrangement summary says two opposite things:
+    the table is provably unchanged, or there was never a quiet layout and
+    `self._settled_baseline or present` diffed the settled frame against
+    itself. #33 could not tell them apart and fails open on the shape, and the
+    comment anchoring that branch called `involved == 0` "a clip-start
+    artifact shape, never a measured placement". **Measured over every settle
+    the corpus produces (55 settles, 51 clips): THIRTEEN read `involved == 0`,
+    and twelve of them have no baseline at all** — `address_chatter_miss_0801`,
+    `break_underread_0801`, `cue_grab_0801`, `kick_scratch_0811`,
+    `missed_strike_0731`, `occluded_address_0731`, `parked_vote_newborn_0805`,
+    `scratch_replace`, `scratch_shot_0801`, `settle_stall_0801`,
+    `stroke_tug_strike_0801`, `tip_bump`, all clips that open mid-action. The
+    thirteenth is `parked_vote_strike_0801`'s phantom, against a 7-ball quiet
+    layout. So the shape was never the discriminator; **where the baseline
+    came from is.**
+  * **`RearrangeSummary.baseline_balls`** (`vision/pipeline.py`) is the whole
+    vision-side change: how many balls the quiet layout resolved, `None` when
+    the fallback stood in for one. Additive, evidence-only, journaled on every
+    settle as `baseline` — the live `flag_phantom` record had to be settled by
+    replaying the dump because the journal could not say.
+  * **`Hub._settle_is_phantom`** is the verdict, and every clause is positive
+    evidence: **MOTION only** (the clock is sitting on a provisional freeze,
+    so being wrong costs exactly what #33 already accepts — in GRACE the same
+    refusal would buzz a false violation over a live shot), a **real quiet
+    baseline** of `QUIET_BASELINE_MIN_BALLS` (3) or more, `involved == 0`, and
+    not the pipeline backstop. Anything missing or degraded counts, as before.
+  * **The floor is measured, not chosen.** Baselines resolving 1–2 balls are
+    all unresolved-pack or mid-action clips (`break_0801`, `break_0801b`,
+    `break_outrun_0805`, `pickup_snatch_0801` at 1; `break_dark_flight_0806`,
+    `jaw_strike_0801`, `merge_yank_0731` at 2). Baselines of 3+ are honest
+    layouts, **including late-rack tables with genuinely few balls left**
+    (`pot_scratch_nohold_0811` 3, `lone_roller_0801` 3, `cluster_shot_0801` 4,
+    and the live phantom's own 4 — which is why the 2026-08-11 corpus note
+    claiming an empty 3–4 band is superseded: those clips are anchored, the
+    band is not empty, and the split is fallback-vs-real, not small-vs-large).
+    A table down to two balls cannot be adjudicated and every phantom on it
+    stands — the failing-open direction, accepted.
+  * **Blast radius: 2 rejections over 63 settle verdicts**, across the corpus
+    plus the four un-promoted 2026-08-11 dumps. Both are the known phantoms.
+    Every real-shot settle with an anchored baseline reads `involved >= 1`,
+    including the softest touches in the collection (`soft_touch_0731` 2,
+    `tip_bump` 2) and the three ball-in-hand clips #41 is filed against
+    (involved 1–4) — so this rejection does not touch, and must not be read as
+    covering, the ball-in-hand problem.
+  * **Two evidence axes the issue proposed were measured and rejected.**
+    *Mover travel:* real shots read 0 mm of surviving-mover travel on eight
+    corpus clips (every mover dies in the scatter) while the live phantom's
+    surviving mover read 26 mm — any floor that rejects the phantom refuses
+    real shots. *Roll-out length:* `report.PHANTOM_SETTLE_S` (1 s) is a
+    diagnostic and must stay one — **`pot_scratch_nohold_0811` is a real pot
+    whose settle lands 0.73 s after its fire**, and the two proof cases sit at
+    1.37 s and 1.65 s, so promoting it would refuse a real shot and catch
+    neither phantom.
+  * **`phantom_still_down_0811`** is promoted to the corpus (from
+    `flag_phantom`, 2026-08-11 18:30:20Z, session t=386.36 — Steven's ground
+    truth: nothing happened, he was still down on the ball). The cold replay
+    reproduces the live journal event for event: same settle, same zero
+    rearrangement, the real stroke's 3064 mm/s to the millimetre, the same
+    second settle at involved=3. Its baseline was a genuine 4-ball quiet
+    layout. `EXPECTED` cannot grade it — the phantom precedes the clip's only
+    real stroke and `_assert_clock_outcome` ignores counts before the first
+    ground-truth stroke — so it is pinned by
+    `test_phantom_still_down_is_rejected_at_the_settle`, which fails on the
+    pre-fix engine (2 counts: 10.50 and 18.92) and passes now (1 count, the
+    real one, with the phantom's freeze released at 10.50).
+  * **Measurement story, honestly (issue open question 3).** `report.py` is
+    right that a phantom cannot be *proven* from a journal, and the candidate
+    count cannot fall to prove this worked — a rejected settle stops producing
+    a `Shot` at all. So the report gains `settles_rejected`, tallied off the
+    settle record's new `rejected` marker and deliberately **excluded from
+    `shots`** (counting it would inflate every rate with the exact class the
+    rejection removes). The pair to read live is `settles_rejected` rising
+    while `missed` stays flat. Offline, the load-bearing measurement is the
+    one above: 2 rejections in 63 verdicts, both ground-truthed, no clip
+    changing outcome.
+  * **Golden drift, deliberately not regenerated.** `parked_vote_strike_0801`
+    still emits the phantom's `ShotTaken@10.363` + `BallsSettled@11.732` — the
+    event layer still crowns a hoodie, the hub now neutralises it (§13.1:
+    vision emits evidence, the hub applies policy). Its golden keeps the
+    2-shot/2-settle stream, which is the only surviving record that the engine
+    should not have fired there; regenerating it would canonize the phantom.
+    Same treatment `stroke_tug_strike_0801`'s golden already gets. Both drifts
+    pre-date this checkpoint — `parked_vote`'s was simply invisible while the
+    clip failed before reaching the golden check.
+  * `stroke_tug_strike_0801` re-verified: unchanged, still green under #34's
+    clock-outcome criterion, still a `StrikeMiss` warning and a golden drift.
+
+- **2026-08-11 (checkpoint 88 — #37 Part B: the newborn disarm was dead by
+  construction):** The audit's first sweep, under the Chesterton rule — cite
+  the original clip, then show what covers it today.
+  * **DELETED: the one-shot-per-rest-cycle newborn disarm**
+    (`_newborn_disarmed_at`, 5 sites). Its only setter was the newborn fire,
+    and that same statement block sets `_table_moving = True` and
+    `_fired_this_episode = True`; the latch can then only fall at the settle
+    (the pickup discard refuses a fired episode) and the settle cleared the
+    disarm in the same block. So the stamp was never non-None while the table
+    was unlatched, which makes the `_table_moving` refusal directly below it
+    an **exact superset** on the newborn and own-rest paths. The one path
+    where it could still bite (`_maybe_open_rested`'s re-qualify scan, whose
+    latch check is conditional) is retired on a different argument: since #33
+    a second fire inside one latched episode has no clock consequence at all —
+    `ShotClock.shot_taken` returns early in MOTION and the settle counts
+    exactly one shot per episode. Corpus flat: seven real strikes fire newborn
+    (checkpoint 57's list) and none re-fires without it; no clip changes
+    outcome, no golden moves. Its own history closes the case — it caused two
+    live failures (checkpoint 31's jaw strike, checkpoint 51's session-long
+    shutdown of all three paths) and prevented none. Removal note left in
+    `_maybe_open_newborn`; `design.md` §2.3's checkpoint-51 paragraph now says
+    so; `test_settle_rearms_the_birth_paths_when_the_vote_is_parked` survives,
+    re-scoped from mechanism to outcome.
+  * **KEPT: the axis-kill re-open credit** (`_axis_killed_t`) — the "0.01 s
+    knife-edge" the issue nominated. Measured, not assumed: neutralising it
+    **loses `address_chatter_miss_0801`'s real 1396 mm/s stroke outright**
+    (its `ShotTaken@10.190` disappears, `test_address_chatter_shot_fires_at_
+    impulse` goes red). It is load-bearing on a clip it was not written for.
+  * **KEPT: the carom guard and the hand/arm merged-blob stamps.** The
+    failures they cover — a caromed ball crowned as a strike, `cue_grab_0801`'s
+    gloved snatch minting a phantom rack shot — all *rearrange the table*, so
+    the settle verdict fails open on them by design. The #38 removal note is
+    the measurement: its predicate caught none of a session's five
+    ball-in-hand carries because a carry moves a ball. Part A covers
+    `involved == 0` and nothing else.
+  * **KEPT: the 3000 mm/s IDLE break floor.** #36 landed settle-time break
+    adjudication, so the floor's *cost* (84 eaten fires, 15 manual rescues) is
+    largely paid at the settle now — but its named hazard is a phantom fire
+    during racking starting the clock 19 s early and swallowing the break
+    (2026-08-01 11:14:49, journal-pinned), and E8 does not cover that: it acts
+    at the settle, while a fire above the floor moves IDLE→MOTION immediately.
+    The corpus cannot prove this one either way — its racking clips are
+    event-silent, which is exactly the "mere silence proves nothing" trap
+    checkpoint 57 recorded. Unprovable offline, so it stays.
+
 - **2026-08-11 (checkpoint 87 — #38 deleted rather than tuned, #39 root-caused
   at 3 mm):** The measurement pass #38 demanded, run before touching
   `_settle_not_a_shot`, on the seven flagged dumps from

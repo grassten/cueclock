@@ -1,0 +1,21 @@
+{
+  "scenario": "phantom_still_down_0811",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "BallsSettled",
+      "t": 10.5033
+    },
+    {
+      "type": "ShotTaken",
+      "t": 12.1035,
+      "ball_id": 2,
+      "speed_mms": 3064.3957,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 18.9201
+    }
+  ]
+}

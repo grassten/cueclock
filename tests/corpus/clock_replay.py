@@ -158,18 +158,20 @@ class ClockTimeline:
         """Did every settle have a baseline worth diffing against?
 
         A clip that opens mid-action never gets a quiet layout, so its
-        baseline resolves 1-2 balls and everything that resolves at the
-        settle greedy-matches nothing and lands in `appeared`. The resulting
-        summary is an artifact of the clip, not a fact about the table, and
-        no rearrangement-derived policy can be graded on it.
+        baseline resolves nothing (or one ball of an unresolved rack) and
+        everything that resolves at the settle greedy-matches nothing and
+        lands in `appeared`. The resulting summary is an artifact of the clip,
+        not a fact about the table, and no rearrangement-derived policy can be
+        graded on it.
 
-        The floor is read off the measured split (2026-08-11): the degenerate
-        corpus clips measure 1-2 (`pickup_snatch_0801` 1, `break_0801` 1,
-        `break_dark_flight_0806` 2), the honestly-anchored ones 5 and up
-        (`pickup_newborn_0801` 5, `scratch_replace` 10). Nothing measures 3
-        or 4 — the same empty-band anchoring #36's break floor uses.
+        The floor is the hub's own (`QUIET_BASELINE_MIN_BALLS`) rather than a
+        second number, because it answers the same question the live verdict
+        asks — see that constant for the measurement. A clip whose baseline
+        this harness would not trust is one the hub would not act on either.
         """
-        return bool(self.baselines) and all(b is not None and b >= 3 for b in self.baselines)
+        return bool(self.baselines) and all(
+            b is not None and b >= hub_module.QUIET_BASELINE_MIN_BALLS for b in self.baselines
+        )
 
     @property
     def freezes(self) -> list[float]:
@@ -269,12 +271,6 @@ def replay_clock(
             t = float(timestamps[i])
             cell[0] = t  # the hub's `now` for everything this frame does
 
-            # The layout the settle will be diffed against, snapshotted BEFORE
-            # advance clears it. How many balls it resolved decides whether
-            # this clip's rearrangement means anything at all — see
-            # `baselines` on the timeline.
-            pre_baseline = pipeline._settled_baseline
-
             events = pipeline.advance(t, detections, churn)
             timeline.events += events
             for event in events:
@@ -282,7 +278,14 @@ def replay_clock(
                     timeline.shots_fired.append(t)
                 elif isinstance(event, BallsSettled):
                     timeline.settles.append(t)
-                    timeline.baselines.append(None if pre_baseline is None else len(pre_baseline))
+                    # How many balls the quiet layout this settle was diffed
+                    # against resolved — `None` when there was none and the
+                    # settled frame stood in for one. Read off the summary the
+                    # hub itself receives (#37) rather than reconstructed here,
+                    # so the harness cannot grade a different number from the
+                    # one the live verdict reads.
+                    summary = pipeline.last_settle_rearrange
+                    timeline.baselines.append(None if summary is None else summary.baseline_balls)
                 _dispatch(hub, event, t, pipeline)
 
             # #33 Part B: latch edges AFTER this frame's events, so a

@@ -832,20 +832,6 @@ class EventEngine:
         # silently unlatched a live shot (pair_strikes_0801 lost its first
         # settle that way; live, the same shape froze the clock in MOTION).
         self._fired_this_episode = False
-        # Occluded-address strike arming: one shot per rest cycle. Disarmed
-        # when a newborn candidate fires (no machine-gun re-opens off the
-        # same strike); re-armed by a cue-flagged ball at rest that has
-        # *translated since the disarm* (the struck cue coming to rest, or a
-        # fresh placement) — the whiteness vote's fallback to some still ball
-        # that never moved must not re-arm. Scratch no longer disarms
-        # (checkpoint 31, jaw_strike_0801): a phantom scratch — the cue
-        # stopping *in* a jaw, dying untracked over the pocket mouth — left
-        # the disarm stuck with no cue track to ever re-arm it, and the real
-        # strike out of the jaws was categorically dropped. The fetched-carry
-        # false positive the scratch disarm guarded (scratch_replace, born
-        # 2220 mm/s) dies on the three measured confirm gates instead:
-        # observation ≥ 0.9, raw-step ratio ≤ 2, merged fraction ≤ 0.5.
-        self._newborn_disarmed_at: float | None = None
         # Last time the whiteness-vote holder was actually *observed*, not
         # coasted. The handoff path (_maybe_open_handoff) reads it to tell the
         # cue's own continuation from a bystander: only a track born after the
@@ -1337,23 +1323,6 @@ class EventEngine:
                 self._episode_last.clear()
                 self._episode_free_mover = False
                 self._fired_this_episode = False
-                # The birth paths' one-shot-per-rest-cycle disarm ends with the
-                # episode (stroke_gear_margin_0802, checkpoint 51). It used to
-                # be cleared only in _update_cue_rest, and only once the
-                # *flagged* cue's own translate stamp advanced past it — so
-                # when the whiteness vote parks on a ball that never moves
-                # again, the stamp never advances and the latch is permanent:
-                # both birth paths (newborn and own-rest) stay dead for the
-                # rest of the session. Live, a newborn strike at session
-                # 478.3 s disarmed them and the real strike 25 s later found
-                # every path shut — the wrong-flag own-rest path rejected it
-                # with the vote parked 578 mm away, no ShotTaken fired, and
-                # the clock counted down through the stroke. A settle is
-                # exactly the rest cycle the disarm is scoped to, and unlike
-                # one track's stamp it cannot be parked on the wrong ball.
-                # Cold replay starts undisarmed, so only warm replay of a live
-                # snapshot shows this class at all.
-                self._newborn_disarmed_at = None
                 events.append(BallsSettled(t))
         elif balls:
             # Un-still verdict on a populated table: dwell credit survives
@@ -1419,13 +1388,6 @@ class EventEngine:
     def _update_cue_rest(self, t: float, cue: BallState) -> None:
         cfg = self._cfg
         if cue.speed_mms < cfg.settle_floor_mms:
-            if (
-                self._newborn_disarmed_at is not None
-                and self._last_translate.get(cue.ball_id, float("-inf")) > self._newborn_disarmed_at
-            ):
-                # A cue at rest that moved since the disarm: rest cycle
-                # complete, the next fast newborn may be a strike again.
-                self._newborn_disarmed_at = None
             if self._cue_rest is None or (
                 hypot(cue.x_mm - self._cue_rest[1], cue.y_mm - self._cue_rest[2])
                 > cfg.strike_handoff_radius_mm
@@ -1644,8 +1606,6 @@ class EventEngine:
             # hand/stick fragments near the rest and cost soft_shot its real
             # shot outright.
             return
-        if self._newborn_disarmed_at is not None:
-            return
         if self._table_moving and last_obs_t is None:
             # Same latch guard as the other two scan paths: mid-scatter, a
             # reborn ball's impulse near the cue's stale rest is a carom or
@@ -1754,9 +1714,43 @@ class EventEngine:
             # The birth path keeps the original impulse floor — see
             # newborn_impulse_mms. No chain of custody, so no relaxation.
             return
-        if self._newborn_disarmed_at is not None:
-            return
         if self._table_moving:
+            # REMOVED 2026-08-11 (#37 Part B): the one-shot-per-rest-cycle
+            # newborn disarm (`_newborn_disarmed_at`) stood on the line above
+            # this one. Recorded here because deleting a guard silently is how
+            # it comes back.
+            #
+            # It existed to stop machine-gun re-opens off a single strike: a
+            # newborn fire disarmed all three scan paths until a cue-flagged
+            # ball at rest had translated past the disarm stamp.
+            #
+            # The invariant that retires it: the ONLY setter was the newborn
+            # fire, and that same statement block sets `_table_moving = True`
+            # and `_fired_this_episode = True`. The latch can then only fall
+            # at the settle — the pickup discard refuses a fired episode — and
+            # the settle cleared the disarm in the same block. So the stamp
+            # was never non-None while the table was unlatched. On this path
+            # and on the own-rest path the refusal directly below it is
+            # therefore an exact superset: every input the disarm could have
+            # refused, the latch check already returns on.
+            #
+            # The re-qualify path (`_maybe_open_rested`'s scan, whose latch
+            # check is conditional on `last_obs_t is None`) is the one case
+            # where the disarm could still bite, and it is retired on a
+            # different argument: since #33 a second fire inside one latched
+            # episode has NO clock consequence at all. `ShotClock.shot_taken`
+            # returns early in MOTION and the settle counts exactly one shot
+            # per episode, so the machine-gun this guarded can no longer
+            # produce a machine-gun of counted shots — only of journal lines.
+            #
+            # Corpus: flat. Seven real strikes fire newborn (checkpoint 57's
+            # list) and none re-fires without it — no clip changes outcome, no
+            # golden moves. Its *own* history is the other half of the case:
+            # scoping it to one track's translate stamp shut all three paths
+            # for a whole session (checkpoint 51, stroke_gear_margin_0802),
+            # and it needed the checkpoint-31 scratch fix before that. Two
+            # live failures caused, none prevented.
+            #
             # A latched, unsettled episode is not a quiet table, even when
             # the mover clock has gone stale: a break/fast shot's roster
             # movers die in streak churn and their reborn continuations are
@@ -1824,8 +1818,6 @@ class EventEngine:
         """
         cfg = self._cfg
         if ball.ball_id not in self._roster:
-            return
-        if self._newborn_disarmed_at is not None:
             return
         if self._table_moving:
             # Same latch guard as the newborn path: a mid-episode kiss from
@@ -2104,8 +2096,6 @@ class EventEngine:
                 # on the grab it exists to reject, so speed has to carry it.
                 self._candidate = None
                 return []
-        if candidate.newborn:
-            self._newborn_disarmed_at = t  # one shot per rest cycle
         self._candidate = None
         self._cue_rest = None
         self._axis_killed_t = None
