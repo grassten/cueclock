@@ -12,6 +12,7 @@ session produces) only pin what matters.
 """
 
 import os
+import warnings
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,6 +39,17 @@ if TYPE_CHECKING:
     from cueclock.vision.calibration import TableCalibration
     from cueclock.vision.detect import Detection
     from cueclock.vision.pipeline import ReferenceModel, VisionPipeline
+
+
+class StrikeMiss(UserWarning):
+    """A real stroke the strike layer never fired on (#34).
+
+    Not a failure: the motion latch stopped the clock anyway, which is the
+    same outcome ~0.25 s later. Counted rather than asserted so the
+    strike-fire rate — the leading indicator for the tracker substrate —
+    stays visible on a green run.
+    """
+
 
 CLIPS = Path("tests/clips")
 CALIBRATION = Path("config/table_calibration.json")
@@ -734,6 +746,19 @@ def _assert_clock_outcome(name: str, truth: list[float], timeline: "ClockTimelin
             f"{[round(f, 3) for f in timeline.freezes]}. The countdown ran through a "
             f"real shot; that is the failure this criterion exists to catch."
         )
+        # #34: the strike-fire rate stays worth knowing — it is the difference
+        # between a 0.25 s freeze and a 0.5 s one, and the leading indicator
+        # if the substrate rots. Now that the fire is no longer a gate, this
+        # warning is how a miss stays visible: pytest counts it in the
+        # end-of-run summary, so the rate is readable on a green run.
+        if not any(abs(f - stroke) <= FREEZE_EARLY_S for f in timeline.shots_fired):
+            warnings.warn(
+                f"strike miss on {name}: the stroke at {stroke:.3f}s never fired a "
+                f"ShotTaken — the motion latch stopped the clock instead. Correct "
+                f"outcome, degraded substrate.",
+                StrikeMiss,
+                stacklevel=2,
+            )
 
     # "Extra is not fine" — a shot counted that was never taken is a phantom,
     # and no downstream policy can undo it. Gated on the clip's rearrangement

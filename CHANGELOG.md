@@ -232,6 +232,38 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-11 (checkpoint 86 — #34 closed: the phantom is real, E7 re-scoped):**
+  * **`parked_vote_strike_0801`'s surplus shot is a phantom — confirmed from
+    the footage, not assumed.** Item 2 said to check it before believing it,
+    so the frames around t=10.36 went to Steven and his ground truth is
+    **"nothing"**: no ball moves there. The third `ShotTaken` has no motion
+    behind it. The clip stays red, and it is now the corpus's only red and a
+    *verified* defect rather than a suspected one.
+  * **Strike misses are now counted, not just gated away.** Checkpoint 85
+    demoted the fire from a gate; this restores its visibility as the
+    diagnostic #34 asks for — a `StrikeMiss` warning per real stroke that
+    never fired, which pytest tallies in its end-of-run summary. Current
+    reading: **1 strike miss across 49 graded strokes** (`stroke_tug`), i.e.
+    the substrate is fine and the latch is covering exactly one clip.
+  * **E7 re-scoped (item 3), and the answer is "not justified".** Under the
+    corrected criterion the residual collapsed to **one class with one
+    instance**: phantom counts, `parked_vote_strike_0801`. The other two
+    classes the issue hypothesized are empty — breaks moved to #36, and
+    "shots the latch itself misses" measures **zero** (every graded stroke in
+    the corpus froze within budget). Stated honestly: that is a fact about 61
+    corpus clips, not about the live distribution. E7 remains the
+    highest-regression-risk surface in the system, so one verified phantom
+    does not buy touching it; **tuning stays gated on the §13.6 trigger** —
+    the next identity-family live flag, or phantom / frozen-clock rates that
+    fail to fall. The instrument to measure that now exists, which was the
+    point.
+  * Not graded, and deliberately: a **reverted** provisional freeze. Measured
+    corpus-wide, there are exactly two (`ball_in_hand_pickup_0801` 0.27 s,
+    `cue_grab_0801` 0.61 s), both restoring the countdown to the exact
+    remaining they froze at — zero time lost — and the overlay renders
+    `math.ceil(remaining)`, so a sub-second hold cannot change the digit on
+    the wall. Steven's call: don't grade it.
+
 - **2026-08-11 (checkpoint 85 — the corpus grades the clock, #34 items 1+2):**
   The battery graded the event stream, and since #33 the event stream and the
   product diverge *on purpose*: a missed strike whose latch still stops the
