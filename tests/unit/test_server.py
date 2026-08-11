@@ -1012,6 +1012,10 @@ def test_solo_panel_paces_a_run_out(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(hub.balls_settled())
     now[0] += 5.0
     asyncio.run(hub.shot_taken(speed_mms=1500.0))
+    now[0] += 2.0
+    # #33 Part B: a RUNNING fire is provisional — SHOTS and its pace commit
+    # at the settle that counts the episode, not at the strike.
+    asyncio.run(hub.balls_settled())
     assert hub.payload()["solo"] == {"shots": 3, "last_s": 5.0, "avg_s": 6.6}
 
     # A New Rack is a fresh fifteen thrown up: the whole panel rescopes.
@@ -1028,6 +1032,7 @@ def test_solo_pace_times_from_restart_and_ignores_placement(
     asyncio.run(hub.restart())  # the deck's Start key
     now[0] += 4.0
     asyncio.run(hub.shot_taken(speed_mms=1500.0))
+    asyncio.run(hub.balls_settled())  # commits the provisional's pace (#33)
     solo = cast(dict[str, object], hub.payload()["solo"])
     assert solo["last_s"] == 4.0
 
@@ -1197,5 +1202,151 @@ def test_suppressed_settle_does_not_open_a_pace_timer(
     asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
     now[0] += 6.0
     asyncio.run(hub.shot_taken(speed_mms=2000.0))
+    now[0] += 2.0
+    asyncio.run(hub.balls_settled())  # commits the provisional's pace (#33)
     solo = cast(dict[str, object], hub.payload()["solo"])
     assert solo["last_s"] == 10.0  # timed from the restart, not the placement
+
+
+# ---------- #33 Part B: the provisional shot ----------
+
+
+def test_episode_start_freezes_and_placement_settle_reverts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ball-in-hand felt contract: the clock visibly pauses during the
+    carry, resumes at the exact remaining, never resets, never counts."""
+    now = _freeze_hub_time(monkeypatch)
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    now[0] += 9.0
+    hub.clock.tick(now[0])
+    remaining = hub.clock.remaining
+    asyncio.run(hub.episode_started(t=100.0))  # the latch edge: freeze
+    assert hub.clock.state is State.MOTION
+    now[0] += 20.0
+    hub.clock.tick(now[0])  # the whole carry: frozen
+    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.remaining == remaining
+    assert hub.clock.rack_shots == shots
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "shot_provisional" in kinds
+    assert "shot_provisional_reverted" in kinds
+
+
+def test_placement_fire_reverts_at_the_settle() -> None:
+    # 2026-08-10 20:58:17: the placement fired a real newborn ShotTaken
+    # (399 mm/s) and counted a shot before any settle. Part B defers the
+    # count; the placement-shaped settle reverts fire and freeze together.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.shot_taken(speed_mms=399.0))
+    assert hub.clock.state is State.MOTION
+    assert hub.clock.rack_shots == shots  # deferred, not counted
+    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.rack_shots == shots
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "shot_provisional_reverted" in kinds
+
+
+def test_fire_merges_into_the_provisional_and_counts_once() -> None:
+    # Latch freezes first, the ShotTaken lands late (10 frames or 300 —
+    # unbounded within the episode), the shot-like settle counts exactly one.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.episode_started(t=10.0))
+    asyncio.run(hub.shot_taken(speed_mms=2400.0))  # merges into the freeze
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=2, moved_mm=500.0)))
+    assert hub.clock.rack_shots == shots + 1
+    assert hub.clock.state is State.RUNNING
+
+
+def test_missed_strike_recovers_at_the_latch_and_counts_at_the_settle() -> None:
+    # No fire at all: freeze at the latch, count via compensation at the
+    # settle — the ~5 s bleed becomes ~0.25 s, felt like a detected shot.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.episode_started(t=10.0))
+    assert hub.clock.state is State.MOTION
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, moved_mm=195.0)))
+    assert hub.clock.rack_shots == shots + 1
+    assert hub.clock.state is State.RUNNING
+
+
+def test_episode_discarded_reverts_the_provisional(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The engine's pickup discard unlatches with no settle: revert, exact time.
+    now = _freeze_hub_time(monkeypatch)
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    now[0] += 9.0
+    hub.clock.tick(now[0])
+    remaining = hub.clock.remaining
+    asyncio.run(hub.episode_started(t=50.0))
+    now[0] += 3.0
+    asyncio.run(hub.episode_discarded(t=53.0))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.remaining == remaining
+    assert hub.clock.rack_shots == shots
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "shot_provisional_reverted" in kinds
+
+
+def test_episode_start_respects_kill_switch_and_mode() -> None:
+    hub = _running_hub()
+    asyncio.run(hub.set_vision(False))
+    asyncio.run(hub.episode_started(t=1.0))
+    assert hub.clock.state is State.RUNNING  # kill switch: no freeze
+    asyncio.run(hub.set_vision(True))
+    asyncio.run(hub.set_mode("no_clock"))
+    asyncio.run(hub.episode_started(t=2.0))
+    assert hub.clock.state is State.IDLE  # no_clock parks the countdown
+
+
+def test_scratch_candidate_inside_the_episode_blocks_the_revert() -> None:
+    # Thin-cut scratch: freeze, candidate born mid-episode, census resolves it
+    # before the settle. The vanish is the pot — count, even though the
+    # candidate is no longer open at settle time.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.episode_started(t=10.0))
+    asyncio.run(
+        hub.scratch_candidate(
+            11.0,
+            x_mm=940.0,
+            y_mm=900.0,
+            pocket_x_mm=965.0,
+            pocket_y_mm=965.0,
+            whiteness=0.9,
+            color_age_s=0.0,
+        )
+    )
+    asyncio.run(hub.scratch_seen(t=12.0))  # census confirms, candidate closes
+    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_candidate_before_the_episode_still_reverts_the_retrieval() -> None:
+    # The 20:57:13 retrieval: candidate 20:56:54 resolved 20:56:58, retrieval
+    # episode freezes later — its settle must still revert.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(
+        hub.scratch_candidate(
+            5.0,
+            x_mm=940.0,
+            y_mm=900.0,
+            pocket_x_mm=965.0,
+            pocket_y_mm=965.0,
+            whiteness=0.9,
+            color_age_s=0.0,
+        )
+    )
+    asyncio.run(hub.scratch_seen(t=6.0))  # verdict lands; candidate closes
+    asyncio.run(hub.episode_started(t=20.0))  # the retrieval's own episode
+    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.rack_shots == shots

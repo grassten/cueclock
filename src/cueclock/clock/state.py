@@ -68,6 +68,10 @@ class ShotClock:
         self.state = State.IDLE
         self._rack_shots = 0  # shots taken this rack; the break is shot 1
         self._shot_since_settle = False  # a ShotTaken has landed since the last settle
+        # #33 Part B: a RUNNING fire waiting for its settle's verdict. The
+        # settle counts it exactly once; a revert (placement) drops it.
+        # Cleared by every operator path that rescopes the countdown.
+        self._episode_fired = False
         self.remaining = float(self.current_base())
         self.extensions_used = 0
         self.last_cue: str | None = None
@@ -109,6 +113,7 @@ class ShotClock:
             self._cues_fired.clear()
         self.state = State.RUNNING
         self._hold_until = 0.0
+        self._episode_fired = False
         self._last_tick = now
 
     def pause(self) -> None:
@@ -125,6 +130,7 @@ class ShotClock:
         self._cues_fired.clear()
         self.last_cue = None
         self._hold_until = 0.0
+        self._episode_fired = False
 
     def new_rack(self, now: float) -> None:
         """Per-rack scope reset — pressed between games.
@@ -141,6 +147,7 @@ class ShotClock:
         self._cues_fired.clear()
         self.last_cue = None
         self._hold_until = 0.0
+        self._episode_fired = False
         self._last_tick = now
 
     def restart(self, now: float) -> None:
@@ -165,6 +172,7 @@ class ShotClock:
         self._cues_fired.clear()
         self.last_cue = None
         self._hold_until = 0.0
+        self._episode_fired = False
         self._last_tick = now
 
     def push(self, now: float) -> None:
@@ -187,7 +195,15 @@ class ShotClock:
             self._cues_fired.clear()
             self.last_cue = None
             self._hold_until = 0.0
+            self._episode_fired = False
             self._last_tick = now
+        else:
+            # Pressed mid-flight: the rolling balls ARE the push out, and the
+            # press just accounted for it (_rack_shots = 1 above). The settle
+            # must start the 60 s window without counting the episode again —
+            # the deferred fire (#33) is absorbed into the declaration.
+            self._episode_fired = False
+            self._shot_since_settle = True
 
     def set_ruleset(self, ruleset: Ruleset) -> None:
         # Switching game types is a bigger scope change than a new rack:
@@ -262,13 +278,63 @@ class ShotClock:
         IDLE→MOTION makes the untimed break count: New Rack leaves IDLE, the
         break's ShotTaken lands in IDLE, and the following settle starts the
         WNT 60 s first-shot clock (§5 — the break itself is not clocked).
+
+        A RUNNING fire defers its count to the settle (#33 Part B): the
+        clock freezes now, but "was that a shot?" is a settle-time verdict —
+        placements fire honest-looking newborn ShotTakens (2026-08-10:
+        1463 and 399 mm/s during ball-in-hand), and only the settled table
+        can tell them from a real stroke. The settle counts exactly one
+        shot for the episode (fired or compensated) unless the hub's
+        adjudication reverts it. GRACE and IDLE fires stay immediate: a
+        shot at the buzzer is committed the moment it saves the countdown,
+        and the break is E8's settle-time decision already.
         """
         if self.state is State.MOTION:
             return  # vision re-fired mid-motion — don't double-count the shot
+        if self.state is State.RUNNING:
+            self._episode_fired = True
+            self.state = State.MOTION
+            return
         self._rack_shots += 1
         self._shot_since_settle = True
-        if self.state in (State.RUNNING, State.GRACE, State.IDLE):
+        if self.state in (State.GRACE, State.IDLE):
             self.state = State.MOTION
+
+    def motion_started(self, now: float) -> bool:
+        """#33 Part B: freeze a RUNNING countdown at the motion-episode latch.
+
+        The provisional shot: the table started moving ~0.25 s after the
+        stroke, which is faster than any strike confirm (~0.5 s), so a
+        missed strike stops bleeding time at the latch instead of at its
+        settle ~5 s later. The freeze is provisional — the settle counts it
+        (or a ShotTaken merges into it), and a placement-shaped verdict
+        reverts it with the remaining time untouched. RUNNING only: GRACE
+        has the E9 motion re-arm, IDLE belongs to the break.
+
+        Returns True when the countdown actually froze.
+        """
+        if self.state is not State.RUNNING:
+            return False
+        self.state = State.MOTION
+        self._last_tick = now
+        return True
+
+    def motion_reverted(self, now: float) -> bool:
+        """#33 Part B: resolve a provisional freeze as not-a-shot.
+
+        The countdown resumes with exactly the remaining it froze at (MOTION
+        never decrements). Refused once a shot has been committed this cycle
+        (a GRACE/IDLE fire counted immediately): committed counts do not
+        un-happen here — mirror of balls_settled's suppression rule.
+
+        Returns True when a freeze was actually reverted.
+        """
+        if self.state is not State.MOTION or self._shot_since_settle:
+            return False
+        self._episode_fired = False
+        self.state = State.RUNNING
+        self._last_tick = now
+        return True
 
     def balls_settled(self, now: float, suppress: bool = False) -> bool:
         """Balls at rest — start a fresh shot clock for the next shot.
@@ -304,9 +370,21 @@ class ShotClock:
         if self.state is State.IDLE:
             return False
         if suppress and not self._shot_since_settle:
+            # #33: not a shot. A provisional freeze resumes with exactly the
+            # remaining it froze at; an unfrozen countdown is left alone.
+            # A deferred fire inside the refused episode is dropped with it.
+            self._episode_fired = False
+            if self.state is State.MOTION:
+                self.state = State.RUNNING
+                self._last_tick = now
             return False
-        if not self._shot_since_settle:
+        if self._episode_fired or not self._shot_since_settle:
+            # Exactly one shot per episode: the deferred fire if there was
+            # one, the compensation otherwise. Both funnels — that is the
+            # "10 frames late or 300" merge (#33): lateness within the
+            # episode cannot double-count or lose a shot.
             self._rack_shots += 1
+        self._episode_fired = False
         self._shot_since_settle = False
         self.remaining = float(self.current_base())
         self._cues_fired.clear()

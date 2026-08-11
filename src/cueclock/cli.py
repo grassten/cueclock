@@ -722,6 +722,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     frame_i = 0
                     next_display = 0.0
                     next_status = 5.0
+                    episode_prev = False  # #33: the latch's last exported state
                     # Detect-loop telemetry: with LatestImageOnly, retrieve rate
                     # == processing rate, so grabs/s below the camera's 156.25
                     # means frames are being skipped — the deficit is the only
@@ -762,6 +763,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     detect_max_s = dt_proc
                                 for event in events:
                                     dispatch(event, t)
+                                # #33 Part B: the motion-episode latch edges,
+                                # posted to the loop AFTER this frame's events
+                                # so a same-frame ShotTaken opens the
+                                # provisional itself and a same-frame settle
+                                # resolves it (a falling edge with a settle is
+                                # the settle; without one it is the engine's
+                                # pickup discard).
+                                episode = vision.episode_active
+                                if episode != episode_prev:
+                                    episode_prev = episode
+                                    if episode:
+                                        asyncio.run_coroutine_threadsafe(
+                                            hub.episode_started(t), loop
+                                        ).add_done_callback(_surface)
+                                    elif not any(isinstance(e, BallsSettled) for e in events):
+                                        asyncio.run_coroutine_threadsafe(
+                                            hub.episode_discarded(t), loop
+                                        ).add_done_callback(_surface)
                                 # Detect-loop heartbeat stamp (attribute-only;
                                 # the Hub's tick loop journals it every ~5 s).
                                 hub.note_frame(t)

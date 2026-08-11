@@ -244,6 +244,16 @@ class Hub:
         # *next* shot's clock too.
         self._scratch_candidate_open = False
         self._scratch_hold_done = False
+        # #33 Part B: when the current provisional episode froze the clock
+        # (mono). Doubles as the episode anchor for the scratch guard — a
+        # candidate stamped at or after it was born inside this episode, so
+        # its vanish is the pot, not a lift. Cleared at every resolution.
+        self._provisional_open_mono: float | None = None
+        self._scratch_candidate_mono: float | None = None
+        # The solo-pace measurement riding on the provisional's verdict:
+        # (pace stamp it consumed, seconds the shot took at the freeze).
+        # Commit on a counted shot, restore the stamp on a revert.
+        self._pace_pending: tuple[float, float] | None = None
         # Solo panel (#30): run_out and no_clock are single-player, so the
         # bar's scoreboard area shows session numbers instead of a match
         # score. All of it is wall-clock bookkeeping, which is why it lives
@@ -422,6 +432,11 @@ class Hub:
         if self._table_motion or now - anchor < FROZEN_WATCHDOG_SECONDS:
             return
         self.clock.balls_settled(now)
+        # A synthesized settle carries no evidence, so it fails open and
+        # counts (#33) — commit any pace the provisional held and close the
+        # episode the same way a real counted settle would.
+        self._commit_pace()
+        self._provisional_open_mono = None
         # From MOTION a settle always lands RUNNING; the synthesized one
         # starts a real countdown, so it opens the pace timer like any other.
         self._pace_since_mono = now
@@ -643,17 +658,29 @@ class Hub:
             # above. Speed only: the newborn half was removed at checkpoint 57.
             self._log("vision_shot_taken_ignored_idle", **detail)
             return
-        if self._pace_since_mono is not None and self.clock.state in (State.RUNNING, State.GRACE):
+        state_before = self.clock.state
+        if self._pace_since_mono is not None and state_before in (State.RUNNING, State.GRACE):
             # Solo pace (#30): this shot ends the countdown the stamp opened.
             # GRACE counts — the shot took longer than base, which is exactly
             # what the number is for. Consumed here so a mid-motion re-fire
-            # cannot measure the same countdown twice.
+            # cannot measure the same countdown twice. A RUNNING fire is
+            # provisional (#33 Part B), so its measurement rides the verdict:
+            # committed by the settle that counts it, restored on a revert.
             took = self._last_shot_mono - self._pace_since_mono
-            self._pace_last_s = took
-            self._pace_sum_s += took
-            self._pace_shots += 1
+            if state_before is State.GRACE:
+                self._pace_last_s = took
+                self._pace_sum_s += took
+                self._pace_shots += 1
+            else:
+                self._pace_pending = (self._pace_since_mono, took)
             self._pace_since_mono = None
         self.clock.shot_taken()
+        if state_before is State.RUNNING and self.clock.state is State.MOTION:
+            # #33 Part B: the fire opened (or joined) the provisional
+            # episode — its count is the settle's decision now.
+            if self._provisional_open_mono is None:
+                self._provisional_open_mono = time.monotonic()
+            detail["provisional"] = True
         self._log("vision_shot_taken", **detail)
         await self.broadcast(self.clock.snapshot())
 
@@ -697,15 +724,29 @@ class Hub:
             if self._rack_pending or self._rack_break_mono is None:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
-        suppress = self._settle_not_a_shot(rearrange, movers)
+        # IDLE settles are the clock's no-op (racking) and E8's domain — the
+        # placement adjudication below is RUNNING-domain policy only.
+        suppress = self.clock.state is not State.IDLE and self._settle_not_a_shot(rearrange, movers)
         moved_clock = self.clock.balls_settled(now, suppress=suppress)
         if suppress and not moved_clock:
-            # #33 Part A: placement-shaped — the countdown was left exactly
-            # as it was and nothing was counted. Own journal kind so `report`
-            # tallies refusals without parsing evidence fields.
-            self._log("compensation_suppressed", **detail)
+            # #33: placement-shaped — nothing counted. With a provisional
+            # open this is the revert (the countdown resumes at the exact
+            # remaining it froze with); without one it refused the
+            # compensation on a countdown that never stopped. Own journal
+            # kinds so `report` tallies both without parsing evidence.
+            reverted = self._provisional_open_mono is not None
+            self._revert_pace()
+            self._provisional_open_mono = None
+            kind = "shot_provisional_reverted" if reverted else "compensation_suppressed"
+            self._log(kind, **detail)
             await self.broadcast(self.clock.snapshot())
             return
+        if moved_clock:
+            # The settle counted this episode's one shot (fired or
+            # compensated): commit the pace measurement the provisional was
+            # holding, if any, and close the episode.
+            self._commit_pace()
+            self._provisional_open_mono = None
         if moved_clock and self.clock.state is State.RUNNING:
             # Solo pace (#30): the fresh countdown this settle started is the
             # next shot's timer. A settle the clock ignored (IDLE) or refused
@@ -785,10 +826,78 @@ class Hub:
             return False  # something displaced, or not the single-ball shape
         if self._scratch_candidate_open:
             return False  # the vanish is a pot under adjudication, not a lift
+        if (
+            self._provisional_open_mono is not None
+            and self._scratch_candidate_mono is not None
+            and self._scratch_candidate_mono >= self._provisional_open_mono
+        ):
+            # The candidate was born inside this episode: the vanish IS the
+            # pot (thin-cut scratch), even if the census already resolved it.
+            # A retrieval is untouched — its candidate predates its episode
+            # (20:56:54 candidate vs the 20:57:1x retrieval freeze).
+            return False
         # A surviving ball that really traveled is the stun-pot shape — count.
         return not any(
             m.alive and m.travel_mm >= SHOTLIKE_MOVER_MIN_TRAVEL_MM for m in movers or []
         )
+
+    async def episode_started(self, t: float | None = None) -> None:
+        """#33 Part B: the engine's motion-episode latch set (quiet→moving).
+
+        The provisional shot: a RUNNING countdown freezes ~0.25 s after the
+        stroke — faster than any strike confirm (~0.5 s) — and the settle
+        (or a ShotTaken merging in) decides what the episode was. The
+        trigger is the hardened roster-mover latch exported by the pipeline,
+        deliberately not the raw E9 motion bit. Gated exactly like the
+        events that move the clock. Freeze latency is settled — do not
+        optimize it (#33): the 0.2 s displacement window dominates, stride 1
+        is a measured null (plan §3.1 item 4).
+        """
+        if not self.vision_enabled or not self.clock.mode.clock_live:
+            return
+        now = time.monotonic()
+        if not self.clock.motion_started(now):
+            return  # only a RUNNING countdown freezes; GRACE/IDLE decline
+        self._provisional_open_mono = now
+        if self._pace_since_mono is not None:
+            # The stroke pace-wise ends at the freeze (~0.25 s after it) —
+            # held with the provisional, committed or restored by its verdict.
+            self._pace_pending = (self._pace_since_mono, now - self._pace_since_mono)
+            self._pace_since_mono = None
+        self._log("shot_provisional", t=t, frame_t=t)
+        await self.broadcast(self.clock.snapshot())
+
+    async def episode_discarded(self, t: float | None = None) -> None:
+        """#33 Part B: the engine unlatched with no settle — its pickup
+        discard (ball in hand carried off, mid-table). The engine only ever
+        discards unfired episodes (a fired one always ends in a settle), so
+        the provisional reverts outright: no shot, exact remaining restored.
+        """
+        if not self.vision_enabled or not self.clock.mode.clock_live:
+            return
+        now = time.monotonic()
+        if self.clock.motion_reverted(now):
+            self._revert_pace()
+            self._log("shot_provisional_reverted", t=t, frame_t=t, reason="pickup_discard")
+            await self.broadcast(self.clock.snapshot())
+        self._provisional_open_mono = None
+
+    def _commit_pace(self) -> None:
+        """The provisional's shot counted: land its held pace measurement (#30)."""
+        if self._pace_pending is not None:
+            _, took = self._pace_pending
+            self._pace_last_s = took
+            self._pace_sum_s += took
+            self._pace_shots += 1
+            self._pace_pending = None
+
+    def _revert_pace(self) -> None:
+        """The provisional reverted: the shot is still in progress. Discard the
+        held measurement and let the pace stamp keep accruing wall time — a
+        carry honestly lengthens the shot that used it, like a hold (#30)."""
+        if self._pace_pending is not None:
+            self._pace_since_mono = self._pace_pending[0]
+            self._pace_pending = None
 
     async def scratch_seen(self, t: float | None = None) -> None:
         # The confirmed verdict never moves the clock — the hold (#25) was
@@ -814,6 +923,7 @@ class Hub:
         # so a live candidate is auditable from the journal alone.
         self._scratch_candidate_open = True
         self._scratch_hold_done = False
+        self._scratch_candidate_mono = time.monotonic()  # #33 episode guard
         self._log(
             "vision_scratch_candidate",
             t=t,

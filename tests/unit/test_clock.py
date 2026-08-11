@@ -391,18 +391,99 @@ def test_suppressed_settle_leaves_the_countdown_untouched() -> None:
     assert clock.remaining == 48  # kept counting straight through the settle
 
 
-def test_suppression_refused_after_a_counted_shot() -> None:
-    # A ShotTaken already committed the count: the settle that follows starts
-    # the next countdown regardless of what the placement predicate thinks —
-    # committed shots do not un-happen at the clock layer.
+def test_suppression_refused_after_a_committed_grace_shot() -> None:
+    # A GRACE fire commits immediately (it saved the countdown at the buzzer);
+    # the settle that follows starts the next countdown regardless of what the
+    # placement predicate thinks — committed shots do not un-happen here.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=0.0)
+    clock.tick(now=60.5)  # the 60 s window expires
+    assert clock.state is State.GRACE
+    clock.shot_taken()  # shot at the buzzer: counted on the spot
+    assert clock.rack_shots == 2
+    assert clock.balls_settled(now=66.0, suppress=True) is True
+    assert clock.state is State.RUNNING
+    assert clock.rack_shots == 2  # exactly once
+    assert clock.remaining == 30  # fresh countdown, window consumed
+
+
+def test_running_fire_defers_and_settle_counts_exactly_once() -> None:
+    # #33 Part B: a RUNNING fire freezes the clock but its count is the
+    # settle's decision — one shot per episode, fired or compensated.
     clock = make_clock("wnt_9ball")
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
-    clock.shot_taken()  # detected shot: counted, clock frozen in MOTION
-    assert clock.balls_settled(now=6.0, suppress=True) is True
+    clock.shot_taken()  # detected shot: frozen, not yet counted
+    assert clock.state is State.MOTION
+    assert clock.rack_shots == 1
+    clock.balls_settled(now=6.0)
+    assert clock.rack_shots == 2
+    assert clock.remaining == 30
+
+
+def test_deferred_fire_reverts_with_suppression() -> None:
+    # The 2026-08-10 20:58:17 phantom: the placement itself fired a newborn
+    # ShotTaken at 399 mm/s. The settle's placement verdict reverts the whole
+    # episode — no count, and the countdown resumes at the frozen remaining.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=0.0)
+    clock.tick(now=9.0)  # 60 -> 51
+    clock.shot_taken()  # phantom fire during the placement
+    assert clock.state is State.MOTION
+    assert clock.balls_settled(now=14.0, suppress=True) is False
     assert clock.state is State.RUNNING
-    assert clock.remaining == 30  # fresh countdown, window consumed
+    assert clock.rack_shots == 1  # the break only
+    clock.tick(now=15.0)
+    assert clock.remaining == 50  # 51 frozen through the episode, then 1 s ran
+
+
+def test_provisional_freeze_and_revert_restore_time_exactly() -> None:
+    # Part B's felt contract: a wrong provisional must never cost time.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=0.0)
+    clock.tick(now=9.0)
+    assert clock.remaining == 51
+    assert clock.motion_started(now=9.25) is True  # the latch edge
+    assert clock.state is State.MOTION
+    clock.tick(now=20.0)  # frozen through the carry
+    assert clock.remaining == 51
+    assert clock.motion_reverted(now=20.0) is True
+    clock.tick(now=21.0)
+    assert clock.remaining == 50
+
+
+def test_motion_started_declines_outside_running() -> None:
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    assert clock.motion_started(now=1.0) is False  # IDLE is the break's domain
+    assert clock.state is State.IDLE
+    clock.shot_taken()  # break -> MOTION
+    assert clock.motion_started(now=2.0) is False
+    clock.balls_settled(now=3.0)
+    clock.tick(now=63.5)
+    assert clock.state is State.GRACE  # GRACE has the E9 re-arm instead
+    assert clock.motion_started(now=64.0) is False
+    assert clock.state is State.GRACE
+
+
+def test_motion_reverted_refused_after_a_committed_shot() -> None:
+    # A GRACE fire counted on the spot; a late pickup-discard must not yank
+    # the committed shot's freeze out from under it.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=0.0)
+    clock.tick(now=60.5)
+    clock.shot_taken()  # buzzer shot, committed
+    assert clock.motion_reverted(now=61.0) is False
+    assert clock.state is State.MOTION
 
 
 def test_push_then_missed_shot_consumes_the_window() -> None:
