@@ -268,3 +268,48 @@ def test_session_format_names_the_missed_shots(tmp_path: Path) -> None:
     text = format_session(build(path))
     assert "MISSED" in text
     assert "#2" in text
+
+
+# ---------- #33: deferred fires, provisionals, reverts ----------
+
+
+def test_deferred_fire_settle_bump_is_still_a_seen_shot(tmp_path: Path) -> None:
+    # Post-#33 journals: a RUNNING fire defers its count, so the settle bumps
+    # rack_shots even though the strike WAS seen — the open strike record is
+    # the sighting. (Pre-#33 journals never bump on seen strikes, so this
+    # reading changes nothing for them.)
+    report = build(journal(tmp_path, shot(5.0, 1), settle(10.0, 2)))
+    assert report.total == 1
+    assert report.missed == []
+
+
+def test_reverted_provisional_is_not_a_shot_and_releases_the_strike(tmp_path: Path) -> None:
+    # A placement episode: latch freeze, phantom fire, revert. The revert is
+    # not a shot, and its fire must not mark the NEXT settle seen — that one
+    # is a genuinely confessed miss.
+    report = build(
+        journal(
+            tmp_path,
+            {"kind": "shot_provisional", "rack_shots": 1, "state": "MOTION"},
+            shot(5.0, 1),  # the placement's phantom fire, deferred
+            {"kind": "shot_provisional_reverted", "rack_shots": 1, "state": "RUNNING"},
+            settle(20.0, 2),  # later: a real missed strike, confessed
+        )
+    )
+    assert report.provisionals == 1
+    assert report.provisional_reverts == 1
+    assert report.total == 1
+    assert len(report.missed) == 1
+
+
+def test_suppressed_settle_is_tallied_and_not_a_shot(tmp_path: Path) -> None:
+    report = build(
+        journal(
+            tmp_path,
+            shot(5.0, 1),
+            settle(6.0, 1),
+            {"kind": "compensation_suppressed", "rack_shots": 1, "state": "RUNNING"},
+        )
+    )
+    assert report.suppressed_settles == 1
+    assert report.total == 1  # the real shot only

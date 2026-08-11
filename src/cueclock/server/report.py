@@ -112,6 +112,13 @@ SUMMARY_KIND = "session_summary"
 BREAK_ADJUDICATED_KIND = "break_adjudicated"
 BREAK_DARK_CANDIDATE_KIND = "break_dark_candidate"
 SETTLE_SYNTHESIZED_KIND = "settle_synthesized"
+# #33 the provisional shot: the latch froze a RUNNING countdown; the settle
+# (or the engine's pickup discard) later counted or reverted it. A reverted
+# or suppressed settle is NOT a shot — the clock was left untouched — so
+# neither enters `shots`; they are tallied separately below.
+SHOT_PROVISIONAL_KIND = "shot_provisional"
+PROVISIONAL_REVERTED_KIND = "shot_provisional_reverted"
+COMPENSATION_SUPPRESSED_KIND = "compensation_suppressed"
 
 # Emitted-then-gated shots. "Vision saw it, the clock declined it" is a
 # different bug from "vision never saw it", and only the second is a miss.
@@ -265,6 +272,13 @@ class SessionReport:
     # sat motion-free past the watchdog. Counted inside `shots` (the clock
     # acted on them) and surfaced separately here.
     settles_synthesized: int = 0
+    # #33: provisional freezes (latch edges that stopped a RUNNING countdown)
+    # and the episodes adjudicated as not-a-shot. Reverts released a freeze
+    # with the time restored; suppressions refused the compensation on a
+    # countdown that never stopped. Neither is in `shots`.
+    provisionals: int = 0
+    provisional_reverts: int = 0
+    suppressed_settles: int = 0
     # Freezes an operator key had to rescue, because no settle ever released
     # them. Not `Shot`s and not in `total`: a shot here is a settle, and these
     # never reached one. See `left_frozen` in the module docstring for why the
@@ -383,6 +397,17 @@ def build(path: Path) -> SessionReport:
             adjudicated_pending = True
         elif kind == BREAK_DARK_CANDIDATE_KIND:
             report.dark_candidates += 1
+        elif kind == SHOT_PROVISIONAL_KIND:
+            report.provisionals += 1
+        elif kind == PROVISIONAL_REVERTED_KIND:
+            # The episode (and any deferred fire inside it) was adjudicated
+            # not-a-shot: release the pending strike so it cannot pair with —
+            # or mark seen — the next real settle.
+            report.provisional_reverts += 1
+            pending_shot_t = freeze_open_t = None
+        elif kind == COMPENSATION_SUPPRESSED_KIND:
+            report.suppressed_settles += 1
+            pending_shot_t = freeze_open_t = None
         elif isinstance(kind, str) and kind in GATED_SHOT_KINDS:
             label = GATED_SHOT_KINDS[kind]
             report.gated[label] = report.gated.get(label, 0) + 1
@@ -401,7 +426,17 @@ def build(path: Path) -> SessionReport:
                 # against, so it is credited as seen. A settle the hub just
                 # adjudicated as the break bumps the count too, but by being
                 # *caught*, not confessed — that is the opposite of a miss.
-                seen = adjudicated_pending or prev_rack is None or rack is None or rack <= prev_rack
+                # Since #33 a RUNNING fire defers its count to the settle, so
+                # post-#33 journals bump at the settle even when the strike
+                # was seen — an open pending strike IS the sighting. (Pre-#33
+                # journals are unaffected: their seen fires never bump here.)
+                seen = (
+                    adjudicated_pending
+                    or pending_shot_t is not None
+                    or prev_rack is None
+                    or rack is None
+                    or rack <= prev_rack
+                )
                 adjudicated_pending = False
                 gap = (
                     settle_t - pending_shot_t
@@ -469,6 +504,9 @@ def summary_detail(report: SessionReport) -> dict[str, object]:
         "break_presses": report.break_presses,
         "dark_candidates": report.dark_candidates,
         "settles_synthesized": report.settles_synthesized,
+        "provisionals": report.provisionals,
+        "provisional_reverts": report.provisional_reverts,
+        "suppressed_settles": report.suppressed_settles,
     }
 
 
@@ -555,6 +593,16 @@ def format_session(report: SessionReport) -> str:
         out.append(
             f"  settles synthesized {report.settles_synthesized}   "
             "(frozen-clock watchdog; the underlying miss is counted above)"
+        )
+    if report.provisionals or report.provisional_reverts or report.suppressed_settles:
+        out.append(
+            f"  provisional shots  {report.provisionals} frozen at the latch / "
+            f"{report.provisional_reverts} reverted (not a shot, time restored)"
+            + (
+                f" / {report.suppressed_settles} suppressed without a freeze"
+                if report.suppressed_settles
+                else ""
+            )
         )
     if report.scratch_candidates:
         out.append(

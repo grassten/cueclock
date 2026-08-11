@@ -37,10 +37,14 @@ computes it identically.
 | **Phantom candidates** | `report`'s review symptoms (no roll-out / snap-back). Candidates, never verdicts. |
 | **Scratches journaled** | Journals **with `vision_scratch_candidate` records** (checkpoint 77+, #26): `vision_scratch` is an adjudicated verdict — present it as a count, with candidates/refuted beside it (`report` prints all three). Journals **without** candidate records predate the two-stage verdict: **upper bound only**, over-counted ~6x (potted object balls mis-crowned as the cue; Steven ground truth 2026-08-06) — never present those as a real count. The adjudicator's one known leak keeps even new counts a slight over-bound: a real cue at rest in deep rail shade (0.53 whiteness vs the 0.72 witness floor) cannot refute its false candidate. |
 
-Rows that appear only when nonzero: **dark break candidates** (E8's shadow
-tier — accumulate ~2 sessions of these plus racking-settle rearrangements
-before flipping the tier live), **settles synthesized** (E9 watchdog
-rescues), **flags pressed** (each lands in the `triage-clips` loop).
+Rows that appear only when nonzero: **dark break candidates** (E8's no-fire
+tier — measured OFF 2026-08-10, #33 Part C: the armed-rack racking settle at
+21:07:56 sat inside the break population on both involved-count and
+settle-spread, so the tier stays journal-only until a discriminator separates
+on data), **settles synthesized** (E9 watchdog rescues), **provisional
+shots** (#33: latch freezes / reverted-not-a-shot / suppressed settles —
+reverts and suppressions are placements the clock now correctly ignores, not
+misses), **flags pressed** (each lands in the `triage-clips` loop).
 
 ## Known caveats, so the numbers are read honestly
 
@@ -50,6 +54,11 @@ rescues), **flags pressed** (each lands in the `triage-clips` loop).
   press timing in accuracy plan §13.0).
 - **A miss whose settle was also missed leaves no trace** (`report`'s floor,
   not ceiling) — the backstop (checkpoint 75) narrows but does not close this.
+- **Journals from #33 on defer RUNNING fires to the settle**, so `rack_shots`
+  bumps at the settle even for seen strikes; `report` marks those settles
+  seen via the open strike record. Strike-detection rates stay comparable
+  across the boundary — a pre-#33 confessed miss and a post-#33 one read the
+  same way.
 - Strategy questions ("is it getting better?") get answered from this table
   plus the trend across sessions — never by opening clips (Steven, 2026-08-05).
 

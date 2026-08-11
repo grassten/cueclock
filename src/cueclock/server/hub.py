@@ -64,13 +64,24 @@ FROZEN_WATCHDOG_SECONDS = 12.0
 # pickups 1, and racking/placement clips never settle at all — so 5 clears
 # every ordinary settle with the same margin it gives every measured break.
 # The named hazard this policy is measured against is the 2026-08-01
-# racking countdown (checkpoint 28). Corpus racking is event-silent, but
-# live sessions do log ~3 IDLE settles per session whose rearrangement was
-# never recorded — that unpriced population is why the dark tier stays
-# shadow, and every settle now journals its rearrangement so the next
-# session prices it. Worst case for the fired tier, pre-accepted in the
-# plan (§13.4): a spurious IDLE→MOTION during racking costs one New Rack
-# press, against 13-22 missed-break presses per 30 sessions today.
+# racking countdown (checkpoint 28). Worst case for the fired tier,
+# pre-accepted in the plan (§13.4): a spurious IDLE→MOTION during racking
+# costs one New Rack press, against 13-22 missed-break presses per 30
+# sessions today.
+#
+# THE DARK TIER STAYS OFF — measured blocker, not shadow (#33 Part C,
+# 2026-08-10). The unpriced racking population got priced and it REFUSED
+# both discriminators: the 21:07:56 armed-rack racking settle (ground truth
+# solid — the real break came ~15 s later, was missed, flagged as
+# flag_missed_2, and rescued by a Restart press) measured involved=12,
+# inside the break population (7-12), and settle-spread 1619 mm, inside the
+# break population there too (1103-1684 mm — a mid-racking gather settle is
+# table-wide: balls sit by pockets and rails waiting to be racked, so the
+# layout is not pack-local). No measured axis separates a racking gather
+# settle from a dark break; flipping would re-create the 2026-08-01 racking
+# countdown on the record's own evidence. The candidate mark and the
+# journaled spread keep accumulating both axes; re-open the flip only with
+# a discriminator that separates on data, not on hope.
 BREAK_FIRED_MIN_INVOLVED = 5
 BREAK_DARK_MIN_INVOLVED = 8
 # A fire arms adjudication only for the settle of its own motion episode:
@@ -794,17 +805,16 @@ class Hub:
             self._idle_fire = None
             return True
         if not fired and rearrange.involved >= BREAK_DARK_MIN_INVOLVED:
-            # Shadow only (E5's philosophy, §13.3): the no-fire tier's one
-            # unmeasured hazard is a racking settle — the pack resolving from
-            # a merged blob into singles is appear-heavy exactly like a break,
-            # and the corpus cannot price it because corpus racking never
-            # settles at all. The journal mark makes the next few sessions
-            # the measurement; flip it live when racking settles prove to
-            # stay under the floor.
+            # Journal-only, and now by MEASUREMENT rather than caution: the
+            # racking hazard was priced on 2026-08-10 and refused both the
+            # involved floor and the settle-spread fallback — see the dark-
+            # tier blocker note above the constants. The mark (with spread
+            # journaled since #33) keeps accumulating the record.
             self._log(
                 "break_dark_candidate",
                 involved=rearrange.involved,
                 moved_mm=round(rearrange.moved_mm),
+                spread_mm=round(rearrange.spread_mm),
             )
         return False
 
