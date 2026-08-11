@@ -64,8 +64,10 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   local gitignored symlink — always use the symlink path in code and docs. T7 unmounted
   ⇒ symlink dangles ⇒ corpus tests skip; mount it before recording or corpus runs.
 - The corpus battery has **two tiers** (`tests/README.md`): `uv run pytest -n 4` is cold,
-  full-fidelity, ~5 min — **the gate, run it before every commit that touches detection**.
-  `--detect-cache` reuses stored detector output for a ~21 s run — the iteration loop for
+  full-fidelity, ~9 min on an otherwise idle M2 (measured 2026-08-11 over 62 clips /
+  526 tests; it was 8:37 at 57 clips) — **the gate, run it before every commit that
+  touches detection**. `--detect-cache` reuses stored detector output for a ~30 s run —
+  the iteration loop for
   `events.py`/`track.py`, which is where nearly all accuracy work happens. Editing
   `detect.py` or `DetectConfig` invalidates every entry by design, so a cached run can
   never grade stale detections.
@@ -73,8 +75,8 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   (→ the T7), `config/` (the mount calibration), `logs/`, `models/` and `.venv` are all
   *gitignored*, so a new worktree has none of them: every corpus test skips and the battery
   reports green having graded nothing — an agent can honestly say "357 passed" while
-  validating zero clips. **Always check the test count and wall time**: cold is ~5 min and
-  ~520 tests, cached ~30 s; much smaller or faster means the corpus skipped. The working
+  validating zero clips. **Always check the test count and wall time**: cold is ~9 min and
+  ~526 tests, cached ~30 s; much smaller or faster means the corpus skipped. The working
   recipe (three parallel agents ran on it 2026-08-11 — keep worktrees *outside* `~/Desktop`,
   since iCloud is what forced `.venv.nosync` in the first place):
 

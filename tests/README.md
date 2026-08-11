@@ -60,7 +60,7 @@ a new key and a full cold run. It accelerates event/tracker work only.
 | Editing | Cache | Iteration cost |
 |---|---|---|
 | `events.py` / `track.py` thresholds | **hits** | ~16 s |
-| `detect.py` / `DetectConfig` | **misses by design** | ~4 min, unavoidable |
+| `detect.py` / `DetectConfig` | **misses by design** | ~9 min, unavoidable |
 | anything outside `vision/` | n/a | unit suite, ~3 s |
 
 The detector case is the design working, not a problem to route around: a
@@ -167,7 +167,7 @@ loop, so every iteration paid a full cold battery. The bug actually under
 investigation — a recovered core stealing a greedy match from a *moving* track,
 which made a rolling ball read as still and fired a settle 1.7 s early — lived
 entirely in `track.py`. With `detect.py` held still and the cache warm, that
-debug loop is **~21 s instead of 5–12 minutes**.
+debug loop is **~30 s instead of ~9 minutes**.
 
 Two more things that cost real time that day:
 
