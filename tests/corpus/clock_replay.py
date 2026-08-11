@@ -22,9 +22,11 @@ grade can never drift from what ships.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -80,6 +82,21 @@ BREAK_CLIPS = frozenset(
 )
 
 
+def golden_shot_times(name: str, goldens_dir: Path = Path("tests/goldens")) -> list[float] | None:
+    """The ``ShotTaken`` times a clip's golden holds, or None if it has none.
+
+    Read straight off the file rather than from a replay, deliberately: on a
+    clip whose fire has since been lost (``stroke_tug_strike_0801``) the
+    golden is the only surviving record of when the stroke was, and it is
+    what makes that clip gradeable at all.
+    """
+    path = goldens_dir / f"{name}.json"
+    if not path.exists():
+        return None
+    doc = json.loads(path.read_text())
+    return [float(e["t"]) for e in doc["events"] if e["type"] == "ShotTaken"]
+
+
 def ground_truth(
     name: str, expected: object, golden_shot_times: list[float] | None
 ) -> tuple[list[float] | None, str]:
@@ -127,10 +144,32 @@ class ClockTimeline:
     """Every clock transition a clip produced, plus the event diagnostics."""
 
     scenario: str
+    events: list[Any] = field(default_factory=list)  # the clip's vision events
     marks: list[ClockMark] = field(default_factory=list)
     shots_fired: list[float] = field(default_factory=list)  # ShotTaken event times
     settles: list[float] = field(default_factory=list)
     provisional_opens: list[float] = field(default_factory=list)  # latch freezes
+    # Balls resolved by the quiet layout each settle was diffed against.
+    # `None` means there was no quiet layout at all.
+    baselines: list[int | None] = field(default_factory=list)
+
+    @property
+    def rearrangement_is_anchored(self) -> bool:
+        """Did every settle have a baseline worth diffing against?
+
+        A clip that opens mid-action never gets a quiet layout, so its
+        baseline resolves 1-2 balls and everything that resolves at the
+        settle greedy-matches nothing and lands in `appeared`. The resulting
+        summary is an artifact of the clip, not a fact about the table, and
+        no rearrangement-derived policy can be graded on it.
+
+        The floor is read off the measured split (2026-08-11): the degenerate
+        corpus clips measure 1-2 (`pickup_snatch_0801` 1, `break_0801` 1,
+        `break_dark_flight_0806` 2), the honestly-anchored ones 5 and up
+        (`pickup_newborn_0801` 5, `scratch_replace` 10). Nothing measures 3
+        or 4 — the same empty-band anchoring #36's break floor uses.
+        """
+        return bool(self.baselines) and all(b is not None and b >= 3 for b in self.baselines)
 
     @property
     def freezes(self) -> list[float]:
@@ -230,12 +269,20 @@ def replay_clock(
             t = float(timestamps[i])
             cell[0] = t  # the hub's `now` for everything this frame does
 
+            # The layout the settle will be diffed against, snapshotted BEFORE
+            # advance clears it. How many balls it resolved decides whether
+            # this clip's rearrangement means anything at all — see
+            # `baselines` on the timeline.
+            pre_baseline = pipeline._settled_baseline
+
             events = pipeline.advance(t, detections, churn)
+            timeline.events += events
             for event in events:
                 if isinstance(event, ShotTaken):
                     timeline.shots_fired.append(t)
                 elif isinstance(event, BallsSettled):
                     timeline.settles.append(t)
+                    timeline.baselines.append(None if pre_baseline is None else len(pre_baseline))
                 _dispatch(hub, event, t, pipeline)
 
             # #33 Part B: latch edges AFTER this frame's events, so a

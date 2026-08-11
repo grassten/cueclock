@@ -179,6 +179,15 @@ def main() -> int:
                 verdict.append(f"extra-freeze {[round(x, 2) for x in unmatched]}")
             if verdict:
                 print(f"      >>> {' | '.join(verdict)}")
+        anchored = timeline.rearrangement_is_anchored
+        if truth is not None:
+            lo = truth[0] - 0.5 if truth else -1.0
+            counts_in = [c for c in timeline.counts if c >= lo]
+            if len(counts_in) != len(truth):
+                print(
+                    f"      >>> COUNTS {len(counts_in)}!={len(truth)}  "
+                    f"baselines={timeline.baselines} anchored={anchored}"
+                )
         if os.environ.get("CLOCK_PROBE_DETAIL"):
             print(f"      strokes {[round(x, 3) for x in truth]}")
             print(f"      freezes {[round(x, 3) for x in timeline.freezes]}")

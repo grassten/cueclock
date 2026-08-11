@@ -46,6 +46,7 @@ without reading it is the same as not having goldens.
 
 import json
 import os
+import warnings
 from dataclasses import fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -70,6 +71,15 @@ SPEED_ABS_TOL_MMS = 5.0
 
 # Written to the file for forensics, never asserted. See the module docstring.
 UNASSERTED = ("ball_id",)
+
+
+class GoldenDrift(UserWarning):
+    """A golden diff on a clip whose clock outcome is graded and correct (#34).
+
+    Not a failure: since #33 an event-stream change matters only when it
+    changes what the clock did. It is still news, so it warns rather than
+    passing silently — `pytest` prints warnings in its end-of-run summary.
+    """
 
 
 def updating() -> bool:
@@ -197,12 +207,21 @@ def _write_failure(scenario: str, report: str) -> Path:
     return path
 
 
-def check(scenario: str, reference: str, events: list["Event"]) -> None:
+def check(scenario: str, reference: str, events: list["Event"], gate: bool = True) -> None:
     """Compare a replay against its golden, or rewrite it under --update-goldens.
 
     Raises AssertionError with the first difference — full timelines included,
     since the whole point is to make the collateral of a threshold move
     readable without a second run.
+
+    ``gate=False`` (#34) reports the diff and writes the full report to
+    ``.failures/`` without failing. That is for clips the clock-outcome
+    criterion already grades: since #33 an event-stream change is only a
+    failure when it changes what the clock did, and a golden diff on a clip
+    whose clock is provably correct is *drift to read*, not a defect. The
+    golden file itself is still the record — never regenerate one to make
+    something green, and on `stroke_tug_strike_0801` in particular it is the
+    only surviving record of when that stroke was.
     """
     if updating():
         write(scenario, reference, events)
@@ -230,6 +249,20 @@ def check(scenario: str, reference: str, events: list["Event"]) -> None:
             f"  golden json: {json.dumps(golden['events'])}\n"
             f"  actual json: {json.dumps(actual)}\n"
         )
+        written = _write_failure(scenario, report)
+        if not gate:
+            # Reported, not fatal — the clock grade is this clip's gate. A
+            # warning rather than a bare print: pytest surfaces warnings in
+            # its end-of-run summary, so drift stays visible on a green run
+            # instead of being buried in captured stdout.
+            print(f"GOLDEN DRIFT (clock outcome graded separately): {report}\nreport: {written}")
+            warnings.warn(
+                f"golden drift on {scenario}: {len(problems)} difference(s), "
+                f"clock outcome still correct — full report at {written}",
+                GoldenDrift,
+                stacklevel=2,
+            )
+            return
         raise AssertionError(
             report + "\n"
             "A red golden is a diff to read, not a verdict. It has three causes and\n"
@@ -240,5 +273,5 @@ def check(scenario: str, reference: str, events: list["Event"]) -> None:
             "  2. a deliberate improvement   -> regenerate with --update-goldens and\n"
             "                                   cite the moved timelines in CHANGELOG\n"
             "  3. an over-specific assertion -> widen the tolerance, and say why\n"
-            f"Full report also written to {_write_failure(scenario, report)}."
+            f"Full report also written to {written}."
         )

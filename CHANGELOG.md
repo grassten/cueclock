@@ -232,6 +232,76 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-11 (checkpoint 85 — the corpus grades the clock, #34 items 1+2):**
+  The battery graded the event stream, and since #33 the event stream and the
+  product diverge *on purpose*: a missed strike whose latch still stops the
+  countdown ~0.25 s after the stroke is indistinguishable at the table from a
+  detected one. Steven: *"If the clock stops 0.25 s after the shot actually
+  occurs, for all intents and purposes, that IS shot detection. From a test
+  perspective too."* So the gate moved.
+  * **The harness** (`tests/corpus/clock_replay.py`) replays a clip exactly as
+    `cli.py`'s run loop does — same events, same latch edges posted after the
+    frame's events, same `note_frame`/`note_motion` — into a **real `Hub`**
+    with the hub's clock driven by frame timestamps. It re-implements no
+    policy: provisional freeze, settle adjudication, break tiers and the
+    frozen-clock watchdog all run in the shipping hub, so the grade cannot
+    drift from what ships. Asserted per real shot: the countdown **stopped
+    within budget** and the shot was **counted exactly once**.
+  * **Ground truth is seeded mechanically, never invented** — the #33 Part C
+    lesson applied to tests. *How many* shots from `EXPECTED`, *roughly when*
+    from the golden's `ShotTaken.t`. Where the two disagree or either is
+    missing, the clip is **skipped as "no ground truth"** (2 clips) rather
+    than asserted on a guess, with the provenance reported.
+  * **Budget anchored, not chosen** (`scripts/clock_budget_probe.py`): freeze
+    latency vs the golden stroke over **n=49** — min −0.256, median −0.013,
+    p90 +0.000, max **+0.019**. Bounds **[−0.5, +0.25]**; the late bound is
+    ~13× the measured worst lateness, the early bound is the confirm path's
+    own latency. A guard test fails if anyone tightens them to pass a clip.
+    Negative is the norm and *is* #33 showing up as a number: the golden's
+    `t` is the strike **confirm**, and the latch precedes it.
+  * **What is now reported instead of asserted:** shot/settle counts and the
+    **golden timeline**, on any clip the criterion can grade — a golden diff
+    there is drift to read, not a defect, and it raises a `GoldenDrift`
+    warning that pytest surfaces in its end-of-run summary plus a full report
+    under `.failures/`. Still hard assertions: **scratch counts** (a Scratch
+    verdict deliberately never moves the clock, #25/#26, so the clock grade
+    cannot see it) and **everything on a clip with no clock ground truth**,
+    where the golden remains the only gate. **No golden was regenerated** —
+    on `stroke_tug_strike_0801` the golden is the only surviving record of
+    when that stroke was, and it is what makes the clip gradeable at all.
+  * **Item 2 settled by construction.** `stroke_tug_strike_0801` is **green**:
+    its fire was lost at checkpoint 73, and the latch stops the clock
+    **0.128 s earlier** than that fire ever did, then counts it — the clip was
+    behaving correctly and the event grade was what was wrong about it.
+    `parked_vote_strike_0801` is **red and stays red**: 3 counts against a
+    recorded truth of 2, phantom freeze at 10.36 s mid-clip. Late is fine,
+    extra is not. It is now the corpus's **only** red, down from two.
+  * **`pickup_snatch_0801`**, surfaced by the new criterion and then resolved
+    as a **clip artifact, not a live defect**: it counts a phantom shot, but
+    its rearrangement is diffed against a **one-ball baseline** (opens
+    mid-action, no quiet layout), so it reads `moved=1, appeared=6` and misses
+    #33 Part A's placement shape. Two measurements settle it — every live
+    ball-in-hand settle with an anchored baseline *does* match that shape and
+    is refused, and across the 111 live settles carrying `appeared` **every
+    RUNNING settle at ap≥5 is a caught break**; this clip's shape has never
+    occurred live (bounded by three sessions, stated as such). The gate is
+    therefore `ClockTimeline.rearrangement_is_anchored`, not the clip's name:
+    `parked_vote` measures 7/7/7, stays graded, stays red. Baseline floor 3
+    is read off the measured split (degenerate clips 1–2, honest ones 5+,
+    nothing between) — the same empty-band anchoring #36's break floor uses.
+  * **One replay, graded twice.** The clock grade first landed as a second
+    parametrized pass and doubled the battery to 9:07; folding it into
+    `test_corpus_clip` brought it back to **5:00 for 514 tests** — faster than
+    the 5:11 before this work, while grading strictly more. Two probe bugs
+    fixed on the way: the wrong default empty-table reference
+    (`empty_table_0801` vs the battery's `empty_table`, which silently
+    degraded detection on every clip outside `REFERENCES` — `tip_bump` read as
+    a total miss), and a clip outliving one countdown grading the harness's
+    synthetic start rather than the clip.
+  * Item 3 (re-scope E7) deliberately untouched: it needs a failure list from
+    this criterion, and one clip is not a list. E7 tuning still waits on its
+    §13.6 trigger.
+
 - **2026-08-11 (checkpoint 84 — the break starts its own clock, #36):** The
   head of the §13.0 Pareto closed: 15–25% of breaks never started the clock,
   and the evidence to catch them was already computed, already journaled, and

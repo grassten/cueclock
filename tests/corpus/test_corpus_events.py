@@ -23,6 +23,15 @@ from cueclock.server import hub as hub_module
 from cueclock.vision.events import BallsSettled, Event, Scratch, ShotTaken
 
 from . import goldens
+from .clock_replay import (
+    BREAK_CLIPS,
+    FREEZE_EARLY_S,
+    FREEZE_LATE_S,
+    ClockTimeline,
+    golden_shot_times,
+    ground_truth,
+    replay_clock,
+)
 
 if TYPE_CHECKING:
     from cueclock.capture.clip import ClipReader
@@ -634,34 +643,114 @@ def test_corpus_clip(name: str) -> None:
     ref_name = REFERENCES.get(name, "empty_table")
     if not (CLIPS / ref_name).exists():
         pytest.skip(f"reference clip {ref_name} not recorded")
-    events = _run_clip(name, _reference_model(ref_name))
+    # ONE replay, graded twice. The replay is the whole cost (~5 min cold for
+    # the battery), so the clock harness drives the same pass rather than
+    # replaying the corpus a second time — that mistake doubled the battery to
+    # 9 minutes when the clock grade first landed.
+    from cueclock.capture.clip import ClipReader
+    from cueclock.vision.pipeline import VisionPipeline
+
+    pipeline = VisionPipeline(_calibration(), _reference_model(ref_name))
+    reader = ClipReader(CLIPS / name)
+    indices = reader.detect_indices()
+    timeline = replay_clock(
+        name,
+        pipeline,
+        [float(t) for t in reader.timestamps],
+        _detections(reader, CLIPS / name, pipeline, indices),
+        indices,
+        mid_rack=name not in BREAK_CLIPS,
+    )
+    events = timeline.events
     shots = sum(isinstance(e, ShotTaken) for e in events)
     scratches = sum(isinstance(e, Scratch) for e in events)
     settles = sum(isinstance(e, BallsSettled) for e in events)
     summary = f"{name}: {[f'{type(e).__name__}@{e.t:.2f}' for e in events]}"
     print(summary)
 
-    # The golden runs in the same test as the counts on purpose: the replay is
-    # the whole cost (~5 min cold for the battery), so a separate parametrized
-    # golden test would double it to grade the same events twice.
-    #
-    # Before the count assertions, not after — so that `--update-goldens`
-    # records the timeline even for a clip whose counts are currently red.
-    # That is exactly the case during a deliberate expectation change, when
-    # seeing what actually fired is the whole point.
-    goldens.check(name, ref_name, events)
+    truth, provenance = ground_truth(name, EXPECTED[name], golden_shot_times(name))
 
+    # ---- the gate: what the clock did (#34) ----
+    #
+    # Since #33 the event stream and the product diverge on purpose — a missed
+    # strike whose latch still stops the countdown ~0.25 s after the stroke is
+    # indistinguishable at the table from a detected one. So the clip is
+    # graded on the clock, and the event stream below is diagnostics.
+    if truth is not None:
+        _assert_clock_outcome(name, truth, timeline)
+
+    # ---- the golden: the record, and the gate only where nothing else is ----
+    #
+    # A golden diff is no longer a failure by itself: under the criterion
+    # above, an event-stream change matters only when it changes what the
+    # clock did. `stroke_tug_strike_0801` is the case that forced this — its
+    # fire was lost at checkpoint 73 and the golden still holds the 13.198 s
+    # stroke, yet the latch stops the clock 0.128 s *earlier* than that fire
+    # ever did. The golden is kept exactly as it is, because it is now the
+    # only surviving record of when that stroke was, and it is what makes the
+    # clip gradeable at all. Regenerating it would destroy that.
+    #
+    # On clips with no clock ground truth the golden is the only gate left,
+    # so there it still fails.
+    goldens.check(name, ref_name, events, gate=truth is None)
+
+    # ---- event counts: diagnostics, except where the clock cannot see ----
     expected = EXPECTED[name]
     exp_shots, exp_scratches, min_settles = expected[:3]
     max_settles = expected[3] if len(expected) == 4 else None
-    if exp_shots is not None:
-        assert shots == exp_shots, summary
+    if truth is None and exp_shots is not None:
+        assert shots == exp_shots, f"{summary} (no clock ground truth: {provenance})"
+    # Scratches are NOT covered by the clock grade — a Scratch verdict
+    # deliberately never moves the clock (#25/#26; the candidate grants the
+    # hold, the verdict is journal-only). So this stays a hard assertion, or
+    # the whole scratch class would go ungraded.
     if exp_scratches is not None:
         assert scratches == exp_scratches, summary
-    if min_settles is not None:
-        assert settles >= min_settles, summary
-    if max_settles is not None:
-        assert settles <= max_settles, summary
+    if truth is None:
+        if min_settles is not None:
+            assert settles >= min_settles, summary
+        if max_settles is not None:
+            assert settles <= max_settles, summary
+
+
+def _assert_clock_outcome(name: str, truth: list[float], timeline: "ClockTimeline") -> None:
+    """Did the countdown stop on time, and count each real shot exactly once?"""
+    if name in BREAK_CLIPS:
+        # No countdown to freeze — WNT §5 makes the break untimed and starts
+        # the window at the rest. The only question is whether it got counted.
+        assert len(timeline.counts) == len(truth), (
+            f"{name}: break counted {len(timeline.counts)}x, expected {len(truth)} "
+            f"(counts at {[round(c, 2) for c in timeline.counts]})"
+        )
+        return
+
+    for stroke in truth:
+        window = [
+            f for f in timeline.freezes if stroke - FREEZE_EARLY_S <= f <= stroke + FREEZE_LATE_S
+        ]
+        assert window, (
+            f"{name}: the stroke at {stroke:.3f}s never stopped the clock within "
+            f"[-{FREEZE_EARLY_S}, +{FREEZE_LATE_S}]s — freezes at "
+            f"{[round(f, 3) for f in timeline.freezes]}. The countdown ran through a "
+            f"real shot; that is the failure this criterion exists to catch."
+        )
+
+    # "Extra is not fine" — a shot counted that was never taken is a phantom,
+    # and no downstream policy can undo it. Gated on the clip's rearrangement
+    # being anchored at all: a clip that opens mid-action has a 1-2 ball
+    # baseline, which makes every settled ball read as `appeared` and the
+    # summary an artifact of the clip rather than a fact about the table
+    # (`pickup_snatch_0801`). `parked_vote_strike_0801` measures 7/7/7 and
+    # stays graded, which is what keeps this from excusing the real defect.
+    if not timeline.rearrangement_is_anchored:
+        return
+    lo = (truth[0] - FREEZE_EARLY_S) if truth else float("-inf")
+    counts = [c for c in timeline.counts if c >= lo]
+    assert len(counts) == len(truth), (
+        f"{name}: clock counted {len(counts)} shots at {[round(c, 2) for c in counts]}, "
+        f"ground truth has {len(truth)} at {[round(s, 3) for s in truth]}. Extra counts "
+        f"are phantom shots — a freeze on nothing."
+    )
 
 
 def test_detect_cache_replay_matches_cold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
