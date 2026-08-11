@@ -326,8 +326,28 @@ def test_rejected_phantom_settle_is_tallied_and_not_a_shot(tmp_path: Path) -> No
         )
     )
     assert report.settles_rejected == 1
+    assert report.settles_rejected_by_reason == {"phantom": 1}
     assert report.total == 1  # the real shot only
     assert report.missed == []  # and it was seen
+
+
+def test_rejections_are_split_by_reason(tmp_path: Path) -> None:
+    """#37 and #41 both refuse settles, and they must be counted apart.
+
+    They share one code path and one journal marker, so after the two landed
+    together the summary line would otherwise report a ball-in-hand carry as
+    "phantoms rejected". They make different predictions (handoff §6) and are
+    validated against different clips, so a session that refuses five carries
+    and no phantoms has to be readable as exactly that.
+    """
+    phantom = settle(10.0, 1)
+    phantom["rejected"] = "phantom"
+    carry_a, carry_b = settle(20.0, 1), settle(30.0, 1)
+    carry_a["rejected"] = carry_b["rejected"] = "hand_placement"
+    report = build(journal(tmp_path, phantom, carry_a, carry_b, shot(40.0, 1), settle(46.0, 2)))
+    assert report.settles_rejected == 3
+    assert report.settles_rejected_by_reason == {"phantom": 1, "hand_placement": 2}
+    assert report.total == 1  # none of the three is a shot
 
 
 def test_suppressed_settle_is_tallied_and_not_a_shot(tmp_path: Path) -> None:

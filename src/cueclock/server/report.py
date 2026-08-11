@@ -245,6 +245,15 @@ class Shot:
         return self.no_rollout or self.snap_back
 
 
+# How each `rejected` reason reads in the summary line. Unknown reasons print
+# their raw key rather than being dropped — a refusal the report cannot name
+# is exactly the one worth seeing.
+REJECTION_BLURBS = {
+    "phantom": "phantom (table unchanged)",
+    "hand_placement": "ball-in-hand (every arrival hand-delivered)",
+}
+
+
 @dataclass
 class SessionReport:
     """One journal, read for accuracy."""
@@ -283,15 +292,23 @@ class SessionReport:
     provisionals: int = 0
     provisional_reverts: int = 0
     suppressed_settles: int = 0
-    # #37: settles the hub rejected as phantoms — the table was provably
-    # unchanged against a real quiet baseline, so the freeze was released and
-    # nothing was counted. NOT in `shots`: the clock did not act on them, and
-    # counting them would inflate every rate below with the exact class this
-    # rejection exists to remove. It is also the honest live measure of the
-    # feature: `phantom_candidates` cannot fall to prove it worked, because a
-    # rejected settle stops producing a `Shot` at all — the pair to read is
-    # this number rising while `missed` stays flat.
+    # Settles the hub refused at settle time, total and split by why. NOT in
+    # `shots`: the clock did not act on them, and counting them would inflate
+    # every rate below with the exact classes these rejections exist to
+    # remove. This is also the honest live measure of both features —
+    # `phantom_candidates` cannot fall to prove either one worked, because a
+    # rejected settle stops producing a `Shot` at all. The pair to read is
+    # these numbers rising while `missed` stays flat; if a predicate starts
+    # refusing real shots they come back as misses and frozen clocks, not as
+    # a quieter phantom count.
+    #
+    # Two reasons today, and they must be read separately because they make
+    # different predictions (handoff §6): `phantom` (#37) is the table
+    # provably unchanged against a real quiet baseline; `hand_placement`
+    # (#41) is every ball that arrived somewhere new having been put there
+    # by a hand.
     settles_rejected: int = 0
+    settles_rejected_by_reason: dict[str, int] = field(default_factory=dict)
     # Freezes an operator key had to rescue, because no settle ever released
     # them. Not `Shot`s and not in `total`: a shot here is a settle, and these
     # never reached one. See `left_frozen` in the module docstring for why the
@@ -430,12 +447,17 @@ def build(path: Path) -> SessionReport:
                 # never counted it and it is not a shot.
                 report.racking_settles += 1
                 adjudicated_pending = False
-            elif record.get("rejected"):
-                # #37: the hub proved this episode was a phantom and released
-                # the freeze. The clock counted nothing, so neither does the
-                # report — the accompanying `shot_provisional_reverted` record
-                # has already cleared the pending strike.
+            elif (reason := record.get("rejected")) is not None:
+                # The hub refused this settle on positive evidence (#37's
+                # phantom or #41's hand placement) and released the freeze.
+                # The clock counted nothing, so neither does the report — the
+                # accompanying revert record has already cleared the pending
+                # strike.
                 report.settles_rejected += 1
+                key = str(reason)
+                report.settles_rejected_by_reason[key] = (
+                    report.settles_rejected_by_reason.get(key, 0) + 1
+                )
                 adjudicated_pending = False
                 last_settle_t = _number(record, "frame_t") or _number(record, "t")
             else:
@@ -529,6 +551,7 @@ def summary_detail(report: SessionReport) -> dict[str, object]:
         "provisional_reverts": report.provisional_reverts,
         "suppressed_settles": report.suppressed_settles,
         "settles_rejected": report.settles_rejected,
+        "settles_rejected_by_reason": report.settles_rejected_by_reason,
     }
 
 
@@ -627,9 +650,13 @@ def format_session(report: SessionReport) -> str:
             )
         )
     if report.settles_rejected:
+        by_reason = ", ".join(
+            f"{n} {REJECTION_BLURBS.get(reason, reason)}"
+            for reason, n in sorted(report.settles_rejected_by_reason.items())
+        )
         out.append(
-            f"  phantoms rejected  {report.settles_rejected}   "
-            "(table unchanged at the settle; not counted, not in the rates above)"
+            f"  settles refused    {report.settles_rejected}   "
+            f"({by_reason}; not counted, not in the rates above)"
         )
     if report.scratch_candidates:
         out.append(
