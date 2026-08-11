@@ -270,7 +270,7 @@ class ShotClock:
         if self.state in (State.RUNNING, State.GRACE, State.IDLE):
             self.state = State.MOTION
 
-    def balls_settled(self, now: float) -> None:
+    def balls_settled(self, now: float, suppress: bool = False) -> bool:
         """Balls at rest — start a fresh shot clock for the next shot.
 
         Ignored in IDLE: IDLE means the operator said hold (New Rack, pause),
@@ -287,11 +287,24 @@ class ShotClock:
         replays on the following shot (2026-07-31 live failure, twice: after
         a push out and after the break).
 
+        ``suppress`` (#33 Part A) is the hub's settle-time verdict that this
+        episode was ball-in-hand placement/retrieval, not a shot: nothing is
+        counted and the countdown is left exactly as it was — a placement
+        must neither reset the clock nor inflate the rack. Suppression is
+        refused when a ShotTaken already committed this cycle (the shot is
+        counted; evidence policy lives in the hub, committed counts do not
+        un-happen here).
+
+        Returns True when the settle moved the clock (counted / fresh
+        countdown), False when ignored or suppressed.
+
         Does not refill extensions: the pool is per rack (WNT §5), restored
         only by new_rack().
         """
         if self.state is State.IDLE:
-            return
+            return False
+        if suppress and not self._shot_since_settle:
+            return False
         if not self._shot_since_settle:
             self._rack_shots += 1
         self._shot_since_settle = False
@@ -301,6 +314,7 @@ class ShotClock:
         self.state = State.RUNNING
         self._hold_until = 0.0
         self._last_tick = now
+        return True
 
     # ---------- time ----------
 

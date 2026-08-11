@@ -372,6 +372,39 @@ def test_settle_without_shot_still_counts_the_shot() -> None:
     assert clock.remaining == 30  # window consumed, not replayed
 
 
+def test_suppressed_settle_leaves_the_countdown_untouched() -> None:
+    # #33 Part A: the hub adjudicated the settle as ball-in-hand placement.
+    # Nothing is counted and the running countdown is not reset — the live
+    # failure was exactly "the clock reset on pretty much every ball in hand"
+    # (2026-08-10 journal: rack_shots 3->4 and 7->8 on placement settles).
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.tick(now=10.0)  # countdown runs to 51
+    assert clock.remaining == 51
+    shots_before = clock.rack_shots
+    assert clock.balls_settled(now=12.0, suppress=True) is False
+    assert clock.state is State.RUNNING
+    assert clock.rack_shots == shots_before
+    clock.tick(now=13.0)
+    assert clock.remaining == 48  # kept counting straight through the settle
+
+
+def test_suppression_refused_after_a_counted_shot() -> None:
+    # A ShotTaken already committed the count: the settle that follows starts
+    # the next countdown regardless of what the placement predicate thinks —
+    # committed shots do not un-happen at the clock layer.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.shot_taken()  # detected shot: counted, clock frozen in MOTION
+    assert clock.balls_settled(now=6.0, suppress=True) is True
+    assert clock.state is State.RUNNING
+    assert clock.remaining == 30  # fresh countdown, window consumed
+
+
 def test_push_then_missed_shot_consumes_the_window() -> None:
     # The push-incident bug: push re-arms 60 s; the shot under that window is
     # missed by vision; the settle must still burn the window so the

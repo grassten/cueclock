@@ -663,12 +663,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 t, ball_id=event.ball_id, speed_mms=event.speed_mms, newborn=event.newborn
             )
         elif isinstance(event, BallsSettled):
-            # The rearrangement summary set by the same process() call that
-            # emitted this settle — the hub's E8 break-adjudication evidence.
+            # The rearrangement summary and mover evidence set by the same
+            # process() call that emitted this settle — the hub's E8 break
+            # adjudication and #33 settle-time shot adjudication evidence.
             coro = hub.balls_settled(
                 t,
                 rearrange=vision.last_settle_rearrange,
                 backstop=vision.last_settle_backstop,
+                movers=vision.last_settle_movers,
             )
         elif isinstance(event, ScratchCandidate):
             # Two-stage verdict (#26): the candidate also grants the #25

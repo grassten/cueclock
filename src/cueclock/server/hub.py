@@ -30,6 +30,7 @@ from cueclock.server.score import MatchScore
 if TYPE_CHECKING:
     # Type-only: importing the vision stack at runtime would drag cv2/numpy
     # into the bare server. The hub reads the summary as plain evidence.
+    from cueclock.vision.events import SettleMover
     from cueclock.vision.pipeline import RearrangeSummary
 
 BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
@@ -87,6 +88,38 @@ BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
 # each candidate grants at most once — the confirmed Scratch verdict itself
 # still never moves the clock.
 SCRATCH_HOLD_SECONDS = 5.0
+
+# #33 Part A — the settle-time shot adjudication. A RUNNING-domain settle is
+# refused (ball-in-hand placement/retrieval, not a shot) only on POSITIVE
+# placement-shaped evidence, measured on every live compensated settle on
+# record (stage 0, issue #33):
+#
+#   * rearrangement shape `moved == 0 and involved == 1` — exactly one ball
+#     appeared XOR vanished and nothing was displaced. All four 2026-08-10
+#     ball-in-hand settles match (ap=1 or vn=1, moved_mm=0); every measured
+#     real-shot settle has moved >= 1 (live missed strikes 195/668 mm; the
+#     whole corpus shot population, down to hanger_pot's 33 mm). There is
+#     deliberately NO travel floor — the axis is the moved count.
+#   * no surviving episode mover with real travel (the stun-pot guard): a cue
+#     that stops on the potted ball's old spot fools the greedy match into
+#     `moved=0, vanished=1`, but the identity-aware engine still shows a
+#     roster ball, alive at the settle, that traveled. The floor below is the
+#     engine's own motion-evidence bar (EventConfig.moving_enter_mm) — the
+#     same 30 mm that makes a ball a mover in the first place, not a new
+#     constant. Alive-mover evidence only ever UPGRADES a refusal to a count:
+#     real shots routinely end with zero alive movers (handoff rebirths —
+#     soft_shot, hanger_pot, every measured break), so its absence proves
+#     nothing and refusal still requires the rearrangement shape.
+#   * no scratch candidate standing un-refuted (the thin-cut scratch guard):
+#     a candidate at the settle means the vanish IS the pot. Retrieval
+#     settles stay refusable — their candidate resolved seconds earlier
+#     (20:56:58 verdict vs 20:57:13 retrieval settle).
+#
+# Everything else counts — no summary, degraded summary, involved == 0 (a
+# clip-start artifact shape, never a measured placement), vanished >= 2,
+# movers seen 10 frames late: all fail-open. The default verdict for a
+# RUNNING settle is *shot*, exactly the checkpoint 26 compensation.
+SHOTLIKE_MOVER_MIN_TRAVEL_MM = 30.0
 
 # `detect_heartbeat` journal cadence: often enough to bracket a starvation
 # window (a flag-dump write measurably halved the detect rate for ~10 s —
@@ -629,6 +662,7 @@ class Hub:
         t: float | None = None,
         rearrange: "RearrangeSummary | None" = None,
         backstop: bool = False,
+        movers: "list[SettleMover] | None" = None,
     ) -> None:
         detail: dict[str, object] = {"t": t, "frame_t": t}
         if backstop:
@@ -643,6 +677,10 @@ class Hub:
             detail["appeared"] = rearrange.appeared
             detail["vanished"] = rearrange.vanished
             detail["moved_mm"] = round(rearrange.moved_mm)
+            detail["spread_mm"] = round(rearrange.spread_mm)
+        if movers:
+            detail["movers_alive"] = sum(m.alive for m in movers)
+            detail["mover_max_mm"] = round(max(m.travel_mm for m in movers))
         if not self.vision_enabled:
             self._log("vision_balls_settled_killed", **detail)
             return  # kill switch, as above
@@ -659,11 +697,19 @@ class Hub:
             if self._rack_pending or self._rack_break_mono is None:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
-        self.clock.balls_settled(now)
-        if self.clock.state is State.RUNNING:
+        suppress = self._settle_not_a_shot(rearrange, movers)
+        moved_clock = self.clock.balls_settled(now, suppress=suppress)
+        if suppress and not moved_clock:
+            # #33 Part A: placement-shaped — the countdown was left exactly
+            # as it was and nothing was counted. Own journal kind so `report`
+            # tallies refusals without parsing evidence fields.
+            self._log("compensation_suppressed", **detail)
+            await self.broadcast(self.clock.snapshot())
+            return
+        if moved_clock and self.clock.state is State.RUNNING:
             # Solo pace (#30): the fresh countdown this settle started is the
-            # next shot's timer. A settle the clock ignored (IDLE) stamps
-            # nothing — placement motion must not time a phantom shot.
+            # next shot's timer. A settle the clock ignored (IDLE) or refused
+            # stamps nothing — placement motion must not time a phantom shot.
             self._pace_since_mono = now
         self._log("vision_balls_settled", **detail)
         # #25: the scratch's candidate can precede its settle (shot_debug:
@@ -720,6 +766,29 @@ class Hub:
                 moved_mm=round(rearrange.moved_mm),
             )
         return False
+
+    def _settle_not_a_shot(
+        self, rearrange: "RearrangeSummary | None", movers: "list[SettleMover] | None"
+    ) -> bool:
+        """#33 Part A: is this settle positively placement-shaped?
+
+        Policy over evidence (§13.1) — the measured predicate and its
+        anchoring live in the SHOTLIKE_MOVER_MIN_TRAVEL_MM note above. True
+        means the hub asks the clock to suppress the settle: no shot counted,
+        no reset. The default is False — a RUNNING settle is a shot unless
+        the evidence is positively placement-shaped (fail-open: late-seen
+        movers, missing or degraded summaries all count).
+        """
+        if rearrange is None:
+            return False  # no evidence — fail-open (E9-synthesized settles)
+        if rearrange.moved != 0 or rearrange.involved != 1:
+            return False  # something displaced, or not the single-ball shape
+        if self._scratch_candidate_open:
+            return False  # the vanish is a pot under adjudication, not a lift
+        # A surviving ball that really traveled is the stun-pot shape — count.
+        return not any(
+            m.alive and m.travel_mm >= SHOTLIKE_MOVER_MIN_TRAVEL_MM for m in movers or []
+        )
 
     async def scratch_seen(self, t: float | None = None) -> None:
         # The confirmed verdict never moves the clock — the hold (#25) was

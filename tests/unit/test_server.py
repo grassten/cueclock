@@ -1061,3 +1061,141 @@ def test_solo_panel_counts_a_drill(monkeypatch: pytest.MonkeyPatch) -> None:
     assert hub.payload()["solo"] is None
     asyncio.run(hub.set_mode("no_clock"))
     assert hub.payload()["solo"] == {"reps": 0, "elapsed_s": 0.0}
+
+
+# ---------- #33 Part A: the settle-time shot adjudication ----------
+#
+# Predicate + anchoring: hub.SHOTLIKE_MOVER_MIN_TRAVEL_MM note. The refusal
+# shape (moved == 0, involved == 1) is the measured live placement/retrieval
+# population, 4/4 on 2026-08-10; every measured real-shot settle has moved >= 1.
+
+
+def _mover(travel_mm: float, alive: bool):
+    from cueclock.vision.events import SettleMover
+
+    return SettleMover(travel_mm=travel_mm, alive=alive)
+
+
+def _running_hub() -> Hub:
+    """A hub whose clock is RUNNING mid-rack (break counted via Restart)."""
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.restart())  # counts the break, starts a live countdown
+    return hub
+
+
+def test_placement_shaped_settle_is_suppressed() -> None:
+    # 2026-08-10 20:52:59 / 20:56:51: settle `moved=0 appeared=1 0mm` counted
+    # rack_shots and reset the countdown while the cue was being placed.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    remaining = hub.clock.remaining
+    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
+    assert hub.clock.state is State.RUNNING
+    assert hub.clock.rack_shots == shots
+    assert hub.clock.remaining == remaining
+    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
+    assert "compensation_suppressed" in kinds
+
+
+def test_retrieval_shaped_settle_is_suppressed() -> None:
+    # 2026-08-10 20:49:34 / 20:57:13: `moved=0 vanished=1 0mm` — the hand
+    # lifting the ball out of the pocket counted as a shot.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
+    assert hub.clock.rack_shots == shots
+    assert hub.clock.state is State.RUNNING
+
+
+def test_missed_strike_settle_still_counts() -> None:
+    # 2026-08-10 21:02:06: `moved=2, 668mm` with no ShotTaken — the
+    # compensation this issue keeps, felt exactly as before.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=2, moved_mm=668.0)))
+    assert hub.clock.rack_shots == shots + 1
+    assert hub.clock.state is State.RUNNING
+
+
+def test_settle_with_no_evidence_counts() -> None:
+    # Fail-open: no rearrangement summary (E9-synthesized settles, degraded
+    # replay) must keep today's compensation — refusal needs positive evidence.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.balls_settled())
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_alive_traveled_mover_upgrades_to_count() -> None:
+    # The stun-pot guard: greedy matching reads a cue parked on the potted
+    # ball's old spot as `moved=0 vanished=1`, but the engine still shows a
+    # surviving roster ball that traveled — that IS the shot.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(
+        hub.balls_settled(
+            rearrange=_summary(vanished=1), movers=[_mover(travel_mm=300.0, alive=True)]
+        )
+    )
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_dead_mover_does_not_upgrade() -> None:
+    # A retrieval's lifted ball shows episode travel (88mm on scratch_replace)
+    # but does not survive to the settle — refusal stands.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(
+        hub.balls_settled(
+            rearrange=_summary(vanished=1), movers=[_mover(travel_mm=88.0, alive=False)]
+        )
+    )
+    assert hub.clock.rack_shots == shots
+
+
+def test_open_scratch_candidate_blocks_suppression() -> None:
+    # A candidate standing un-refuted at the settle means the vanish is the
+    # pot under adjudication (thin-cut scratch), not a lift — count it.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(
+        hub.scratch_candidate(
+            5.0,
+            x_mm=940.0,
+            y_mm=900.0,
+            pocket_x_mm=965.0,
+            pocket_y_mm=965.0,
+            whiteness=0.9,
+            color_age_s=0.0,
+        )
+    )
+    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_multi_ball_pickup_shape_still_counts() -> None:
+    # `vanished=2, 0mm` is NOT the measured refusal shape (a double-pot stun
+    # reads the same) — fail-open keeps counting it until live ground truth
+    # says otherwise.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=2)))
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_suppressed_settle_does_not_open_a_pace_timer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The pace stamp is the fresh countdown a settle starts; a refused settle
+    # starts none, so it must not restart the shot timer either.
+    now = _freeze_hub_time(monkeypatch)
+    hub = Hub()
+    asyncio.run(hub.set_mode("run_out"))
+    asyncio.run(hub.restart())
+    now[0] += 4.0
+    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
+    now[0] += 6.0
+    asyncio.run(hub.shot_taken(speed_mms=2000.0))
+    solo = cast(dict[str, object], hub.payload()["solo"])
+    assert solo["last_s"] == 10.0  # timed from the restart, not the placement
