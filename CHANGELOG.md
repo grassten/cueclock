@@ -232,6 +232,113 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-11 (checkpoint 87 — #38 deleted rather than tuned, #39 root-caused
+  at 3 mm):** The measurement pass #38 demanded, run before touching
+  `_settle_not_a_shot`, on the seven flagged dumps from
+  `session-20260811-182341` (preserved to the T7 under behaviour names, five
+  replaying warm field-for-field against the live journal) plus 11 corpus
+  scenarios — 23 motion episodes. Probes: `episode_dump.py` (replay once,
+  dump the substrate) + `episode_report.py` (axes computed from the dump, free
+  to re-run) + `scratch_latch_probe.py`, all in
+  `~/Desktop/cueclock-accuracy-probes/`.
+  * **Gate A: nothing separates a carry from a strike.** All five candidate
+    axes overlap across 9 hand and 6 strike episodes — deceleration
+    (time-to-peak HAND 0.0–1.0 vs STRIKE 0.0–0.085; plateau fraction
+    0.038–0.88 vs 0.146–1.0; accel/decel runs 1–6 vs 1–3), path curvature
+    (tortuosity 1.03–4.22 vs 1.00–1.30), cue-stick presence at onset
+    (44–341 px vs 48–168 px), and onset→30 mm latency (0.026–0.633 s vs
+    0.025–0.768 s). **`merged` is the one asymmetry and still cannot carry
+    the predicate:** exactly 0.0 on all six strikes and positive on 3 of the
+    4 session carries (1.0, 1.0, 0.55) — but ~0 on every *corpus* hand event
+    (`cue_grab` 0.003, `pickup_newborn` 0.002, `pickup_snatch` 0.032,
+    `scratch_replace` 0.0/0.006). That is **checkpoint 50's finding
+    reproduced on a fourth clip set**, and it means `merged` cannot replace
+    the shape test — the retrieval class the shape test exists to refuse
+    reads exactly like a strike on it. Measured, refuted, recorded as dead.
+  * **#38: the refusal is deleted, not retuned** (Steven's call, with the
+    numbers). Live it fired **3 times in 80 shots** — right once (a
+    retrieval), wrong twice (a jump shot and a no-contact kick, both real
+    shots refused, the jump shot's clock then running 15.7 → 0 → GRACE) — and
+    caught **none of the session's five ball-in-hand carries**, because a
+    carry moves a ball and is counted at the predicate's first test. Removal
+    was measured against the full corpus first: **zero cost, no clip changes
+    outcome**; the only failures were the 7 unit tests that existed solely to
+    pin it, now removed with it. `ShotClock.balls_settled(suppress=...)` is
+    deliberately kept — the clock-side mechanism was never what failed.
+    **Ball-in-hand must still not reset the clock (Steven, 2026-08-11); that
+    problem stays open** rather than being served by a rule that is wrong
+    twice as often as it is right. `episode_discarded` (the mid-table pickup
+    discard) is a different path and is untouched.
+  * **#39: two real scratches missed by 3 mm and 4 mm, and it was never
+    identity.** Both went into the same corner; the cue's last *observed*
+    position was **123 mm** (the pot) and **124 mm** (the kick) from the
+    pocket centre against `pocket_zone_radius_mm` = 120, so `_near_pocket`
+    refused and neither reached the #26 adjudicator. The whiteness vote held
+    the cue throughout on both (0.989 and 1.0) — §2.3's usual suspect,
+    positively excluded by replay. On the pot the cue was tracked marching in
+    at ~850 mm/s (164 → 148 → 134 → **123 mm** over six frames): the track
+    ended **one frame short of the zone**. Fix: `_near_pocket` allows one
+    frame of flight (`speed × measured frame interval`, capped at one more
+    zone radius), where the interval is the engine's own measured detect
+    cadence rather than a new constant — so it tracks a starved loop instead
+    of assuming 78 Hz. Deliberately **not** a bigger zone, which would admit
+    slow deaths near a pocket and re-open the ~6× over-fire #26 closed;
+    `spin_in_place`'s coasted phantom sat **359 mm** out and no single frame
+    bridges that. Before: both clips emitted zero scratch events of any kind.
+    After: both emit a candidate, and the pot reaches a full `Scratch`.
+    Promoted as `pot_scratch_nohold_0811` and `kick_scratch_0811` with a
+    bespoke test pinning the *candidate* — the kick's verdict never lands
+    inside its clip, so counts alone would stay green through the bug.
+  * **The #39 coupling defect is real but was latent, not live.** The early
+    return at the refused settle sat before `_maybe_hold_for_scratch()`, but
+    guard 3 made refusal and an open candidate mutually exclusive, so it
+    could not have contributed to either missed scratch. Deleting the
+    predicate removes the early return outright and the hold is now
+    unconditional at the settle.
+  * **A flagged clip was misread by this session and by the last one, and the
+    correction matters more than the clip.** `flag_missed_4` was renamed
+    `jump_shot_0811` on the theory that its subject (a jump shot at session
+    t=585.40) fell 7.6 s before the dump's 20 s window. The window claim is
+    true; the conclusion was wrong. The clip contains **a different, later
+    shot that current code misses completely**, and it reproduces cold: peak
+    ball speed **2047.8 mm/s**, `episode_active` **False for all 20.74 s**,
+    `all_still` **True through the whole crossing**, and **zero events**. The
+    cue crown sat on track 3 at (1011, 191) reading `observed=False` — a pure
+    extrapolation at a position the ball had already left — while the real
+    cue flew as track 8 at 1668→1852 mm/s; two dead tracks then coasted *off
+    the table* (y → −59) at 380–692 mm/s before being dropped. Live, the
+    clock hit GRACE 1.7 s later. That is §4.11's stale-flag-holder mechanism
+    and the E7 class, and it is now the best-evidenced instance of it we
+    have. Renamed **`latch_blind_shot_0811`**; deliberately NOT yet in
+    `EXPECTED` — it is the next piece of work, not a parked failure.
+    Method note: the burned-in renderer said *"nothing is **detected** for the
+    entire 21 s"*, which was read as "nothing happened". Read the frames.
+  * **`--update-goldens` is not safe to run corpus-wide, and
+    `stroke_tug_strike_0801.json` is why.** Eight goldens change under it
+    (`break_0801` t and speed, `break_shot`, `pair_strikes_0801`, `soft_shot`,
+    `soft_touch_0731`, `spin_in_place`, `stroke_tug_strike_0801`, `tip_bump`).
+    None are this checkpoint's: regenerating at HEAD with every source change
+    reverted produces **byte-identical** files (62/62), which is also the
+    proof that this checkpoint perturbs no clip's timeline at all. They were
+    absorbed here and then **reverted**, because one of them is load-bearing.
+    `stroke_tug`'s golden is *deliberately stale* — the fire was lost at
+    checkpoint 73 and the golden is the surviving record of the 13.198 s
+    stroke, which is what `ground_truth()` reads. Refreshing it makes the
+    golden hold 0 shots against `EXPECTED`'s 1, the two disagree, the clip
+    loses its clock ground truth entirely, and it falls back to the hard
+    count assertion and fails — turning a documented, understood residual
+    into a red. Regenerate goldens **per clip, for clips you changed**; never
+    across the corpus.
+  * Housekeeping: the internal volume went 94% → 73% (12 → 56 GB free). The
+    six pre-#33/#36 dumps were deleted with Steven's approval; the seven
+    2026-08-11 dumps moved to the T7. `kick_scratch_0811` lost its
+    `state.json` to a SIGINT, but the camera-ns → session-t map is
+    bit-identical across all five dumps that kept one
+    (A = −1118566.678510), so it still locates exactly (session
+    1574.22–1594.58) — worth reusing whenever a dump loses its sidecar.
+    Raising `--ring-seconds` was proposed and **declined by Steven**; it stays
+    at 20.
+
 - **2026-08-11 (checkpoint 86 — #34 closed: the phantom is real, E7 re-scoped):**
   * **`parked_vote_strike_0801`'s surplus shot is a phantom — confirmed from
     the footage, not assumed.** Item 2 said to check it before believing it,

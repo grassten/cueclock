@@ -518,6 +518,24 @@ EXPECTED: dict[
     # departure run must be pixel-witnessed; the dwell may be presence-
     # witnessed).
     "cluster_rest_shot_0806": (1, 0, 1, 1),
+    # 2026-08-11 live flags, Steven's own ground truth (#39). Both scratches
+    # went into the SAME corner and both died on the zone margin: the cue's
+    # last observed position was 123 mm and 124 mm from the pocket centre
+    # against a 120 mm zone, so neither reached the #26 adjudicator and
+    # neither held the clock. On the pot the cue was tracked marching in —
+    # 164 -> 148 -> 134 -> 123 mm over six frames at ~850 mm/s — i.e. the
+    # track ended one frame short of the zone. Pins the one-frame flight
+    # allowance in `_near_pocket`; before it, both clips emitted zero scratch
+    # events of any kind.
+    #
+    # pot_scratch_nohold: an ordinary pot that scratched. Steven: "the scratch
+    # delay didn't apply, clock started immediately."
+    "pot_scratch_nohold_0811": (1, 1, 1, 1),
+    # kick_scratch: kicked at a ball, hit nothing, cue scratched. The verdict
+    # itself never lands inside the clip (the census is still open when the
+    # frames run out), so scratches stays 0 and the *candidate* — the thing
+    # that was missing — is pinned by its own test below.
+    "kick_scratch_0811": (1, 0, 2, 2),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -570,6 +588,10 @@ REFERENCES: dict[str, str] = {
     "occluded_roll_0806": "empty_table_0801",
     "cluster_rest_shot_0806": "empty_table_0801",
     "break_dark_total_0806": "empty_table_0801",
+    # 2026-08-11 ring dumps: the live session's own reference (deck/session.py
+    # DEFAULT_REFERENCE), same mount, so they replay against what shot them.
+    "pot_scratch_nohold_0811": "empty_table_0801",
+    "kick_scratch_0811": "empty_table_0801",
 }
 
 
@@ -1105,3 +1127,35 @@ def test_break_dark_total_settles_via_the_backstop() -> None:
         f"({hub_module.BREAK_DARK_MIN_APPEARED}) — the fully dark break no "
         "longer reaches the tier that counts it"
     )
+
+
+def test_0811_scratches_reach_the_adjudicator() -> None:
+    """#39: two real scratches that produced zero candidates, 2026-08-11.
+
+    Both went into the same corner and both died on the zone margin — the
+    cue's last *observed* position 123 mm (the pot) and 124 mm (the kick)
+    from the pocket centre, against `pocket_zone_radius_mm` = 120. The
+    whiteness vote held the cue throughout on both (0.989 and 1.0), so this
+    was never the §2.3 identity failure it looked like from the journal; the
+    latch simply never armed, and the two-stage verdict #26 built was never
+    reached.
+
+    A `ScratchCandidate` is what the counts in EXPECTED cannot pin — the kick
+    never gets a verdict inside its clip, and a candidate is the evidence the
+    hub's hold and adjudication both hang off. Before the one-frame flight
+    allowance in `_near_pocket`, both clips emitted **zero** scratch events of
+    any kind; the pot additionally reaches a full `Scratch`.
+    """
+    for name, wants_verdict in (("pot_scratch_nohold_0811", True), ("kick_scratch_0811", False)):
+        if not (CLIPS / name).exists():
+            pytest.skip(f"clip {name} not recorded")
+        events = _run_clip(name, _reference_model("empty_table_0801"))
+        candidates = [e for e in events if type(e).__name__ == "ScratchCandidate"]
+        assert len(candidates) == 1, (
+            f"{name}: expected exactly one scratch candidate, got {len(candidates)} — "
+            "the cue died in the pocket zone and must reach the adjudicator"
+        )
+        if wants_verdict:
+            assert any(isinstance(e, Scratch) for e in events), (
+                f"{name}: the candidate never resolved to a Scratch"
+            )

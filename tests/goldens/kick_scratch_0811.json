@@ -1,0 +1,31 @@
+{
+  "scenario": "kick_scratch_0811",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "BallsSettled",
+      "t": 4.474
+    },
+    {
+      "type": "ShotTaken",
+      "t": 13.0251,
+      "ball_id": 0,
+      "speed_mms": 1833.2645,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 15.3677
+    },
+    {
+      "type": "ScratchCandidate",
+      "t": 16.0014,
+      "x_mm": 95.3758,
+      "y_mm": 885.9073,
+      "pocket_x_mm": 0.0,
+      "pocket_y_mm": 965.0,
+      "whiteness": 1.0,
+      "color_age_s": 1.2545
+    }
+  ]
+}

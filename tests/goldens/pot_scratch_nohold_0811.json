@@ -1,0 +1,31 @@
+{
+  "scenario": "pot_scratch_nohold_0811",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 7.6231,
+      "ball_id": 4,
+      "speed_mms": 19101.0305,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 8.3527
+    },
+    {
+      "type": "ScratchCandidate",
+      "t": 8.9864,
+      "x_mm": 102.7914,
+      "y_mm": 897.8398,
+      "pocket_x_mm": 0.0,
+      "pocket_y_mm": 965.0,
+      "whiteness": 0.9888,
+      "color_age_s": 0.1152
+    },
+    {
+      "type": "Scratch",
+      "t": 8.9864
+    }
+  ]
+}

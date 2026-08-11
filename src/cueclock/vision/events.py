@@ -851,6 +851,11 @@ class EventEngine:
         # cue's own continuation from a bystander: only a track born after the
         # cue went dark can be the ball that left the rest spot.
         self._cue_last_obs_t: float = float("-inf")
+        # Measured detect cadence — see the note in `update`. None until two
+        # frames have been seen; `_near_pocket` then gives a still-unmeasured
+        # engine no flight allowance at all, which is the safe direction.
+        self._prev_update_t: float | None = None
+        self._frame_dt_s: float | None = None
 
     def update(self, t: float, balls: list[BallState]) -> list[Event]:
         events: list[Event] = []
@@ -859,6 +864,16 @@ class EventEngine:
         was_moving = self._table_moving
         if cue is not None and cue.observed:
             self._cue_last_obs_t = t
+        # The engine's own detect cadence, measured rather than configured, so
+        # it tracks the live rate (78 Hz healthy, 11-20 Hz starved) instead of
+        # assuming it. `_near_pocket` is the only reader: an observation of a
+        # moving ball is one of these stale by construction.
+        if self._prev_update_t is not None:
+            dt = t - self._prev_update_t
+            if 0.0 < dt < 1.0:  # ignore replay seeks and the first frame
+                prev = self._frame_dt_s
+                self._frame_dt_s = dt if prev is None else 0.9 * prev + 0.1 * dt
+        self._prev_update_t = t
 
         # Birth registry + roster founding. Tracks present within the first
         # creep window of engine life are founding roster members (the engine
@@ -1387,7 +1402,7 @@ class EventEngine:
                 # *next* shot's cue dies — live, 68/68 resolved a settle
                 # within 19.4 s, well inside any shot cycle
                 and t - last_t >= cfg.cue_lost_latch_s
-                and self._near_pocket(last_x, last_y)
+                and self._near_pocket(last_x, last_y, last_speed)
             ):
                 # Latch the verdict, do not publish it: a ball may yet turn up
                 # at the death spot, which means the cue stopped in the jaw
@@ -2421,8 +2436,31 @@ class EventEngine:
             return [Scratch(t)]
         return []
 
-    def _near_pocket(self, x: float, y: float) -> bool:
-        return any(
-            hypot(x - px, y - py) <= self._cfg.pocket_zone_radius_mm
-            for px, py in self._cfg.pocket_centers()
-        )
+    def _near_pocket(self, x: float, y: float, speed_mms: float = 0.0) -> bool:
+        """Did the cue die inside a pocket zone — allowing for one frame of flight?
+
+        The death spot is the last *observed* position, and an observation is
+        up to one detect frame stale by construction. A ball sinking at speed
+        therefore reads systematically short of where it actually was when the
+        track ended, by exactly `speed x frame interval`. Both 2026-08-11
+        scratches died on that margin: the pot at **123 mm** and the kick at
+        **124 mm** from the same corner, against a 120 mm zone, with the pot
+        tracked marching in at 164 -> 148 -> 134 -> 123 mm over six frames at
+        ~850 mm/s (#39). Neither reached the adjudicator at all.
+
+        The allowance is a measured bound, not a threshold: at 850 mm/s a
+        frame is ~11 mm, which is why 123 lands inside and the corpus's
+        coasted phantom does not — `spin_in_place`'s last real observation sat
+        **359 mm** out, and no single frame bridges 240 mm. It is deliberately
+        NOT a bigger `pocket_zone_radius_mm`: widening the zone would admit
+        slow deaths anywhere near a pocket, which is the ~6x over-fire #26
+        just closed. A still ball gets no allowance at all.
+        """
+        zone = self._cfg.pocket_zone_radius_mm
+        # Capped at one more zone radius so a starved detect loop (11-20 Hz
+        # measured) cannot turn the allowance into a second, much larger zone.
+        # The cap is expressed in the existing constant on purpose — it is not
+        # a new tunable — and even at its ceiling it stays well short of
+        # `spin_in_place`'s 359 mm coasted death.
+        flight = min(max(speed_mms, 0.0) * (self._frame_dt_s or 0.0), zone)
+        return any(hypot(x - px, y - py) <= zone + flight for px, py in self._cfg.pocket_centers())

@@ -93,6 +93,18 @@ that shows what a threshold move did to the rest of the corpus. Regenerating
 without reading it is the same as not having goldens, and a CHANGELOG entry for
 a detection change should cite which timelines moved.
 
+**Commit only the goldens for clips you actually changed.** Some goldens are
+deliberately stale, because `ground_truth()` reads them: a clip whose strike
+fire was lost to a past regression keeps the *old* golden as the surviving
+record of when the stroke happened, and the clock grade (#34) is scored against
+it. Refreshing such a golden makes it agree with today's behaviour and
+therefore *disagree* with `EXPECTED` — the clip then has no ground truth at
+all, falls back to the hard count assertion, and goes red. That is what
+`stroke_tug_strike_0801` did at checkpoint 87: a corpus-wide `--update-goldens`
+turned a documented, understood residual into a failure. The run itself is
+still the right diagnostic — just revert the files for clips your change did
+not touch.
+
 ### Separating a real regression from a timing shift
 
 Goldens are checked *before* the count assertions, so a threshold change tends

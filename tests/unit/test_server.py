@@ -1197,11 +1197,13 @@ def test_solo_panel_counts_a_drill(monkeypatch: pytest.MonkeyPatch) -> None:
     assert hub.payload()["solo"] == {"reps": 0, "elapsed_s": 0.0}
 
 
-# ---------- #33 Part A: the settle-time shot adjudication ----------
+# ---------- #33 Part B: the provisional freeze, and what closes it ----------
 #
-# Predicate + anchoring: hub.SHOTLIKE_MOVER_MIN_TRAVEL_MM note. The refusal
-# shape (moved == 0, involved == 1) is the measured live placement/retrieval
-# population, 4/4 on 2026-08-10; every measured real-shot settle has moved >= 1.
+# Part A (the settle refusal) was deleted at checkpoint 87 — see the #38 note
+# in hub.py. What survives is the freeze at motion onset and its two honest
+# endings: a settle counts the shot, and an unlatched episode with no settle
+# (the engine's pickup discard) reverts it. The settle tests below therefore
+# pin *counting*, which is the default verdict again.
 
 
 def _mover(travel_mm: float, alive: bool):
@@ -1216,30 +1218,6 @@ def _running_hub() -> Hub:
     asyncio.run(hub.new_rack())
     asyncio.run(hub.restart())  # counts the break, starts a live countdown
     return hub
-
-
-def test_placement_shaped_settle_is_suppressed() -> None:
-    # 2026-08-10 20:52:59 / 20:56:51: settle `moved=0 appeared=1 0mm` counted
-    # rack_shots and reset the countdown while the cue was being placed.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    remaining = hub.clock.remaining
-    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
-    assert hub.clock.state is State.RUNNING
-    assert hub.clock.rack_shots == shots
-    assert hub.clock.remaining == remaining
-    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
-    assert "compensation_suppressed" in kinds
-
-
-def test_retrieval_shaped_settle_is_suppressed() -> None:
-    # 2026-08-10 20:49:34 / 20:57:13: `moved=0 vanished=1 0mm` — the hand
-    # lifting the ball out of the pocket counted as a shot.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
-    assert hub.clock.rack_shots == shots
-    assert hub.clock.state is State.RUNNING
 
 
 def test_missed_strike_settle_still_counts() -> None:
@@ -1261,53 +1239,6 @@ def test_settle_with_no_evidence_counts() -> None:
     assert hub.clock.rack_shots == shots + 1
 
 
-def test_alive_traveled_mover_upgrades_to_count() -> None:
-    # The stun-pot guard: greedy matching reads a cue parked on the potted
-    # ball's old spot as `moved=0 vanished=1`, but the engine still shows a
-    # surviving roster ball that traveled — that IS the shot.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    asyncio.run(
-        hub.balls_settled(
-            rearrange=_summary(vanished=1), movers=[_mover(travel_mm=300.0, alive=True)]
-        )
-    )
-    assert hub.clock.rack_shots == shots + 1
-
-
-def test_dead_mover_does_not_upgrade() -> None:
-    # A retrieval's lifted ball shows episode travel (88mm on scratch_replace)
-    # but does not survive to the settle — refusal stands.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    asyncio.run(
-        hub.balls_settled(
-            rearrange=_summary(vanished=1), movers=[_mover(travel_mm=88.0, alive=False)]
-        )
-    )
-    assert hub.clock.rack_shots == shots
-
-
-def test_open_scratch_candidate_blocks_suppression() -> None:
-    # A candidate standing un-refuted at the settle means the vanish is the
-    # pot under adjudication (thin-cut scratch), not a lift — count it.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    asyncio.run(
-        hub.scratch_candidate(
-            5.0,
-            x_mm=940.0,
-            y_mm=900.0,
-            pocket_x_mm=965.0,
-            pocket_y_mm=965.0,
-            whiteness=0.9,
-            color_age_s=0.0,
-        )
-    )
-    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
-    assert hub.clock.rack_shots == shots + 1
-
-
 def test_multi_ball_pickup_shape_still_counts() -> None:
     # `vanished=2, 0mm` is NOT the measured refusal shape (a double-pot stun
     # reads the same) — fail-open keeps counting it until live ground truth
@@ -1316,68 +1247,6 @@ def test_multi_ball_pickup_shape_still_counts() -> None:
     shots = hub.clock.rack_shots
     asyncio.run(hub.balls_settled(rearrange=_summary(vanished=2)))
     assert hub.clock.rack_shots == shots + 1
-
-
-def test_suppressed_settle_does_not_open_a_pace_timer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The pace stamp is the fresh countdown a settle starts; a refused settle
-    # starts none, so it must not restart the shot timer either.
-    now = _freeze_hub_time(monkeypatch)
-    hub = Hub()
-    asyncio.run(hub.set_mode("run_out"))
-    asyncio.run(hub.restart())
-    now[0] += 4.0
-    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
-    now[0] += 6.0
-    asyncio.run(hub.shot_taken(speed_mms=2000.0))
-    now[0] += 2.0
-    asyncio.run(hub.balls_settled())  # commits the provisional's pace (#33)
-    solo = cast(dict[str, object], hub.payload()["solo"])
-    assert solo["last_s"] == 10.0  # timed from the restart, not the placement
-
-
-# ---------- #33 Part B: the provisional shot ----------
-
-
-def test_episode_start_freezes_and_placement_settle_reverts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The ball-in-hand felt contract: the clock visibly pauses during the
-    carry, resumes at the exact remaining, never resets, never counts."""
-    now = _freeze_hub_time(monkeypatch)
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    now[0] += 9.0
-    hub.clock.tick(now[0])
-    remaining = hub.clock.remaining
-    asyncio.run(hub.episode_started(t=100.0))  # the latch edge: freeze
-    assert hub.clock.state is State.MOTION
-    now[0] += 20.0
-    hub.clock.tick(now[0])  # the whole carry: frozen
-    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
-    assert hub.clock.state is State.RUNNING
-    assert hub.clock.remaining == remaining
-    assert hub.clock.rack_shots == shots
-    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
-    assert "shot_provisional" in kinds
-    assert "shot_provisional_reverted" in kinds
-
-
-def test_placement_fire_reverts_at_the_settle() -> None:
-    # 2026-08-10 20:58:17: the placement fired a real newborn ShotTaken
-    # (399 mm/s) and counted a shot before any settle. Part B defers the
-    # count; the placement-shaped settle reverts fire and freeze together.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    asyncio.run(hub.shot_taken(speed_mms=399.0))
-    assert hub.clock.state is State.MOTION
-    assert hub.clock.rack_shots == shots  # deferred, not counted
-    asyncio.run(hub.balls_settled(rearrange=_summary(appeared=1), movers=[]))
-    assert hub.clock.state is State.RUNNING
-    assert hub.clock.rack_shots == shots
-    kinds = [r["kind"] for r in hub.journal.tail(60.0)]
-    assert "shot_provisional_reverted" in kinds
 
 
 def test_fire_merges_into_the_provisional_and_counts_once() -> None:
@@ -1433,52 +1302,6 @@ def test_episode_start_respects_kill_switch_and_mode() -> None:
     asyncio.run(hub.set_mode("no_clock"))
     asyncio.run(hub.episode_started(t=2.0))
     assert hub.clock.state is State.IDLE  # no_clock parks the countdown
-
-
-def test_scratch_candidate_inside_the_episode_blocks_the_revert() -> None:
-    # Thin-cut scratch: freeze, candidate born mid-episode, census resolves it
-    # before the settle. The vanish is the pot — count, even though the
-    # candidate is no longer open at settle time.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    asyncio.run(hub.episode_started(t=10.0))
-    asyncio.run(
-        hub.scratch_candidate(
-            11.0,
-            x_mm=940.0,
-            y_mm=900.0,
-            pocket_x_mm=965.0,
-            pocket_y_mm=965.0,
-            whiteness=0.9,
-            color_age_s=0.0,
-        )
-    )
-    asyncio.run(hub.scratch_seen(t=12.0))  # census confirms, candidate closes
-    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
-    assert hub.clock.rack_shots == shots + 1
-
-
-def test_candidate_before_the_episode_still_reverts_the_retrieval() -> None:
-    # The 20:57:13 retrieval: candidate 20:56:54 resolved 20:56:58, retrieval
-    # episode freezes later — its settle must still revert.
-    hub = _running_hub()
-    shots = hub.clock.rack_shots
-    asyncio.run(
-        hub.scratch_candidate(
-            5.0,
-            x_mm=940.0,
-            y_mm=900.0,
-            pocket_x_mm=965.0,
-            pocket_y_mm=965.0,
-            whiteness=0.9,
-            color_age_s=0.0,
-        )
-    )
-    asyncio.run(hub.scratch_seen(t=6.0))  # verdict lands; candidate closes
-    asyncio.run(hub.episode_started(t=20.0))  # the retrieval's own episode
-    asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
-    assert hub.clock.state is State.RUNNING
-    assert hub.clock.rack_shots == shots
 
 
 def test_operator_keys_abandon_an_open_provisional(monkeypatch: pytest.MonkeyPatch) -> None:

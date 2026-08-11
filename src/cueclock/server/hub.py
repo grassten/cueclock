@@ -139,37 +139,38 @@ BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
 # still never moves the clock.
 SCRATCH_HOLD_SECONDS = 5.0
 
-# #33 Part A — the settle-time shot adjudication. A RUNNING-domain settle is
-# refused (ball-in-hand placement/retrieval, not a shot) only on POSITIVE
-# placement-shaped evidence, measured on every live compensated settle on
-# record (stage 0, issue #33):
+# REMOVED 2026-08-11 (checkpoint 87, #38): the #33 Part A settle refusal and
+# its SHOTLIKE_MOVER_MIN_TRAVEL_MM floor. Recorded here because deleting a
+# guard silently is how it comes back.
 #
-#   * rearrangement shape `moved == 0 and involved == 1` — exactly one ball
-#     appeared XOR vanished and nothing was displaced. All four 2026-08-10
-#     ball-in-hand settles match (ap=1 or vn=1, moved_mm=0); every measured
-#     real-shot settle has moved >= 1 (live missed strikes 195/668 mm; the
-#     whole corpus shot population, down to hanger_pot's 33 mm). There is
-#     deliberately NO travel floor — the axis is the moved count.
-#   * no surviving episode mover with real travel (the stun-pot guard): a cue
-#     that stops on the potted ball's old spot fools the greedy match into
-#     `moved=0, vanished=1`, but the identity-aware engine still shows a
-#     roster ball, alive at the settle, that traveled. The floor below is the
-#     engine's own motion-evidence bar (EventConfig.moving_enter_mm) — the
-#     same 30 mm that makes a ball a mover in the first place, not a new
-#     constant. Alive-mover evidence only ever UPGRADES a refusal to a count:
-#     real shots routinely end with zero alive movers (handoff rebirths —
-#     soft_shot, hanger_pot, every measured break), so its absence proves
-#     nothing and refusal still requires the rearrangement shape.
-#   * no scratch candidate standing un-refuted (the thin-cut scratch guard):
-#     a candidate at the settle means the vanish IS the pot. Retrieval
-#     settles stay refusable — their candidate resolved seconds earlier
-#     (20:56:58 verdict vs 20:57:13 retrieval settle).
+# It refused a RUNNING settle whose rearrangement read `moved == 0 and
+# involved == 1`, to stop a ball-in-hand placement counting as a shot. The
+# first played session on it (2026-08-11, 80 shots) measured the predicate
+# selecting the wrong population in both directions:
 #
-# Everything else counts — no summary, degraded summary, involved == 0 (a
-# clip-start artifact shape, never a measured placement), vanished >= 2,
-# movers seen 10 frames late: all fail-open. The default verdict for a
-# RUNNING settle is *shot*, exactly the checkpoint 26 compensation.
-SHOTLIKE_MOVER_MIN_TRAVEL_MM = 30.0
+#   * It fired **3 times all session** — right once (a post-scratch
+#     retrieval, t=1181.8) and wrong twice, on a jump shot (t=585.4) and a
+#     no-contact kick (t=1589.6). Both refusals let the countdown run
+#     through the following stroke; the jump shot went 15.7 -> 0 -> GRACE.
+#     The retrieval and the kick are byte-identical evidence apart from a
+#     travel figure the predicate never consulted.
+#   * It caught **none of the session's five ball-in-hand carries**. A carry
+#     moves a ball from A to B, so `moved == 1` — counted at the predicate's
+#     first test, before any evidence #33 added is read. The refusable shape
+#     cannot contain the thing it targets.
+#
+# The #38 measurement pass then tested all five discriminators that could
+# have replaced the shape (deceleration profile, path curvature, cue-stick
+# presence at onset, hand/arm merged blob at onset, onset->displacement
+# latency) over 9 hand episodes and 6 strike episodes: every one overlaps.
+# `merged` is one-sided (0.0 on all six strikes) but reads ~0 on every corpus
+# hand event too — checkpoint 50's finding, reproduced. Removal was measured
+# against the full corpus at zero cost: no clip changes outcome.
+#
+# Ball-in-hand still must not reset the clock (Steven, 2026-08-11) — that
+# problem stays open, without a predicate that is wrong twice as often as it
+# is right. `ShotClock.balls_settled(suppress=...)` is deliberately KEPT: the
+# clock-side mechanism was never what failed, only the hub's evidence test.
 
 # `detect_heartbeat` journal cadence: often enough to bracket a starvation
 # window (a flag-dump write measurably halved the detect rate for ~10 s —
@@ -784,38 +785,24 @@ class Hub:
             if self._rack_pending or self._rack_break_mono is None:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
-        # IDLE settles are the clock's no-op (racking) and E8's domain — the
-        # placement adjudication below is RUNNING-domain policy only.
-        suppress = self.clock.state is not State.IDLE and self._settle_not_a_shot(rearrange, movers)
-        moved_clock = self.clock.balls_settled(now, suppress=suppress)
-        if suppress and not moved_clock:
-            # #33: placement-shaped — nothing counted. With a provisional
-            # open this is the revert (the countdown resumes at the exact
-            # remaining it froze with); without one it refused the
-            # compensation on a countdown that never stopped. Own journal
-            # kinds so `report` tallies both without parsing evidence.
-            reverted = self._provisional_open_mono is not None
-            self._revert_pace()
-            self._provisional_open_mono = None
-            kind = "shot_provisional_reverted" if reverted else "compensation_suppressed"
-            self._log(kind, **detail)
-            await self.broadcast(self.clock.snapshot())
-            return
+        moved_clock = self.clock.balls_settled(now)
         if moved_clock:
             # The settle counted this episode's one shot (fired or
             # compensated): commit the pace measurement the provisional was
             # holding, if any, and close the episode.
             self._commit_pace()
             self._provisional_open_mono = None
-        if moved_clock and self.clock.state is State.RUNNING:
-            # Solo pace (#30): the fresh countdown this settle started is the
-            # next shot's timer. A settle the clock ignored (IDLE) or refused
-            # stamps nothing — placement motion must not time a phantom shot.
-            self._pace_since_mono = now
+            if self.clock.state is State.RUNNING:
+                # Solo pace (#30): the fresh countdown this settle started is
+                # the next shot's timer. A settle the clock ignored (IDLE)
+                # stamps nothing — racking motion must not time a phantom shot.
+                self._pace_since_mono = now
         self._log("vision_balls_settled", **detail)
         # #25: the scratch's candidate can precede its settle (shot_debug:
         # candidate 9.54 s, settle 11.92 s) — the fresh countdown this settle
-        # just started is the one the retrieval needs held.
+        # just started is the one the retrieval needs held. Unconditional
+        # (#39): the hold belongs to the *cue ball*, not to the shot, so no
+        # verdict about what this settle was may swallow it.
         self._maybe_hold_for_scratch()
         await self.broadcast(self.clock.snapshot())
 
@@ -869,39 +856,6 @@ class Hub:
             )
             return True
         return False
-
-    def _settle_not_a_shot(
-        self, rearrange: "RearrangeSummary | None", movers: "list[SettleMover] | None"
-    ) -> bool:
-        """#33 Part A: is this settle positively placement-shaped?
-
-        Policy over evidence (§13.1) — the measured predicate and its
-        anchoring live in the SHOTLIKE_MOVER_MIN_TRAVEL_MM note above. True
-        means the hub asks the clock to suppress the settle: no shot counted,
-        no reset. The default is False — a RUNNING settle is a shot unless
-        the evidence is positively placement-shaped (fail-open: late-seen
-        movers, missing or degraded summaries all count).
-        """
-        if rearrange is None:
-            return False  # no evidence — fail-open (E9-synthesized settles)
-        if rearrange.moved != 0 or rearrange.involved != 1:
-            return False  # something displaced, or not the single-ball shape
-        if self._scratch_candidate_open:
-            return False  # the vanish is a pot under adjudication, not a lift
-        if (
-            self._provisional_open_mono is not None
-            and self._scratch_candidate_mono is not None
-            and self._scratch_candidate_mono >= self._provisional_open_mono
-        ):
-            # The candidate was born inside this episode: the vanish IS the
-            # pot (thin-cut scratch), even if the census already resolved it.
-            # A retrieval is untouched — its candidate predates its episode
-            # (20:56:54 candidate vs the 20:57:1x retrieval freeze).
-            return False
-        # A surviving ball that really traveled is the stun-pot shape — count.
-        return not any(
-            m.alive and m.travel_mm >= SHOTLIKE_MOVER_MIN_TRAVEL_MM for m in movers or []
-        )
 
     async def episode_started(self, t: float | None = None) -> None:
         """#33 Part B: the engine's motion-episode latch set (quiet→moving).
