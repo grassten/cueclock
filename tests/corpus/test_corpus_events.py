@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
+from cueclock.server import hub as hub_module
 from cueclock.vision.events import BallsSettled, Event, Scratch, ShotTaken
 
 from . import goldens
@@ -967,14 +968,26 @@ def test_break_dark_total_settles_via_the_backstop() -> None:
     reader = ClipReader(CLIPS / name)
     indices = reader.detect_indices()
     frames = _detections(reader, CLIPS / name, pipeline, indices)
-    settles: list[tuple[float, bool, int]] = []
+    settles: list[tuple[float, bool, int, int]] = []
     for i, (detections, churn) in zip(indices, frames, strict=True):
         for event in pipeline.advance(float(reader.timestamps[i]), detections, churn):
             if isinstance(event, BallsSettled):
                 summary = pipeline.last_settle_rearrange
                 involved = summary.involved if summary is not None else 0
-                settles.append((event.t, pipeline.last_settle_backstop, involved))
+                appeared = summary.appeared if summary is not None else 0
+                settles.append((event.t, pipeline.last_settle_backstop, involved, appeared))
     assert len(settles) == 1, f"expected the one backstop settle, got {settles}"
-    _t, backstop, involved = settles[0]
+    _t, backstop, involved, appeared = settles[0]
     assert backstop, "the engine settled this itself — tracker news, retire this pin deliberately"
     assert involved >= 8, f"backstop fired at involved {involved} — not break-scale evidence"
+    # #36 Part 3: the backstop settle must not merely exist, it must reach the
+    # hub's dark tier — which reads `appeared`, the pack un-merging. A backstop
+    # settle carries no mover evidence at all (the engine slept through the
+    # episode), so this is the *only* channel by which a fully dark break can
+    # ever start the clock. If it stops clearing the floor, that class silently
+    # reverts to being missed.
+    assert appeared >= hub_module.BREAK_DARK_MIN_APPEARED, (
+        f"backstop settle appeared={appeared} is under the dark floor "
+        f"({hub_module.BREAK_DARK_MIN_APPEARED}) — the fully dark break no "
+        "longer reaches the tier that counts it"
+    )

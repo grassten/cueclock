@@ -232,6 +232,102 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-11 (checkpoint 84 — the break starts its own clock, #36):** The
+  head of the §13.0 Pareto closed: 15–25% of breaks never started the clock,
+  and the evidence to catch them was already computed, already journaled, and
+  discarded. E8's dark tier — the no-fire case, which IS this failure class —
+  has journalled `break_dark_candidate` and done nothing since checkpoint 75.
+  It now counts the break at the settle, where WNT §5 starts the 60 s window
+  anyway. **No vision change was needed; the whole fix is one hub predicate.**
+  * **The axis moved from `involved` to `appeared`, and `involved >= 8` is
+    dead.** Steven recorded four 9-ball breaks (2026-08-11, one of them
+    missed): all four measure `involved = 7`, and 9-ball *racking* measures 6
+    — a one-ball gap that no absolute floor and no population-normalised
+    version of one survives. The old floor would have missed every 9-ball
+    break, silently, forever. `appeared` separates structurally rather than
+    statistically: a break **un-merges** the racked pack, so balls that shared
+    one unresolvable blob position acquire their own — which is exactly what
+    an unmatched current ball is. Racking runs it backwards (singles merge
+    into the pack) and lands in `vanished`. The axis therefore keys on the
+    un-merge itself and is rack-size independent.
+  * **Re-derived from every journal carrying the field** (111 settles across
+    2026-08-07/08-10/08-11), IDLE domain — the only domain the tier acts in:
+    9-ball breaks 5, 6, 6, 6; 8-ball breaks 6, 7, 10, 10, 12; **all 13
+    non-break IDLE settles at 0** — racking gathers (mv=0 vn=6), placements
+    to 1313 mm, a 2278 mm two-ball gather, cue positioning. Travel does not
+    lift them off zero; only un-merging does. **The 1–4 band is empty.** Floor
+    at 5, the lowest measured break, with the whole gap beneath it.
+  * **`pickup_snatch_0801` priced** — the loudest hand event in the corpus and
+    the clip that had to be cleared before lowering the floor below 8. It
+    measures `appeared = 6`, inside the break population, and is **not** a
+    counterexample: its baseline is a **single ball** (the clip opens
+    mid-action with no quiet layout), as is every corpus break clip's (1–2),
+    so the corpus anchors nothing on this axis and the live journals are the
+    load-bearing record. Mechanism check, which is what makes it safe rather
+    than convenient: a hand kills tracks by *occlusion* and they are reborn
+    where they already were, so against an anchored baseline they match and
+    land as moved/unchanged. `pickup_newborn_0801`, the one hand clip with an
+    honest baseline (5 balls → 5), measures `appeared = 0` with 814 mm of
+    travel. `settle_probe.py` now reports the baseline/settled population
+    triple so a bare `appeared` can never again be read out of context.
+  * **Residuals, named rather than solved.** A *soft* break that barely
+    separates the pack reads low on `appeared` and stays missed — one press,
+    as today; the settle journals its `appeared`, so the class is visible if
+    it appears. Tearing a **built** rack apart by hand un-merges the pack and
+    is genuinely break-shaped here — not in the live record, costs one New
+    Rack press, the pre-accepted §13.4 worst case. A settle with **no
+    anchored baseline** (`_settled_baseline is None`) yields an all-zero
+    summary and cannot reach the tier at all — fail-closed, and the reason a
+    cold replay of `flag_missed_2` reads `appeared = 0` where the live
+    session read 12.
+  * **Part 5 (`run_out`) refused on measurement — it cannot work as
+    specified, and was not shipped.** Two facts: an ordinary shot never
+    reaches the floor (77 settles at ap=0, then 9/3/1/1 at ap=1–4, **none**
+    ≥5), so widening the tier would rescue no missed `run_out` opener; and
+    `run_out` has `break_floor_mms=None`, so the IDLE gate never eats a fire
+    there and the *fired* tier has nothing to rescue either. Against that,
+    widening opens a hazard `match` does not have — fifteen balls thrown onto
+    an empty table is by definition a large-`appeared` IDLE settle, and would
+    start a 30 s countdown (no first-shot allowance) during setup, with a
+    false-foul buzz possible. It cannot be priced: `appeared` exists in three
+    journals, two never left `match`, and the third was in `run_out` for
+    3m57s and produced **no IDLE settle at all**. Zero measured `run_out`
+    IDLE settles on record. Gating on `_rack_pending` resolves nothing — it
+    turns on **press order**, and inferring physics from press timing is the
+    exact error corrected below. The press stays authoritative in `run_out`.
+    **Steven closed this out 2026-08-11 on reading the measurement — `run_out`
+    should not have been in this issue's scope in the first place**, so this
+    is settled rather than deferred. If it is ever revisited, the predicate is
+    the *opposite* of this one (opener = shot-shaped with `appeared` low), and
+    it needs one recorded `run_out` session to anchor it.
+  * **Part 3 verified, not built:** the pipeline's quiet-rearrangement
+    backstop already synthesizes the settle for a break the engine sleeps
+    through, and `break_dark_total_0806`'s corpus pin now asserts that settle
+    clears the dark floor — the only channel by which a fully dark break can
+    start the clock, since a backstop settle carries no mover evidence at
+    all. Corroborator absence must never block the verdict (fail-open,
+    unit-pinned), or the class silently reverts to missed.
+  * **Corrects the false record (#33 Part C).** Checkpoint 83 claimed the
+    2026-08-10 21:07:56 settle was racking that sat inside the break
+    population, killing both discriminators. It is the **missed break**: its
+    dump replays 10 pack tracks dying in ~0.9 s and 13 newborns flying to
+    1534 mm. The identity was inferred from *when Steven pressed buttons
+    afterwards*, in a dump that had already been replayed. **When ground
+    truth decides a policy, verify it from the episode physics in a replay,
+    never from press timing.** 83's bullet is marked superseded in place, not
+    rewritten; `hub.py`'s "THE DARK TIER STAYS OFF" block is replaced with the
+    corrected ground truth; `session-stats/SKILL.md` now states break
+    auto-catch covers both tiers, with dark candidates relabelled historical.
+    `report` still parses `break_dark_candidate` so pre-#36 journals read
+    right; live journals never carry it again — a dark catch is a
+    `break_adjudicated` with `tier="dark"`.
+  * **Live contract Steven assesses by feel:** break a rack while vision
+    misses the strike → the clock starts by itself at the settle, no press.
+    Rack the balls → nothing starts. Kill switch and `no_clock` park all of
+    it. Gate: ruff, `mypy --strict`, cold battery 511 tests / ~5 min; the two
+    standing reds (`parked_vote_strike_0801`, `stroke_tug_strike_0801`, red
+    since checkpoint 73, tracked in #34) unchanged and verified pre-existing.
+
 - **2026-08-10 (checkpoint 83 — the shot becomes a settle-time decision, #33):**
   Ball-in-hand counted as shots and reset the clock (live 2026-08-10: 4/4
   journaled placement/retrieval settles counted — e.g. rack_shots 3→4 at

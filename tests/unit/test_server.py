@@ -976,6 +976,69 @@ def test_dark_tier_counts_a_backstop_settle_with_no_mover_evidence() -> None:
     assert hub.clock.rack_shots == 1
 
 
+def test_both_live_missed_breaks_now_count() -> None:
+    """The ground truth #36 exists for, at the numbers they actually produced.
+
+    These are not invented shapes — each is the rearrangement its settle
+    carried in the live journal, both of them breaks the clock slept through
+    while Steven waited, flagged, and pressed a key:
+
+    * 2026-08-11 03:14:17, 9-ball, `flag_missed_3` — warm replay reproduces
+      the live settle exactly (t=26.02, episode latched 19.82, 8 tracks dead,
+      7 newborns flying to 1543 mm, no fire anywhere in the episode).
+    * 2026-08-10 21:07:56, 8-ball, `flag_missed_2` — the settle #33 Part C
+      misread as racking off press timing. Its dump predates the current
+      vision core, so warm replay is refused by the fingerprint and a cold
+      one has no quiet layout to anchor a baseline; the live journal record
+      is the ground truth here, and it is the load-bearing one.
+    """
+    for label, summary in (
+        ("9-ball 03:14:17", _summary(moved=2, appeared=5, moved_mm=741.0)),
+        ("8-ball 21:07:56", _summary(moved=0, appeared=12, moved_mm=0.0)),
+    ):
+        hub = Hub()
+        asyncio.run(hub.new_rack())
+        asyncio.run(hub.balls_settled(rearrange=summary))
+        assert hub.clock.state is State.RUNNING, f"{label} still missed"
+        assert hub.clock.rack_shots == 1, f"{label} counted {hub.clock.rack_shots} shots"
+
+
+def test_a_caught_break_still_counts_exactly_once() -> None:
+    """`flag_other`, 2026-08-11 03:15:20 — a 9-ball break vision DID catch.
+
+    Fire at 7360 mm/s, settle 7.7 s later at moved 1 / appeared 6. The fire
+    clears the break floor, so it starts the clock itself and the settle
+    arrives in MOTION — the adjudicator never sees it. That is the point of
+    the test: a break-scale `appeared` must not count a *second* shot on top
+    of the fire that already counted it. Adjudication is IDLE-only, and this
+    pins that it stays so now that the dark tier acts on `appeared` alone.
+    """
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    asyncio.run(hub.shot_taken(speed_mms=7360.0))
+    assert hub.clock.state is State.MOTION  # the fire started it, no tier needed
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, appeared=6, moved_mm=377.0)))
+    assert hub.clock.rack_shots == 1  # once, not once per mechanism
+    assert "break_adjudicated" not in [r["kind"] for r in hub.journal.tail(60.0)]
+
+
+def test_the_9ball_racking_settles_still_do_nothing() -> None:
+    # The three racking settles from the same session (03:14:49, 03:15:35,
+    # 03:16:21), at their measured shape: six balls MERGING into the pack,
+    # which is `vanished`, not `appeared`. All three arrived via the pipeline
+    # backstop. Racking must remain the clock's no-op — checkpoint 28's
+    # racking countdown is the hazard this whole policy is measured against.
+    hub = Hub()
+    asyncio.run(hub.new_rack())
+    for _ in range(3):
+        asyncio.run(
+            hub.balls_settled(rearrange=_summary(moved=0, vanished=6, moved_mm=0.0), backstop=True)
+        )
+    assert hub.clock.state is State.IDLE
+    assert hub.clock.rack_shots == 0
+    assert "break_adjudicated" not in [r["kind"] for r in hub.journal.tail(60.0)]
+
+
 def test_dark_tier_respects_the_kill_switch_and_no_clock() -> None:
     hub = Hub()
     asyncio.run(hub.new_rack())
