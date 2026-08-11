@@ -118,8 +118,12 @@ class ShotClock:
 
     def pause(self) -> None:
         # Verbatim old behavior: pause drops to IDLE and a later start()
-        # restarts from full base time — remaining is not preserved.
+        # restarts from full base time — remaining is not preserved. The
+        # deferred fire dies with the episode (#33): paused over a live
+        # motion episode, the abandoned flag must not ride into a later
+        # IDLE-fire cycle and double-count its settle.
         self.state = State.IDLE
+        self._episode_fired = False
 
     def reset(self) -> None:
         # Timer normalize only — the foul/bug button. Rack scope (shot count,

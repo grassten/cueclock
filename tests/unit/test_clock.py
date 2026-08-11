@@ -473,6 +473,23 @@ def test_motion_started_declines_outside_running() -> None:
     assert clock.state is State.GRACE
 
 
+def test_pause_drops_the_deferred_fire() -> None:
+    # Pause pressed over a live motion episode abandons it; the deferred
+    # fire must not survive into a later IDLE-fire cycle, where the stale
+    # flag would make that break's settle count a second shot.
+    clock = make_clock("wnt_9ball")
+    clock.new_rack(now=0.0)
+    clock.shot_taken()  # break
+    clock.balls_settled(now=1.0)
+    clock.shot_taken()  # deferred fire, frozen
+    clock.pause()  # operator abandons the episode
+    assert clock.state is State.IDLE
+    clock.shot_taken()  # e.g. re-break after re-racking by hand
+    shots = clock.rack_shots
+    clock.balls_settled(now=10.0)
+    assert clock.rack_shots == shots  # counted at the fire, once
+
+
 def test_motion_reverted_refused_after_a_committed_shot() -> None:
     # A GRACE fire counted on the spot; a late pickup-discard must not yank
     # the committed shot's freeze out from under it.

@@ -1350,3 +1350,24 @@ def test_candidate_before_the_episode_still_reverts_the_retrieval() -> None:
     asyncio.run(hub.balls_settled(rearrange=_summary(vanished=1), movers=[]))
     assert hub.clock.state is State.RUNNING
     assert hub.clock.rack_shots == shots
+
+
+def test_operator_keys_abandon_an_open_provisional(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An operator key rescopes the clock, so the open episode no longer
+    # describes it: the provisional's anchor and its held pace both die, and
+    # the settle that eventually arrives is adjudicated on its own evidence.
+    now = _freeze_hub_time(monkeypatch)
+    hub = Hub()
+    asyncio.run(hub.set_mode("run_out"))
+    asyncio.run(hub.restart())
+    now[0] += 5.0
+    asyncio.run(hub.episode_started(t=10.0))  # provisional freeze
+    assert hub.clock.state is State.MOTION
+    asyncio.run(hub.start())  # operator takes over
+    assert hub._provisional_open_mono is None
+    assert hub._pace_pending is None
+    now[0] += 3.0
+    asyncio.run(hub.shot_taken(speed_mms=2000.0))
+    asyncio.run(hub.balls_settled())
+    solo = cast(dict[str, object], hub.payload()["solo"])
+    assert solo["last_s"] == 3.0  # timed from the press, not the abandoned freeze

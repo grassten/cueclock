@@ -499,15 +499,19 @@ class Hub:
         now = time.monotonic()
         fresh = self.clock.state is not State.RUNNING  # resuming doesn't restart the pace
         self.clock.start(now)
+        self._idle_fire = None
+        # Abandon before stamping: the abandoned provisional hands its pace
+        # measurement back as an open stamp, which a fresh countdown replaces.
+        self._abandon_provisional()
         if fresh:
             self._pace_since_mono = now
-        self._idle_fire = None
         self._log("cmd_start")
         await self.broadcast(self.clock.snapshot())
 
     async def pause(self) -> None:
         self.clock.pause()
         self._idle_fire = None
+        self._abandon_provisional()
         self._pace_since_mono = None
         self._log("cmd_pause")
         await self.broadcast(self.clock.snapshot())
@@ -515,6 +519,7 @@ class Hub:
     async def reset(self) -> None:
         self.clock.reset()
         self._idle_fire = None
+        self._abandon_provisional()
         self._pace_since_mono = None
         self._log("cmd_reset")
         await self.broadcast(self.clock.snapshot())
@@ -523,6 +528,7 @@ class Hub:
         now = time.monotonic()
         self.clock.new_rack(now)
         self._idle_fire = None
+        self._abandon_provisional()
         # New Rack *arms* the next shot to become the replay anchor; it does not
         # retire the old one. Until the break lands there is nothing on the
         # table to watch, so the rack worth replaying is still the one that
@@ -538,6 +544,7 @@ class Hub:
         now = time.monotonic()
         self.clock.restart(now)
         self._idle_fire = None
+        self._abandon_provisional()
         self._pace_since_mono = now
         self._log("cmd_restart")
         await self.broadcast(self.clock.snapshot())
@@ -546,6 +553,7 @@ class Hub:
         now = time.monotonic()
         self.clock.push(now)
         self._idle_fire = None
+        self._abandon_provisional()
         if self.clock.state is State.RUNNING:
             # During MOTION a push only re-arms the window; the settle that
             # follows starts (and stamps) the fresh countdown itself.
@@ -579,6 +587,7 @@ class Hub:
             return False
         self.clock.set_ruleset(ruleset)
         self._idle_fire = None
+        self._abandon_provisional()
         self._reset_pace()  # the clock zeroed its rack scope; the panel follows
         self._log("cmd_ruleset", ruleset=self.clock.ruleset.name)
         await self.broadcast(self.clock.snapshot())
@@ -597,6 +606,7 @@ class Hub:
             return False
         self.clock.set_mode(mode)
         self._idle_fire = None
+        self._abandon_provisional()
         # A mode switch is a new activity: the whole solo panel rescopes.
         self._reset_pace()
         self._drill_reps = 0
@@ -891,6 +901,19 @@ class Hub:
             self._log("shot_provisional_reverted", t=t, frame_t=t, reason="pickup_discard")
             await self.broadcast(self.clock.snapshot())
         self._provisional_open_mono = None
+
+    def _abandon_provisional(self) -> None:
+        """An operator key rescoped the clock: the open episode is over (#33).
+
+        Every command that clears `_idle_fire` clears this too — they are the
+        same statement about the same thing, that whatever vision was in the
+        middle of no longer describes what the clock is doing. The pace
+        measurement the provisional held goes back to being an open stamp
+        (`_revert_pace`); the commands that reopen a countdown re-stamp it
+        themselves right after.
+        """
+        self._provisional_open_mono = None
+        self._revert_pace()
 
     def _commit_pace(self) -> None:
         """The provisional's shot counted: land its held pace measurement (#30)."""
