@@ -232,6 +232,98 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-11 (checkpoint 88 — #40: the motion latch stops being roster-only):**
+  `latch_blind_shot_0811` (Steven's flag from `session-20260811-182341`) is a
+  real shot at **2047.8 mm/s** on which the engine emitted **zero events over
+  all 20.74 s** and `episode_active` was False throughout; live the countdown
+  ran through the stroke and hit GRACE. Root cause was upstream of every
+  policy layer: the motion-episode latch only ever considered **roster**
+  balls, roster admission happens only during sustained quiet, and the struck
+  cue was reborn as a new track *at the impact* — so the fastest object on the
+  table was structurally unable to latch. No episode ⇒ no provisional freeze
+  (#33 Part B) ⇒ no settle ⇒ no compensation. The strike path's designed
+  escape hatch (a fire certifies the track, admits it to the roster and
+  latches directly) never ran either: the crown sat on the cue's dead
+  identity, still and unobserved at a position the ball had already left.
+  * **The fix is positive evidence, not a wider roster.** A track outside the
+    mover set may latch when it is *visibly a struck ball*
+    (`EventEngine._struck_mover`): two consecutive **observed** raw reports at
+    `parked_fast_confirm_mms` (struck-ball kinematics) **and** an observed
+    history at most `newborn_merged_frac_max` merged (a ball in a hand is
+    inseparable from the hand), on top of the ordinary `_solidly_observed` /
+    `moving_enter_mm` bar. **No new constant** — both gates already existed in
+    the strike path for exactly this question, so this is reuse, not tuning.
+    Age is deliberately dropped: `_judgeable`'s age gate is what a newborn
+    cannot satisfy in the frames that matter (this cue needed 0.40 s to become
+    judgeable, by which time the clock had run through the stroke), and
+    `_is_still` already makes the same trade in the other direction.
+  * **Measured before writing any code**, over every non-roster track
+    corpus-wide (70 clips) that clears the ordinary motion bar. Best
+    consecutive-observed raw pair: real strokes **1210–3803** (jaw_strike
+    1210, scratch_shot 1296, late_emergence 1315, occluded_address 1419,
+    drill 1598, parked_vote_newborn 1828, latch_blind 1917, pot_scratch 2646,
+    phantom_candidate_block 3803) against hand junk **≤ 1122**
+    (scratch_replace's throw 1122, lone_roller 1025, pickup_snatch 1022,
+    address_chatter 871). The hand events that *do* reach struck-ball speed
+    are the carries, and they read **0.67–1.00 merged** against **0.00–0.17**
+    for every real stroke admitted. The two gates share no failure mode:
+    nothing in the corpus clears both without being a ball that was just
+    struck. The bare "solidly observed + 30 mm" predicate was measured first
+    and rejected — it flips the latch on 30+ clips, including every pickup,
+    grab, snatch and carry.
+  * **The new latchers do not stamp `_recent_movers` or `_last_mover_t`.** A
+    reborn cue must stay invisible to the carom guard and to the birth path's
+    pre-strike-dwell test; stamping it there would have refused the very
+    strikes the admission exists to catch (`jaw_strike`, `late_emergence`,
+    `occluded_address`, `scratch_shot` all latch at ages 0.02–0.11 s, inside
+    their own candidates' age budgets).
+  * **What it does to the breaks** — the class checkpoint 87's reverted
+    attempt broke. `break_0801`, `break_0801b`, `break_outrun_0805`,
+    `break_underread_0801`, `break_dark_flight_0806`, `break_shot`: **every
+    event identical**, pre and post. Two of them latch the same episode a
+    touch earlier (`break_0801` 12.83 → 12.82, one frame; `break_underread`
+    0.93 → 0.88) and nothing downstream moves. `break_dark_total_0806` — the
+    fully dark break — is the one that moves, and it moves the right way: the
+    engine now sees the scatter and settles it at **14.29 s** instead of
+    leaving it to the identity-free backstop at **18.51 s**, while the balls
+    are measurably at rest by 13.2–13.8 s. The break still counts through the
+    hub's dark tier (`appeared` 10, floor 5) — nothing about `_adjudicate_break`
+    changed. `test_break_dark_total_settles_via_the_backstop` is therefore
+    **retired deliberately**, exactly as its own docstring instructed, and
+    replaced by `test_break_dark_total_settles_at_the_rest`, which pins the
+    thing that actually matters: one settle, at the rest, reaching the dark
+    tier. The backstop itself is untouched and still covers a genuinely
+    sleeping engine.
+  * **Ball-in-hand is untouched.** All four un-promoted 0811 carry clips
+    (`ball_in_hand_carry`, `_carry_b`, `_triple`, `phantom_still_down`) replay
+    **event-for-event identical** pre and post; the only difference anywhere
+    is `_carry_b`'s first latch moving 0.11 s earlier inside an episode it
+    already had. The open ball-in-hand problem is neither helped nor worsened.
+  * **One clock-grade premise was wrong and is fixed with it.**
+    `_assert_clock_outcome` rejected a freeze older than `FREEZE_EARLY_S` on
+    the premise that it "cannot belong to this stroke's episode" — a proxy for
+    *held since then*, which the timeline can answer directly. On
+    `pot_scratch_nohold_0811` the golden's fire is **1.11 s late** (the stroke
+    is at 6.509, a track born at 2646 mm/s; the fire lands on the ball's third
+    rebirth at 7.623), so the freeze at the true stroke read as too early
+    against displaced ground truth. A freeze the clock never resumed from
+    before the stroke now counts. Nothing is loosened for a real miss: a
+    missed stroke meets a RUNNING clock, which means a resume.
+  * `latch_blind_shot_0811` is in `EXPECTED` at `(None, 0, 1, 1)` with a
+    golden and a named pin, `test_latch_blind_shot_stops_the_clock`. Shots
+    stay unasserted on purpose — the strike layer is still blind on this clip
+    (the crown never leaves the corpse) and #34's criterion is the clock, not
+    the fire. Both new named tests fail on the pre-fix engine ("the countdown
+    never stopped at all"; "dark break settled at 18.51s") and pass after.
+  * Goldens regenerated deliberately: `break_dark_total_0806`
+    (18.510 → 14.293, above) and `live_divergence_0731a` (gains a
+    `BallsSettled@0.960` — the clip opens mid-motion with a track at
+    4751 mm/s, which now latches and settles; its clock outcome is unchanged
+    and the count falls outside the graded window). `stroke_tug_strike_0801`'s
+    golden drift is pre-existing (checkpoint 73) and untouched.
+  * Corpus: **510 tests, 1 failure — the pre-existing `parked_vote_strike_0801`
+    red, byte-identical to its baseline message.**
+
 - **2026-08-11 (checkpoint 87 — #38 deleted rather than tuned, #39 root-caused
   at 3 mm):** The measurement pass #38 demanded, run before touching
   `_settle_not_a_shot`, on the seven flagged dumps from

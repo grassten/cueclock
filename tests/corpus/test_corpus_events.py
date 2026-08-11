@@ -536,6 +536,17 @@ EXPECTED: dict[
     # frames run out), so scratches stays 0 and the *candidate* — the thing
     # that was missing — is pinned by its own test below.
     "kick_scratch_0811": (1, 0, 2, 2),
+    # #40, same session: a real shot at 2047.8 mm/s on which the engine
+    # emitted **nothing at all** — no fire, no latch, no settle, 0 events in
+    # 20.74 s — because the struck cue was reborn as a new track at the
+    # impact and only *roster* tracks could latch motion. Live the countdown
+    # ran straight through the stroke. Shots stay unasserted deliberately:
+    # the strike layer is still blind here (the crown sat on the cue's dead
+    # identity throughout), and #34's criterion is the clock, not the fire —
+    # `test_latch_blind_shot_stops_the_clock` below is the real pin. What
+    # this entry adds is the settle that was missing: exactly one, so a
+    # future latch that fires twice on the same stroke shows up.
+    "latch_blind_shot_0811": (None, 0, 1, 1),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -592,6 +603,7 @@ REFERENCES: dict[str, str] = {
     # DEFAULT_REFERENCE), same mount, so they replay against what shot them.
     "pot_scratch_nohold_0811": "empty_table_0801",
     "kick_scratch_0811": "empty_table_0801",
+    "latch_blind_shot_0811": "empty_table_0801",
 }
 
 
@@ -758,14 +770,35 @@ def _assert_clock_outcome(name: str, truth: list[float], timeline: "ClockTimelin
         )
         return
 
+    resumes = [m.t for m in timeline.marks if m.kind == "resume"]
     for stroke in truth:
         window = [
             f for f in timeline.freezes if stroke - FREEZE_EARLY_S <= f <= stroke + FREEZE_LATE_S
         ]
-        assert window, (
+        # ...or a freeze older than the EARLY bound that the clock never came
+        # out of before the stroke (#40, pot_scratch_nohold_0811). The EARLY
+        # bound is a *proxy*: "a freeze earlier than the confirm path's own
+        # latency cannot belong to this stroke's episode". Held-since-then is
+        # the thing the proxy is standing in for, and it can be read directly
+        # — if no resume lies between the freeze and the stroke, the countdown
+        # was stopped continuously through it and by definition did not run
+        # through the shot. What made the proxy wrong here: the golden's fire
+        # on that clip is 1.11 s LATE (the stroke is at 6.509 — a track born
+        # at 2646 mm/s — and the fire lands on the ball's third rebirth at
+        # 7.623), so the ground truth this loop grades against is itself
+        # displaced, and a freeze at the true stroke reads as too early.
+        # Nothing is loosened for a real miss: a missed stroke meets a
+        # RUNNING clock, which means a resume, which fails this too.
+        held = [
+            f
+            for f in timeline.freezes
+            if f < stroke - FREEZE_EARLY_S and not any(f < r <= stroke for r in resumes)
+        ]
+        assert window or held, (
             f"{name}: the stroke at {stroke:.3f}s never stopped the clock within "
             f"[-{FREEZE_EARLY_S}, +{FREEZE_LATE_S}]s — freezes at "
-            f"{[round(f, 3) for f in timeline.freezes]}. The countdown ran through a "
+            f"{[round(f, 3) for f in timeline.freezes]}, resumes at "
+            f"{[round(r, 3) for r in resumes]}. The countdown ran through a "
             f"real shot; that is the failure this criterion exists to catch."
         )
         # #34: the strike-fire rate stays worth knowing — it is the difference
@@ -1076,23 +1109,29 @@ def test_parked_vote_newborn_confirms_on_travel_not_speed() -> None:
     assert 11.31 <= shots[0] <= 11.8, f"shot at {shots[0]:.2f}s — parked confirm tiers broken"
 
 
-def test_break_dark_total_settles_via_the_backstop() -> None:
-    """The identity-free settle backstop must certify the fully dark break.
+def test_break_dark_total_settles_at_the_rest() -> None:
+    """The fully dark break must settle, at the rest, into the dark tier.
 
     break_dark_total_0806: a 15-ball break whose every channel slept — the
     racked pack never confirms a track cold (one confirmed ball on the whole
-    pre-break table), the scatter erupts as rosterless newborns, the engine
-    never latches motion, and live the session emitted nothing between the
-    New Rack press and Steven's flag. The backstop is the layer that cannot be
-    fooled by identity, because it uses none: the quiet layout after the
-    scatter (11 present balls) is provably not the quiet layout before it
-    (1), and that difference IS the settle.
+    pre-break table), the scatter erupts as rosterless newborns, and live the
+    session emitted nothing between the New Rack press and Steven's flag.
 
-    Pins: exactly one settle, emitted by the backstop (not the engine), with
-    break-scale rearrangement. If the engine ever starts settling this clip
-    itself, the backstop assertion goes red — deliberately: that flip is
-    tracker-layer news (accuracy plan §13.6) and the pin should be retired
-    at that checkpoint, not silently absorbed.
+    **Retired deliberately at checkpoint 88 (#40): this used to pin the
+    settle as the *backstop's*.** The engine slept through the episode
+    because the scatter's tracks are all newborns and only roster balls could
+    latch motion; with the struck-ball latch admission the engine sees the
+    scatter itself and settles it at **14.29 s**, against the backstop's
+    18.51 s. That is not a lost pin, it is the tracker news the old docstring
+    said to expect: the balls are measurably at rest by 13.2-13.8 s (last
+    supra-creep displacement 13.6 s, last roller 310 mm/s at 13.5 s), so the
+    engine's settle lands one dwell after the rest and the backstop's was
+    **4.2 s late** — pixel chatter kept resetting its quiet run.
+
+    What is pinned now is what the clip is actually for: exactly one settle,
+    at the rest, with break-scale rearrangement that reaches the hub's dark
+    tier. The backstop itself is untouched and still covers the case where
+    the engine really does sleep; it simply is not needed here any more.
     """
     name = "break_dark_total_0806"
     if not (CLIPS / name).exists():
@@ -1112,20 +1151,76 @@ def test_break_dark_total_settles_via_the_backstop() -> None:
                 involved = summary.involved if summary is not None else 0
                 appeared = summary.appeared if summary is not None else 0
                 settles.append((event.t, pipeline.last_settle_backstop, involved, appeared))
-    assert len(settles) == 1, f"expected the one backstop settle, got {settles}"
-    _t, backstop, involved, appeared = settles[0]
-    assert backstop, "the engine settled this itself — tracker news, retire this pin deliberately"
-    assert involved >= 8, f"backstop fired at involved {involved} — not break-scale evidence"
-    # #36 Part 3: the backstop settle must not merely exist, it must reach the
-    # hub's dark tier — which reads `appeared`, the pack un-merging. A backstop
-    # settle carries no mover evidence at all (the engine slept through the
-    # episode), so this is the *only* channel by which a fully dark break can
-    # ever start the clock. If it stops clearing the floor, that class silently
-    # reverts to being missed.
+    assert len(settles) == 1, f"expected exactly one settle, got {settles}"
+    t, _backstop, involved, appeared = settles[0]
+    # Rest (13.2-13.8 s, measured above) plus a settle dwell, with the same
+    # margin the other timing pins carry. Later than this means the settle has
+    # gone back to riding a chatter lottery.
+    assert 13.2 <= t <= 15.0, f"dark break settled at {t:.2f}s — not one dwell after the rest"
+    assert involved >= 8, f"settle fired at involved {involved} — not break-scale evidence"
+    # #36 Part 3: the settle must not merely exist, it must reach the hub's
+    # dark tier — which reads `appeared`, the pack un-merging. Nothing here
+    # ever produces a fire, so this is the *only* channel by which a fully
+    # dark break can start the clock. If it stops clearing the floor, that
+    # class silently reverts to being missed.
     assert appeared >= hub_module.BREAK_DARK_MIN_APPEARED, (
-        f"backstop settle appeared={appeared} is under the dark floor "
+        f"settle appeared={appeared} is under the dark floor "
         f"({hub_module.BREAK_DARK_MIN_APPEARED}) — the fully dark break no "
         "longer reaches the tier that counts it"
+    )
+
+
+def test_latch_blind_shot_stops_the_clock() -> None:
+    """#40: a shot the whole engine slept through must still stop the clock.
+
+    latch_blind_shot_0811, Steven's flag from session-20260811-182341. The
+    cue is struck at **8.756 s** — its old track goes dark at the impact and
+    the ball reappears as track 8, born already reading 3412 mm/s raw /
+    2048 mm/s smoothed and crossing 358 mm per 0.2 s window, solidly observed
+    the whole way. Cold replay emitted **zero events over all 20.74 s** and
+    `episode_active` was False throughout: the motion latch only admitted
+    roster members, and roster admission happens only during sustained quiet,
+    so the fastest object on the table could not latch. Live, the countdown
+    ran through the stroke and hit GRACE.
+
+    No `ShotTaken` is asserted, and none fires: the crown stayed parked on
+    the cue's dead identity, sitting still and unobserved at a position the
+    ball had already left, so every strike path was watching a corpse. The
+    latch is the criterion (#34) — it stops the countdown ~0.1 s after the
+    stroke, which at the table is the same outcome as a fire.
+
+    Pinned: the freeze belongs to the stroke, and the shot is counted exactly
+    once. A latch that fires on the settle instead of the stroke, or twice,
+    fails here rather than drifting a golden.
+    """
+    name = "latch_blind_shot_0811"
+    if not (CLIPS / name).exists():
+        pytest.skip(f"clip {name} not recorded")
+    from cueclock.capture.clip import ClipReader
+    from cueclock.vision.pipeline import VisionPipeline
+
+    stroke = 8.756
+    pipeline = VisionPipeline(_calibration(), _reference_model("empty_table_0801"))
+    reader = ClipReader(CLIPS / name)
+    indices = reader.detect_indices()
+    timeline = replay_clock(
+        name,
+        pipeline,
+        [float(t) for t in reader.timestamps],
+        _detections(reader, CLIPS / name, pipeline, indices),
+        indices,
+    )
+    assert timeline.freezes, (
+        "the countdown never stopped at all — the roster-scoped latch is back "
+        f"(events: {[f'{type(e).__name__}@{e.t:.2f}' for e in timeline.events]})"
+    )
+    assert any(stroke - FREEZE_EARLY_S <= f <= stroke + FREEZE_LATE_S for f in timeline.freezes), (
+        f"the stroke at {stroke:.3f}s did not stop the clock — freezes at "
+        f"{[round(f, 3) for f in timeline.freezes]}"
+    )
+    assert len(timeline.counts) == 1, (
+        f"the stroke was counted {len(timeline.counts)}x at "
+        f"{[round(c, 2) for c in timeline.counts]} — expected exactly once"
     )
 
 

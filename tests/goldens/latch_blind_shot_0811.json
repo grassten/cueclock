@@ -1,0 +1,10 @@
+{
+  "scenario": "latch_blind_shot_0811",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "BallsSettled",
+      "t": 12.2123
+    }
+  ]
+}

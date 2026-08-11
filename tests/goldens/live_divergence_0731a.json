@@ -3,6 +3,10 @@
   "reference": "empty_table_0729",
   "events": [
     {
+      "type": "BallsSettled",
+      "t": 0.9601
+    },
+    {
       "type": "ShotTaken",
       "t": 3.5843,
       "ball_id": 3,

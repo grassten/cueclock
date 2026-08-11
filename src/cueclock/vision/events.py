@@ -513,6 +513,13 @@ class EventConfig:
     # hold settle hostage with centroid creep (the 11.8 s "clock stays paused
     # while my hands are in frame" stall, checkpoint 22).
     judge_obs_fraction_min: float = 0.7
+    # The roster this floor feeds is *negative* evidence — "this track was
+    # not standing on the last quiet table, so distrust it" — and #40 is the
+    # class that can never satisfy it: a cue reborn at the impact is born
+    # mid-motion by construction. `_struck_mover` is the positive-evidence
+    # path that lets such a track latch anyway; it adds no constant of its
+    # own, reusing `parked_fast_confirm_mms` and `newborn_merged_frac_max`
+    # below, and the measurement admitting it is in that method's docstring.
 
     # Pickup discard (ball_in_hand_pickup_0801, checkpoint 28): a hand pickup
     # latches table motion (a roster ball genuinely drags) and then the
@@ -812,6 +819,15 @@ class EventEngine:
         # get admitted mid-sweep — its own motion breaks the quiet streak.
         self._roster: set[int] = set()
         self._engine_t0: float | None = None
+        # Struck-ball certification for the latch admission above (#40): track
+        # ids that have shown two consecutive *observed* raw reports at
+        # `parked_fast_confirm_mms`, and the previous observed raw each track
+        # was measured at. Sticky, like `_StrikeCandidate.fast_certified` and
+        # for the same reason — the evidence must outlive the frame it was
+        # measured on, because a struck ball's track blurs, merges and coasts
+        # through the frames right after the impact.
+        self._fast_certified: set[int] = set()
+        self._last_obs_raw: dict[int, float] = {}
         self._last_mover_t = float("-inf")  # last genuine observed mover, any position
         # Motion-episode memory for the pickup discard: for every roster ball
         # that latched this episode, its pre-motion position (oldest history
@@ -1160,6 +1176,12 @@ class EventEngine:
 
         # ---- table moving / settled (per-ball displacement over windows) ----
         for ball in balls:
+            raw_mms = ball.speed_mms if ball.raw_speed_mms is None else ball.raw_speed_mms
+            if ball.observed:
+                prev_raw = self._last_obs_raw.get(ball.ball_id)
+                if prev_raw is not None and min(prev_raw, raw_mms) >= cfg.parked_fast_confirm_mms:
+                    self._fast_certified.add(ball.ball_id)
+                self._last_obs_raw[ball.ball_id] = raw_mms
             history = self._history.setdefault(ball.ball_id, _BallHistory())
             history.positions.append(
                 (
@@ -1168,7 +1190,7 @@ class EventEngine:
                     ball.y_mm,
                     ball.observed,
                     ball.merged,
-                    ball.speed_mms if ball.raw_speed_mms is None else ball.raw_speed_mms,
+                    raw_mms,
                 )
             )
             while history.positions and history.positions[0][0] < t - cfg.settle_creep_window_s:
@@ -1216,6 +1238,9 @@ class EventEngine:
         }
         self._first_seen = {b.ball_id: self._first_seen[b.ball_id] for b in balls}
         self._birth_pos = {b.ball_id: self._birth_pos[b.ball_id] for b in balls}
+        live_ids = {b.ball_id for b in balls}
+        self._fast_certified &= live_ids
+        self._last_obs_raw = {i: r for i, r in self._last_obs_raw.items() if i in live_ids}
 
         movers = [
             b
@@ -1224,9 +1249,19 @@ class EventEngine:
             and self._judgeable(b)
             and self._displacement_over(b, cfg.moving_window_s) > cfg.moving_enter_mm
         ]
+        # #40: the struck-ball latch admission. The episode reads `latchers`;
+        # `movers` stays the roster-only set that `_last_mover_t` and the
+        # carom guard's stamps below are calibrated on — a reborn cue must
+        # stay invisible to both, or admitting it here would refuse the very
+        # strikes it exists to catch.
+        mover_ids = {b.ball_id for b in movers}
+        latchers = movers + [
+            b for b in balls if b.ball_id not in mover_ids and self._struck_mover(b)
+        ]
         if movers:
             self._last_mover_t = t
-            for b in movers:
+        if latchers:
+            for b in latchers:
                 if b.ball_id not in self._episode_origin:
                     positions = self._history[b.ball_id].positions
                     oldest = positions[0]
@@ -1275,7 +1310,7 @@ class EventEngine:
         stale = t - cfg.strike_other_motion_guard_s
         while self._recent_movers and self._recent_movers[0][0] < stale:
             self._recent_movers.popleft()
-        if movers:
+        if latchers:
             self._table_moving = True
             self._all_still_since = None
         elif (
@@ -2257,6 +2292,73 @@ class EventEngine:
         if positions[-1][0] - positions[0][0] < 0.8 * self._cfg.settle_creep_window_s:
             return False
         return ball.present
+
+    def _struck_mover(self, ball: BallState) -> bool:
+        """A track the roster cannot vouch for that is visibly a struck ball.
+
+        The positive-evidence half of the motion latch (#40,
+        `latch_blind_shot_0811`): the struck cue crossed the table at
+        2048 mm/s as a two-frame-old track and the engine latched nothing at
+        all — no episode, no provisional freeze, no settle, **0 events in
+        20.74 s** — because only roster members could latch and roster
+        admission happens only during sustained quiet.
+
+        Four conditions, in cost order. Two are the ordinary motion evidence
+        (`_solidly_observed`, `moving_enter_mm` of displacement); the other
+        two are the gates the engine already uses to tell a struck ball from
+        the things that fool it, reused rather than re-derived:
+
+        * **speed** — two consecutive *observed* raw reports at
+          `parked_fast_confirm_mms`, min of the pair so one merged yank
+          cannot certify. Struck-ball kinematics.
+        * **merges** — observed history at most `newborn_merged_frac_max`
+          merged. A ball in a hand is inseparable from the hand.
+
+        Measured over every non-roster track corpus-wide that clears the
+        ordinary motion evidence (2026-08-11, 70 clips). Best
+        consecutive-observed raw pair, by class:
+
+            real strokes that newly latch   1210-3803  (jaw_strike 1210,
+                scratch_shot 1296, late_emergence 1315, occluded_address
+                1419, drill 1598, parked_vote_newborn 1828, latch_blind
+                1917, pot_scratch 2646, phantom_candidate_block 3803)
+            hand junk under the floor       <= 1122  (scratch_replace's
+                throw 1122, lone_roller 1025, pickup_snatch 1022,
+                address_chatter 871)
+
+        and the ones that DO reach struck-ball speed are exactly the carried
+        balls, which the merge gate then removes: pickup_snatch 0.67-0.71
+        merged, and pickup_newborn / cue_grab / cluster_rest /
+        scratch_replace / parked_vote_newborn's stick blob all 1.00 — against
+        0.00-0.17 for every real stroke in the admitted set (latch_blind
+        0.09, drill 0.17). The two gates share no failure mode: nothing in
+        the corpus clears both without being a ball that was just struck.
+
+        Age is deliberately not required. `_judgeable`'s age gate is what a
+        newborn cannot satisfy in the frames that matter (the struck cue here
+        needed 0.40 s to become judgeable, by which time the countdown had
+        run through the stroke), and `_is_still` already makes exactly this
+        trade in the other direction — a solidly observed newborn is position
+        evidence from its first frames.
+
+        What this deliberately does NOT do is stamp `_recent_movers` or
+        `_last_mover_t`: a reborn cue must stay invisible to the carom guard
+        and to the birth path's pre-strike-dwell test, or admitting it here
+        would refuse the very strikes it exists to catch.
+        """
+        cfg = self._cfg
+        if ball.ball_id not in self._fast_certified:
+            return False
+        positions = self._history[ball.ball_id].positions
+        observed = [p for p in positions if p[3]]
+        if not observed:
+            return False
+        if sum(1 for p in observed if p[4]) > cfg.newborn_merged_frac_max * len(observed):
+            return False
+        return (
+            self._solidly_observed(ball)
+            and self._displacement_over(ball, cfg.moving_window_s) > cfg.moving_enter_mm
+        )
 
     def _judgeable(self, ball: BallState) -> bool:
         """Old and solid enough to judge motion/stillness from its history.
