@@ -232,6 +232,69 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-10 (checkpoint 83 — the shot becomes a settle-time decision, #33):**
+  Ball-in-hand counted as shots and reset the clock (live 2026-08-10: 4/4
+  journaled placement/retrieval settles counted — e.g. rack_shots 3→4 at
+  20:57:13 on a hand lifting the cue from the pocket — and, the stage-0
+  finding that reshaped Part B, placements also FIRE honest newborn
+  ShotTakens: 1463 and 399 mm/s, 2 of ~6 ball-in-hand cycles counted through
+  fires rather than compensation), while missed strikes self-healed only at
+  the settle, ~5 s late. One resolver landed for both, the §13 hub-policy
+  shape — vision emits evidence, the settle decides:
+  * **Provisional freeze:** a RUNNING countdown stops at the engine's
+    motion-episode latch (~0.25 s after the stroke — the hardened
+    roster-mover latch, exported as `VisionPipeline.episode_active` and edge-
+    dispatched by the run loop; the raw E9 motion bit still cannot freeze
+    RUNNING, both behaviors unit-pinned side by side). Freeze latency is
+    settled — the 0.2 s displacement window dominates; stride 1 is a
+    measured null (plan §3.1 item 4). Gated by kill switch + `no_clock`.
+  * **Deferred fires:** a RUNNING ShotTaken no longer commits — it joins the
+    provisional and the settle counts exactly one shot per episode, fired or
+    compensated; lateness within the episode is unbounded and can neither
+    double-count nor lose a shot. GRACE and IDLE fires stay immediate;
+    `push()` mid-flight absorbs the deferred fire into its declaration.
+  * **The settle adjudicates:** refusal takes POSITIVE placement-shaped
+    evidence — rearrangement `moved == 0 and involved == 1` (measured: all
+    four live placements match; every measured real-shot settle has
+    moved ≥ 1, down to hanger_pot's 33 mm — the axis is the moved count, no
+    travel floor), no surviving episode mover ≥ `moving_enter_mm` (stun-pot
+    guard, upgrade-only: real shots routinely end with zero alive movers via
+    handoff rebirths — soft_shot, hanger_pot, every measured break), and no
+    scratch candidate anchored inside the episode (thin-cut scratch; a
+    retrieval's candidate predates its episode and does not protect it).
+    Everything else — no summary, degraded summary, involved==0 (a
+    clip-start artifact, never a measured placement), vanished ≥ 2 — fails
+    open and counts. A refused settle reverts fire and freeze together:
+    nothing counted, remaining restored to the tick; the engine's pickup
+    discard (falling latch edge with no settle) reverts the same way.
+  * **Part C measured off:** the E8 dark tier's gating data arrived and
+    refused both axes — the 21:07:56 armed-rack racking settle (ground
+    truth: the real break came ~15 s later, was missed, flag_missed_2,
+    Restart rescue) reads involved=12 and settle-spread 1619 mm, both inside
+    the break population (7–12 involved; 1103–1684 mm) — a mid-racking
+    gather is table-wide, not pack-local. Blocker documented at the hub
+    constants; `spread_mm` now journals on every settle so the record
+    accumulates. Fired tier untouched (1/1 live catch this session).
+  * Plumbing: vision side is additive evidence only — `SettleMover`
+    (per-mover episode travel + liveness, exported before the settle clears
+    episode state), `RearrangeSummary.spread_mm`, the latch-edge export; no
+    golden moved; warm snapshots from pre-#33 commits refuse to load
+    (fingerprint). Journal marks `shot_provisional` /
+    `shot_provisional_reverted` / `compensation_suppressed`, plus
+    `provisional`, `spread_mm` and mover fields on existing kinds; `report`
+    tallies all three and reads the deferral correctly (an open strike
+    record marks its settle seen — pre-#33 journals read unchanged, so
+    accuracy rates stay comparable across the boundary); session-stats
+    skill updated.
+  Predicted live feel: ball-in-hand pauses the clock through the carry and
+  resumes at the exact remaining — never resets, never counts; missed
+  strikes freeze ~0.25 s after the stroke instead of bleeding ~5 s; phantom
+  placement fires revert at their settle. Live in one commit chain, stage-by-
+  stage measurements and commits on issue #33 (probe:
+  `scripts/settle_probe.py`). Unit suite 429 green (+27 across stages);
+  corpus cold battery 476 passed + the two checkpoint-73 standing reds,
+  stash-verified unchanged; ruff + mypy --strict clean.
+
 - **2026-08-07 (checkpoint 82 — control page: mobile-first Play/Setup tabs, #31):**
   `/control` was one long scroll with Match first, which on a phone put the
   clock readout astride the fold and every clock key under it — mid-rack,
