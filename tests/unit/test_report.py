@@ -302,6 +302,34 @@ def test_reverted_provisional_is_not_a_shot_and_releases_the_strike(tmp_path: Pa
     assert len(report.missed) == 1
 
 
+def test_rejected_phantom_settle_is_tallied_and_not_a_shot(tmp_path: Path) -> None:
+    """#37: the hub proved nothing happened, so the report must not count it.
+
+    The record shape the 2026-08-11 `flag_phantom` episode writes today: latch
+    freeze, revert, then the settle carrying the verdict. `total` is the
+    number of shots the CLOCK acted on, and a rejected settle landing in
+    `shots` would inflate every rate below it with the exact class this
+    rejection exists to remove.
+    """
+    rejected = settle(10.0, 1)
+    rejected["rejected"] = "phantom"
+    rejected["involved"] = 0
+    rejected["baseline"] = 4
+    report = build(
+        journal(
+            tmp_path,
+            {"kind": "shot_provisional", "rack_shots": 1, "state": "MOTION"},
+            {"kind": "shot_provisional_reverted", "rack_shots": 1, "state": "RUNNING"},
+            rejected,
+            shot(20.0, 1),  # the real stroke, 1.6 s later at the table
+            settle(26.0, 2),
+        )
+    )
+    assert report.settles_rejected == 1
+    assert report.total == 1  # the real shot only
+    assert report.missed == []  # and it was seen
+
+
 def test_suppressed_settle_is_tallied_and_not_a_shot(tmp_path: Path) -> None:
     report = build(
         journal(

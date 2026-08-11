@@ -547,6 +547,34 @@ EXPECTED: dict[
     # this entry adds is the settle that was missing: exactly one, so a
     # future latch that fires twice on the same stroke shows up.
     "latch_blind_shot_0811": (None, 0, 1, 1),
+    # phantom_still_down: THE PHANTOM, live and mid-rack (#37). 2026-08-11
+    # 18:30:20Z, `flag_phantom`, session t=386.36. Steven's ground truth:
+    # nothing happened — he was still down on the ball. The engine latched a
+    # motion episode at session 384.71, the clock froze, and the settle 1.65 s
+    # later counted a shot and reset the countdown 19.7 -> 30 s on
+    # `involved=0 moved=0 appeared=0 vanished=0`, one surviving mover at
+    # 26 mm. His real stroke follows 1.6 s afterwards and is detected normally
+    # (3064 mm/s).
+    #
+    # A cold replay reproduces the live journal event for event — the same
+    # settle at clip 10.503 with the same zero rearrangement, the same fire
+    # speed to the millimetre, the same second settle at 18.920 reading
+    # involved=3 — so this is the live failure itself, not a replay artifact.
+    # What the journal could NOT say, and the replay does, is that the zero
+    # was real: the diff was taken against a genuine 4-ball quiet layout, not
+    # the `_settled_baseline or present` fallback. That fact is what #37's
+    # rejection stands on, and it is what retires the claim the fail-open
+    # branch used to carry — "involved == 0, a clip-start artifact shape,
+    # never a measured placement".
+    #
+    # Two settles, one shot. The phantom settle still FIRES: vision emits
+    # evidence and the hub applies policy (§13.1), so the event counts are
+    # unchanged and what moved is only what the clock did with them. That is
+    # pinned by `test_phantom_still_down_is_rejected_at_the_settle`, because
+    # the EXPECTED grade structurally cannot see it — the phantom precedes the
+    # clip's only real stroke, and `_assert_clock_outcome` ignores counts
+    # before the first ground-truth stroke by design.
+    "phantom_still_down_0811": (1, 0, 2, 2),
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -604,6 +632,7 @@ REFERENCES: dict[str, str] = {
     "pot_scratch_nohold_0811": "empty_table_0801",
     "kick_scratch_0811": "empty_table_0801",
     "latch_blind_shot_0811": "empty_table_0801",
+    "phantom_still_down_0811": "empty_table_0801",
 }
 
 
@@ -1254,3 +1283,72 @@ def test_0811_scratches_reach_the_adjudicator() -> None:
             assert any(isinstance(e, Scratch) for e in events), (
                 f"{name}: the candidate never resolved to a Scratch"
             )
+
+
+def test_phantom_still_down_is_rejected_at_the_settle() -> None:
+    """#37: a settle that proves nothing happened must not count a shot.
+
+    `phantom_still_down_0811` is the live case, mid-rack and 375 s into a
+    session: the latch froze the clock while Steven was still down on the
+    ball, and 1.65 s later the settle counted a shot and reset the countdown
+    19.7 -> 30 s. His real stroke lands 1.6 s after that.
+
+    This cannot be graded by `EXPECTED`: the phantom precedes the clip's only
+    real stroke, and `_assert_clock_outcome` ignores counts before the first
+    ground-truth stroke on purpose (clip-start artifacts). So the phantom is
+    pinned here, on the three things that must all be true:
+
+      * the settle's evidence is a **real** zero — an anchored quiet baseline,
+        not the `_settled_baseline or present` fallback that makes every
+        mid-action clip read zero for free;
+      * the clock counts exactly one shot in the whole clip, and it is the
+        real one;
+      * the phantom's freeze is *released*, not merely uncounted — the
+        countdown resumes, which is the whole point of doing this at the
+        settle instead of refusing the freeze up front.
+
+    Pre-#37 this failed on the second: two counts, at 10.50 and 18.92.
+    """
+    name = "phantom_still_down_0811"
+    if not (CLIPS / name).exists():
+        pytest.skip(f"clip {name} not recorded")
+    from cueclock.capture.clip import ClipReader
+    from cueclock.vision.pipeline import VisionPipeline
+
+    pipeline = VisionPipeline(_calibration(), _reference_model("empty_table_0801"))
+    reader = ClipReader(CLIPS / name)
+    indices = reader.detect_indices()
+    timeline = replay_clock(
+        name,
+        pipeline,
+        [float(t) for t in reader.timestamps],
+        _detections(reader, CLIPS / name, pipeline, indices),
+        indices,
+    )
+
+    assert timeline.baselines and timeline.baselines[0] is not None, (
+        f"{name}: the phantom settle had no quiet baseline at all "
+        f"(baselines {timeline.baselines}) — the zero would be arithmetic, not "
+        "evidence, and the rejection must fail open on it"
+    )
+    assert timeline.baselines[0] >= hub_module.QUIET_BASELINE_MIN_BALLS, (
+        f"{name}: the phantom settle's baseline resolved {timeline.baselines[0]} balls, "
+        f"under the floor ({hub_module.QUIET_BASELINE_MIN_BALLS}) — this clip no longer "
+        "demonstrates a rejectable phantom"
+    )
+    assert len(timeline.counts) == 1, (
+        f"{name}: the clock counted {len(timeline.counts)} shots at "
+        f"{[round(c, 2) for c in timeline.counts]}; ground truth is ONE, the stroke at "
+        f"~12.10s. The first settle (~10.50s) is the phantom — Steven was still down on "
+        "the ball, and the table is provably unchanged across it."
+    )
+    assert timeline.counts[0] > 12.0, (
+        f"{name}: the one count landed at {timeline.counts[0]:.2f}s — that is the "
+        "phantom's settle, not the real shot's"
+    )
+    resumes = [m.t for m in timeline.marks if m.kind == "resume"]
+    assert any(10.0 < r < 12.0 for r in resumes), (
+        f"{name}: the phantom's freeze was never released (resumes at "
+        f"{[round(r, 2) for r in resumes]}) — a rejected phantom must hand the "
+        "countdown back, not leave the clock frozen"
+    )

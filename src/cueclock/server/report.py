@@ -283,6 +283,15 @@ class SessionReport:
     provisionals: int = 0
     provisional_reverts: int = 0
     suppressed_settles: int = 0
+    # #37: settles the hub rejected as phantoms — the table was provably
+    # unchanged against a real quiet baseline, so the freeze was released and
+    # nothing was counted. NOT in `shots`: the clock did not act on them, and
+    # counting them would inflate every rate below with the exact class this
+    # rejection exists to remove. It is also the honest live measure of the
+    # feature: `phantom_candidates` cannot fall to prove it worked, because a
+    # rejected settle stops producing a `Shot` at all — the pair to read is
+    # this number rising while `missed` stays flat.
+    settles_rejected: int = 0
     # Freezes an operator key had to rescue, because no settle ever released
     # them. Not `Shot`s and not in `total`: a shot here is a settle, and these
     # never reached one. See `left_frozen` in the module docstring for why the
@@ -421,6 +430,14 @@ def build(path: Path) -> SessionReport:
                 # never counted it and it is not a shot.
                 report.racking_settles += 1
                 adjudicated_pending = False
+            elif record.get("rejected"):
+                # #37: the hub proved this episode was a phantom and released
+                # the freeze. The clock counted nothing, so neither does the
+                # report — the accompanying `shot_provisional_reverted` record
+                # has already cleared the pending strike.
+                report.settles_rejected += 1
+                adjudicated_pending = False
+                last_settle_t = _number(record, "frame_t") or _number(record, "t")
             else:
                 if kind == SETTLE_SYNTHESIZED_KIND:
                     report.settles_synthesized += 1
@@ -511,6 +528,7 @@ def summary_detail(report: SessionReport) -> dict[str, object]:
         "provisionals": report.provisionals,
         "provisional_reverts": report.provisional_reverts,
         "suppressed_settles": report.suppressed_settles,
+        "settles_rejected": report.settles_rejected,
     }
 
 
@@ -607,6 +625,11 @@ def format_session(report: SessionReport) -> str:
                 if report.suppressed_settles
                 else ""
             )
+        )
+    if report.settles_rejected:
+        out.append(
+            f"  phantoms rejected  {report.settles_rejected}   "
+            "(table unchanged at the settle; not counted, not in the rates above)"
         )
     if report.scratch_candidates:
         out.append(

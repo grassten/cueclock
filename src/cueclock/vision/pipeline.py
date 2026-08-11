@@ -79,6 +79,25 @@ class RearrangeSummary:
     # is what keeps the dark tier off (#33 Part C); every journaled settle
     # now accumulates both axes for free.
     spread_mm: float = 0.0
+    # How many balls the quiet layout this diff was taken against resolved —
+    # and **None when there was no quiet layout at all** and the current
+    # frame stood in for one (`self._settled_baseline or present`, below).
+    #
+    # This is the field that makes `involved == 0` readable (#37). A zero diff
+    # means one of two opposite things: the table is provably unchanged, or
+    # the baseline was the settled layout itself and the diff was arithmetic
+    # rather than evidence. Measured over every corpus settle (2026-08-11):
+    # THIRTEEN clips read `involved == 0`, and twelve of them read it with no
+    # baseline at all — clips that open mid-action, so the pipeline never saw
+    # a quiet frame before the episode latched. The thirteenth is
+    # `parked_vote_strike_0801`'s phantom, against a 7-ball quiet layout.
+    # Without this field the two are byte-identical, which is exactly why #33
+    # had to fail open on the shape.
+    #
+    # Evidence, not a verdict: the hub decides what a baseline this size is
+    # worth (§13.1). Defaults to None so any summary built without it is
+    # treated as unanchored — the failing-open direction.
+    baseline_balls: int | None = None
 
     @property
     def involved(self) -> int:
@@ -100,9 +119,17 @@ SETTLE_BACKSTOP_MIN_INVOLVED = 5
 
 
 def _match_rearrange(
-    prev: list[tuple[float, float]], cur: list[tuple[float, float]], moved_mm: float
+    prev: list[tuple[float, float]],
+    cur: list[tuple[float, float]],
+    moved_mm: float,
+    baseline_balls: int | None = None,
 ) -> RearrangeSummary:
-    """Greedy nearest-pair matching — n is ~16, O(n² log n) is nothing."""
+    """Greedy nearest-pair matching — n is ~16, O(n² log n) is nothing.
+
+    ``baseline_balls`` rides through untouched; the caller passes it because
+    only the caller knows whether ``prev`` was a real quiet layout or the
+    current frame standing in for one (see the field's note above).
+    """
     dists = sorted(
         (hypot(p[0] - c[0], p[1] - c[1]), i, j)
         for i, p in enumerate(prev)
@@ -135,6 +162,7 @@ def _match_rearrange(
         vanished=len(prev) - len(used_p),
         moved_mm=sum(moved_dists),
         spread_mm=spread,
+        baseline_balls=baseline_balls,
     )
 
 
@@ -375,6 +403,9 @@ class VisionPipeline:
                 self._settled_baseline or present,
                 present,
                 self.event_config.moving_enter_mm,
+                baseline_balls=None
+                if self._settled_baseline is None
+                else len(self._settled_baseline),
             )
             self.last_settle_backstop = False
             self.last_settle_movers = list(self._engine.last_settle_movers)
@@ -418,6 +449,9 @@ class VisionPipeline:
                 self._settled_baseline or present,
                 present,
                 self.event_config.moving_enter_mm,
+                baseline_balls=None
+                if self._settled_baseline is None
+                else len(self._settled_baseline),
             )
             if summary.involved >= SETTLE_BACKSTOP_MIN_INVOLVED:
                 self.last_settle_rearrange = summary

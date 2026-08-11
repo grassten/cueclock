@@ -851,10 +851,25 @@ def test_run_out_still_ignores_vision_under_the_kill_switch() -> None:
 # ---------- E8 break adjudication + E9 hub guards (2026-08-06, plan §13.2/§13.3) ----------
 
 
-def _summary(moved: int = 0, appeared: int = 0, vanished: int = 0, moved_mm: float = 0.0):
+def _summary(
+    moved: int = 0,
+    appeared: int = 0,
+    vanished: int = 0,
+    moved_mm: float = 0.0,
+    baseline_balls: int | None = None,
+):
+    # `baseline_balls` defaults to None — the unanchored reading — so every
+    # test written before #37 keeps describing a settle whose zero could be
+    # arithmetic, which is the shape the hub must still fail open on.
     from cueclock.vision.pipeline import RearrangeSummary
 
-    return RearrangeSummary(moved=moved, appeared=appeared, vanished=vanished, moved_mm=moved_mm)
+    return RearrangeSummary(
+        moved=moved,
+        appeared=appeared,
+        vanished=vanished,
+        moved_mm=moved_mm,
+        baseline_balls=baseline_balls,
+    )
 
 
 def test_break_adjudicated_from_eaten_fire_and_break_scale_settle() -> None:
@@ -1246,6 +1261,123 @@ def test_multi_ball_pickup_shape_still_counts() -> None:
     hub = _running_hub()
     shots = hub.clock.rack_shots
     asyncio.run(hub.balls_settled(rearrange=_summary(vanished=2)))
+    assert hub.clock.rack_shots == shots + 1
+
+
+# ---------- #37: rejecting the phantom at the settle ----------
+
+
+def test_phantom_settle_reverts_the_freeze_and_counts_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live 2026-08-11 phantom, in hub terms.
+
+    Steven still down on the ball; the latch froze a live countdown and the
+    settle 1.65 s later counted a shot and reset 19.7 -> 30 s on an
+    `involved == 0` reading — against a genuine 4-ball quiet baseline, which
+    a replay of the dump confirmed. Rejected now: no count, no reset, the
+    countdown resumes with exactly the remaining it froze at.
+    """
+    now = _freeze_hub_time(monkeypatch)
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    now[0] += 10.3  # 19.7 s left on a 30 s countdown, as in the journal
+    hub.clock.tick(now[0])
+    remaining = hub.clock.remaining
+    asyncio.run(hub.episode_started(t=384.71))
+    assert hub.clock.state is State.MOTION
+    now[0] += 1.65
+    asyncio.run(hub.balls_settled(t=386.36, rearrange=_summary(baseline_balls=4)))
+    assert hub.clock.rack_shots == shots, "a phantom must not count a shot"
+    assert hub.clock.state is State.RUNNING, "the freeze must be handed back"
+    assert hub.clock.remaining == remaining, "the countdown must not reset"
+    records = hub.journal.tail(60.0)
+    revert = next(r for r in records if r["kind"] == "shot_provisional_reverted")
+    assert revert["reason"] == "phantom_settle"
+    assert revert["baseline"] == 4
+    settle = next(r for r in records if r["kind"] == "vision_balls_settled")
+    assert settle["rejected"] == "phantom", "the settle record must carry the verdict"
+    assert settle["baseline"] == 4, "and what the diff was taken against"
+
+
+def test_phantom_settle_drops_a_deferred_fire() -> None:
+    # `parked_vote_strike_0801`'s shape: a ShotTaken really did fire into the
+    # RUNNING countdown (a hoodie and a cue shaft crowned as the cue ball), so
+    # the episode is *fired*, not merely latched. #33 defers a RUNNING fire's
+    # count to the settle precisely so a verdict like this can drop it.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.shot_taken(speed_mms=1085.0))
+    assert hub.clock.state is State.MOTION
+    asyncio.run(hub.balls_settled(rearrange=_summary(baseline_balls=7)))
+    assert hub.clock.rack_shots == shots
+    assert hub.clock.state is State.RUNNING
+
+
+def test_unanchored_zero_settle_still_counts() -> None:
+    # THE TRAP #33 failed open on, and it still has to. `involved == 0` with no
+    # quiet baseline is arithmetic, not evidence: twelve corpus clips read it
+    # purely because they open mid-action. Refusal takes positive evidence.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.episode_started(t=10.0))
+    asyncio.run(hub.balls_settled(rearrange=_summary(baseline_balls=None)))
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_thin_baseline_zero_settle_still_counts() -> None:
+    # A baseline that exists but resolved almost nothing — an unresolved
+    # racked pack — can read zero while balls scatter, because both sides of
+    # the diff hold the same two tracks. Under the floor, so it counts.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.episode_started(t=10.0))
+    asyncio.run(
+        hub.balls_settled(
+            rearrange=_summary(baseline_balls=hub_module.QUIET_BASELINE_MIN_BALLS - 1)
+        )
+    )
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_any_rearrangement_at_all_still_counts() -> None:
+    # The softest real touches in the corpus still move something
+    # (`soft_touch_0731` and `tip_bump` both involve 2 balls). One is enough.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.episode_started(t=10.0))
+    asyncio.run(hub.balls_settled(rearrange=_summary(moved=1, moved_mm=63.0, baseline_balls=9)))
+    assert hub.clock.rack_shots == shots + 1
+
+
+def test_grace_settle_is_never_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In GRACE the same refusal would buzz a false violation.
+
+    The fail-safe direction: a wrongly-rejected MOTION settle costs the
+    countdown it froze at, which is what #33 already accepts. A wrongly-
+    rejected GRACE settle lets the clock EXPIRE over a live shot — the worst
+    felt failure on record (2 in 30 sessions). So the verdict is MOTION-only.
+    """
+    now = _freeze_hub_time(monkeypatch)
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    now[0] += hub.clock.remaining + 0.1  # into GRACE
+    hub.clock.tick(now[0])
+    assert hub.clock.state is State.GRACE
+    asyncio.run(hub.balls_settled(rearrange=_summary(baseline_balls=9)))
+    assert hub.clock.rack_shots == shots + 1
+    assert hub.clock.state is State.RUNNING
+
+
+def test_backstop_settle_is_never_rejected() -> None:
+    # The pipeline's identity-free backstop carries no episode at all, so
+    # there is no mover evidence behind its summary. It cannot read zero today
+    # (SETTLE_BACKSTOP_MIN_INVOLVED), and the verdict says so out loud rather
+    # than relying on that staying true.
+    hub = _running_hub()
+    shots = hub.clock.rack_shots
+    asyncio.run(hub.episode_started(t=10.0))
+    asyncio.run(hub.balls_settled(rearrange=_summary(baseline_balls=9), backstop=True))
     assert hub.clock.rack_shots == shots + 1
 
 
