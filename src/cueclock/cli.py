@@ -423,6 +423,10 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
                     f"(moved {s.moved} / appeared {s.appeared} / vanished {s.vanished}) "
                     f"{s.moved_mm:.0f} mm]"
                 )
+                # #41: how many balls came to rest somewhere new, and how many
+                # of those a hand put there. `hand N/N` is the ball-in-hand
+                # verdict the hub suppresses on.
+                extra += f"  [arrivals {s.arrivals}, hand {s.hand_arrivals}]"
                 if pipeline.last_settle_backstop:
                     extra += "  [BACKSTOP — the engine slept through this episode]"
             print(f"{t:7.3f}s  {type(event).__name__}{extra}")

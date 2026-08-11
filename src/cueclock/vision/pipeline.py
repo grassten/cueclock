@@ -32,10 +32,11 @@ from cueclock.vision.calibration import TableCalibration
 from cueclock.vision.detect import (
     DetectConfig,
     Detection,
+    Intrusion,
     ball_churn,
     bayer_to_gray,
     build_reference,
-    detect_balls,
+    detect_frame,
 )
 from cueclock.vision.events import (
     BallsSettled,
@@ -72,6 +73,16 @@ class RearrangeSummary:
     appeared: int
     vanished: int
     moved_mm: float
+    # Ball-in-hand evidence (#41). An *arrival* is a ball that ended up
+    # somewhere it was not: a matched ball displaced past ``moving_enter_mm``
+    # (counted at its new position) or an unmatched current ball. Every real
+    # shot produces at least one arrival on open cloth; a hand placement
+    # produces arrivals only where the hand put them. ``hand_arrivals`` counts
+    # those that were under a hand-scale :class:`Intrusion` at the moment they
+    # arrived — see ``_hand_delivered``. Evidence only: the hub decides what
+    # it means (§13.1).
+    arrivals: int = 0
+    hand_arrivals: int = 0
     # Max pairwise distance across the involved balls' positions (vanished
     # balls: where the baseline last had them). Journaled for E8's
     # racking-vs-break record: the 2026-08-10 armed-rack racking settle
@@ -98,9 +109,70 @@ class RearrangeSummary:
 # and racking stay exactly as event-silent as checkpoints 28-56 left them.
 SETTLE_BACKSTOP_MIN_INVOLVED = 5
 
+# One frame of the rearrangement window (#41): its timestamp, where the
+# present balls stood, and the hand-scale intrusions' bounding boxes in table
+# mm (x0, y0, x1, y1). Exactly the frames the settle's rearrangement summary
+# describes — from the freeze of the quiet baseline to the settle itself.
+SettleFrame = tuple[float, list[tuple[float, float]], list[tuple[float, float, float, float]]]
+
+# "Nothing is standing here": no ball centre within one ball's width
+# (57.15 mm, WPA spec — see BALL_RADIUS_MM) of the spot. Used to find when a
+# ball ARRIVED at a resting place by walking the window backwards to the last
+# frame the spot was empty.
+ARRIVAL_CLEAR_MM = 60.0
+
+# How close in time the hand has to be to the arrival. Measured on the
+# 2026-08-11 carries: the worst gap between a ball's arrival frame and a
+# frame whose hand-scale intrusion covered that spot is 0.064 s (the hand
+# lifting clear as the ball is released). 0.25 s is ~4x that, and the
+# population it must not admit — every strike and every corpus pickup, where
+# the arrival is on open cloth — stays completely empty out to 0.5 s, so the
+# band this sits in is empty in both directions.
+ARRIVAL_HAND_WINDOW_S = 0.25
+
+# Cap on the retained window. Bounded memory for a table that never settles
+# (the frozen-clock class); 40 s is longer than the longest corpus
+# rearrangement window measured (18 s, pickup_snatch_0801) by 2x.
+SETTLE_WINDOW_MAX_S = 40.0
+
+
+def _hand_delivered(point: tuple[float, float], window: list[SettleFrame]) -> bool:
+    """Did a hand put this ball here? (#41)
+
+    The one asymmetry that survived measurement. During a stroke the player's
+    bridge hand and forearm are on the cloth beside the cue ball, so "a hand
+    is near the ball" separates nothing and was never going to — what
+    separates is *where the ball ends up*. A struck ball leaves the hand
+    within a few frames and comes to rest somewhere the hand is not; a
+    carried ball comes to rest inside where the hand was, because the hand
+    is what took it there.
+
+    So: walk back to the last frame this spot was empty — the ball's arrival
+    — and ask whether a hand-scale intrusion was covering the spot then.
+    Returns False when the spot was never empty in the window (nothing
+    arrived, so there is nothing to attribute) — one of several places this
+    fails toward counting the shot, which is the direction that must never
+    flip.
+    """
+    arrival_t: float | None = None
+    for t, present, _boxes in reversed(window):
+        if not any(hypot(x - point[0], y - point[1]) <= ARRIVAL_CLEAR_MM for x, y in present):
+            arrival_t = t
+            break
+    if arrival_t is None:
+        return False
+    return any(
+        abs(t - arrival_t) <= ARRIVAL_HAND_WINDOW_S
+        and any(x0 <= point[0] <= x1 and y0 <= point[1] <= y1 for x0, y0, x1, y1 in boxes)
+        for t, _present, boxes in window
+    )
+
 
 def _match_rearrange(
-    prev: list[tuple[float, float]], cur: list[tuple[float, float]], moved_mm: float
+    prev: list[tuple[float, float]],
+    cur: list[tuple[float, float]],
+    moved_mm: float,
+    window: list[SettleFrame] | None = None,
 ) -> RearrangeSummary:
     """Greedy nearest-pair matching — n is ~16, O(n² log n) is nothing."""
     dists = sorted(
@@ -121,6 +193,10 @@ def _match_rearrange(
             moved_dists.append(d)
             involved_pos.append(cur[j])
     involved_pos += [c for j, c in enumerate(cur) if j not in used_c]  # appeared
+    # Arrivals (#41): everything above is where a ball ENDED UP — the moved
+    # balls at their new positions, then the appeared ones. The vanished
+    # appended below are departures and have no arrival to attribute.
+    arrivals = list(involved_pos)
     involved_pos += [p for i, p in enumerate(prev) if i not in used_p]  # vanished
     spread = 0.0
     if len(involved_pos) > 1:
@@ -135,6 +211,8 @@ def _match_rearrange(
         vanished=len(prev) - len(used_p),
         moved_mm=sum(moved_dists),
         spread_mm=spread,
+        arrivals=len(arrivals),
+        hand_arrivals=(0 if window is None else sum(_hand_delivered(p, window) for p in arrivals)),
     )
 
 
@@ -280,6 +358,10 @@ class VisionPipeline:
         self._rearrange_pending = False
         self._quiet_since: float | None = None
         self._prev_present: list[tuple[float, float]] | None = None
+        # #41's rearrangement window: the same frames the summary above
+        # describes, carrying where the balls stood and where the hand-scale
+        # intrusions were. Reset exactly where `_settled_baseline` is.
+        self._settle_window: list[SettleFrame] = []
         self.last_settle_rearrange: RearrangeSummary | None = None
         # True when the most recent BallsSettled was the pipeline's backstop
         # rather than the engine's own — journaled by the hub so triage sees
@@ -298,10 +380,12 @@ class VisionPipeline:
         return self._engine.table_moving
 
     def process(self, t: float, bayer: npt.NDArray[np.uint8]) -> list[Event]:
-        detections, churn = self.detect(bayer)
-        return self.advance(t, detections, churn)
+        detections, churn, intrusions = self.detect(bayer)
+        return self.advance(t, detections, churn, intrusions)
 
-    def detect(self, bayer: npt.NDArray[np.uint8]) -> tuple[list[Detection], list[float | None]]:
+    def detect(
+        self, bayer: npt.NDArray[np.uint8]
+    ) -> tuple[list[Detection], list[float | None], list[Intrusion]]:
         """Frame-bound half: ball-like blobs plus each one's appearance churn.
 
         The expensive half (~5.9 ms/frame on the M2 against 0.08 ms for
@@ -310,7 +394,7 @@ class VisionPipeline:
         (`capture.detect_cache`). Stateful only through the previous frame's
         gray, which churn differences against.
         """
-        detections = detect_balls(
+        detections, intrusions = detect_frame(
             bayer,
             self.reference.gray,
             self.detect_config,
@@ -326,10 +410,42 @@ class VisionPipeline:
             for d in detections
         ]
         self._prev_gray = gray
-        return detections, churn
+        return detections, churn, intrusions
+
+    def _intrusion_boxes_mm(
+        self, intrusions: list[Intrusion]
+    ) -> list[tuple[float, float, float, float]]:
+        """Intrusion bounding boxes in table mm — the frame's hand evidence.
+
+        Detection runs on distorted pixels and only coordinates get
+        undistorted (§4.1), so this is the same forward transform every ball
+        position goes through, applied to the box corners. The mm-space
+        axis-aligned hull of the four corners is a hair larger than the true
+        quad, which for an overhead camera is a fraction of a millimetre —
+        and a box is already a coarse outline of a hand.
+        """
+        if not intrusions:
+            return []
+        corners = np.array(
+            [
+                [x + dx * w, y + dy * h]
+                for x, y, w, h in (i.bbox for i in intrusions)
+                for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1))
+            ],
+            dtype=np.float64,
+        )
+        mm = self._calibration.to_table_mm(corners).reshape(len(intrusions), 4, 2)
+        return [
+            (float(q[:, 0].min()), float(q[:, 1].min()), float(q[:, 0].max()), float(q[:, 1].max()))
+            for q in mm
+        ]
 
     def advance(
-        self, t: float, detections: list[Detection], churn: list[float | None]
+        self,
+        t: float,
+        detections: list[Detection],
+        churn: list[float | None],
+        intrusions: list[Intrusion] | None = None,
     ) -> list[Event]:
         """State-bound half: pixels → table mm → tracker → events.
 
@@ -369,12 +485,16 @@ class VisionPipeline:
         self._supra = {ball_id: raw >= floor for ball_id, raw in raws.items()}
 
         present = [(b.x_mm, b.y_mm) for b in balls if b.present]
+        self._settle_window.append((t, present, self._intrusion_boxes_mm(intrusions or [])))
+        while self._settle_window and t - self._settle_window[0][0] > SETTLE_WINDOW_MAX_S:
+            self._settle_window.pop(0)
         settled = any(isinstance(e, BallsSettled) for e in events)
         if settled:
             self.last_settle_rearrange = _match_rearrange(
                 self._settled_baseline or present,
                 present,
                 self.event_config.moving_enter_mm,
+                self._settle_window,
             )
             self.last_settle_backstop = False
             self.last_settle_movers = list(self._engine.last_settle_movers)
@@ -418,6 +538,7 @@ class VisionPipeline:
                 self._settled_baseline or present,
                 present,
                 self.event_config.moving_enter_mm,
+                self._settle_window,
             )
             if summary.involved >= SETTLE_BACKSTOP_MIN_INVOLVED:
                 self.last_settle_rearrange = summary
@@ -428,9 +549,11 @@ class VisionPipeline:
         if settled:
             self._settled_baseline = present
             self._rearrange_pending = False
+            self._settle_window.clear()
         elif quiet:
             if not self._rearrange_pending:
                 self._settled_baseline = present
+                self._settle_window.clear()
         elif balls:
             self._rearrange_pending = True
         return events
@@ -471,6 +594,7 @@ class VisionPipeline:
                 "quiet_since": self._quiet_since,
                 "prev_present": self._prev_present,
                 "last_settle_movers": self.last_settle_movers,
+                "settle_window": self._settle_window,
             },
             protocol=pickle.HIGHEST_PROTOCOL,
         )
@@ -488,3 +612,4 @@ class VisionPipeline:
         self._quiet_since = state.get("quiet_since")
         self._prev_present = state.get("prev_present")
         self.last_settle_movers = state.get("last_settle_movers", [])
+        self._settle_window = state.get("settle_window", [])

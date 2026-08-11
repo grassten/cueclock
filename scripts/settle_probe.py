@@ -116,7 +116,7 @@ def probe(name, reader, pipeline: VisionPipeline, indices, clip_dir: Path, t_off
     was_moving = engine.table_moving
     frames = _detections(reader, clip_dir, pipeline, indices)
     results = []
-    for i, (detections, churn) in zip(indices, frames, strict=True):
+    for i, (detections, churn, intrusions) in zip(indices, frames, strict=True):
         t = t_offset + float(reader.timestamps[i])
         # Snapshot episode state BEFORE advance: a settling update() clears it.
         pre_origin = dict(engine._episode_origin)
@@ -125,7 +125,7 @@ def probe(name, reader, pipeline: VisionPipeline, indices, clip_dir: Path, t_off
         pre_roster = set(engine._roster)
         pre_baseline = pipeline._settled_baseline
 
-        events = pipeline.advance(t, detections, churn)
+        events = pipeline.advance(t, detections, churn, intrusions)
 
         now_ids = set(engine._first_seen)
         for dead in prev_ids - now_ids:

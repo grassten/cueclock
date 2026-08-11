@@ -1,0 +1,25 @@
+{
+  "scenario": "ball_in_hand_triple_0811",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 5.9077,
+      "ball_id": 7,
+      "speed_mms": 6481.6332,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 12.4555
+    },
+    {
+      "type": "BallsSettled",
+      "t": 14.7405
+    },
+    {
+      "type": "BallsSettled",
+      "t": 16.0398
+    }
+  ]
+}

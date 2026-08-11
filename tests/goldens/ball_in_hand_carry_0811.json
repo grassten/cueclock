@@ -1,0 +1,28 @@
+{
+  "scenario": "ball_in_hand_carry_0811",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 2.9443,
+      "ball_id": 2,
+      "speed_mms": 1588.4974,
+      "newborn": true
+    },
+    {
+      "type": "BallsSettled",
+      "t": 7.9047
+    },
+    {
+      "type": "ShotTaken",
+      "t": 13.646,
+      "ball_id": 14,
+      "speed_mms": 16274.4348,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 15.4253
+    }
+  ]
+}
