@@ -19,12 +19,45 @@ Two §2.3 lessons are load-bearing here:
 Pure module: arrays in, detections out. No I/O, no clocks, no threads.
 """
 
+import math
 from dataclasses import dataclass
 from typing import cast
 
 import cv2
 import numpy as np
 import numpy.typing as npt
+
+
+@dataclass(frozen=True)
+class Intrusion:
+    """One hand-scale blob that the ball gates **rejected** (#41).
+
+    The gates below already compute, classify and then discard a per-frame
+    record of everything on the cloth that is not a ball — an arm is thrown
+    away by ``max_area_px``, a cue stick by ``min_extent_px``, anything
+    reaching in from off-table by the mask-border rule. Downstream therefore
+    sees ball-shaped blobs and nothing else, and when a hand *engulfs* a ball
+    the combined blob exceeds ``max_area_px`` and is discarded outright: the
+    ball simply vanishes, with no detection left to carry the ``merged`` flag.
+    That is why ``merged`` reads ~0 on every measured hand event (checkpoint
+    50, and again in #38) — the arm is not absent from the image, it was
+    absent from the exported evidence.
+
+    This is that evidence, and it is purely additive: which blobs become
+    :class:`Detection` is untouched (§2.3 lesson 2 — balls are never
+    shape-filtered, because fast balls streak). Only the *rejects* are
+    described, and only the hand-scale ones (see
+    ``DetectConfig.intrusion_min_core_px``), because that is the class #41
+    needs and a stick channel measured useless for it.
+
+    ``core_radius_px`` is the radius of the largest disc that fits inside the
+    blob — the one shape number that says "solid mass" rather than "long thin
+    thing", and the axis on which a hand and a cue actually differ.
+    """
+
+    bbox: tuple[int, int, int, int]  # x, y, w, h — distorted pixels
+    area: float
+    core_radius_px: float
 
 
 @dataclass(frozen=True)
@@ -102,6 +135,21 @@ class DetectConfig:
     # tracker the centroid is untrustworthy *if* the ball is known-still.
     merged_area_px: float = 1800.0
     merged_extent_px: int = 70
+    # Intrusion export gate (#41): a rejected blob is reported as an
+    # :class:`Intrusion` only if a disc of this radius fits inside it. Set to
+    # the nominal ball radius above, and that is the whole argument: a hand
+    # covering a ball is at minimum as fat as the ball it is covering, while
+    # a cue stick (~12 px wide) and the cushion-edge artifacts (4-8 px) are
+    # nowhere near it. Measured on the 2026-08-11 carries against every
+    # corpus clip that puts a hand near a ball: a hand carrying a ball reads
+    # core 23-62 px (n=4), while the closest competing population — the
+    # bridge hand at address, fingers spread with the shaft running through
+    # them — reads 8-20 px (n=7). The band 20-23 is empty, the same
+    # empty-band anchoring the break floors use. Also the pre-filter that
+    # keeps this cheap: a blob can only hold such a disc if its short bbox
+    # side is >= 2r and its area >= pi*r^2, so the distance transform runs on
+    # a handful of blobs per frame, never on the rails.
+    intrusion_min_core_px: float = 21.9
 
 
 def bayer_to_gray(bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -236,6 +284,44 @@ def ball_churn(
     return float(diff[(xs * xs + ys * ys) <= radius * radius].mean())
 
 
+def _as_intrusion(
+    labels: "cv2.typing.MatLike",
+    label: int,
+    bbox: tuple[int, int, int, int],
+    area: float,
+    bayer: npt.NDArray[np.uint8],
+    reference_bayer: npt.NDArray[np.uint8] | None,
+    cfg: DetectConfig,
+) -> Intrusion | None:
+    """Describe a rejected blob as an :class:`Intrusion`, or None if it is not
+    hand-scale. See ``DetectConfig.intrusion_min_core_px`` for the gate and
+    for why the two cheap necessary conditions come first."""
+    x, y, w, h = bbox
+    r = cfg.intrusion_min_core_px
+    if min(w, h) < 2.0 * r or area < math.pi * r * r:
+        return None  # cannot hold a disc of radius r, whatever its shape
+    padded = np.zeros((h + 2, w + 2), np.uint8)
+    padded[1:-1, 1:-1] = labels[y : y + h, x : x + w] == label
+    # Distance to the nearest background pixel: its maximum IS the radius of
+    # the largest inscribed disc, and where it peaks is the blob's thickest
+    # point — which is also the only point guaranteed to be inside a concave
+    # blob, so it is where the shadow sample is taken.
+    dist = cv2.distanceTransform(padded, cv2.DIST_L2, 5)
+    core = float(dist.max())
+    if core < r:
+        return None
+    if reference_bayer is not None:
+        py, px = np.unravel_index(int(dist.argmax()), dist.shape)
+        cx, cy = float(x + int(px) - 1), float(y + int(py) - 1)
+        if _is_shadow(
+            _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px),
+            _patch_rgb_means(reference_bayer, cx, cy, cfg.patch_radius_px),
+            cfg,
+        ):
+            return None  # the player's shadow on the cloth is not a hand
+    return Intrusion(bbox=bbox, area=area, core_radius_px=core)
+
+
 def detect_balls(
     bayer: npt.NDArray[np.uint8],
     reference_gray: npt.NDArray[np.uint8],
@@ -244,6 +330,18 @@ def detect_balls(
     reference_bayer: npt.NDArray[np.uint8] | None = None,
     radius_map: npt.NDArray[np.float32] | None = None,
 ) -> list[Detection]:
+    """The ball half of :func:`detect_frame` — see it for the gates."""
+    return detect_frame(bayer, reference_gray, config, table_mask, reference_bayer, radius_map)[0]
+
+
+def detect_frame(
+    bayer: npt.NDArray[np.uint8],
+    reference_gray: npt.NDArray[np.uint8],
+    config: DetectConfig | None = None,
+    table_mask: npt.NDArray[np.uint8] | None = None,
+    reference_bayer: npt.NDArray[np.uint8] | None = None,
+    radius_map: npt.NDArray[np.float32] | None = None,
+) -> tuple[list[Detection], list[Intrusion]]:
     """Find ball-like blobs in one frame. See module docstring for the gates.
 
     ``table_mask`` (optional, uint8 0/1) restricts detection to the cloth.
@@ -258,6 +356,10 @@ def detect_balls(
     annulus is measured in ball radii, so without it the sample falls back to
     ``nominal_ball_radius_px`` and reads the wrong part of the sphere wherever
     perspective disagrees with that nominal. Every production path supplies it.
+
+    Returns the balls and, beside them, the hand-scale blobs these gates threw
+    away (:class:`Intrusion`). The second list is additive evidence: it never
+    feeds back into the first, and which blobs become balls is unchanged.
     """
     cfg = config or DetectConfig()
     gray = bayer_to_gray(bayer)
@@ -274,15 +376,26 @@ def detect_balls(
         ring = cv2.subtract(table_mask, cv2.erode(table_mask, np.ones((7, 7), np.uint8)))
         border_ids = set(np.unique(labels[ring.astype(bool)]).tolist())
     detections: list[Detection] = []
+    intrusions: list[Intrusion] = []
     for i in range(1, n):
-        if i in border_ids:
-            continue
         area = float(stats[i, cv2.CC_STAT_AREA])
-        if not (cfg.min_area_px <= area <= cfg.max_area_px):
-            continue
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
         bh = int(stats[i, cv2.CC_STAT_HEIGHT])
-        if min(bw, bh) < cfg.min_extent_px or max(bw, bh) > cfg.max_extent_px:
+        bbox = (int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP]), bw, bh)
+        ball_shaped = (
+            i not in border_ids
+            and cfg.min_area_px <= area <= cfg.max_area_px
+            and min(bw, bh) >= cfg.min_extent_px
+            and max(bw, bh) <= cfg.max_extent_px
+        )
+        if not ball_shaped:
+            # Rejected on geometry — the three gates that between them throw
+            # away every arm, stick and reaching hand. Describe it instead of
+            # dropping it on the floor (#41); shadow-rejected blobs below are
+            # deliberately NOT offered, they are already known to be shadows.
+            found = _as_intrusion(labels, i, bbox, area, bayer, reference_bayer, cfg)
+            if found is not None:
+                intrusions.append(found)
             continue
         cx, cy = float(centroids[i, 0]), float(centroids[i, 1])
         if reference_bayer is not None:
@@ -295,12 +408,7 @@ def detect_balls(
                 cx=cx,
                 cy=cy,
                 area=area,
-                bbox=(
-                    int(stats[i, cv2.CC_STAT_LEFT]),
-                    int(stats[i, cv2.CC_STAT_TOP]),
-                    bw,
-                    bh,
-                ),
+                bbox=bbox,
                 whiteness=_ring_whiteness(
                     bayer,
                     cx,
@@ -313,4 +421,4 @@ def detect_balls(
                 merged=area > cfg.merged_area_px or max(bw, bh) > cfg.merged_extent_px,
             )
         )
-    return detections
+    return detections, intrusions

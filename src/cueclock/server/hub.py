@@ -201,6 +201,42 @@ QUIET_BASELINE_MIN_BALLS = 3
 # problem stays open, without a predicate that is wrong twice as often as it
 # is right. `ShotClock.balls_settled(suppress=...)` is deliberately KEPT: the
 # clock-side mechanism was never what failed, only the hub's evidence test.
+#
+# RE-SUPPLIED 2026-08-11 (#41), on evidence rather than shape — see
+# `_settle_is_hand_placement` below. The lesson from the removal is encoded
+# in what the new test does NOT do: it never reads the *shape* of the
+# rearrangement, so there is no population it can select wrongly. It reads
+# whether each ball that came to rest somewhere new was put there by a hand.
+
+
+def _settle_is_hand_placement(rearrange: "RearrangeSummary | None") -> bool:
+    """#41: did a hand put every ball that moved where it now stands?
+
+    Policy (§13.1): the vision layer measures, per settle, how many balls
+    *arrived* somewhere new and how many of those were under a hand-scale
+    intrusion at the moment they arrived (`pipeline._hand_delivered`). This
+    is the one line that says what that means.
+
+    **Every** arrival, not any — that conjunction is what keeps the fail-safe
+    direction from flipping. A real stroke always leaves at least one ball
+    resting on open cloth: the struck ball itself, or the object ball it
+    sent away. Measured across the labelled 2026-08-11 carries plus every
+    corpus clip that puts a hand near a ball, the two populations do not
+    touch — the four carries read 1/1 arrivals hand-delivered, and all
+    twelve strike/pickup/retrieval settles have at least one arrival with no
+    covering intrusion whatsoever (`scratch_replace`'s shot has the player
+    leaning fully across the table and still reads 1 of 3, because the
+    potted-and-replaced ball is not the only thing that moved).
+
+    A settle with no arrivals at all — a pickup, a post-scratch retrieval,
+    the #37 phantom shape — is never refused here. That class was measured
+    unresolvable in #38 (a retrieval and a no-contact kick are
+    byte-identical), and absence of evidence must never refuse a shot.
+    """
+    if rearrange is None:
+        return False
+    return rearrange.arrivals > 0 and rearrange.hand_arrivals == rearrange.arrivals
+
 
 # `detect_heartbeat` journal cadence: often enough to bracket a starvation
 # window (a flag-dump write measurably halved the detect rate for ~10 s —
@@ -800,6 +836,11 @@ class Hub:
             # `involved=0` is unreadable after the fact — the 2026-08-11
             # `flag_phantom` record had to be settled by replaying the dump.
             detail["baseline"] = rearrange.baseline_balls
+            # #41: how many balls came to rest somewhere new, and how many of
+            # those a hand put there. Journaled on every settle so the next
+            # flagged carry is readable without a replay, same reasoning.
+            detail["arrivals"] = rearrange.arrivals
+            detail["hand_arrivals"] = rearrange.hand_arrivals
         if movers:
             detail["movers_alive"] = sum(m.alive for m in movers)
             detail["mover_max_mm"] = round(max(m.travel_mm for m in movers))
@@ -810,11 +851,18 @@ class Hub:
             self._log("vision_balls_settled_no_clock", **detail)
             return  # journaled, not clocked — as above
         now = time.monotonic()
-        # #37, decided before anything else touches the clock: was this
-        # episode a phantom? Evaluated against the state the settle ARRIVED
-        # in, which is what keeps it disjoint from the break adjudication
-        # below (that one acts only out of IDLE, this one only out of MOTION).
+        # Both settle-time refusals are decided here, before anything touches
+        # the clock, and against the state the settle ARRIVED in. That is what
+        # keeps them disjoint from the break adjudication below: E8 acts only
+        # out of IDLE, these only out of MOTION/RUNNING. Deciding after it
+        # would let a break the hub had just counted be refused by a predicate
+        # reading the post-break state.
+        #
+        # #37 — was this episode a phantom? The table is provably unchanged.
         phantom = self._settle_is_phantom(rearrange, backstop)
+        # #41 — was this a hand putting balls down? An IDLE settle is the
+        # clock's no-op (racking) and E8's business, so it is never refused.
+        hand = self.clock.state is not State.IDLE and _settle_is_hand_placement(rearrange)
         if self._adjudicate_break(now, rearrange):
             # E8: an armed rack's settle with break-scale rearrangement IS
             # the break (WNT §5 starts the 60 s window at the rest, so
@@ -824,7 +872,7 @@ class Hub:
             if self._rack_pending or self._rack_break_mono is None:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
-        moved_clock = self.clock.balls_settled(now, suppress=phantom)
+        moved_clock = self.clock.balls_settled(now, suppress=phantom or hand)
         if phantom:
             # The provisional freeze is undone: no shot counted, the countdown
             # resumes with exactly the remaining it froze at, and the pace
@@ -843,6 +891,27 @@ class Hub:
                 baseline=rearrange.baseline_balls if rearrange is not None else None,
                 movers_alive=detail.get("movers_alive"),
                 mover_max_mm=detail.get("mover_max_mm"),
+            )
+        elif hand:
+            # #41: same resolution, different evidence. With a provisional
+            # open this is the revert (the countdown resumes at the exact
+            # remaining it froze with); without one it refused the
+            # compensation on a countdown that never stopped — two journal
+            # kinds so `report` can tell them apart without parsing evidence.
+            # No early return: the settle still journals, and #39's
+            # unconditional scratch hold below still runs. A verdict about
+            # what this settle *was* must never swallow the cue ball's hold.
+            reverted = self._provisional_open_mono is not None
+            self._revert_pace()
+            self._provisional_open_mono = None
+            detail["rejected"] = "hand_placement"
+            self._log(
+                "shot_provisional_reverted" if reverted else "compensation_suppressed",
+                t=t,
+                frame_t=t,
+                reason="hand_placement",
+                arrivals=detail.get("arrivals"),
+                hand_arrivals=detail.get("hand_arrivals"),
             )
         if moved_clock:
             # The settle counted this episode's one shot (fired or

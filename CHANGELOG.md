@@ -232,6 +232,90 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-11 (checkpoint 91 — #41: the detector was destroying the evidence,
+  so ball-in-hand now stops the clock resetting):** Steven's directive was the
+  lead and it was right — *"an arm / a hand does not look like a cue"*. The
+  reason nothing downstream could act on that is upstream: `detect_balls`
+  already **classifies** every non-ball blob (arm → `max_area_px`, stick →
+  `min_extent_px`, anything reaching in from off-table → the mask-border rule)
+  and then throws the verdict away. When a hand *engulfs* a ball the combined
+  blob clears 6000 px² and is discarded outright, so the ball simply vanishes
+  and there is no detection left to carry `merged` — which is the whole
+  explanation for `merged` reading ~0 on hand events across checkpoints 50, 66
+  and #38. The arm was never absent from the image, only from the exported
+  evidence. So: export it.
+  * **The journal contrast first (#41's stated lead), and it came back
+    negative — usefully.** Every one of the 84 settles in
+    `session-20260811-182341` that landed while the clock was RUNNING counted
+    a shot, except the 4 provisional reverts. The carries Steven remembers
+    *not* resetting the clock are the four settles that landed in **IDLE**
+    (t=127.19, 474.41, 894.69, 1424.41 — two of them textbook carries,
+    `involved=1 moved=1` at 424 mm and 700 mm), where a settle is a no-op by
+    design. "It works sometimes" was the clock's state, not a discriminator
+    hiding in the live system. Recorded so nobody hunts for it again.
+  * **What separates a carry from a stroke is not the hand's presence, it is
+    where the ball ends up.** During a stroke the bridge hand and forearm are
+    on the cloth beside the cue ball — which is why every presence-shaped
+    axis #38 measured overlaps, and why "arm near ball" was never going to
+    work. Measured over the rearrangement window (the frames the settle's own
+    summary describes — *not* the episode latch, which on
+    `ball_in_hand_carry_b_0811` opens only as the hand withdraws, 0.6 s after
+    the carry is over): for each ball that **arrived** somewhere new, walk
+    back to the last frame that spot was empty and ask whether a hand-scale
+    intrusion covered it then.
+
+    | population | n | verdict |
+    |---|---|---|
+    | ball-in-hand carries (Steven's ground truth) | 4 | **every** arrival hand-delivered (1/1 each) |
+    | strikes, pickups, retrievals, replaces | 12 | at least one arrival with **no** covering blob at all |
+
+    The conjunction — *every* arrival, not any — is what holds the fail-safe
+    direction: a real stroke always leaves at least one ball resting on open
+    cloth. `scratch_replace`'s shot is the case that proves it, with the
+    player leaning fully across the table (core 101 px over two of its three
+    arrivals) and still reading 1 of 3.
+  * **New evidence, two new constants, both empty-band anchored.**
+    `DetectConfig.intrusion_min_core_px = 21.9` — the radius of the largest
+    disc that fits inside the blob, set to the nominal ball radius on the
+    argument that a hand covering a ball is at least as fat as the ball.
+    Measured: a hand carrying a ball reads **23–62 px** (n=4); the closest
+    competing population, a bridge hand at address with the shaft running
+    through its fingers, reads **8–20 px** (n=7). `ARRIVAL_HAND_WINDOW_S =
+    0.25` — the worst measured gap between a carry's arrival frame and a
+    covering hand is **0.064 s**, and the population that must not be
+    admitted stays empty out to 0.5 s, so the band is empty in both
+    directions. `ARRIVAL_CLEAR_MM = 60.0` is one ball diameter (WPA 57.15 mm),
+    not a fitted number.
+  * **Where it lives.** `detect_frame()` returns `(balls, intrusions)` and
+    `detect_balls()` is now its ball half — the accept path is byte-identical
+    and §2.3 lesson 2 is untouched (balls are still never shape-filtered).
+    `pipeline` keeps the rearrangement window and reports `arrivals` /
+    `hand_arrivals` on `RearrangeSummary`; the hub's
+    `_settle_is_hand_placement` is the single line of policy (§13.1) and
+    re-supplies the evidence test checkpoint 87 removed, on evidence rather
+    than on shape. `ShotClock.balls_settled(suppress=...)`, deliberately kept
+    at 87, is what it drives. The detect cache carries the intrusion channel
+    (SCHEMA 2): a cached replay that dropped it would grade a different
+    verdict than a cold one.
+  * **Before / after, on the clips that carry Steven's ground truth.**
+    `ball_in_hand_carry_0811` counted 2 shots → **1**; `..._carry_b_0811`
+    2 → **1**; `..._triple_0811` 3 → **1** (that is the rack 9 → 12 episode:
+    three counted shots in 3.6 s for one real stroke). Every carry still
+    *settles* — the clock freezes at the motion latch and resumes at the
+    remaining it froze with, which is #33's headline behaviour restored. All
+    three promoted to the corpus with `shots` deliberately unasserted (a carry
+    fires an honest-looking 16 274 mm/s ShotTaken — the strike-layer artifact
+    #38 recorded as dead) and the clock outcome pinned by
+    `test_0811_carries_do_not_reset_the_clock`, which fails on the pre-fix
+    engine and passes on this one.
+  * **Not fixed, stated plainly:** a settle with *no* arrivals — a pickup, a
+    post-scratch retrieval, the #37 phantom shape — is never refused here.
+    #38 measured that class unresolvable (a retrieval and a no-contact kick
+    are byte-identical evidence) and absence of evidence must not refuse a
+    shot. The shaft cases are also untouched: a legal ball-in-hand tip nudge
+    and a foul shaft bump remain the same pixels and both still reset, exactly
+    as the 2026-08-02 decision says. This fixes the *hand*, which is the case
+    Steven actually hits.
 - **2026-08-11 (checkpoint 90 — #40: the motion latch stops being roster-only):**
   `latch_blind_shot_0811` (Steven's flag from `session-20260811-182341`) is a
   real shot at **2047.8 mm/s** on which the engine emitted **zero events over

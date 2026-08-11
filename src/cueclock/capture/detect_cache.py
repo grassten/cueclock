@@ -53,18 +53,22 @@ import cv2
 import numpy as np
 
 from cueclock.capture.clip import FRAMES_NAME, META_NAME
-from cueclock.vision.detect import DetectConfig, Detection
+from cueclock.vision.detect import DetectConfig, Detection, Intrusion
 from cueclock.vision.pipeline import ReferenceModel
 
-SCHEMA = 1
+SCHEMA = 2  # 2: the #41 intrusion channel rides along with the balls
 DEFAULT_CACHE_DIR = Path(".detect-cache.nosync")
 """Repo-local and gitignored. The `.nosync` suffix is load-bearing, not
 decoration: iCloud syncs Desktop and stamps `UF_HIDDEN` on what it touches,
 which has already broken this repo once (CHANGELOG checkpoint 13)."""
 
-# One frame's detections: the blobs plus each blob's appearance churn
-# (None on the first replayed frame, which has no predecessor to difference).
-FrameDetections = tuple[list[Detection], list[float | None]]
+# One frame's detector output: the ball-like blobs, each blob's appearance
+# churn (None on the first replayed frame, which has no predecessor to
+# difference), and the hand-scale blobs the ball gates rejected (#41). The
+# intrusions are cached with the rest because they are detector output: a
+# cached replay that dropped them would grade a different settle verdict than
+# a cold one, which is exactly what the key exists to make impossible.
+FrameDetections = tuple[list[Detection], list[float | None], list[Intrusion]]
 
 
 def _clip_identity(clip_dir: Path) -> str:
@@ -130,13 +134,25 @@ class DetectionCache:
             cx, cy, area = data["cx"], data["cy"], data["area"]
             whiteness, churn = data["whiteness"], data["churn"]
             merged, bbox = data["merged"], data["bbox"]
+            icounts = data["intrusion_counts"]
+            ibbox, iarea, icore = (
+                data["intrusion_bbox"],
+                data["intrusion_area"],
+                data["intrusion_core"],
+            )
         if int(counts.sum()) != len(cx):
             raise ValueError(f"{path.name}: counts sum to {counts.sum()} but hold {len(cx)} rows")
+        if int(icounts.sum()) != len(iarea):
+            raise ValueError(
+                f"{path.name}: intrusion counts sum to {icounts.sum()} but hold {len(iarea)} rows"
+            )
 
         out: list[FrameDetections] = []
         offsets = np.concatenate([[0], np.cumsum(counts)])
+        ioffsets = np.concatenate([[0], np.cumsum(icounts)])
         for f in range(len(counts)):
             lo, hi = int(offsets[f]), int(offsets[f + 1])
+            ilo, ihi = int(ioffsets[f]), int(ioffsets[f + 1])
             out.append(
                 (
                     [
@@ -156,6 +172,19 @@ class DetectionCache:
                         for i in range(lo, hi)
                     ],
                     [None if np.isnan(churn[i]) else float(churn[i]) for i in range(lo, hi)],
+                    [
+                        Intrusion(
+                            bbox=(
+                                int(ibbox[i, 0]),
+                                int(ibbox[i, 1]),
+                                int(ibbox[i, 2]),
+                                int(ibbox[i, 3]),
+                            ),
+                            area=float(iarea[i]),
+                            core_radius_px=float(icore[i]),
+                        )
+                        for i in range(ilo, ihi)
+                    ],
                 )
             )
         return out
@@ -175,7 +204,8 @@ class DetectionCache:
         must be unique, or two workers interleave into one path and produce a
         genuinely corrupt file.
         """
-        flat = [(d, c) for dets, churns in frames for d, c in zip(dets, churns, strict=True)]
+        flat = [(d, c) for dets, churns, _ in frames for d, c in zip(dets, churns, strict=True)]
+        iflat = [x for _, _, intrusions in frames for x in intrusions]
         self.root.mkdir(parents=True, exist_ok=True)
         path = self._path(clip_dir, key)
         tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
@@ -188,7 +218,13 @@ class DetectionCache:
                 np.savez(
                     fh,
                     frame_indices=np.asarray(frame_indices, dtype=np.int32),
-                    counts=np.asarray([len(d) for d, _ in frames], dtype=np.int32),
+                    counts=np.asarray([len(d) for d, _, _ in frames], dtype=np.int32),
+                    intrusion_counts=np.asarray([len(i) for _, _, i in frames], dtype=np.int32),
+                    intrusion_bbox=np.asarray([i.bbox for i in iflat], dtype=np.int32).reshape(
+                        -1, 4
+                    ),
+                    intrusion_area=np.asarray([i.area for i in iflat], dtype=np.float64),
+                    intrusion_core=np.asarray([i.core_radius_px for i in iflat], dtype=np.float64),
                     cx=np.asarray([d.cx for d, _ in flat], dtype=np.float64),
                     cy=np.asarray([d.cy for d, _ in flat], dtype=np.float64),
                     area=np.asarray([d.area for d, _ in flat], dtype=np.float64),

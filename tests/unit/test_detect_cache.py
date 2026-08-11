@@ -16,7 +16,7 @@ import pytest
 
 from cueclock.capture.clip import ClipWriter
 from cueclock.capture.detect_cache import DetectionCache, cache_key
-from cueclock.vision.detect import DetectConfig, Detection
+from cueclock.vision.detect import DetectConfig, Detection, Intrusion
 from cueclock.vision.pipeline import ReferenceModel
 
 WIDTH, HEIGHT = 64, 48
@@ -54,18 +54,32 @@ def _detection(cx: float, merged: bool = False) -> Detection:
     return Detection(cx=cx, cy=2.5, area=1234.5, bbox=(1, 2, 3, 4), whiteness=0.625, merged=merged)
 
 
-def _frames() -> list[tuple[list[Detection], list[float | None]]]:
+def _frames() -> list[tuple[list[Detection], list[float | None], list[Intrusion]]]:
     """Three frames covering the packing edge cases in one fixture.
 
     Frame 0 exercises the None-churn sentinel alongside a real 0.0 (they must
     not collapse — 0.0 is a measurement, None is "no predecessor"); frame 1 is
     empty (the cumsum-offset bug lives here); frame 2 carries two detections
     whose order must survive, because the tracker's association is greedy.
+
+    The intrusion channel (#41) is packed with its own per-frame counts, so it
+    varies independently of the ball counts here: 1, 0, 2 against 2, 0, 2.
     """
     return [
-        ([_detection(1.5), _detection(2.5, merged=True)], [None, 0.0]),
-        ([], []),
-        ([_detection(10.125), _detection(20.25)], [1.5, 2.75]),
+        (
+            [_detection(1.5), _detection(2.5, merged=True)],
+            [None, 0.0],
+            [Intrusion(bbox=(5, 6, 70, 80), area=4321.5, core_radius_px=25.5)],
+        ),
+        ([], [], []),
+        (
+            [_detection(10.125), _detection(20.25)],
+            [1.5, 2.75],
+            [
+                Intrusion(bbox=(1, 1, 60, 60), area=2500.25, core_radius_px=22.125),
+                Intrusion(bbox=(9, 9, 90, 90), area=9000.0, core_radius_px=44.0),
+            ],
+        ),
     ]
 
 

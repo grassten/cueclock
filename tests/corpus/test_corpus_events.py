@@ -37,7 +37,7 @@ from .clock_replay import (
 if TYPE_CHECKING:
     from cueclock.capture.clip import ClipReader
     from cueclock.vision.calibration import TableCalibration
-    from cueclock.vision.detect import Detection
+    from cueclock.vision.detect import Detection, Intrusion
     from cueclock.vision.pipeline import ReferenceModel, VisionPipeline
 
 
@@ -575,6 +575,43 @@ EXPECTED: dict[
     # clip's only real stroke, and `_assert_clock_outcome` ignores counts
     # before the first ground-truth stroke by design.
     "phantom_still_down_0811": (1, 0, 2, 2),
+    # The three 2026-08-11 ball-in-hand carries (#41), Steven's own ground
+    # truth: he moved the cue ball by hand mid-rack and the clock reset and
+    # advanced the rack every time. Each clip holds a real shot AND at least
+    # one carry, recorded minutes apart in one session — the controlled pair
+    # the corpus never had.
+    #
+    # `shots` is deliberately unasserted on all three, and that is a statement
+    # about the strike layer, not about the fix. A carry fires an honest-
+    # looking ShotTaken (16 274 mm/s on carry, 1058 on carry_b — track-jump
+    # artifacts, the dead-end #38 recorded), so the fire count here is 2, 2
+    # and 1 against one real stroke each. Pinning it would either canonize the
+    # phantom fires or demand a strike-layer fix this issue is not. What
+    # matters is what the CLOCK did, and since #33 those two are deliberately
+    # different things — so the outcome is pinned by
+    # `test_0811_carries_do_not_reset_the_clock` below, which is the actual
+    # done-when. Settles are pinned exactly (a carry still settles; it must
+    # just not count), and the golden keeps the event stream visible.
+    "ball_in_hand_carry_0811": (None, 0, 2, 2),
+    "ball_in_hand_carry_b_0811": (None, 0, 2, 2),
+    "ball_in_hand_triple_0811": (None, 0, 3, 3),
+}
+
+# #41: the settle each clip's ONE real stroke produced, and the settles that
+# are hand carries. Steven's ground truth, matched to
+# `logs/session-20260811-182341.jsonl` through the dumps' state.json
+# (t_clip = t_session - snapshot_t + (snapshot_ns - first_ns)/1e9):
+#
+#   ball_in_hand_carry_0811    shot 7.905 (s=647.38)   carry 15.425 (s=654.90)
+#   ball_in_hand_carry_b_0811  shot 10.06 (s=1487.50)  carry 13.345 (s=1490.79)
+#   ball_in_hand_triple_0811   shot 12.455 (s=1134.74) carries 14.740, 16.040
+#
+# The triple is the rack 9 -> 12 episode: three settles inside 3.6 s counted
+# three shots for one real stroke plus two carries.
+CARRY_CLIPS: dict[str, list[float]] = {
+    "ball_in_hand_carry_0811": [7.905],
+    "ball_in_hand_carry_b_0811": [10.062],
+    "ball_in_hand_triple_0811": [12.455],
 }
 
 # Clips pair with the empty-table reference from the same camera position:
@@ -633,6 +670,9 @@ REFERENCES: dict[str, str] = {
     "kick_scratch_0811": "empty_table_0801",
     "latch_blind_shot_0811": "empty_table_0801",
     "phantom_still_down_0811": "empty_table_0801",
+    "ball_in_hand_carry_0811": "empty_table_0801",
+    "ball_in_hand_carry_b_0811": "empty_table_0801",
+    "ball_in_hand_triple_0811": "empty_table_0801",
 }
 
 
@@ -671,14 +711,14 @@ def _run_clip(name: str, reference: "ReferenceModel") -> list[Event]:
     indices = reader.detect_indices()
     frames = _detections(reader, CLIPS / name, pipeline, indices)
     events: list[Event] = []
-    for i, (detections, churn) in zip(indices, frames, strict=True):
-        events += pipeline.advance(float(reader.timestamps[i]), detections, churn)
+    for i, (detections, churn, intrusions) in zip(indices, frames, strict=True):
+        events += pipeline.advance(float(reader.timestamps[i]), detections, churn, intrusions)
     return events
 
 
 def _detections(
     reader: "ClipReader", clip_dir: Path, pipeline: "VisionPipeline", indices: list[int]
-) -> list[tuple[list["Detection"], list[float | None]]]:
+) -> list[tuple[list["Detection"], list[float | None], list["Intrusion"]]]:
     """Detector output for `indices` — from disk when `--detect-cache` is on.
 
     Cold (the default) is the fidelity gate: it exercises the detector against
@@ -1173,8 +1213,8 @@ def test_break_dark_total_settles_at_the_rest() -> None:
     indices = reader.detect_indices()
     frames = _detections(reader, CLIPS / name, pipeline, indices)
     settles: list[tuple[float, bool, int, int]] = []
-    for i, (detections, churn) in zip(indices, frames, strict=True):
-        for event in pipeline.advance(float(reader.timestamps[i]), detections, churn):
+    for i, (detections, churn, intrusions) in zip(indices, frames, strict=True):
+        for event in pipeline.advance(float(reader.timestamps[i]), detections, churn, intrusions):
             if isinstance(event, BallsSettled):
                 summary = pipeline.last_settle_rearrange
                 involved = summary.involved if summary is not None else 0
@@ -1352,3 +1392,61 @@ def test_phantom_still_down_is_rejected_at_the_settle() -> None:
         f"{[round(r, 2) for r in resumes]}) — a rejected phantom must hand the "
         "countdown back, not leave the clock frozen"
     )
+
+
+@pytest.mark.parametrize("name", sorted(CARRY_CLIPS))
+def test_0811_carries_do_not_reset_the_clock(name: str) -> None:
+    """#41: adjusting the cue ball by hand must not count as a shot.
+
+    The done-when, stated as the clock rather than as an event count. Each of
+    these three clips holds one real stroke and one or two hand carries
+    (`CARRY_CLIPS` maps the strokes, with the journal timestamps they came
+    from). Before the intrusion channel every settle here counted: the
+    countdown reset to 30 s and the rack count advanced, three times inside
+    3.6 s on `ball_in_hand_triple_0811`.
+
+    Fails on the pre-fix engine — it counts 2, 2 and 3 — and the fix is
+    upstream, not a threshold: `detect_balls` was already computing the arm
+    and then throwing it away, so nothing downstream could see the one thing
+    that separates a carry from a stroke (`vision/detect.py`'s `Intrusion`,
+    `pipeline._hand_delivered`, `hub._settle_is_hand_placement`).
+
+    The freeze is asserted alongside the count on purpose. Suppression must
+    leave the countdown *frozen and then resumed at the remaining it froze
+    with* — a fix that stopped the carry counting by making the table
+    invisible would pass a count assertion and be a worse product.
+    """
+    if not (CLIPS / name).exists():
+        pytest.skip(f"clip {name} not recorded")
+    from cueclock.capture.clip import ClipReader
+    from cueclock.vision.pipeline import VisionPipeline
+
+    pipeline = VisionPipeline(_calibration(), _reference_model(REFERENCES[name]))
+    reader = ClipReader(CLIPS / name)
+    indices = reader.detect_indices()
+    timeline = replay_clock(
+        name,
+        pipeline,
+        [float(t) for t in reader.timestamps],
+        _detections(reader, CLIPS / name, pipeline, indices),
+        indices,
+    )
+    strokes = CARRY_CLIPS[name]
+    assert len(timeline.counts) == len(strokes), (
+        f"{name}: the clock counted {len(timeline.counts)} shots at "
+        f"{[round(c, 3) for c in timeline.counts]}; ground truth is "
+        f"{len(strokes)} at {strokes} and the rest are ball-in-hand carries. "
+        "Extra counts are the countdown resetting and the rack advancing on a "
+        "ball moved by hand — the failure #41 exists to kill."
+    )
+    for stroke, counted in zip(strokes, timeline.counts, strict=True):
+        assert abs(counted - stroke) <= FREEZE_LATE_S, (
+            f"{name}: the surviving count landed at {counted:.3f}s, not on the "
+            f"real stroke's settle at {stroke:.3f}s — the right number of "
+            "shots for the wrong reason"
+        )
+    for stroke in strokes:
+        assert any(f <= stroke for f in timeline.freezes), (
+            f"{name}: the countdown never stopped before the stroke settling at "
+            f"{stroke:.3f}s — freezes at {[round(f, 3) for f in timeline.freezes]}"
+        )

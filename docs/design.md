@@ -95,6 +95,7 @@ Key architectural choices, each the researched consensus for this setting:
 - **Track all balls, minimally.** At 160 fps even a 13 m/s break moves a ball ~1.4 diameters/frame; at 80 Hz detection it's ~2.8. Nearest-neighbor/Hungarian association with a generous gate is nearly unambiguous; Kalman filters earn their keep only for coasting through hand occlusions and for smoothed velocity — not for association. Norfair is the off-the-shelf fit (centroid input, custom distance, ReID hook for color re-identification after occlusion) if we don't hand-roll; pedestrian MOT stacks (ByteTrack/OC-SORT/BoT-SORT) are dead weight here.
 - **Cue ball identification** by white-fraction + hue statistics on a central disk of each ball patch, resolved **globally** (Hungarian against ball identities) rather than per-patch — POOL-AID's 72% → 98.6% lesson. For the shot clock only cue-vs-rest matters; full 16-ball identity is backlog.
 - **Undistort points, not pixels.** Detection runs on distorted frames; only detected coordinates go through `undistortPoints` + homography (~200× cheaper than full-frame remap, and the detector sees unresampled pixels). Full remap runs only on the display path. Straight-line logic (if we ever detect the cue stick again) must account for curvature in distorted space — undistort line endpoints too.
+- **The rejects are evidence too — export them (2026-08-11, #41).** The geometry gates above are already a *classifier*: an arm fails the area ceiling, a cue stick fails the minimum extent, anything reaching in from off-table fails the mask-border rule. Throwing those verdicts away left the rest of the system unable to see a hand at all — which is why four separate passes (checkpoint 50, checkpoint 66, #38) found the `merged` flag reading ~0 on hand events. A hand that *engulfs* a ball produces one over-size blob that is discarded outright, so there is no detection left to mark; the arm was never absent from the image, only from the exported evidence. `detect_frame` therefore returns a second list, `Intrusion`, describing the hand-scale rejects. Strictly additive — which blobs become balls is untouched, and §2.3 lesson 2 stands: balls are never shape-filtered, because fast balls streak. The one shape number it carries is the radius of the largest inscribed disc, which is where a hand and a cue actually differ: a hand carrying a ball measures 23–62 px against 8–20 px for a bridge hand with the shaft running through its fingers. What consumes it is settle-time *policy*, in the hub — see §4.2's ball-in-hand note.
 
 ### 4.2 Event logic (the actual product)
 
@@ -257,6 +258,33 @@ cueclock/
      Hence the two-stage confirm — 60 mm at any time, or 22 mm once the window
      has run — which leaves every ordinary shot firing on the same frame at
      the same speed.
+
+- **2026-08-11 — Moving the cue ball *by hand* does not reset the clock (#41).**
+  Narrows the 2026-08-02 "eat the rare wrong reset" above; it does not reverse
+  it. Steven, after the first session that measured the cost (five carries in
+  80 shots, one of them three counted shots in 3.6 s for one real stroke):
+  *"Adjusting the cue ball with a human hand shouldn't reset the clock… I need
+  you to identify a way to make ball in hand NOT look like movement. In my
+  opinion an arm / a hand does not look like a cue."*
+
+  What separates them is **not** that a hand is near the ball — during a
+  stroke the bridge hand and forearm are on the cloth beside it, and every
+  presence-shaped axis #38 measured overlaps because of that. It is **where
+  the ball ends up**: a struck ball leaves the hand within a few frames and
+  comes to rest on open cloth, while a carried ball comes to rest inside where
+  the hand was, because the hand is what took it there. So the settle asks,
+  of every ball that arrived somewhere new, whether a hand-scale intrusion
+  (§4.1) was covering that spot at the moment it arrived — and refuses the
+  shot only when **all** of them were. A real stroke always leaves at least
+  one ball resting where no hand is, which is what keeps the fail-safe
+  direction from flipping.
+
+  **What this does and does not settle.** It settles the *hand* case, which
+  is the one Steven actually hits. It does not settle the shaft case: a legal
+  ball-in-hand nudge with the cue tip and a foul shaft bump are still the same
+  pixels and both still reset, exactly as the 2026-08-02 decision says. Both
+  arrive without a hand covering the spot, so neither is refused here. The
+  keyless call stands and no ball-in-hand key is added.
 
 ## 9. Test-corpus recording checklist
 

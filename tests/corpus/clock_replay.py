@@ -267,11 +267,11 @@ def replay_clock(
         prev_rack_shots = hub.clock.rack_shots
         episode_prev = pipeline.episode_active
 
-        for i, (detections, churn) in zip(indices, frames, strict=True):
+        for i, (detections, churn, intrusions) in zip(indices, frames, strict=True):
             t = float(timestamps[i])
             cell[0] = t  # the hub's `now` for everything this frame does
 
-            events = pipeline.advance(t, detections, churn)
+            events = pipeline.advance(t, detections, churn, intrusions)
             timeline.events += events
             for event in events:
                 if isinstance(event, ShotTaken):
