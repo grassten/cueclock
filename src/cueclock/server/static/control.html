@@ -681,7 +681,16 @@
     let armed = null;           // who has reached their target, per the server
     let liveMatchId = null;     // the loaded match, straight off the broadcast
     let switcherOpen = false;
-    let build = { players: [], a_race: 5, b_race: 4 };
+    // Only the player list is held in JS, because it is a list of objects with
+    // no DOM to read it back from. Everything else on the build form — name,
+    // races, handicap, seeding — is read out of its own control at build time.
+    // The races used to be duplicated here and it cost a tournament: `clear`
+    // reset the copy to the defaults without repainting the steppers, so the
+    // page showed 3 and 2 while the copy held 5 and 4 and Build sent 5 and 4.
+    // The two values that came from the DOM survived that clear; the two that
+    // didn't, didn't. One source of truth per field is the whole fix.
+    let build = { players: [] };
+    const RACE_MIN = 2, RACE_MAX = 21;
 
     async function refreshBracket() {
         try {
@@ -895,10 +904,15 @@
         panel.hidden = false;
     }
 
+    // The readout *is* the value — read it back rather than shadowing it.
+    function raceValue(side) {
+        const shown = parseInt(document.getElementById(`build-${side}-race`).innerText, 10);
+        return Number.isFinite(shown) ? shown : (side === 'a' ? 5 : 4);
+    }
+
     function stepBuildRace(side, delta) {
-        const key = side + '_race';
-        build[key] = Math.max(2, Math.min(21, build[key] + delta));
-        document.getElementById(`build-${side}-race`).innerText = build[key];
+        const next = Math.max(RACE_MIN, Math.min(RACE_MAX, raceValue(side) + delta));
+        document.getElementById(`build-${side}-race`).innerText = next;
     }
 
     async function buildBracket() {
@@ -909,8 +923,8 @@
         const res = await postJson('/api/bracket', {
             name: document.getElementById('bracket-name').value || 'Tournament',
             players,
-            a_race: build.a_race,
-            b_race: build.b_race,
+            a_race: raceValue('a'),
+            b_race: raceValue('b'),
             handicap: document.getElementById('build-handicap').value,
             seeding: document.getElementById('build-seeding').value,
         });
@@ -921,7 +935,9 @@
     async function clearBracket() {
         if (!confirm('Clear the bracket and go back to casual scoring?')) return;
         await fetch('/api/bracket', { method: 'DELETE' });
-        build = { players: [], a_race: 5, b_race: 4 };
+        // Only the field goes: the races, handicap and draw on the form are
+        // whatever you last chose, and they are still what Build will send.
+        build = { players: [] };
         refreshBracket();
     }
 

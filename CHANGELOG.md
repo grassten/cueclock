@@ -302,6 +302,21 @@ survive unchanged in `design.md`.
     start the first one. Building now puts the first ready match up (which is
     what you built the draw for), and the panel follows the *bracket* rather
     than the loaded match.
+  * **Second follow-up, from Steven's first real build: the races he chose were
+    not the races that got built.** He set 3 and 2, cleared the draw, rebuilt,
+    and got 5 and 4. `clearBracket()` reset the page's in-memory copy of the
+    races to the defaults and never repainted the steppers, so the readout said
+    3/2 while the copy said 5/4 and Build sent 5/4. The tell was in the saved
+    file: `handicap` and `seeding` survived the clear because they are read out
+    of their own `<select>` at build time, and only the two fields that were
+    *duplicated* in JS state were lost. Fixed by deleting the duplicate — the
+    readout is the value now, read back at build time like every other field —
+    rather than by repainting, which would have left the same trap for the next
+    field. `bracket_created` also gains `a_race`/`b_race`: without them the
+    journal could not say a build had gone out with races nobody chose, and
+    diagnosing it took reading the page's JavaScript instead of one log line.
+    Both directions verified in a real browser, driving the exact sequence:
+    old page rebuilds at [5,4], new page at [3,2].
   * Shipped with it: `/bracket` (1920×1080, geometry computed from the field so
     3-16 players draw without scrolling), the Bracket tab on `/control` plus the
     match header / per-player targets / report / switch-match additions to the

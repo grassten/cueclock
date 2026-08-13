@@ -828,6 +828,12 @@ class Hub:
             size=self.bracket.size,
             handicap=self.bracket.handicap,
             seeding=self.bracket.seeding,
+            # The races belong here for the same reason every other setting
+            # does: the first bug this feature had was a build going out with
+            # races nobody chose, and without these the journal could not say
+            # so — it took reading the page's JavaScript.
+            a_race=self.bracket.a_race,
+            b_race=self.bracket.b_race,
         )
         # Building the draw puts the first match up. Without this the bracket
         # exists with nothing loaded, which is a state the deck can only show as
