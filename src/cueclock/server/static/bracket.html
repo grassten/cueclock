@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>cueclock — bracket</title>
+    <style>
+        /* The bracket scene: 1920x1080, its own OBS scene (issue #43).
+
+           It draws the bracket and NOTHING else — no current-match panel, no
+           up-next list. The play scene's score bar already says who is up and
+           the live match is the highlighted box, so repeating either would only
+           cost the boxes the space that makes them readable from the couch.
+
+           Same tokens as the rest of the overlay (docs/hardware.md §B3): one
+           accent, spent only on the live match. No colour states, no hill
+           state, no glow — a bracket is a table of facts, and the one thing
+           worth colouring is where everyone should be looking.
+
+           Layout is computed, never hardcoded: `sizeStage()` derives box height
+           and column width from the field, so 8 draws like the mockup and 16
+           packs tighter without the page ever scrolling. */
+        :root {
+            color-scheme: dark;
+            --ink: #0B0E13;
+            --accent: #2E86C8;
+            --slate: #9FB3C4;
+            --panel: #111721;
+            --line: rgba(159, 179, 196, 0.18);
+            --hair: rgba(159, 179, 196, 0.11);
+            --dim: #6C7A87;
+            --ref: #55616E;
+            /* Set by sizeStage() from the field size. */
+            --box: 100px;
+            --col: 330px;
+            --link: 36px;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; overflow: hidden; }
+        body {
+            background: var(--ink);
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* The page is authored at 1920x1080 and scaled to whatever the OBS
+           browser source is, exactly like the bar's fitBar(): text then
+           rasterizes at the source's native resolution instead of being
+           upscaled by OBS. */
+        #stage {
+            position: absolute;
+            top: 0; left: 0;
+            width: 1920px; height: 1080px;
+            transform-origin: top left;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            height: 76px;
+            flex: none;
+            display: flex;
+            align-items: center;
+            gap: 28px;
+            padding: 0 40px;
+            border-bottom: 1px solid var(--hair);
+        }
+        header .title {
+            font-size: 26px; font-weight: 700; letter-spacing: 2.5px; text-transform: uppercase;
+        }
+        header .meta, header .right {
+            font-size: 15px; font-weight: 700; letter-spacing: 2px;
+            color: var(--slate); text-transform: uppercase;
+        }
+        header .right { margin-left: auto; }
+
+        main { flex: 1; padding: 16px 40px 24px; display: flex; flex-direction: column; }
+        .sidelab {
+            height: 34px; flex: none; display: flex; align-items: center;
+            font-size: 14px; font-weight: 700; letter-spacing: 3.5px;
+            text-transform: uppercase; color: var(--slate);
+        }
+        .rounds { display: flex; align-items: stretch; }
+        .round {
+            width: var(--col); flex: none;
+            display: flex; flex-direction: column; justify-content: space-around;
+        }
+        .link { width: var(--link); flex: none; position: relative; }
+        .link i, .link u {
+            position: absolute; background: var(--line); text-decoration: none;
+        }
+        .link i { width: 1px; }
+        .link u { height: 1px; }
+        /* The one connector that crosses the page: the B final feeding the
+           final, drawn after layout because it spans both regions. */
+        .cross { position: absolute; background: var(--line); }
+
+        .m {
+            height: var(--box);
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            overflow: hidden;
+            display: flex; flex-direction: column;
+        }
+        .m.ifnec { border-style: dashed; background: transparent; }
+        .m .mh {
+            flex: none; height: 24%;
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 14px;
+            font-size: calc(var(--box) * 0.12);
+            font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+            color: var(--dim);
+            border-bottom: 1px solid var(--hair);
+        }
+        .m .r {
+            flex: 1;
+            display: flex; align-items: center; gap: 12px;
+            padding: 0 14px;
+            font-size: calc(var(--box) * 0.18);
+            line-height: 1;
+        }
+        .m .r + .r { border-top: 1px solid var(--hair); }
+        .m .nm { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
+                 text-overflow: ellipsis; letter-spacing: 0.5px; }
+        .m .fg { flex: none; font-size: calc(var(--box) * 0.13); font-weight: 700; color: var(--dim); }
+        .m .sc { flex: none; width: calc(var(--box) * 0.16); text-align: right;
+                 font-weight: 700; font-variant-numeric: tabular-nums; }
+        .m .tg { flex: none; width: calc(var(--box) * 0.24);
+                 font-size: calc(var(--box) * 0.13); font-weight: 700; color: var(--dim); }
+        /* The result, said once: the winner's name is white and bold, the
+           loser's greys out. No ticks, no colour — the score is right there. */
+        .m .r.win .nm { color: #fff; font-weight: 700; }
+        .m .r.lose .nm, .m .r.lose .sc { color: var(--dim); }
+        .m .r.ref .nm { color: var(--ref); }
+        .m.live { border-color: var(--accent); }
+        .m.live .mh { color: var(--accent); border-bottom-color: rgba(46, 134, 200, 0.35); }
+
+        /* Casual night: the scene exists but nothing has been built. Says so
+           rather than showing an empty grid, which reads as a broken page. */
+        #empty {
+            position: absolute; inset: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 22px; font-weight: 700; letter-spacing: 4px;
+            text-transform: uppercase; color: var(--ref);
+        }
+        /* `display:flex` above outranks the UA stylesheet's [hidden] rule, so
+           the hidden state has to be said explicitly or the placeholder sits on
+           top of the bracket forever. */
+        #empty[hidden] { display: none; }
+    </style>
+</head>
+<body>
+<div id="stage">
+    <header>
+        <div class="title" id="hdr-title">Bracket</div>
+        <div class="meta" id="hdr-meta"></div>
+        <div class="right" id="hdr-right"></div>
+    </header>
+    <main id="board">
+        <div class="sidelab">A Side</div>
+        <div class="rounds" id="side-a"></div>
+        <div class="sidelab" id="lab-b">B Side</div>
+        <div class="rounds" id="side-b"></div>
+    </main>
+    <div class="cross" id="cross-down" hidden></div>
+    <div class="cross" id="cross-along" hidden></div>
+    <div class="cross" id="cross-up" hidden></div>
+    <div id="empty">No bracket loaded</div>
+</div>
+
+<script>
+    // ---------------- fit the authored 1920x1080 to the source ----------------
+    const stage = document.getElementById('stage');
+    function fitStage() {
+        const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+        stage.style.transform = `scale(${scale})`;
+    }
+    window.addEventListener('resize', () => { fitStage(); drawCrossLink(); });
+    fitStage();
+
+    // ---------------- state ----------------
+    // The full bracket is fetched, not broadcast: it is a few kilobytes and
+    // changes a handful of times an evening, so `/ws` carries only a compact
+    // summary and this page refetches when `revision` moves. Live scores are a
+    // different story — they change on every Stream Deck press, so they are
+    // patched straight from the payload's `score` without a re-render.
+    let bracket = null;
+    let shownRevision = -1;
+
+    async function refetch() {
+        try {
+            const res = await fetch('/api/bracket').then(r => r.json());
+            bracket = res.bracket;
+        } catch (e) { return; }
+        shownRevision = bracket ? bracket.revision : -1;
+        render();
+    }
+
+    // ---------------- rendering ----------------
+    const EN_DASH = '–';
+
+    function sizeStage(size) {
+        // One slot per Round-1 match on each side; the two sides share a slot
+        // height so their columns line up. 16 packs tighter than 8 — that is
+        // the whole trade, and it is made here rather than in three places.
+        const aRows = size / 2, bRows = size / 4;
+        const available = 1080 - 76 - 16 - 32 - 34 * 2;   // header, pads, two labels
+        const slot = available / (aRows + bRows);
+        const box = Math.max(58, Math.min(112, slot - 12));
+        const rounds = Math.log2(size);
+        const cols = Math.max(rounds + 2, 2 * rounds - 2);  // A + both finals, or B
+        const link = size >= 16 ? 26 : 36;
+        const col = Math.floor((1840 - (cols - 1) * link) / cols);
+        const root = document.documentElement.style;
+        root.setProperty('--box', box + 'px');
+        root.setProperty('--col', col + 'px');
+        root.setProperty('--link', link + 'px');
+        document.getElementById('side-a').style.height = (aRows * slot) + 'px';
+        document.getElementById('side-b').style.height = (bRows * slot) + 'px';
+    }
+
+    function row(slot, match) {
+        const el = document.createElement('div');
+        el.className = 'r';
+        const name = document.createElement('span');
+        name.className = 'nm';
+        if (slot.name) {
+            name.innerText = slot.name;
+        } else {
+            // Generated from the structure, never typed: "Winner of Match 8".
+            name.innerText = slot.ref;
+            el.classList.add('ref');
+        }
+        el.appendChild(name);
+        if (slot.rating != null) {
+            const fg = document.createElement('span');
+            fg.className = 'fg';
+            fg.innerText = slot.rating;
+            el.appendChild(fg);
+        }
+        // A score only means something once the match has started: a known
+        // player in a match nobody has racked yet shows a dash, not a zero,
+        // which would read as "lost 5-0" from across the room.
+        const started = match.status === 'played' || match.status === 'live';
+        const sc = document.createElement('span');
+        sc.className = 'sc';
+        sc.innerText = slot.name && started ? slot.score : EN_DASH;
+        el.appendChild(sc);
+        // Every row carries its own target, because handicapping makes the two
+        // differ — a single centre race-to number cannot say what either player
+        // is playing to.
+        const tg = document.createElement('span');
+        tg.className = 'tg';
+        tg.innerText = slot.target != null ? '/' + slot.target : '';
+        el.appendChild(tg);
+        if (slot.won === true) el.classList.add('win');
+        if (slot.won === false) el.classList.add('lose');
+        return el;
+    }
+
+    function box(match) {
+        const el = document.createElement('div');
+        el.className = 'm' + (match.status === 'live' ? ' live' : '')
+            + (match.conditional ? ' ifnec' : '');
+        el.dataset.match = match.id;
+        const head = document.createElement('div');
+        head.className = 'mh';
+        const left = document.createElement('span');
+        left.innerText = match.title + (match.status === 'live' ? ' · Live' : '');
+        const right = document.createElement('span');
+        const t1 = match.p1.target, t2 = match.p2.target;
+        right.innerText = t1 != null && t2 != null ? t1 + EN_DASH + t2 : '—';
+        head.append(left, right);
+        el.append(head, row(match.p1, match), row(match.p2, match));
+        return el;
+    }
+
+    function column(matches) {
+        const el = document.createElement('div');
+        el.className = 'round';
+        for (const m of matches) el.appendChild(box(m));
+        return el;
+    }
+
+    // A connector between two columns. `merge` joins pairs into one (the A
+    // side, and the B side's own rounds); `carry` is the 1:1 hop a drop round
+    // or a final makes. Percentages, so it is correct at any field size:
+    // match i of n sits at (i + 0.5)/n of the column's height.
+    function link(fromCount, toCount) {
+        const el = document.createElement('div');
+        el.className = 'link';
+        const pct = (i, n) => ((i + 0.5) / n) * 100;
+        if (fromCount === toCount) {
+            for (let i = 0; i < toCount; i++) {
+                el.insertAdjacentHTML('beforeend',
+                    `<u style="top:${pct(i, fromCount)}%;left:0;right:0"></u>`);
+            }
+            return el;
+        }
+        for (let j = 0; j < toCount; j++) {
+            const a = pct(2 * j, fromCount), b = pct(2 * j + 1, fromCount);
+            el.insertAdjacentHTML('beforeend',
+                `<u style="top:${a}%;left:0;width:50%"></u>` +
+                `<u style="top:${b}%;left:0;width:50%"></u>` +
+                `<i style="top:${a}%;height:${b - a}%;left:50%"></i>` +
+                `<u style="top:${(a + b) / 2}%;left:50%;right:0"></u>`);
+        }
+        return el;
+    }
+
+    function chain(host, columns) {
+        host.innerHTML = '';
+        columns.forEach((matches, i) => {
+            if (i > 0) host.appendChild(link(columns[i - 1].length, matches.length));
+            host.appendChild(column(matches));
+        });
+    }
+
+    function byRound(side) {
+        const rounds = [];
+        for (const m of bracket.matches) {
+            if (m.side !== side) continue;
+            (rounds[m.round - 1] ||= []).push(m);
+        }
+        return rounds.filter(Boolean);
+    }
+
+    function render() {
+        const empty = document.getElementById('empty');
+        const board = document.getElementById('board');
+        empty.hidden = !!bracket;
+        board.style.visibility = bracket ? 'visible' : 'hidden';
+        if (!bracket) {
+            document.getElementById('hdr-title').innerText = 'Bracket';
+            document.getElementById('hdr-meta').innerText = '';
+            document.getElementById('hdr-right').innerText = '';
+            drawCrossLink();
+            return;
+        }
+
+        sizeStage(bracket.size);
+        document.getElementById('hdr-title').innerText = bracket.name;
+        document.getElementById('hdr-meta').innerText =
+            'Double Elim' + (bracket.handicap === 'off' ? '' : ' · Handicapped');
+
+        // The finals hang off the end of the A-side chain: the A finalist walks
+        // straight into them, and the B side reaches them by the one connector
+        // that crosses the page.
+        const finals = bracket.matches.filter(m => m.side === 'F');
+        chain(document.getElementById('side-a'), byRound('A').concat(finals.map(m => [m])));
+        chain(document.getElementById('side-b'), byRound('B'));
+
+        const playable = bracket.matches.filter(
+            m => !m.conditional || m.status !== 'conditional');
+        const played = playable.filter(m => m.status === 'played' || m.status === 'bye').length;
+        document.getElementById('hdr-right').innerText = bracket.champion
+            ? `Champion · ${bracket.champion}`
+            : (bracket.loaded != null
+                ? `A Race ${bracket.a_race} · B Race ${bracket.b_race} · Match ${bracket.loaded} of ${playable.length}`
+                : `A Race ${bracket.a_race} · B Race ${bracket.b_race} · ${played} of ${playable.length} played`);
+        // Synchronously, not on the next animation frame: an OBS browser source
+        // that is loaded while its scene is dark paints nothing, so a
+        // requestAnimationFrame callback can sit unfired until the cut — and
+        // this is the one connector that would be missing when it arrives.
+        drawCrossLink();
+    }
+
+    function drawCrossLink() {
+        // The B final feeds the final, and the two live in different regions, so
+        // this one connector is measured off the rendered boxes rather than
+        // expressed in percentages of a column.
+        //
+        // It routes down from the final, along the empty band between the two
+        // regions, and up into the B final — three segments, because the two
+        // boxes only line up at a field of eight. At sixteen the B side is a
+        // column wider than the A side, so the B final sits under the *second*
+        // final and a straight line would run through it; at four it sits a
+        // column short. When they do line up the two horizontals collapse to
+        // nothing and it draws as the single vertical the mockup has.
+        const down = document.getElementById('cross-down');
+        const along = document.getElementById('cross-along');
+        const up = document.getElementById('cross-up');
+        const parts = [down, along, up];
+        const hide = () => parts.forEach(p => { p.hidden = true; });
+        if (!bracket) { hide(); return; }
+        const bFinal = bracket.matches.filter(m => m.side === 'B').slice(-1)[0];
+        const final = bracket.matches.find(m => m.side === 'F' && !m.conditional);
+        const from = document.querySelector(`.m[data-match="${bFinal.id}"]`);
+        const to = document.querySelector(`.m[data-match="${final.id}"]`);
+        const label = document.getElementById('lab-b');
+        if (!from || !to) { hide(); return; }
+        const scale = stage.getBoundingClientRect().width / 1920;
+        const rect = (node) => {
+            const r = node.getBoundingClientRect();
+            return { x: r.left / scale, y: r.top / scale, w: r.width / scale, h: r.height / scale };
+        };
+        const a = rect(from), b = rect(to), band = rect(label);
+        const xa = a.x + a.w / 2, xb = b.x + b.w / 2;
+        const channel = band.y + band.h / 2;   // the B Side label's row, empty this far right
+        const place = (el, x, y, w, h) => {
+            el.style.left = x + 'px';
+            el.style.top = y + 'px';
+            el.style.width = Math.max(1, w) + 'px';
+            el.style.height = Math.max(1, h) + 'px';
+            el.hidden = w < 1 && h < 1;
+        };
+        place(down, xb, b.y + b.h, 0, channel - (b.y + b.h));
+        place(along, Math.min(xa, xb), channel, Math.abs(xa - xb), 0);
+        place(up, xa, channel, 0, a.y - channel);
+    }
+
+    // ---------------- live wiring ----------------
+    function patchLiveScores(state) {
+        if (!bracket || bracket.loaded == null || !state.score) return;
+        const el = document.querySelector(`.m[data-match="${bracket.loaded}"]`);
+        if (!el) return;
+        const rows = el.querySelectorAll('.r');
+        const scores = [state.score.p1.score, state.score.p2.score];
+        rows.forEach((r, i) => {
+            const sc = r.querySelector('.sc');
+            if (sc && scores[i] != null) sc.innerText = scores[i];
+        });
+    }
+
+    function onState(state) {
+        const summary = state.bracket;
+        const revision = summary ? summary.revision : -1;
+        if (revision !== shownRevision) { refetch(); return; }
+        patchLiveScores(state);
+    }
+
+    function connect() {
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        const ws = new WebSocket(`${proto}://${location.host}/ws`);
+        ws.onmessage = (ev) => { try { onState(JSON.parse(ev.data)); } catch (e) {} };
+        ws.onclose = () => setTimeout(connect, 500);
+        ws.onerror = () => ws.close();
+    }
+    refetch();
+    connect();
+</script>
+</body>
+</html>

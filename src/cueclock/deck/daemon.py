@@ -22,8 +22,9 @@ from typing import Any
 
 from PIL import Image
 
-from cueclock.deck import client, faces, replay
+from cueclock.deck import bracket, client, faces, replay
 from cueclock.deck.layout import (
+    CONFIRM_PENDING_FACE,
     DUMP_PENDING_FACE,
     FLAG_PENDING_FACE,
     LAYOUT,
@@ -31,12 +32,14 @@ from cueclock.deck.layout import (
     REASON_KEYS,
     REPLAY_PENDING_FACE,
     ApiPost,
+    BracketConfirm,
     Cycle,
     DeckState,
     FlagReason,
     FlagStart,
     Key,
     ReplayShow,
+    SceneToggle,
     ScoreAdjust,
     SessionToggle,
     cycle_listing,
@@ -48,6 +51,7 @@ from cueclock.deck.session import SessionManager, SessionState
 POLL_S = 2.0  # server/state poll cadence
 FLASH_S = 1.2  # how long a press outcome stays on the key
 RETRY_S = 3.0  # device reconnect cadence
+CONFIRM_S = 5.0  # a bracket confirm writes a result, loads a match and racks
 HOLD_FACE = "HOLD…"  # shown while the Session key is held toward a stop
 
 _BY_INDEX: dict[int, Key] = {key.index: key for key in LAYOUT}
@@ -74,21 +78,54 @@ def _score_of(payload: object, slot: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+def _bracket_fields(payload: object) -> dict[str, object]:
+    """The bracket half of a `GET /api/state` body, flattened for `DeckState`.
+
+    `null` (casual play) leaves every field at its default, which is what makes
+    both new keys dark and the deck exactly the deck it was before #43.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    match = payload.get("match")
+    fields: dict[str, object] = {"bracket_loaded": True}
+    if isinstance(match, dict):
+        fields["bracket_match_id"] = match.get("id")
+        fields["bracket_match"] = f"MATCH {match.get('id')}"
+        side = match.get("side")
+        fields["bracket_side"] = f"{side} SIDE" if side in ("A", "B") else "FINAL"
+    armed = payload.get("armed")
+    if isinstance(armed, dict):
+        fields["bracket_armed"] = (
+            str(armed.get("name", "")),
+            int(armed.get("score", 0)),
+            int(armed.get("other", 0)),
+        )
+    return fields
+
+
 def build_state(
-    data: dict[str, object] | None, session: SessionState, *, replaying: bool = False
+    data: dict[str, object] | None,
+    session: SessionState,
+    *,
+    replaying: bool = False,
+    on_bracket: bool = False,
 ) -> DeckState:
     """Turn one `GET /api/state` body into everything the faces need.
 
     Server down is a `DeckState` too, not an exception: every key but Session
     goes dark, and the Session key still says how to bring the server back.
 
-    ``replaying`` is the one face input the server knows nothing about — the
-    replay lives entirely between the deck and OBS — so the loop passes its own
-    answer in rather than inventing a second source of state for one key.
+    ``replaying`` and ``on_bracket`` are the face inputs the server knows
+    nothing about — both live entirely between the deck and OBS — so the loop
+    passes its own answers in rather than inventing a second source of state.
     """
     if data is None:
         return DeckState(
-            up=False, replaying=replaying, session_face=session.face, session_sub=session.sub
+            up=False,
+            replaying=replaying,
+            on_bracket=on_bracket,
+            session_face=session.face,
+            session_sub=session.sub,
         )
 
     def _int(field: str, default: int) -> int:
@@ -109,11 +146,13 @@ def build_state(
         p1=_score_of(data.get("score"), "p1"),
         p2=_score_of(data.get("score"), "p2"),
         replaying=replaying,
+        on_bracket=on_bracket,
         session_face=session.face,
         session_sub=session.sub,
         # The session is what the health dot reports on: green once the server
         # is answering, absent otherwise (there is nothing to be healthy).
         session_dot=faces.DOT_OK,
+        **_bracket_fields(data.get("bracket")),  # type: ignore[arg-type]
     )
 
 
@@ -216,6 +255,7 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
     deck.set_key_callback(lambda _deck, k, pressed: events.put((int(k), bool(pressed))))
 
     playing: replay.Playing | None = None  # a replay currently on the TV
+    showing: bracket.Showing | None = None  # the bracket is on the TV
 
     def poll() -> DeckState:
         """One request serves both the session machine and every face."""
@@ -223,7 +263,12 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
         # The session machine advances on this same poll: STARTING becomes ON
         # the moment the server answers (that is when OBS is launched), and
         # STOPPING becomes OFF when `run` finally exits.
-        return build_state(data, session.tick(data is not None), replaying=playing is not None)
+        return build_state(
+            data,
+            session.tick(data is not None),
+            replaying=playing is not None,
+            on_bracket=showing is not None,
+        )
 
     state = poll()
     _draw_all(deck, state)
@@ -355,6 +400,43 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
             continue
         if not state.up:
             print(f"{key.name}: ignored — server down", flush=True)
+            continue
+
+        if isinstance(key.action, SceneToggle):
+            if showing is not None:
+                # A failed cut back still clears the handle: a key stuck saying
+                # BACK forever is worse than one press that does nothing — the
+                # same rule the Replay key follows.
+                bracket.hide(showing)
+                showing = None
+            else:
+                showing = bracket.show()
+            state = replace(state, on_bracket=showing is not None)
+            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+            continue
+
+        if isinstance(key.action, BracketConfirm):
+            if state.bracket_armed is None or state.bracket_match_id is None:
+                # Unarmed: nobody has reached their race yet. Say so rather
+                # than doing nothing — a key that swallows a press reads broken.
+                _set_key(deck, index, faces.flash_err("NOT YET"))
+                flashes[index] = time.monotonic() + FLASH_S
+                continue
+            _set_key(deck, index, faces.Face(CONFIRM_PENDING_FACE))
+            result = client.post(
+                base, f"/api/bracket/match/{state.bracket_match_id}/result", timeout=CONFIRM_S
+            )
+            print(f"confirm: match {state.bracket_match_id} -> {result.status}", flush=True)
+            if result.ok:
+                # The wall shows the updated bracket while the next pair racks.
+                # A failed flip is not a failed result: the bracket has already
+                # advanced, so the key still says SAVED and the TV stays put.
+                showing = bracket.show() or showing
+                state = poll()
+                _draw_all(deck, state, skip=frozenset(flashes) | {index})
+            outcome = faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")
+            _set_key(deck, index, outcome)
+            flashes[index] = time.monotonic() + FLASH_S
             continue
 
         if isinstance(key.action, FlagStart):

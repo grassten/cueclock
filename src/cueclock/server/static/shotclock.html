@@ -808,8 +808,27 @@
                 sc.p1.fargo == null && sc.p2.fargo == null);
             setBarScore('p1', sc.p1.score);
             setBarScore('p2', sc.p2.score);
-            scoresEl.classList.toggle('no-race', sc.race_to == null);
-            if (sc.race_to != null) raceEl.innerText = 'RACE TO ' + sc.race_to;
+            setRace(sc);
+        }
+
+        // The race line. Casual play has one target or none, and says so in the
+        // centre as it always has. A handicapped bracket match (issue #43) gives
+        // each player their own — a 563 against a 240 races 7 to 2 — so a single
+        // centre number would be a lie about at least one of them, and the line
+        // carries both. Equal targets collapse back to the familiar wording:
+        // that is what a bracket with handicapping off looks like, and it should
+        // not read as something new.
+        function setRace(sc) {
+            const t1 = sc.p1.target, t2 = sc.p2.target;
+            const paired = t1 != null && t2 != null;
+            scoresEl.classList.toggle('no-race', !paired && sc.race_to == null);
+            if (paired) {
+                raceEl.innerText = t1 === t2
+                    ? 'RACE TO ' + t1
+                    : `${sc.p1.score} OF ${t1} · ${sc.p2.score} OF ${t2}`;
+            } else if (sc.race_to != null) {
+                raceEl.innerText = 'RACE TO ' + sc.race_to;
+            }
         }
 
         function render(state) {

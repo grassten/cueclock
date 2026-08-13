@@ -83,10 +83,20 @@ uv run python -m cueclock.cli deck
   cue strikes, the break, you, and the TV's own chimes exactly once
   (`hardware.md` Part D)),
   `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
-  broadcast-style clock scene), and `http://localhost:8000/replay` (the REPLAY
+  broadcast-style clock scene), `http://localhost:8000/replay` (the REPLAY
   badge — lives only in the Replay scene, which `scripts/setup_obs_replay.py`
-  builds; never assemble it by hand). Phone control page: `/control` — player
+  builds; never assemble it by hand), and `http://localhost:8000/bracket` (the
+  double-elimination bracket, its own scene, built by
+  `scripts/setup_obs_bracket.py`). Phone control page: `/control` — player
   names, race-to, scores, clock and session mode.
+- **Tournament nights** (issue #43): the Bracket tab on `/control` builds a
+  double-elimination draw from FargoRate ratings (or typed estimates on the
+  same scale), handicaps every match FargoRate-chart style, and drives the same
+  scoreboard the casual nights use. Players score from their own phones on the
+  LAN; the Stream Deck's confirm key commits a result, loads the next match and
+  puts the updated bracket on the wall. **With no bracket loaded every page
+  behaves exactly as it does without the feature** — that is what makes the
+  casual night and the tournament night the same software.
 - Voice "extension": say the word and the clock grants one — and the overlay
   announces "Extension called" back, for that call and for the deck key alike.
   Needs the Vosk model (`scripts/fetch_vosk_model.sh`, once) and a microphone —

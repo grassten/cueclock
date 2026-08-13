@@ -128,6 +128,50 @@
             text-transform: uppercase; color: var(--slate);
         }
 
+        /* ---- Bracket (issue #43) ----
+           The same page in both modes: with no bracket loaded nothing below
+           appears and the controls above are exactly what they have always
+           been. With one loaded the page *gains* a header, per-player targets,
+           where each player goes next, and the report button — but the score
+           keys themselves do not move, because they are what a thumb finds
+           without looking. */
+        .matchhdr {
+            text-align: center; font-size: 12px; font-weight: 700;
+            letter-spacing: 1.5px; text-transform: uppercase; color: var(--accent);
+        }
+        .mini .val { flex-direction: column; gap: 1px; }
+        .mini .val .of {
+            font-size: 10px; font-weight: 700; letter-spacing: 1.2px;
+            text-transform: uppercase; color: var(--slate);
+        }
+        .ctx {
+            text-align: center; font-size: 12px; font-weight: 600;
+            letter-spacing: 1.2px; color: var(--slate);
+        }
+        .stack { display: flex; flex-direction: column; gap: 10px; }
+        button:disabled { opacity: .45; cursor: default; }
+
+        .matchlist { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+        .matchlist button {
+            display: flex; justify-content: space-between; align-items: center; gap: 10px;
+            padding: 11px 12px; font-size: 14px; font-weight: 500; text-align: left;
+        }
+        .matchlist .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .matchlist .tag {
+            font-size: 10px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase;
+            color: var(--slate); border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 7px;
+        }
+        .matchlist .tag.live { color: var(--accent); border-color: rgba(46,134,200,.5); }
+        .matchlist .tag.waiting { color: #55606C; }
+
+        .plist { display: flex; flex-direction: column; gap: 10px; }
+        .prow { display: flex; gap: 8px; align-items: center; }
+        .prow input.pname { flex: 1; min-width: 0; }
+        .prow input.prating { width: 74px; text-align: center; }
+        .prow .drop { min-width: 44px; padding: 12px 8px; }
+        .prow .fargo-go { padding: 0 12px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; }
+        .est { font-size: 11px; color: var(--slate); letter-spacing: 1px; text-transform: uppercase; }
+
         /* ---- Setup tab ---- */
         .player { display: flex; flex-direction: column; gap: 9px; }
         label {
@@ -253,11 +297,12 @@
 
             <section>
                 <h2>Score</h2>
+                <div class="matchhdr" id="match-header" hidden></div>
                 <div class="scorerow">
                     <span class="who"><span id="p1-row-name">Player 1</span><span class="fargo-badge" id="p1-row-fargo" hidden></span></span>
                     <div class="mini">
                         <button aria-label="Player 1 minus one" onclick="post('/api/score/p1/decrement')">&minus;</button>
-                        <div class="val" id="p1-score">–</div>
+                        <div class="val"><span id="p1-score">–</span><span class="of" id="p1-of" hidden></span></div>
                         <button aria-label="Player 1 plus one" onclick="post('/api/score/p1/increment')">+</button>
                     </div>
                 </div>
@@ -265,11 +310,18 @@
                     <span class="who"><span id="p2-row-name">Player 2</span><span class="fargo-badge" id="p2-row-fargo" hidden></span></span>
                     <div class="mini">
                         <button aria-label="Player 2 minus one" onclick="post('/api/score/p2/decrement')">&minus;</button>
-                        <div class="val" id="p2-score">–</div>
+                        <div class="val"><span id="p2-score">–</span><span class="of" id="p2-of" hidden></span></div>
                         <button aria-label="Player 2 plus one" onclick="post('/api/score/p2/increment')">+</button>
                     </div>
                 </div>
                 <div class="racechip" id="race-chip"></div>
+                <!-- Everything below appears only with a bracket loaded. -->
+                <div class="stack" id="bracket-play" hidden>
+                    <div class="ctx" id="match-routes"></div>
+                    <button class="primary" id="report-btn" onclick="reportResult()">Report result</button>
+                    <button class="ghost" onclick="toggleSwitcher()">Switch match</button>
+                    <div class="matchlist" id="match-list" hidden></div>
+                </div>
             </section>
     </main>
 
@@ -341,6 +393,81 @@
             </section>
     </main>
 
+    <!-- Bracket: built once a night, then only looked at. Lives on its own tab
+         rather than inside Setup because Setup is the *match* — names, race,
+         ruleset — and a tournament replaces all three. -->
+    <main id="view-bracket" hidden>
+            <!-- No bracket: the builder. -->
+            <section id="bracket-build">
+                <h2>Build a bracket</h2>
+                <div class="field">
+                    <label for="bracket-name">Name</label>
+                    <input type="text" id="bracket-name" placeholder="Asten Family 8-Ball">
+                </div>
+                <div class="field">
+                    <label>Players</label>
+                    <div class="plist" id="player-list"></div>
+                    <p class="hint">Rated players: type a name and tap Fargo. Family without one:
+                        type an estimate on the same 0&ndash;800 scale &mdash; one number feeds both
+                        the draw and the handicap.</p>
+                </div>
+                <button class="ghost" onclick="addPlayer()">Add player</button>
+                <div class="two">
+                    <div class="race">
+                        <label style="min-width:58px">A race</label>
+                        <div class="stepper">
+                            <button aria-label="A race, one fewer" onclick="stepBuildRace('a', -1)">&minus;</button>
+                            <div class="val" id="build-a-race">5</div>
+                            <button aria-label="A race, one more" onclick="stepBuildRace('a', 1)">+</button>
+                        </div>
+                    </div>
+                    <div class="race">
+                        <label style="min-width:58px">B race</label>
+                        <div class="stepper">
+                            <button aria-label="B race, one fewer" onclick="stepBuildRace('b', -1)">&minus;</button>
+                            <div class="val" id="build-b-race">4</div>
+                            <button aria-label="B race, one more" onclick="stepBuildRace('b', 1)">+</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="two">
+                    <div class="field">
+                        <label for="build-handicap">Handicap</label>
+                        <select id="build-handicap">
+                            <option value="off">Off &mdash; everyone races the base</option>
+                            <option value="mild">Mild</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="hot">Hot &mdash; closest to even</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="build-seeding">Draw</label>
+                        <select id="build-seeding">
+                            <option value="adjacent" selected>Similar ratings early</option>
+                            <option value="standard">Standard (top seeds apart)</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="primary xl" onclick="buildBracket()">Build bracket</button>
+                <p class="hint" id="build-error"></p>
+                <div class="field" id="archive-load" hidden>
+                    <label for="archive-pick">Load past bracket</label>
+                    <select id="archive-pick"></select>
+                    <button class="ghost" onclick="reopenArchive()">Reopen</button>
+                </div>
+            </section>
+
+            <!-- Bracket loaded: state + the whole draw. -->
+            <section id="bracket-state" hidden>
+                <h2 id="bracket-state-h">Bracket</h2>
+                <div class="racechip" id="bracket-summary"></div>
+                <div class="matchlist" id="bracket-all"></div>
+                <button class="ghost" onclick="archiveBracket()">Save &amp; archive</button>
+                <div class="danger-row"><button class="danger" onclick="clearBracket()">Clear bracket</button></div>
+                <p class="hint" id="bracket-error"></p>
+            </section>
+    </main>
+
 </div>
 
 <nav class="tabbar">
@@ -350,15 +477,20 @@
     <button id="tab-setup" onclick="showTab('setup')" aria-label="Setup tab">
         <span class="glyph">&#9881;</span>Setup
     </button>
+    <button id="tab-bracket" onclick="showTab('bracket')" aria-label="Bracket tab">
+        <span class="glyph">&#9776;</span>Bracket
+    </button>
 </nav>
 
 <script>
     // ---- Tabs ----
+    const TABS = ['play', 'setup', 'bracket'];
     function showTab(which) {
-        document.getElementById('view-play').hidden = which !== 'play';
-        document.getElementById('view-setup').hidden = which !== 'setup';
-        document.getElementById('tab-play').classList.toggle('active', which === 'play');
-        document.getElementById('tab-setup').classList.toggle('active', which === 'setup');
+        for (const t of TABS) {
+            document.getElementById('view-' + t).hidden = t !== which;
+            document.getElementById('tab-' + t).classList.toggle('active', t === which);
+        }
+        if (which === 'bracket') refreshBracket();
     }
 
     async function post(url) {
@@ -418,8 +550,18 @@
         renderFargoBadge('p2', sc.p2.fargo);
         raceTo = sc.race_to;
         document.getElementById('race-to').innerText = raceTo == null ? '–' : raceTo;
+        // Per-player targets (issue #43) win over the single race, because a
+        // handicapped match has no single race to state.
+        for (const p of ['p1', 'p2']) {
+            const of = document.getElementById(p + '-of');
+            of.hidden = sc[p].target == null;
+            of.innerText = sc[p].target == null ? '' : 'of ' + sc[p].target;
+        }
+        const t1 = sc.p1.target, t2 = sc.p2.target;
         document.getElementById('race-chip').innerText =
-            raceTo == null ? 'Casual — no race' : `Race to ${raceTo}`;
+            t1 != null && t2 != null
+                ? (t1 === t2 ? `Race to ${t1}` : `Race ${t1}–${t2}`)
+                : (raceTo == null ? 'Casual — no race' : `Race to ${raceTo}`);
     }
 
     // ---- Fargo lookup (issue #27) ----
@@ -529,6 +671,285 @@
         if (confirm('Reset scores to 0–0?')) await post('/api/score/reset');
     }
 
+    // ---- Bracket (issue #43) ----
+    // The bracket is optional state layered on top of the score: everything
+    // here is inert until one exists, and clearing one puts the page back to
+    // exactly what it was. The compact summary on `/ws` drives the Play tab at
+    // 10 Hz; the full draw is fetched only when its revision moves.
+    let bracket = null;         // the full draw, from GET /api/bracket
+    let bracketRev = -1;        // the revision the fetched copy is at
+    let armed = null;           // who has reached their target, per the server
+    let liveMatchId = null;     // the loaded match, straight off the broadcast
+    let switcherOpen = false;
+    let build = { players: [], a_race: 5, b_race: 4 };
+
+    async function refreshBracket() {
+        try {
+            bracket = (await fetch('/api/bracket').then(r => r.json())).bracket;
+        } catch (e) { return; }
+        bracketRev = bracket ? bracket.revision : -1;
+        renderBracketTab();
+        if (switcherOpen) renderSwitcher();
+    }
+
+    function renderBracketLive(summary) {
+        // Called on every payload. A revision change means the draw moved —
+        // somebody reported a result from the deck or another phone.
+        const rev = summary ? summary.revision : -1;
+        if (rev !== bracketRev) refreshBracket();
+        armed = summary ? summary.armed : null;
+        const panel = document.getElementById('bracket-play');
+        const header = document.getElementById('match-header');
+        const loaded = summary && summary.match;
+        // From the broadcast, not the fetched draw: the two are the same thing
+        // a moment apart, and this is the one that is never stale.
+        liveMatchId = loaded ? summary.match.id : null;
+        panel.hidden = !loaded;
+        header.hidden = !loaded;
+        if (!loaded) { document.getElementById('race-chip').hidden = false; return; }
+        header.innerText = summary.match.header;
+        const routes = summary.match.routes;
+        const parts = [];
+        if (routes.winner) parts.push(`Winner → Match ${routes.winner}`);
+        if (routes.loser) parts.push(`Loser → Match ${routes.loser}`);
+        document.getElementById('match-routes').innerText = parts.join(' · ');
+        // Reaching the target arms the result; it never fires it. The button
+        // says who it is about to advance, so a mis-tap is visible before it
+        // lands rather than after.
+        const btn = document.getElementById('report-btn');
+        btn.disabled = !armed;
+        btn.classList.toggle('primary', !!armed);
+        btn.innerText = armed
+            ? `Report — ${armed.name} wins ${armed.score}–${armed.other}`
+            : 'Report result — race not reached';
+        // The header already states the race; a second copy under the scores
+        // would just be the same fact twice.
+        document.getElementById('race-chip').hidden = true;
+    }
+
+    async function reportResult() {
+        if (!armed || liveMatchId == null) return;
+        await postJson(`/api/bracket/match/${liveMatchId}/result`, {});
+        switcherOpen = false;
+        document.getElementById('match-list').hidden = true;
+        refreshBracket();
+    }
+
+    async function postJson(url, body, method = 'POST') {
+        const res = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: method === 'DELETE' ? undefined : JSON.stringify(body || {}),
+        });
+        let data = {};
+        try { data = await res.json(); } catch (e) {}
+        return { ok: res.ok && data.ok !== false, error: data.error || '' };
+    }
+
+    function toggleSwitcher() {
+        switcherOpen = !switcherOpen;
+        document.getElementById('match-list').hidden = !switcherOpen;
+        if (switcherOpen) renderSwitcher();
+    }
+
+    // Only matches with both players known can be played, so the list says which
+    // is which rather than offering rows that do nothing.
+    const STATUS_LABEL = { live: 'Live', ready: 'Ready', waiting: 'Waiting',
+                           played: 'Played', bye: 'Bye', conditional: 'If needed' };
+
+    // `enabled` decides which rows are tappable, because the two lists want
+    // different things from the same row: Switch match loads one, the Bracket
+    // tab clears a played result.
+    function matchRow(m, onPick, enabled) {
+        const btn = document.createElement('button');
+        const who = document.createElement('span');
+        who.className = 'who';
+        const names = [m.p1, m.p2].map(s => s.name || s.ref).join(' v ');
+        who.innerText = `${m.title} · ${names}`;
+        const tag = document.createElement('span');
+        tag.className = 'tag ' + m.status;
+        tag.innerText = STATUS_LABEL[m.status] || m.status;
+        btn.append(who, tag);
+        btn.disabled = !enabled(m);
+        btn.onclick = () => onPick(m);
+        return btn;
+    }
+
+    function renderSwitcher() {
+        const host = document.getElementById('match-list');
+        host.innerHTML = '';
+        if (!bracket) return;
+        for (const m of bracket.matches) {
+            if (m.status === 'bye' || m.status === 'conditional') continue;
+            host.appendChild(matchRow(m, async (match) => {
+                if (match.status === 'played' && !confirm(
+                    `Reopen ${match.title} to fix the score?`)) return;
+                const res = await postJson(`/api/bracket/match/${match.id}/load`, {});
+                if (!res.ok) alert(res.error);
+                switcherOpen = false;
+                host.hidden = true;
+                refreshBracket();
+            }, (match) => ['ready', 'live', 'played'].includes(match.status)));
+        }
+    }
+
+    // ---- Bracket tab ----
+    function renderBracketTab() {
+        document.getElementById('bracket-build').hidden = !!bracket;
+        document.getElementById('bracket-state').hidden = !bracket;
+        if (!bracket) { renderPlayers(); loadArchives(); return; }
+        document.getElementById('bracket-state-h').innerText = bracket.name;
+        document.getElementById('bracket-summary').innerText = bracket.champion
+            ? `Finished — champion ${bracket.champion}`
+            : `${bracket.field} players · A race ${bracket.a_race} · B race ${bracket.b_race}`
+              + ` · handicap ${bracket.handicap}`;
+        const host = document.getElementById('bracket-all');
+        host.innerHTML = '';
+        for (const m of bracket.matches) {
+            host.appendChild(matchRow(m, async (match) => {
+                if (!confirm(`Clear the result of ${match.title}?`)) return;
+                const res = await postJson(
+                    `/api/bracket/match/${match.id}/result`, null, 'DELETE');
+                document.getElementById('bracket-error').innerText = res.ok ? '' : res.error;
+                refreshBracket();
+            }, (match) => match.status === 'played'));
+        }
+    }
+
+    function renderPlayers() {
+        const host = document.getElementById('player-list');
+        host.innerHTML = '';
+        if (!build.players.length) build.players = [{ name: '', rating: null, established: true }];
+        build.players.forEach((p, i) => {
+            const row = document.createElement('div');
+            row.className = 'prow';
+            const name = document.createElement('input');
+            name.type = 'text'; name.className = 'pname'; name.value = p.name;
+            name.placeholder = 'Name';
+            name.oninput = () => { p.name = name.value; };
+            const go = document.createElement('button');
+            go.className = 'fargo-go'; go.innerText = 'Fargo';
+            go.onclick = () => bracketFargo(i);
+            const rating = document.createElement('input');
+            rating.type = 'text'; rating.className = 'prating'; rating.inputMode = 'numeric';
+            rating.value = p.rating == null ? '' : p.rating;
+            rating.placeholder = '—';
+            rating.oninput = () => {
+                const n = parseInt(rating.value, 10);
+                p.rating = Number.isFinite(n) ? n : null;
+                // Typed by hand is an estimate, not a looked-up rating: it seeds
+                // the draw and feeds the handicap, but never reaches the wall
+                // under a FARGO label.
+                p.established = false;
+            };
+            const drop = document.createElement('button');
+            drop.className = 'ghost drop'; drop.innerText = '×';
+            drop.setAttribute('aria-label', 'Remove player');
+            drop.onclick = () => { build.players.splice(i, 1); renderPlayers(); };
+            row.append(name, go, rating, drop);
+            const panel = document.createElement('div');
+            panel.className = 'fargo-results';
+            panel.id = 'bfargo-' + i;
+            panel.hidden = true;
+            host.append(row, panel);
+        });
+    }
+
+    function addPlayer() {
+        build.players.push({ name: '', rating: null, established: true });
+        renderPlayers();
+    }
+
+    async function bracketFargo(i) {
+        const panel = document.getElementById('bfargo-' + i);
+        const name = (build.players[i].name || '').trim();
+        if (!name) { panel.hidden = true; return; }
+        fargoNote(panel, 'Searching Fargo…');
+        let res = null;
+        try {
+            res = await fetch('/api/fargo/search?q=' + encodeURIComponent(name)).then(x => x.json());
+        } catch (e) {}
+        if (!res || !res.ok) { fargoNote(panel, 'Fargo unreachable — tap to dismiss'); return; }
+        if (!res.players.length) { fargoNote(panel, 'No Fargo match — tap to dismiss'); return; }
+        panel.innerHTML = '';
+        for (const pl of res.players.slice(0, 20)) {
+            const btn = fargoRow(null, panel, pl);
+            btn.onclick = () => {
+                Object.assign(build.players[i],
+                    { name: pl.name, rating: pl.rating, established: pl.established });
+                panel.hidden = true;
+                renderPlayers();
+            };
+            panel.appendChild(btn);
+        }
+        const skip = document.createElement('button');
+        skip.className = 'ghost note';
+        skip.textContent = 'Not them / estimate instead — skip';
+        skip.onclick = () => { panel.hidden = true; };
+        panel.appendChild(skip);
+        panel.hidden = false;
+    }
+
+    function stepBuildRace(side, delta) {
+        const key = side + '_race';
+        build[key] = Math.max(2, Math.min(21, build[key] + delta));
+        document.getElementById(`build-${side}-race`).innerText = build[key];
+    }
+
+    async function buildBracket() {
+        const players = build.players
+            .filter(p => (p.name || '').trim())
+            .map(p => ({ name: p.name.trim(), rating: p.rating, established: p.established }));
+        const err = document.getElementById('build-error');
+        const res = await postJson('/api/bracket', {
+            name: document.getElementById('bracket-name').value || 'Tournament',
+            players,
+            a_race: build.a_race,
+            b_race: build.b_race,
+            handicap: document.getElementById('build-handicap').value,
+            seeding: document.getElementById('build-seeding').value,
+        });
+        err.innerText = res.ok ? '' : res.error;
+        if (res.ok) refreshBracket();
+    }
+
+    async function clearBracket() {
+        if (!confirm('Clear the bracket and go back to casual scoring?')) return;
+        await fetch('/api/bracket', { method: 'DELETE' });
+        build = { players: [], a_race: 5, b_race: 4 };
+        refreshBracket();
+    }
+
+    async function archiveBracket() {
+        const res = await postJson('/api/bracket/archive', {});
+        document.getElementById('bracket-error').innerText =
+            res.ok ? 'Archived beside the session journals.' : res.error;
+    }
+
+    async function loadArchives() {
+        let names = [];
+        try {
+            names = (await fetch('/api/bracket/archives').then(r => r.json())).archives || [];
+        } catch (e) {}
+        const field = document.getElementById('archive-load');
+        const pick = document.getElementById('archive-pick');
+        field.hidden = !names.length;
+        pick.innerHTML = '';
+        for (const n of names) {
+            const opt = document.createElement('option');
+            opt.value = n; opt.textContent = n.replace(/^bracket-|\.json$/g, '');
+            pick.appendChild(opt);
+        }
+    }
+
+    async function reopenArchive() {
+        const name = document.getElementById('archive-pick').value;
+        if (!name) return;
+        const res = await postJson('/api/bracket/archives/' + encodeURIComponent(name), {});
+        document.getElementById('build-error').innerText = res.ok ? '' : res.error;
+        refreshBracket();
+    }
+
     // ---- Clock ----
     const ALARM_STATES = ['GRACE', 'EXPIRED'];
     function render(s) {
@@ -556,6 +977,7 @@
         }
         if (typeof s.vision === 'boolean') renderVision(s.vision);
         if (s.score) renderScore(s.score);
+        renderBracketLive(s.bracket);
     }
 
     function setConnected(live) {

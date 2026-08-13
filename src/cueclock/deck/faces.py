@@ -41,6 +41,12 @@ Rgb = tuple[int, int, int]
 BG: Rgb = (0, 0, 0)
 BG_OK: Rgb = (18, 92, 44)
 BG_ERR: Rgb = (140, 30, 30)
+# The one standing exception to "the tile colour is the press-outcome language"
+# (issue #43): an armed bracket result is a state that has to be findable from
+# across the room, on a key whose whole job is that it is *waiting* for a press.
+# Blue is not in the flash vocabulary, so it can't be read as an outcome — and
+# the face still says the verb ("PRESS TO CONFIRM"), so rule 3 holds.
+BG_ARMED: Rgb = (24, 74, 118)
 FG: Rgb = (235, 235, 235)
 FG_DIM: Rgb = (90, 90, 90)
 

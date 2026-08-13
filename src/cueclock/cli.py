@@ -596,11 +596,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return str(clip_dir)
 
     # Scores persist across restarts (a mid-match crash must not lose the match).
+    # So does a live bracket (#43), for the same reason and by the same means;
+    # finished ones are archived beside the session journals.
     session_stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     journal_path = Path("logs") / f"session-{session_stamp}.jsonl"
     app = create_app(
         score_path=Path("config/score.json"),
         journal_path=journal_path,
+        bracket_path=Path("config/bracket.json"),
+        archive_dir=journal_path.parent,
     )
     if ring_capacity > 0:
         app.state.dump = dump_ring

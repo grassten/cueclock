@@ -232,6 +232,79 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-13 (checkpoint 92 — #43: the bracket, and it never keeps a score of
+  its own):** A double-elimination bracket as its own OBS scene, an auto-built
+  and editable draw, and player-facing scoring that feeds it. Prompted by a
+  family tournament, but the requirement was general: some nights it is two
+  people keeping score, some nights it is a bracket, and the same pages have to
+  serve both.
+  * **The governing constraint, and every design call falls out of it.** The
+    bracket is *optional state layered on top of the score already kept*.
+    `MatchScore` stays the single source of truth for what is on the TV — the
+    bracket hands it two players and two race targets and takes a result back,
+    and never draws a scoreboard of its own. So the bracket page reads the live
+    match's scores out of the score payload rather than storing them, and with
+    no bracket loaded every page and every deck key behaves exactly as it did
+    before. That is what makes casual night and tournament night the same
+    software, and it is why "does the bracket disagree with the wall" is not a
+    failure mode this can have.
+  * **The cross-drop is the part that would have failed silently.** Where the A
+    side's second round drops its losers, the incoming order is reversed against
+    the B-side matches waiting for them. Drop straight down instead and the
+    bracket still *runs* — it quietly replays first-round pairings, which is
+    exactly the kind of bug nobody notices during a party. Pinned by a test that
+    walks the reference graph and proves the branches feeding each first-drop
+    match descend from disjoint halves of Round 1.
+  * **The handicap chart is FargoRate's, not ours.** Game odds
+    `1/(1 + 2^(−diff/100))`, exact negative-binomial match odds, and a race
+    picked off a ladder (5-5, 5-4, 6-4, 6-3, 7-3, 7-2). Each mode has a target
+    for the underdog's match odds with 50% as a hard ceiling — the target is
+    what stops the rule degenerating into "always take the biggest legal spot",
+    which at a race to five hands a 68-point gap the same 6-4 as a 100-point
+    one. **First cut got this wrong in the other direction**: a spread cap
+    expressed as a fraction of the base race reproduced the two published
+    columns but could never reach 7-2, the issue's own worked example. Replacing
+    it with a ceiling near a third above the base reproduces every published
+    endpoint on record — their base-3 ladder ending at 5-2, race-to-5 at 6-4,
+    race-to-11 hot at 14-8 — *and* lands 563-vs-240 on exactly 7-2.
+  * **Reaching the target arms the result; it never fires it.** Plus/minus is
+    the easiest control on the deck to fat-finger, so auto-advance was rejected
+    deliberately: one stray press would corrupt a bracket somebody has to unwind
+    mid-party. The arm is **derived** from the live score against each player's
+    own target rather than stored, which is what makes holding the winner's key
+    to take a point back clear it by itself — there is no undo to find.
+  * **Two deck keys, both dark on every other night.** `(3,5)` confirm (free
+    since "I shot" was pulled 2026-08-05, so no existing key changes meaning)
+    and `(2,3)` scene toggle. Confirm is one action with four effects: result
+    written and both players routed, next ready match loaded at 0-0 with its own
+    targets, `/api/rack` fired, and the TV flipped to the bracket so the update
+    is on the wall while the next pair racks. The scene flip is the deck's half
+    because obs-websocket lives out there. The reason page borrows `(2,3)` while
+    it is open — existing overlay behaviour, and the accepted cost, since every
+    free cell on a 15-key deck is one of those three.
+  * **Corrections walk back one step at a time.** Re-deriving downstream slots
+    is free while they are empty. Behind a *played* match an edit is refused by
+    name (`Match 5 has already been played — clear its result first`) and
+    clearing that result is its own act, so nothing real is ever silently
+    erased. A walkover is not a result and cannot be cleared.
+  * **Rendered rather than assumed.** The bracket page was checked at 8 and 16
+    players by snapshotting it through an off-screen WKWebView, which caught
+    four things reading the code would not have: the empty-state overlay sitting
+    on top of the draw (a `display:flex` rule outranking `[hidden]`), a
+    `requestAnimationFrame` callback that never fires in a browser source that
+    is not painting — the same condition an OBS source in a dark scene is in —
+    unstarted matches showing `0` where they should show a dash, and at sixteen
+    the B final landing under the *second* final, where a straight connector
+    would have run through it.
+  * Shipped with it: `/bracket` (1920×1080, geometry computed from the field so
+    3-16 players draw without scrolling), the Bracket tab on `/control` plus the
+    match header / per-player targets / report / switch-match additions to the
+    Play tab, two race targets on the score bar when they differ, per-player
+    `target` on `MatchScore`, `scripts/setup_obs_bracket.py`, and persistence
+    beside the score with archives beside the journals. 505 unit tests green
+    (47 new for the bracket core, 13 for the API, 6 for the deck), full cold
+    corpus battery green, mypy --strict and ruff clean.
+
 - **2026-08-11 (checkpoint 91 — #41: the detector was destroying the evidence,
   so ball-in-hand now stops the clock resetting):** Steven's directive was the
   lead and it was right — *"an arm / a hand does not look like a cue"*. The

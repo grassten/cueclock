@@ -23,7 +23,12 @@ are on the face and neither can be mistaken for the other; a key with a hold on
 it says so on its second line, because a gesture nothing names is a feature only
 its author knows about (Session states where it is, Replay names the span a hold
 would reach — the score keys are the exception, and only because their inverse
-is self-evident and their result is already on the wall).
+is self-evident and their result is already on the wall). The second line has
+one other legitimate job, which Replay has always done and #43's scene key now
+does too: **naming where a press goes** when the key's own word cannot. `BACK`
+alone does not say back to what. What the second line may never be is context —
+a fact about the world with no press behind it — because that is the promise
+the whole grammar rests on.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from enum import Enum
 
 from cueclock.clock import MODES, RULESETS
 from cueclock.deck.faces import (
+    BG_ARMED,
     STRIPE_CLOCK,
     STRIPE_EVIDENCE,
     STRIPE_MATCH,
@@ -87,6 +93,16 @@ class DeckState:
     session_face: str = "START"
     session_sub: str | None = None
     session_dot: Rgb | None = None
+    # The bracket (#43). `bracket_loaded` gates both new keys — with no bracket
+    # their cells are dark and the deck is exactly the deck it was. `armed` is
+    # the server's own derivation of "somebody has reached their race", so the
+    # key lights on the same fact the phone and the wall are showing.
+    bracket_loaded: bool = False
+    bracket_match_id: int | None = None
+    bracket_match: str | None = None  # "MATCH 4"
+    bracket_side: str | None = None  # "A SIDE"
+    bracket_armed: tuple[str, int, int] | None = None  # (name, their score, other)
+    on_bracket: bool = False  # the bracket scene is on the TV, not the table
 
 
 # ---------- actions ----------
@@ -189,7 +205,46 @@ class ReplayShow:
     hold_s: float = 0.6
 
 
-Action = ApiPost | Cycle | SessionToggle | ScoreAdjust | FlagStart | FlagReason | ReplayShow
+@dataclass(frozen=True)
+class BracketConfirm:
+    """Commit the armed bracket result — one press, four effects (#43).
+
+    **Reaching the target arms the result, it never fires it.** Plus/minus is
+    the easiest control on the deck to fat-finger, and auto-advancing on the
+    winning point would turn one stray press into a bracket somebody has to
+    unwind mid-party. Arming costs one deliberate press and makes that failure
+    a shrug: hold the winner's key to drop them a point and the arm clears
+    itself, so there is no undo to find.
+
+    Confirming writes the result and routes both players, loads the next ready
+    match at 0-0 with its own targets, resets the rack (a new match is a new
+    rack), and flips the TV to the bracket so the update is on the wall while
+    the next pair racks. The first three are one server call; the scene flip is
+    this side's, because obs-websocket lives out here (`hardware.md` §C3).
+    """
+
+
+@dataclass(frozen=True)
+class SceneToggle:
+    """Swap the TV between the play scene and the bracket.
+
+    Reads its state from the deck rather than from OBS: the daemon remembers
+    the scene it left, exactly as the Replay key does, so the face never costs
+    an obs-websocket round trip on a 2 s poll.
+    """
+
+
+Action = (
+    ApiPost
+    | Cycle
+    | SessionToggle
+    | ScoreAdjust
+    | FlagStart
+    | FlagReason
+    | ReplayShow
+    | BracketConfirm
+    | SceneToggle
+)
 
 
 # ---------- cycle label tables ----------
@@ -211,6 +266,19 @@ _CYCLES: dict[str, tuple[Mapping[str, str], tuple[str, ...], str, str]] = {
     "mode": (MODE_FACES, tuple(MODES), "/api/modes", "/api/mode/"),
     "ruleset": (RULESET_FACES, tuple(RULESETS), "/api/rulesets", "/api/ruleset/"),
 }
+
+
+def first_name(name: str) -> str:
+    """What fits on a 72 px key: the first name, or the whole one if it is one
+    word. A full "Priya Shah" would be auto-shrunk to unreadable by `_fit`, and
+    the key already names the match, so there is no ambiguity to resolve.
+
+    Eight characters, because `faces._MAIN_SIZES` bottoms out at 10 px and a
+    ninth would not fit the tile at that size — `_fit` falls through to the
+    smallest rather than failing, so an over-long name is *clipped*, which is
+    the one outcome worse than a truncated one.
+    """
+    return (name.split()[0] if name.split() else name).upper()[:8]
 
 
 def cycle_label(kind: str, name: str | None) -> str:
@@ -253,6 +321,7 @@ class Key:
     action: Action
     modes: frozenset[str] | None = None  # None = every mode
     rulesets: frozenset[str] | None = None  # None = every ruleset
+    needs_bracket: bool = False  # dark unless a bracket is loaded (#43)
     offline: bool = False  # survives a server-down deck (Session only)
     text: str = ""  # static face text, where the face isn't state-derived
     meta: Mapping[str, str] = field(default_factory=dict)
@@ -266,6 +335,8 @@ class Key:
         """Is this key pressable right now? If not, its cell goes dark."""
         if not state.up:
             return self.offline
+        if self.needs_bracket and not state.bracket_loaded:
+            return False
         if self.modes is not None and state.mode is not None and state.mode not in self.modes:
             return False
         return not (
@@ -295,6 +366,36 @@ class Key:
         if isinstance(action, ScoreAdjust):
             score = state.p1 if action.player == "p1" else state.p2
             return Face(text=action.player.upper(), big=str(score), stripe=stripe)
+        if isinstance(action, BracketConfirm):
+            if state.bracket_armed is None:
+                # Nothing to confirm: the key just names the loaded match, so
+                # the deck always says which one the score keys are keeping.
+                # Both lines are main-tier rather than text-over-sub, because a
+                # sub line promises "one gesture away" and this face has no
+                # gesture behind it at all.
+                label = state.bracket_match or "—"
+                return Face(
+                    text=f"{label}\n{state.bracket_side}" if state.bracket_side else label,
+                    stripe=stripe,
+                )
+            name, score, other = state.bracket_armed
+            return Face(
+                text=f"{first_name(name)}\nWINS {score}-{other}",
+                # One word, not the mockup's "PRESS TO CONFIRM": on one line
+                # that is wider than the tile at every size `_fit` will try (and
+                # `_fit` clips rather than fails), and on two the four-line
+                # stack overflows the tile and eats the winner's name. The verb
+                # alone is what rule 3 asks for anyway.
+                sub="CONFIRM",
+                bg=BG_ARMED,
+                stripe=stripe,
+            )
+        if isinstance(action, SceneToggle):
+            # Same shape as the Replay key's two faces, and for the same
+            # reason: one key, two directions, and the face says which.
+            if state.on_bracket:
+                return Face(text="BACK", sub="TO PLAY", stripe=stripe)
+            return Face(text="BRACKET", sub="TO TV", stripe=stripe)
         if self.name == "start":
             # The countdown a press hands you, straight off the clock's own
             # current_base(): 60 s inside the WNT first-shot window, 15 under
@@ -369,13 +470,19 @@ LAYOUT: tuple[Key, ...] = (
     ),
     Key(3, 3, "p1", Group.MATCH, ScoreAdjust("p1"), modes=RACKED),
     Key(3, 4, "p2", Group.MATCH, ScoreAdjust("p2"), modes=RACKED),
-    # (3,5) is free. It held the "I shot" ground-truth key (#19) from
-    # 2026-08-02 until 2026-08-05, when it was removed: a key the player must
-    # remember on every shot is a key that stops being pressed, and it was
-    # pressed in two sessions out of twenty-nine. The denominator it existed to
-    # provide was already in the journal — the clock's own missed-strike
-    # compensation — so `cueclock report` now derives the miss rate with
-    # nothing asked of the table (`server/report.py`).
+    # (3,5) took the bracket's confirm key on 2026-08-13 (#43). It had been
+    # free since 2026-08-05, when the "I shot" ground-truth key (#19) was
+    # removed — a key the player must remember on every shot is a key that
+    # stops being pressed, and it was pressed in two sessions out of
+    # twenty-nine; the denominator it existed to provide was already in the
+    # journal, so `cueclock report` now derives the miss rate with nothing
+    # asked of the table (`server/report.py`). Because the cell was empty, no
+    # existing key changes meaning: with no bracket loaded it stays dark.
+    Key(3, 5, "confirm", Group.MATCH, BracketConfirm(), modes=RACKED, needs_bracket=True),
+    # (2,3) sits inside the block Flag's reason page borrows while it is open,
+    # which is fine and needs no new mechanism: the overlay already wins in
+    # `_visible_key`, and a flag press is seconds long.
+    Key(2, 3, "scene", Group.SYSTEM, SceneToggle(), needs_bracket=True),
 )
 
 # The transient reason page: shown only while a Flag press is waiting for a
@@ -393,3 +500,6 @@ REPLAY_PENDING_FACE = "CUEING…"  # while the buffer is written and seeked
 # under the finger, and this face is the only confirmation the gesture landed
 # before the TV changes a second or two later.
 RACK_PENDING_FACE = "RACK…"
+# A confirm does four things across two processes (result, next match, rack,
+# scene) and takes as long as the slowest — so the key says it is working.
+CONFIRM_PENDING_FACE = "SAVING…"

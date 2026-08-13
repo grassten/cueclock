@@ -9,7 +9,7 @@ one payload every WS client and ``GET /api/state`` see.
 import asyncio
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +24,8 @@ from cueclock.clock import (
     get_mode,
     get_ruleset,
 )
+from cueclock.server import bracket as bracket_mod
+from cueclock.server.bracket import Bracket, BracketError, Match, Player
 from cueclock.server.journal import SessionJournal
 from cueclock.server.score import MatchScore
 
@@ -300,13 +302,38 @@ HEARTBEAT_INTERVAL_SECONDS = 5.0
 # starvation (41.9 and 34.0 Hz against ~78 nominal) and have been deleted.
 
 
+def _as_int(value: object, default: int) -> int:
+    return int(value) if isinstance(value, int | float) else default
+
+
+def _as_opt_int(value: object) -> int | None:
+    return int(value) if isinstance(value, int | float) else None
+
+
 class Hub:
-    def __init__(self, score_path: Path | None = None, journal_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        score_path: Path | None = None,
+        journal_path: Path | None = None,
+        bracket_path: Path | None = None,
+        archive_dir: Path | None = None,
+    ) -> None:
         self.clock = ShotClock(
             get_ruleset(DEFAULT_RULESET), now=time.monotonic(), mode=get_mode(DEFAULT_MODE)
         )
         self.clients: set[WebSocket] = set()
         self.score = MatchScore(path=score_path)  # None = in-memory only
+        # The bracket (#43) is optional state layered on top of the score: with
+        # none loaded every page behaves exactly as it did before it existed.
+        # A live one is restored from disk so a server restart mid-tournament
+        # is survivable, the same way the score is.
+        self.bracket_path = bracket_path
+        self.archive_dir = archive_dir
+        self.bracket: Bracket | None = (
+            bracket_mod.load(bracket_path)
+            if bracket_path is not None and bracket_path.exists()
+            else None
+        )
         # Match-day kill switch: when False, vision events are ignored and
         # the clock runs manually (Stream Deck / voice / control panel).
         self.vision_enabled = True
@@ -441,14 +468,37 @@ class Hub:
         return time.monotonic() - self._rack_break_mono
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
-        """The composed broadcast/state payload: clock + `vision` + `score` + `solo`."""
+        """The composed broadcast/state payload: clock + `vision` + `score` +
+        `solo` + `bracket`."""
         snap = snapshot if snapshot is not None else self.clock.snapshot()
         return {
             **snap.as_dict(),
             "vision": self.vision_enabled,
             "score": self.score.as_dict(),
             "solo": self._solo(),
+            "bracket": self._bracket_summary(),
         }
+
+    def live_scores(self) -> tuple[int, int]:
+        """What the loaded match's two players are on right now.
+
+        Straight off `MatchScore`, because that is the single source of truth
+        for the score — the bracket never keeps one of its own, or the wall and
+        the bracket page would disagree in front of everyone (#43).
+        """
+        return self.score.p1_score, self.score.p2_score
+
+    def _bracket_summary(self) -> dict[str, object] | None:
+        """The compact bracket object on every broadcast — `null` in casual play.
+
+        Compact deliberately: the full draw is a few kilobytes and changes a
+        handful of times an evening, so it rides `GET /api/bracket` and the page
+        refetches when `revision` moves here, rather than being re-serialized ten
+        times a second for every connected page all night.
+        """
+        if self.bracket is None:
+            return None
+        return self.bracket.live_summary(self.live_scores())
 
     def _solo(self) -> dict[str, object] | None:
         """The solo panel's numbers (#30) — pace in run_out, reps in no_clock.
@@ -729,6 +779,216 @@ class Hub:
     async def score_changed(self) -> None:
         """Broadcast after any MatchScore mutation (score rides every payload)."""
         await self.broadcast(self.clock.snapshot())
+
+    # ---------- the bracket (#43) ----------
+    #
+    # Policy lives here, structure lives in `bracket.py`. The division is the
+    # one the rest of this file already uses: the pure module decides what a
+    # double-elimination draw *is*, and the hub decides what happens to the
+    # clock and the scoreboard when a result lands.
+
+    def require_bracket(self) -> Bracket:
+        if self.bracket is None:
+            raise BracketError("no bracket loaded")
+        return self.bracket
+
+    async def create_bracket(self, body: Mapping[str, object]) -> Bracket:
+        """Build a draw from a field of players. Replaces any existing one."""
+        raw = body.get("players")
+        if not isinstance(raw, list):
+            raise BracketError("players must be a list")
+        players = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                raise BracketError("each player must be an object")
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                raise BracketError("every player needs a name")
+            rating = entry.get("rating")
+            players.append(
+                Player(
+                    name=name,
+                    rating=int(rating) if isinstance(rating, int | float) else None,
+                    established=bool(entry.get("established", True)),
+                )
+            )
+        self.bracket = Bracket.create(
+            str(body.get("name") or "Tournament"),
+            players,
+            a_race=_as_int(body.get("a_race"), bracket_mod.DEFAULT_A_RACE),
+            b_race=_as_int(body.get("b_race"), bracket_mod.DEFAULT_B_RACE),
+            handicap=str(body.get("handicap") or "medium"),
+            seeding=str(body.get("seeding") or "adjacent"),
+            path=self.bracket_path,
+        )
+        self._log(
+            "bracket_created",
+            name=self.bracket.name,
+            field=len(players),
+            size=self.bracket.size,
+            handicap=self.bracket.handicap,
+            seeding=self.bracket.seeding,
+        )
+        await self.broadcast(self.clock.snapshot())
+        return self.bracket
+
+    async def clear_bracket(self) -> None:
+        """Back to casual: the pages behave exactly as they did before #43.
+
+        The file goes with it — a cleared bracket that reappears on the next
+        server restart is a bracket nobody can get rid of at the table.
+        """
+        if self.bracket is None:
+            return
+        self._log("bracket_cleared", name=self.bracket.name)
+        self.bracket = None
+        if self.bracket_path is not None:
+            self.bracket_path.unlink(missing_ok=True)
+        # The per-player targets were the bracket's, so they go with it —
+        # otherwise the wall keeps showing a handicap nothing can now explain,
+        # and the Setup tab's race stepper cannot reach it. Names and scores
+        # stay: they are whoever is at the table right now.
+        self.score.configure({"p1_target": None, "p2_target": None})
+        await self.broadcast(self.clock.snapshot())
+
+    def archive_bracket(self) -> Path:
+        """Write the bracket beside the journals (`archive_dir`)."""
+        bracket = self.require_bracket()
+        if self.archive_dir is None:
+            raise BracketError("this server has no archive directory")
+        path = bracket.archive(self.archive_dir)
+        self._log("bracket_archived", name=bracket.name, path=str(path))
+        return path
+
+    async def reopen_archive(self, name: str) -> Bracket:
+        """Make an archived bracket the live one again.
+
+        The name comes from the archive listing and is re-derived here rather
+        than trusted: it is a filename arriving over HTTP, and the directory it
+        may address is the one holding the session journals.
+        """
+        if self.archive_dir is None:
+            raise BracketError("this server has no archive directory")
+        path = self.archive_dir / Path(name).name
+        if path.suffix != ".json" or not path.is_file():
+            raise BracketError(f"no such archived bracket: {name}")
+        restored = bracket_mod.load(path)
+        if restored is None:
+            raise BracketError(f"{path.name} is not a readable bracket")
+        restored.path = self.bracket_path  # from here on it saves as the live one
+        restored.save()
+        self.bracket = restored
+        self._log("bracket_reopened", name=restored.name, path=str(path))
+        await self.broadcast(self.clock.snapshot())
+        return restored
+
+    async def load_match(self, match_id: int) -> Match:
+        """Put a match's two players and their own race targets on the wall."""
+        bracket = self.require_bracket()
+        match = bracket.load(match_id)
+        self._apply_match_to_score(bracket, match)
+        self._log("bracket_match_loaded", match=match.id, targets=match.targets)
+        await self.score_changed()
+        return match
+
+    def _apply_match_to_score(self, bracket: Bracket, match: Match) -> None:
+        """The bracket's one job against `MatchScore`: two players, two targets.
+
+        `race_to` is cleared because a handicapped match has no single race —
+        the two targets are the race, and the bar reads them in preference. The
+        rating only rides across when it is **established**: an estimate typed
+        in for an unrated relative is a fine seed and a fine handicap input, but
+        putting it on the wall under a FARGO label would be a lie.
+        """
+        updates: dict[str, object] = {"race_to": None}
+        for slot, prefix in ((0, "p1"), (1, "p2")):
+            index = match.slots[slot]
+            player = bracket.players[index] if isinstance(index, int) and index >= 0 else None
+            updates[f"{prefix}_name"] = player.name if player else "—"
+            updates[f"{prefix}_fargo"] = (
+                player.rating if player is not None and player.established else None
+            )
+            updates[f"{prefix}_target"] = match.targets[slot]
+        self.score.configure(updates)
+        self.score.reset_scores()
+
+    async def report_result(
+        self, match_id: int, scores: tuple[int, int] | None = None
+    ) -> dict[str, object]:
+        """Confirm a result — and, for the loaded match, start the next one.
+
+        This is the Stream Deck's confirm press and the phone's Report button,
+        and it is deliberately one action with several effects: the result is
+        written and both players routed, the next ready match is loaded at 0-0
+        with its own targets, and the rack is reset (a new match is a new rack:
+        clock parks, extensions refill, shot count zeroes). The scene flip to
+        the bracket is the deck's half — obs-websocket lives out there, not in
+        the server (`docs/hardware.md` §C3).
+
+        Reporting a match that is *not* loaded is a correction, not a new match:
+        it touches the bracket and nothing else, so fixing a score from the
+        phone can never park a clock somebody is playing under.
+        """
+        bracket = self.require_bracket()
+        was_loaded = bracket.loaded == match_id
+        if scores is None and was_loaded:
+            scores = self.live_scores()
+        match = bracket.report(match_id, scores)
+        winner = bracket.players[match.slots[match.winner or 0]]  # type: ignore[index]
+        self._log(
+            "bracket_result",
+            match=match.id,
+            scores=match.scores,
+            winner=winner.name,
+            routes=bracket.routes(match),
+            champion=bracket.champion(),
+        )
+        loaded_next: Match | None = None
+        if was_loaded:
+            loaded_next = bracket.next_ready(after=match.id)
+            if loaded_next is not None:
+                bracket.load(loaded_next.id)
+                self._apply_match_to_score(bracket, loaded_next)
+            else:
+                bracket.unload()
+            await self.new_rack()  # a new match is a new rack
+        await self.broadcast(self.clock.snapshot())
+        return {
+            "match": match.id,
+            "winner": winner.name,
+            "loaded": loaded_next.id if loaded_next else None,
+            "champion": bracket.champion(),
+        }
+
+    async def clear_result(self, match_id: int) -> Match:
+        """Un-play a match so the one feeding it can be corrected."""
+        bracket = self.require_bracket()
+        match = bracket.clear_result(match_id)
+        self._log("bracket_result_cleared", match=match.id)
+        await self.broadcast(self.clock.snapshot())
+        return match
+
+    async def edit_match(self, match_id: int, body: Mapping[str, object]) -> Match:
+        """Redraw a Round-1 matchup, or override its race targets."""
+        bracket = self.require_bracket()
+        match = bracket.match(match_id)
+        if "p1" in body or "p2" in body:
+            match = bracket.edit(
+                match_id,
+                _as_opt_int(body.get("p1")),
+                _as_opt_int(body.get("p2")),
+            )
+        if "p1_target" in body or "p2_target" in body:
+            match = bracket.set_targets(
+                match_id,
+                _as_opt_int(body.get("p1_target")),
+                _as_opt_int(body.get("p2_target")),
+            )
+            if bracket.loaded == match_id:
+                self.score.configure({"p1_target": match.targets[0], "p2_target": match.targets[1]})
+        self._log("bracket_match_edited", match=match.id, targets=match.targets)
+        await self.broadcast(self.clock.snapshot())
+        return match
 
     # ---------- vision events (dispatched from the `cueclock run` camera thread) ----------
 

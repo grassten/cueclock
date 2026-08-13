@@ -18,9 +18,11 @@ class MatchScore:
     p1_name: str = "PLAYER 1"
     p1_score: int = 0
     p1_fargo: int | None = None  # None = no rating shown (unestablished / skipped)
+    p1_target: int | None = None  # this player's own race target (issue #43)
     p2_name: str = "PLAYER 2"
     p2_score: int = 0
     p2_fargo: int | None = None
+    p2_target: int | None = None
     race_to: int | None = None  # None = center segment hidden on the overlay
     path: Path | None = None  # None = in-memory only
 
@@ -39,19 +41,41 @@ class MatchScore:
             p1_fargo = int(p1_fargo) if p1_fargo is not None else None
             p2_fargo = data["p2"].get("fargo")
             p2_fargo = int(p2_fargo) if p2_fargo is not None else None
+            p1_target = data["p1"].get("target")
+            p1_target = int(p1_target) if p1_target is not None else None
+            p2_target = data["p2"].get("target")
+            p2_target = int(p2_target) if p2_target is not None else None
             race = data.get("race_to")
             race_to = int(race) if race is not None else None
         except (OSError, ValueError, KeyError, TypeError):
             return  # corrupt or half-written — keep defaults; next save rewrites
         self.p1_name, self.p1_score, self.p1_fargo = p1_name, p1_score, p1_fargo
         self.p2_name, self.p2_score, self.p2_fargo = p2_name, p2_score, p2_fargo
+        self.p1_target, self.p2_target = p1_target, p2_target
         self.race_to = race_to
 
     def as_dict(self) -> dict[str, object]:
-        """The `score` object carried in every WS/state payload."""
+        """The `score` object carried in every WS/state payload.
+
+        ``target`` is per player and is what handicapped play needs (issue #43):
+        a 563 against a 240 races 7 to 2, so a single centre number cannot say
+        what either player is playing to. ``race_to`` keeps its old meaning for
+        casual play; a reader shows the targets when they are set and falls back
+        to `race_to` when they are not, so nothing that existed before moved.
+        """
         return {
-            "p1": {"name": self.p1_name, "score": self.p1_score, "fargo": self.p1_fargo},
-            "p2": {"name": self.p2_name, "score": self.p2_score, "fargo": self.p2_fargo},
+            "p1": {
+                "name": self.p1_name,
+                "score": self.p1_score,
+                "fargo": self.p1_fargo,
+                "target": self.p1_target,
+            },
+            "p2": {
+                "name": self.p2_name,
+                "score": self.p2_score,
+                "fargo": self.p2_fargo,
+                "target": self.p2_target,
+            },
             "race_to": self.race_to,
         }
 
@@ -84,17 +108,24 @@ class MatchScore:
         ``p1_fargo`` / ``p2_fargo`` (issue #27): int sets, null clears. A
         rating belongs to a name, so changing a name without sending a
         rating in the same update clears the old one — a stale rating under
-        a new player is worse than no rating.
+        a new player is worse than no rating. ``p1_target`` / ``p2_target``
+        (issue #43) follow exactly the same rule for the same reason: a race
+        target belongs to a matchup, and one left over from the previous pair
+        is worse than none.
         """
         p1 = updates.get("p1_name")
         if isinstance(p1, str):
             if p1 != self.p1_name and "p1_fargo" not in updates:
                 self.p1_fargo = None
+            if p1 != self.p1_name and "p1_target" not in updates:
+                self.p1_target = None
             self.p1_name = p1
         p2 = updates.get("p2_name")
         if isinstance(p2, str):
             if p2 != self.p2_name and "p2_fargo" not in updates:
                 self.p2_fargo = None
+            if p2 != self.p2_name and "p2_target" not in updates:
+                self.p2_target = None
             self.p2_name = p2
         if "p1_fargo" in updates:
             fargo = updates["p1_fargo"]
@@ -102,6 +133,12 @@ class MatchScore:
         if "p2_fargo" in updates:
             fargo = updates["p2_fargo"]
             self.p2_fargo = fargo if isinstance(fargo, int) else None
+        if "p1_target" in updates:
+            target = updates["p1_target"]
+            self.p1_target = target if isinstance(target, int) else None
+        if "p2_target" in updates:
+            target = updates["p2_target"]
+            self.p2_target = target if isinstance(target, int) else None
         if "race_to" in updates:
             race = updates["race_to"]
             self.race_to = race if isinstance(race, int) else None

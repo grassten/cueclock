@@ -46,14 +46,18 @@ def test_state_snapshot_shape() -> None:
             # The solo panel (#30): null in match, pace numbers in run_out,
             # rep counters in no_clock.
             "solo",
+            # The bracket (#43): null in casual play, which is every session
+            # that doesn't build one.
+            "bracket",
         }
         assert snap["mode"] == "match"
         assert snap["base"] == 30
         assert snap["vision"] is True
         assert snap["solo"] is None
+        assert snap["bracket"] is None
         assert snap["score"] == {
-            "p1": {"name": "PLAYER 1", "score": 0, "fargo": None},
-            "p2": {"name": "PLAYER 2", "score": 0, "fargo": None},
+            "p1": {"name": "PLAYER 1", "score": 0, "fargo": None, "target": None},
+            "p2": {"name": "PLAYER 2", "score": 0, "fargo": None, "target": None},
             "race_to": None,
         }
 
@@ -326,8 +330,8 @@ def test_score_persistence_round_trip(tmp_path: Path) -> None:
     # A fresh server (mid-match crash restart) reloads the same score.
     with TestClient(create_app(score_path=path)) as client:
         assert client.get("/api/score").json() == {
-            "p1": {"name": "PLAYER 1", "score": 1, "fargo": None},
-            "p2": {"name": "VISITOR", "score": 0, "fargo": 471},
+            "p1": {"name": "PLAYER 1", "score": 1, "fargo": None, "target": None},
+            "p2": {"name": "VISITOR", "score": 0, "fargo": 471, "target": None},
             "race_to": 7,
         }
 
@@ -336,7 +340,7 @@ def test_score_corrupt_file_falls_back_to_defaults(tmp_path: Path) -> None:
     path = tmp_path / "score.json"
     path.write_text("{not json")
     score = MatchScore(path=path)
-    assert score.as_dict()["p1"] == {"name": "PLAYER 1", "score": 0, "fargo": None}
+    assert score.as_dict()["p1"] == {"name": "PLAYER 1", "score": 0, "fargo": None, "target": None}
     score.adjust("p1", 1)  # next mutation rewrites a clean file
     assert MatchScore(path=path).p1_score == 1
 
@@ -357,7 +361,7 @@ def test_score_fargo_set_and_cleared_by_rename() -> None:
         assert resp["score"]["p1"]["fargo"] is None
         # Name + rating in one update is the pick flow — both land.
         resp = client.post("/api/score/config", json={"p2_name": "SHANE", "p2_fargo": 847}).json()
-        assert resp["score"]["p2"] == {"name": "SHANE", "score": 0, "fargo": 847}
+        assert resp["score"]["p2"] == {"name": "SHANE", "score": 0, "fargo": 847, "target": None}
         # Explicit null clears (the "not established" case).
         resp = client.post("/api/score/config", json={"p2_fargo": None}).json()
         assert resp["score"]["p2"]["fargo"] is None
@@ -1455,3 +1459,188 @@ def test_operator_keys_abandon_an_open_provisional(monkeypatch: pytest.MonkeyPat
     asyncio.run(hub.balls_settled())
     solo = cast(dict[str, object], hub.payload()["solo"])
     assert solo["last_s"] == 3.0  # timed from the press, not the abandoned freeze
+
+
+# ---------------------------------------------------------------- bracket (#43)
+
+
+BRACKET_BODY = {
+    "name": "Asten Family 8-Ball",
+    "a_race": 5,
+    "b_race": 4,
+    "handicap": "off",
+    "seeding": "adjacent",
+    "players": [
+        {"name": "Hank Harrison", "rating": 563},
+        {"name": "Joel Braun", "rating": 495},
+        {"name": "Steven Asten", "rating": 471},
+        {"name": "Marcus Tran", "rating": 415, "established": False},
+    ],
+}
+
+
+def test_no_bracket_means_every_page_behaves_as_before() -> None:
+    with make_client() as client:
+        assert client.get("/api/bracket").json() == {"ok": True, "bracket": None}
+        assert client.get("/api/state").json()["bracket"] is None
+        # Every bracket action is a 404 rather than a crash or a silent no-op.
+        assert client.post("/api/bracket/match/1/load").status_code == 404
+        assert client.post("/api/bracket/match/1/result").status_code == 404
+        assert client.post("/api/bracket/archive").status_code == 404
+
+
+def test_create_build_and_load_a_match() -> None:
+    with make_client() as client:
+        created = client.post("/api/bracket", json=BRACKET_BODY).json()
+        assert created["ok"]
+        assert created["bracket"]["size"] == 4 and created["bracket"]["field"] == 4
+        assert client.post("/api/bracket/match/1/load").json()["ok"]
+        score = client.get("/api/score").json()
+        assert score["p1"]["target"] == 5 and score["p2"]["target"] == 5
+        assert score["race_to"] is None  # a handicapped match has no single race
+        # An unestablished rating seeds the draw but never reaches the wall.
+        names = {score["p1"]["name"], score["p2"]["name"]}
+        assert names == {"Hank Harrison", "Joel Braun"}
+        state = client.get("/api/state").json()["bracket"]
+        assert state["match"]["header"] == "Match 1 · A Side · Race to 5"
+        assert state["armed"] is None
+
+
+def test_an_estimated_rating_seeds_but_is_not_shown_as_fargo() -> None:
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/2/load")  # Steven 471 v Marcus 415 (prov)
+        score = client.get("/api/score").json()
+        assert score["p1"]["fargo"] == 471
+        assert score["p2"]["fargo"] is None  # established=False
+
+
+def test_reaching_the_target_arms_the_deck_key_without_advancing() -> None:
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/load")
+        for _ in range(5):
+            client.post("/api/score/p1/increment")
+        armed = client.get("/api/state").json()["bracket"]["armed"]
+        assert armed["name"] == "Hank Harrison" and armed["score"] == 5
+        # The bracket has not moved: Match 1 is still the live match.
+        assert client.get("/api/bracket").json()["bracket"]["loaded"] == 1
+        client.post("/api/score/p1/decrement")  # the hold that takes a point back
+        assert client.get("/api/state").json()["bracket"]["armed"] is None
+
+
+def test_confirming_routes_loads_the_next_match_and_racks() -> None:
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/load")
+        for _ in range(5):
+            client.post("/api/score/p1/increment")
+        client.post("/api/score/p2/increment")
+        client.post("/api/start")  # a clock running under the match being played
+        result = client.post("/api/bracket/match/1/result").json()
+        assert result["winner"] == "Hank Harrison"
+        assert result["loaded"] == 2  # the next ready match, loaded at 0-0
+        score = client.get("/api/score").json()
+        assert (score["p1"]["score"], score["p2"]["score"]) == (0, 0)
+        assert score["p1"]["name"] == "Steven Asten"
+        # A new match is a new rack: the clock parks and the shot count zeroes.
+        assert client.get("/api/state").json()["state"] == "IDLE"
+        bracket = client.get("/api/bracket").json()["bracket"]
+        played = next(m for m in bracket["matches"] if m["id"] == 1)
+        assert played["p1"]["score"] == 5 and played["p1"]["won"] is True
+        # A four-player draw: Match 1's winner goes to the A final, its
+        # loser opens the B side. The numbers are generated, never typed.
+        assert played["routes"] == {"winner": 3, "loser": 4}
+
+
+def test_a_correction_behind_a_played_match_is_refused_with_its_reason() -> None:
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/result", json={"scores": [5, 2]})
+        client.post("/api/bracket/match/2/result", json={"scores": [5, 1]})
+        client.post("/api/bracket/match/3/result", json={"scores": [5, 0]})
+        refused = client.post("/api/bracket/match/1/result", json={"scores": [2, 5]})
+        assert refused.status_code == 409
+        assert "Match 3" in refused.json()["error"]
+        assert client.delete("/api/bracket/match/3/result").json()["ok"]
+        assert client.post("/api/bracket/match/1/result", json={"scores": [2, 5]}).json()["ok"]
+
+
+def test_a_correction_to_an_unloaded_match_never_touches_the_clock() -> None:
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/load")
+        client.post("/api/start")
+        client.post("/api/bracket/match/2/result", json={"scores": [5, 0]})
+        assert client.get("/api/state").json()["state"] == "RUNNING"
+        assert client.get("/api/bracket").json()["bracket"]["loaded"] == 1
+
+
+def test_editing_a_round_one_matchup_over_http() -> None:
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        assert client.patch("/api/bracket/match/1", json={"p1": 3, "p2": 0}).json()["ok"]
+        bracket = client.get("/api/bracket").json()["bracket"]
+        first = next(m for m in bracket["matches"] if m["id"] == 1)
+        assert [first["p1"]["name"], first["p2"]["name"]] == ["Marcus Tran", "Hank Harrison"]
+        # A derived slot is not editable — it is derived.
+        assert client.patch("/api/bracket/match/3", json={"p1": 1}).status_code == 409
+
+
+def test_target_override_reaches_the_live_scoreboard() -> None:
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/load")
+        client.patch("/api/bracket/match/1", json={"p1_target": 7, "p2_target": 3})
+        score = client.get("/api/score").json()
+        assert (score["p1"]["target"], score["p2"]["target"]) == (7, 3)
+
+
+def test_bracket_survives_a_restart_and_clearing_removes_it(tmp_path: Path) -> None:
+    path = tmp_path / "bracket.json"
+    with TestClient(create_app(bracket_path=path)) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/result", json={"scores": [5, 2]})
+    with TestClient(create_app(bracket_path=path)) as client:
+        bracket = client.get("/api/bracket").json()["bracket"]
+        assert bracket["name"] == "Asten Family 8-Ball"
+        first = next(m for m in bracket["matches"] if m["id"] == 1)
+        assert first["status"] == "played"
+        client.post("/api/bracket/match/2/load")
+        assert client.get("/api/score").json()["p1"]["target"] == 5
+        assert client.delete("/api/bracket").json() == {"ok": True}
+        assert client.get("/api/bracket").json()["bracket"] is None
+        # Casual again, all the way down: a handicap nothing can now explain
+        # must not be left on the wall.
+        casual = client.get("/api/score").json()
+        assert casual["p1"]["target"] is None and casual["p2"]["target"] is None
+    assert not path.exists()  # a cleared bracket must not come back on restart
+    with TestClient(create_app(bracket_path=path)) as client:
+        assert client.get("/api/bracket").json()["bracket"] is None
+
+
+def test_archive_and_reopen(tmp_path: Path) -> None:
+    with TestClient(
+        create_app(bracket_path=tmp_path / "bracket.json", archive_dir=tmp_path / "logs")
+    ) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/result", json={"scores": [5, 2]})
+        archived = client.post("/api/bracket/archive").json()
+        assert archived["ok"] and archived["path"].endswith("bracket-asten-family-8-ball.json")
+        listing = client.get("/api/bracket/archives").json()["archives"]
+        assert listing == ["bracket-asten-family-8-ball.json"]
+        client.delete("/api/bracket")
+        reopened = client.post(f"/api/bracket/archives/{listing[0]}").json()
+        assert reopened["ok"]
+        first = next(m for m in reopened["bracket"]["matches"] if m["id"] == 1)
+        assert first["p1"]["score"] == 5
+        # A name that walks out of the archive directory is refused.
+        assert client.post("/api/bracket/archives/..%2Fbracket.json").status_code == 404
+
+
+def test_a_bad_field_is_a_400_not_a_500() -> None:
+    with make_client() as client:
+        assert client.post("/api/bracket", json={"players": []}).status_code == 400
+        assert client.post("/api/bracket", json={"players": "nope"}).status_code == 400
+        bad = {**BRACKET_BODY, "handicap": "spicy"}
+        assert client.post("/api/bracket", json=bad).status_code == 400

@@ -40,6 +40,13 @@ MATCH = DeckState(up=True, mode="match", ruleset="wnt_9ball", base=60, extension
 RUN_OUT = replace(MATCH, mode="run_out", ruleset="ultimate_pool_8ball", base=30)
 NO_CLOCK = replace(MATCH, mode="no_clock")
 DOWN = DeckState(up=False)
+# The same deck with a bracket loaded (#43). Kept as a separate state rather
+# than folded into MATCH, because casual play is the common case and every
+# invariant below should keep describing it.
+TOURNEY = replace(
+    MATCH, bracket_loaded=True, bracket_match_id=4, bracket_match="MATCH 4", bracket_side="A SIDE"
+)
+ARMED = replace(TOURNEY, bracket_armed=("Priya Shah", 5, 2))
 
 BY_NAME = {key.name: key for key in LAYOUT}
 
@@ -52,8 +59,11 @@ def visible_names(state: DeckState) -> set[str]:
 
 
 def test_layout_positions_unique_and_in_bounds() -> None:
-    positions = [(k.row, k.col) for k in (*LAYOUT, *REASON_KEYS)]
-    assert len(set(positions)) == len(positions)
+    # Within each layer. The reason page is an overlay by design, so it is
+    # allowed to land on a cell the base layout uses — see the flag test below.
+    for layer in (LAYOUT, REASON_KEYS):
+        positions = [(k.row, k.col) for k in layer]
+        assert len(set(positions)) == len(positions)
     for key in (*LAYOUT, *REASON_KEYS):
         assert 1 <= key.row <= ROWS
         assert 1 <= key.col <= COLS
@@ -94,8 +104,15 @@ def test_only_session_survives_the_server_going_down() -> None:
 # --- removal, not dimming: the deck shrinks to what the mode affords ---
 
 
-def test_match_lights_every_key() -> None:
-    assert visible_names(MATCH) == set(BY_NAME)
+def test_match_lights_every_key_a_casual_night_has() -> None:
+    assert visible_names(MATCH) == set(BY_NAME) - {"scene", "confirm"}
+
+
+def test_a_bracket_lights_the_two_keys_it_adds_and_nothing_else() -> None:
+    # The governing constraint of #43, on the deck: with no bracket loaded the
+    # surface is exactly the surface it was, and loading one only ever adds.
+    assert visible_names(TOURNEY) - visible_names(MATCH) == {"scene", "confirm"}
+    assert visible_names(TOURNEY) == set(BY_NAME)
 
 
 def test_run_out_drops_the_rack_only_keys() -> None:
@@ -108,14 +125,18 @@ def test_no_clock_collapses_to_the_spine() -> None:
     assert visible_names(NO_CLOCK) == ALWAYS_ON
 
 
-def test_the_retired_ground_truth_cell_stays_empty() -> None:
-    """(3,5) held "I shot" (#19) until 2026-08-05; nothing took its place.
+def test_the_retired_ground_truth_cell_holds_the_bracket_confirm() -> None:
+    """(3,5) held "I shot" (#19) until 2026-08-05, then stood empty until #43.
 
-    Pinned because the accuracy denominator now comes from the journal with
-    nothing asked of the table, and a key reappearing there would quietly
-    re-introduce the thing that was removed.
+    What the removal established is what this pins: the deck never asks the
+    player to *classify* anything. Confirm is the opposite kind of key — it has
+    no deadline, it only exists while a bracket does, and what it commits is
+    already on the wall in front of everyone before the press.
     """
-    assert all((key.row, key.col) != (3, 5) for key in (*LAYOUT, *REASON_KEYS))
+    at_35 = [k for k in LAYOUT if (k.row, k.col) == (3, 5)]
+    assert [k.name for k in at_35] == ["confirm"]
+    assert at_35[0].needs_bracket
+    assert not at_35[0].visible(MATCH)
 
 
 def test_push_is_absent_under_the_eight_ball_rulebooks() -> None:
@@ -128,7 +149,7 @@ def test_push_is_absent_under_the_eight_ball_rulebooks() -> None:
 def test_an_unknown_mode_hides_nothing() -> None:
     # A server that predates modes (or a hiccup) must not blank the deck:
     # visibility only removes a key when we positively know it doesn't apply.
-    assert visible_names(replace(MATCH, mode=None)) == set(BY_NAME)
+    assert visible_names(replace(TOURNEY, mode=None)) == set(BY_NAME)
 
 
 def test_keys_never_move_between_modes() -> None:
@@ -158,8 +179,11 @@ def test_every_key_carries_its_group_stripe() -> None:
 
 def test_the_clock_group_is_exactly_the_keys_that_leave_with_the_clock() -> None:
     clock_keys = {k.name for k in LAYOUT if k.group is Group.CLOCK}
-    non_clock = {"ruleset", "new_rack", "p1", "p2"}
-    assert clock_keys == set(BY_NAME) - visible_names(NO_CLOCK) - non_clock
+    # These leave `no_clock` for a different reason — they are rack-scoped, not
+    # clock-scoped. Confirm joins them: a drill has no match to report.
+    non_clock = {"ruleset", "new_rack", "p1", "p2", "confirm"}
+    quiet = visible_names(replace(TOURNEY, mode="no_clock"))
+    assert clock_keys == set(BY_NAME) - quiet - non_clock
     for key in LAYOUT:
         if key.group is Group.CLOCK:
             assert key.modes is not None and key.modes <= CLOCKED, key.name
@@ -206,13 +230,43 @@ def test_an_unknown_cycle_value_still_renders_something() -> None:
     assert cycle_label("mode", None) == "—"
 
 
+# What each key's second line is for. A sub line is either the value one tap
+# away, the gesture that reaches the other thing, or where the press goes when
+# the key's own word cannot say — and never context, which is the one thing it
+# must not be, because a face with no press behind its second line makes every
+# other second line untrustworthy.
+SUB_LINE_KEYS = {
+    "mode": "value",
+    "ruleset": "value",
+    "session": "gesture",
+    "replay": "gesture",
+    "confirm": "gesture",  # only once armed — see below
+    "scene": "destination",
+}
+
+
 def test_only_keys_with_a_second_gesture_carry_a_sub_line() -> None:
-    # The sub line means "one gesture away" — a tap on a cycle key, a hold on
-    # Session and Replay. On a key that does exactly one thing it would be a
-    # lie, and the whole face grammar rests on the sub line being trustworthy.
     for key in LAYOUT:
-        if not isinstance(key.action, Cycle | SessionToggle | ReplayShow):
-            assert key.face(MATCH).sub is None, key.name
+        if key.name not in SUB_LINE_KEYS:
+            assert key.face(ARMED).sub is None, key.name
+
+
+def test_the_confirm_key_promises_nothing_until_it_is_armed() -> None:
+    confirm = BY_NAME["confirm"]
+    idle = confirm.face(TOURNEY)
+    assert idle.sub is None  # a label, not an offer
+    assert idle.text == "MATCH 4\nA SIDE"
+    live = confirm.face(ARMED)
+    assert live.text == "PRIYA\nWINS 5-2"  # the first name is what fits 72 px
+    assert live.sub == "CONFIRM"  # the gesture, named
+    assert live.bg == faces.BG_ARMED
+
+
+def test_the_scene_key_says_where_the_press_goes() -> None:
+    scene = BY_NAME["scene"]
+    assert (scene.face(TOURNEY).text, scene.face(TOURNEY).sub) == ("BRACKET", "TO TV")
+    on = replace(TOURNEY, on_bracket=True)
+    assert (scene.face(on).text, scene.face(on).sub) == ("BACK", "TO PLAY")
 
 
 def test_session_face_states_where_it_is_and_names_the_way_out() -> None:
@@ -295,12 +349,17 @@ def test_score_hold_is_shorter_than_the_session_hold() -> None:
 # --- flag: one press by feel, reason afterwards ---
 
 
-def test_flag_page_unfolds_into_empty_cells_beside_the_flag_key() -> None:
+def test_flag_page_unfolds_into_the_cells_beside_the_flag_key() -> None:
     flag = BY_NAME["flag"]
     assert [k.index for k in REASON_KEYS] == [flag.index + 1, flag.index + 2, flag.index + 3]
-    # Those cells are dark in every mode, so the page never covers a live key.
-    occupied = {k.index for k in LAYOUT}
-    assert not occupied & {k.index for k in REASON_KEYS}
+    # Two of the three are dark in every mode. The third holds the bracket's
+    # scene key (#43), which the page borrows while it is open — and that is
+    # the accepted cost rather than an oversight: on a 15-key deck every free
+    # cell is one of these three, a flag press lasts seconds, and the scene key
+    # is the one key on the deck with no deadline attached to it at all.
+    reason_cells = {k.index for k in REASON_KEYS}
+    borrowed = {k.name for k in LAYOUT if k.index in reason_cells}
+    assert borrowed == {"scene"}
 
 
 def test_flag_reasons_send_distinct_labels_through_the_dump_endpoint() -> None:
@@ -421,6 +480,44 @@ def test_build_state_with_no_answer_is_the_server_down_deck() -> None:
     state = build_state(None, SessionState.OFF)
     assert not state.up
     assert state.session_face == "START"
+
+
+def test_build_state_reads_the_bracket_summary() -> None:
+    state = build_state(
+        {
+            "mode": "match",
+            "bracket": {
+                "revision": 4,
+                "match": {"id": 4, "side": "A", "header": "Match 4 \u00b7 A Side"},
+                "armed": {"slot": 0, "name": "Priya Shah", "score": 5, "other": 2},
+            },
+        },
+        SessionState.ON,
+    )
+    assert state.bracket_loaded
+    assert (state.bracket_match_id, state.bracket_match) == (4, "MATCH 4")
+    assert state.bracket_side == "A SIDE"
+    assert state.bracket_armed == ("Priya Shah", 5, 2)
+
+
+def test_build_state_with_no_bracket_leaves_both_keys_dark() -> None:
+    # Casual play, and every session that never builds a draw.
+    state = build_state({"mode": "match", "bracket": None}, SessionState.ON)
+    assert not state.bracket_loaded
+    assert state.bracket_armed is None
+    assert not BY_NAME["confirm"].visible(state)
+    assert not BY_NAME["scene"].visible(state)
+
+
+def test_build_state_survives_a_bracket_with_nothing_loaded() -> None:
+    # Between matches: a bracket exists but no match is on the wall, so the
+    # confirm key is lit and simply has nothing to name.
+    state = build_state(
+        {"mode": "match", "bracket": {"revision": 1, "match": None, "armed": None}},
+        SessionState.ON,
+    )
+    assert state.bracket_loaded and state.bracket_match is None
+    assert BY_NAME["confirm"].face(state).text == "—"
 
 
 # --- client (server down: refused connection, not a hang) ---
@@ -554,3 +651,44 @@ def test_replay_key_stays_on_the_spine_mid_replay() -> None:
 
 def test_mode_faces_cover_every_mode() -> None:
     assert set(MODE_FACES) == set(MODES)
+
+
+def test_no_face_on_the_deck_overflows_its_tile() -> None:
+    """Every face this layout can produce actually fits 72x72.
+
+    `faces._fit` falls through to its smallest size rather than failing, so a
+    line that is too long is silently *clipped* — which is how "PRESS TO
+    CONFIRM" and an eleven-letter first name both got onto a key and came back
+    unreadable (#43, caught by rendering the tiles). Nothing else checks this,
+    because nothing else renders.
+    """
+    from PIL import ImageDraw
+
+    states = [
+        MATCH,
+        RUN_OUT,
+        NO_CLOCK,
+        DOWN,
+        TOURNEY,
+        ARMED,
+        replace(TOURNEY, on_bracket=True),
+        replace(TOURNEY, bracket_side="FINAL", bracket_match="MATCH 15"),
+        replace(ARMED, bracket_armed=("Christopher", 11, 10)),
+        replace(ARMED, bracket_armed=("Jo", 5, 4)),
+    ]
+    probe = ImageDraw.Draw(faces.render(faces.Face()))
+    for state in states:
+        for key in (*LAYOUT, *REASON_KEYS):
+            face = key.face(state)
+            image = faces.render(face)  # must not raise
+            assert image.size == (faces.SIZE, faces.SIZE)
+            for text, sizes in (
+                (face.text, faces._MAIN_SIZES),
+                (face.big, faces._BIG_SIZES),
+                (face.sub, faces._SUB_SIZES),
+            ):
+                if not text:
+                    continue
+                font = faces._font(sizes[-1])  # what _fit falls through to
+                widest = max(probe.textlength(line, font=font) for line in text.split("\n"))
+                assert widest <= faces.SIZE - 8, (key.name, state.mode, text)

@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from cueclock.clock import ALIASES, MODES, RULESETS
 from cueclock.server import fargo
+from cueclock.server.bracket import BracketError
 from cueclock.server.hub import Hub
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -25,8 +26,18 @@ STATIC_DIR = Path(__file__).parent / "static"
 VOICE_DIR = STATIC_DIR / "voice"
 
 
-def create_app(score_path: Path | None = None, journal_path: Path | None = None) -> FastAPI:
-    hub = Hub(score_path=score_path, journal_path=journal_path)  # None = in-memory only
+def create_app(
+    score_path: Path | None = None,
+    journal_path: Path | None = None,
+    bracket_path: Path | None = None,
+    archive_dir: Path | None = None,
+) -> FastAPI:
+    hub = Hub(  # every path None = in-memory only
+        score_path=score_path,
+        journal_path=journal_path,
+        bracket_path=bracket_path,
+        archive_dir=archive_dir,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -44,7 +55,9 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
 
     @app.get("/")
     async def index() -> JSONResponse:
-        return JSONResponse({"endpoints": ["/shotclock", "/replay", "/control", "/ws", "/api/*"]})
+        return JSONResponse(
+            {"endpoints": ["/shotclock", "/replay", "/control", "/bracket", "/ws", "/api/*"]}
+        )
 
     @app.get("/shotclock")
     async def shotclock_page() -> FileResponse:
@@ -65,6 +78,17 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
     async def replay_page() -> FileResponse:
         """REPLAY badge for the OBS Replay scene (`?s=<seconds>` drains the bar)."""
         return FileResponse(STATIC_DIR / "replay.html")
+
+    @app.get("/bracket")
+    async def bracket_page() -> FileResponse:
+        """The double-elimination bracket, 1920x1080, its own OBS scene (#43).
+
+        It draws the bracket and nothing else — no current-match panel, no
+        up-next list. The play scene's score bar already says who is up and the
+        live match is the highlighted box, so repeating either only costs the
+        boxes the space that makes them readable from the couch.
+        """
+        return FileResponse(STATIC_DIR / "bracket.html")
 
     @app.get("/audio/extension_called.wav")
     async def extension_called_audio() -> FileResponse:
@@ -224,6 +248,112 @@ def create_app(score_path: Path | None = None, journal_path: Path | None = None)
                 {"ok": False, "error": f"fargorate unreachable: {exc}"}, status_code=502
             )
         return JSONResponse({"ok": True, "players": players})
+
+    # ---------- bracket (#43) ----------
+    #
+    # Optional state layered on top of the score: with no bracket loaded every
+    # one of these answers 404/409 and every other endpoint behaves exactly as
+    # it did before, which is what makes casual night and tournament night the
+    # same software. A refusal is a 4xx carrying the bracket's own words, so the
+    # phone can print "Match 5 has already been played — clear its result first"
+    # without knowing the rules that produced it.
+
+    def _bracket_error(exc: BracketError) -> JSONResponse:
+        missing = str(exc) == "no bracket loaded"
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=404 if missing else 409)
+
+    @app.get("/api/bracket")
+    async def api_bracket() -> JSONResponse:
+        if hub.bracket is None:
+            return JSONResponse({"ok": True, "bracket": None})
+        return JSONResponse({"ok": True, "bracket": hub.bracket.as_dict(hub.live_scores())})
+
+    @app.post("/api/bracket")
+    async def api_bracket_create(body: dict[str, object]) -> JSONResponse:
+        """Build the draw: `{name, players[], a_race, b_race, handicap, seeding}`."""
+        try:
+            bracket = await hub.create_bracket(body)
+        except BracketError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "bracket": bracket.as_dict(hub.live_scores())})
+
+    @app.delete("/api/bracket")
+    async def api_bracket_clear() -> dict[str, bool]:
+        await hub.clear_bracket()
+        return {"ok": True}
+
+    @app.post("/api/bracket/archive")
+    async def api_bracket_archive() -> JSONResponse:
+        try:
+            path = hub.archive_bracket()
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, "path": str(path)})
+
+    @app.get("/api/bracket/archives")
+    async def api_bracket_archives() -> JSONResponse:
+        """Past brackets on disk, newest first — the Load past bracket list."""
+        if hub.archive_dir is None or not hub.archive_dir.is_dir():
+            return JSONResponse({"ok": True, "archives": []})
+        files = sorted(
+            hub.archive_dir.glob("bracket-*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return JSONResponse({"ok": True, "archives": [f.name for f in files]})
+
+    @app.post("/api/bracket/archives/{name}")
+    async def api_bracket_reopen(name: str) -> JSONResponse:
+        """Reopen an archived bracket as the live one."""
+        try:
+            bracket = await hub.reopen_archive(name)
+        except BracketError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=404)
+        return JSONResponse({"ok": True, "bracket": bracket.as_dict(hub.live_scores())})
+
+    @app.patch("/api/bracket/match/{match_id}")
+    async def api_bracket_edit(match_id: int, body: dict[str, object]) -> JSONResponse:
+        try:
+            await hub.edit_match(match_id, body)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/bracket/match/{match_id}/load")
+    async def api_bracket_load(match_id: int) -> JSONResponse:
+        try:
+            match = await hub.load_match(match_id)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, "match": match.id, "targets": match.targets})
+
+    @app.post("/api/bracket/match/{match_id}/result")
+    async def api_bracket_result(
+        match_id: int, body: dict[str, object] | None = None
+    ) -> JSONResponse:
+        """Confirm a result and advance. Body may carry explicit `scores`.
+
+        Without one the loaded match's live scores are the result — that is the
+        deck's confirm press, where the score on the wall *is* the thing being
+        confirmed and re-typing it would only be a way to disagree with it.
+        """
+        scores: tuple[int, int] | None = None
+        raw = (body or {}).get("scores")
+        if isinstance(raw, list) and len(raw) == 2:
+            scores = (int(raw[0]), int(raw[1]))
+        try:
+            result = await hub.report_result(match_id, scores)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, **result})
+
+    @app.delete("/api/bracket/match/{match_id}/result")
+    async def api_bracket_clear_result(match_id: int) -> JSONResponse:
+        try:
+            await hub.clear_result(match_id)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True})
 
     @app.post("/api/vision/on")
     async def api_vision_on() -> dict[str, object]:

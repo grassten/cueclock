@@ -357,4 +357,11 @@ access and starve this daemon.
 - `scripts/live_view.py` — camera bring-up viewer with focus/WB/grade
   hotkeys (`hardware.md` §A3); pylon Viewer doesn't exist on Apple Silicon.
 - `scripts/fetch_vosk_model.sh` — downloads the Vosk voice model.
+- `scripts/setup_obs_replay.py` / `scripts/setup_obs_bracket.py` — build the
+  Replay and Bracket scenes over obs-websocket. Idempotent; never assemble
+  either by hand (`hardware.md` §B3).
 - The HTTP/WebSocket API the deck and overlays speak: `design.md` §2.1.
+- Tournament nights have no CLI at all: the bracket is built, driven and
+  archived from `/control`'s Bracket tab and the Stream Deck (`design.md` §10).
+  A live one persists to `config/bracket.json` beside the score, so a server
+  restart mid-tournament is survivable; finished ones archive into `logs/`.

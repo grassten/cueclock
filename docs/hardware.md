@@ -203,6 +203,18 @@ actually runs — the original plan called them *Table* / *Clock*):
   already sounds the cues (OBS keeps non-visible browser sources running, so
   two sounding sources would chime twice). The number is browser-rendered
   text: sharpness comes free at any source size.
+- **Bracket** (tournament nights only, issue #43): one browser source,
+  `http://localhost:8000/bracket`, filling the canvas. **Never build this scene
+  by hand** — `uv run python scripts/setup_obs_bracket.py` creates it and
+  re-applies the settings. The page is authored at 1920×1080 and scales itself
+  to the source (`fitStage()`), the same trick the bar uses, so text rasterizes
+  at the wall's own resolution instead of being upscaled by OBS. One setting is
+  the opposite of the Replay badge's: `restart_when_active: **true**` — this
+  page has no timeline to preserve and no pre-cut load, so reloading at the cut
+  is the cheapest way to heal a source that first loaded while the server was
+  down. The deck's scene key (2,3) switches to it and back, and a confirmed
+  result flips to it automatically; both only exist while a bracket is loaded.
+  With none loaded the page says so rather than drawing an empty grid.
 - **Canvas**: standby card shown between sessions (still image, no cueclock
   sources).
 - **Replay**: replay-buffer playback (Stream Deck phase 3, built 2026-08-02).
@@ -275,10 +287,13 @@ commit as any `src/cueclock/deck/layout.py` change; the two must never
 disagree.
 
 **Status: layout v2 live (2026-08-02).** `cueclock deck` runs under launchd
-(`com.cueclock.deck`). Eleven keys, four spare — down from fourteen used and
-one spare, by consolidating the pairs that differed by one bit and splitting
-session *mode* out as its own axis. Phase 3 landed 2026-08-02: Replay now cuts
-the saved buffer to the TV, seeked to the shot (§C5).
+(`com.cueclock.deck`). Eleven keys on a casual night, four spare — down from
+fourteen used and one spare, by consolidating the pairs that differed by one
+bit and splitting session *mode* out as its own axis. Phase 3 landed
+2026-08-02: Replay now cuts the saved buffer to the TV, seeked to the shot
+(§C5). The bracket (#43, 2026-08-13) adds two keys that exist **only while a
+tournament is loaded** — the deck is otherwise unchanged, which is the same
+governing constraint the pages follow.
 
 ### C0. The three rules of layout v2
 
@@ -304,6 +319,12 @@ Everything below follows from these; they are also the module docstring of
    (`ON` / `HOLD 1s`, `REPLAY` / `HOLD RACK`) — a gesture nothing states is a
    feature only its author knows about. The score keys are the exception, and
    only because their inverse is self-evident and lands on the wall scoreboard.
+   The second line has one other legitimate job, which Replay has always done
+   and #43's scene key now does too: **naming where a press goes** when the
+   key's own word cannot (`BACK` / `TO LIVE`, `BACK` / `TO PLAY`) — `BACK`
+   alone does not say back to what. What it may never be is *context*: a fact
+   about the world with no press behind it. That is why the unarmed Confirm key
+   puts its match and side on two main-tier lines instead.
 
 Colour groups (bottom stripe, `faces.STRIPE_*`): **amber** = on the clock
 (seconds matter) · **blue** = the match (no pressure) · **purple** = evidence ·
@@ -340,12 +361,18 @@ keys outside the modes and rulesets named in **Present in**.
 row 1   SESSION      MODE         START 30     PUSH         EXT ••
         ▁▁grey▁▁     ▁▁grey▁▁     ▁▁▁▁▁▁▁▁▁▁▁▁amber▁▁▁▁▁▁▁▁▁▁▁▁▁
 
-row 2   REPLAY       FLAG         (·)          (·)          (·)
-        ▁▁grey▁▁     ▁purple▁      ← the reason page unfolds here →
+row 2   REPLAY       FLAG         BRACKET*     (·)          (·)
+        ▁▁grey▁▁     ▁purple▁     ▁▁grey▁▁      ← reason page →
 
-row 3   RULESET      NEW RACK     P1  3        P2  2        (free)
-        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+row 3   RULESET      NEW RACK     P1  3        P2  2        MATCH 4*
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
+
+`*` = only while a **bracket** is loaded (#43); dark on every other night, so
+the casual deck is exactly the deck it has always been. The reason page still
+unfolds into 2,3–2,5 and borrows the scene key's cell while it is open — the
+overlay already wins, and every free cell on a 15-key deck is one of those
+three.
 
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
@@ -356,12 +383,33 @@ row 3   RULESET      NEW RACK     P1  3        P2  2        (free)
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left**, so the pool reads before the press instead of after a red `NO EXT`. Never removed inside a clocked mode — a spent pool shows as empty pips, which are the only readout of how many remain | `EXT` + one pip per extension, flashes `OK` / `NO EXT` | match, run out |
 | 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at the last break and plays that rack — including after a New Rack press, until the new rack is broken. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
 | 2,2 | **Flag** | Opens the reason page at 2,3–2,5. The dump fires from whichever reason is pressed | `FLAG` → `WHY?` | always |
+| 2,3 | **Scene** | Swap the TV between the play scene and the bracket (#43). The deck remembers the scene it left rather than naming one, exactly as Replay does, so the play scene can be renamed in OBS without touching code | `BRACKET`+`TO TV` ⇄ `BACK`+`TO PLAY` | **bracket loaded** |
 | 2,3–2,5 | **Phantom / Missed / Other** | `POST /api/dump?label=flag_phantom` etc. Only visible while the page is open | `PHANTOM` / `MISSED` / `OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | reason page only |
 | 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` | current over next: `8-BALL`/`FINAL 10` | match, run out |
 | 3,2 | **New Rack** | `POST /api/rack` — you're not shooting, you're building the next rack: clock parks, extensions refill, shot count zeroes. One key for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `NEW RACK`, flashes `RACK` / `ERROR` | match, run out |
 | 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
 | 3,4 | **P2** | as P1 | `P2` over the score | match |
-| 3,5 | *(free)* | Held **I shot** (`POST /api/groundtruth`, #19) from 2026-08-02 until **2026-08-05, when it was removed**. The key was correct in every respect except the one that mattered: it asked the player to do something on every shot, and it was pressed in 2 sessions out of 29. The denominator it existed to provide was already in the journal — `ShotClock.balls_settled` bumps `rack_shots` exactly when vision missed the strike — so `cueclock report` now derives the miss rate with nothing asked of the table (`server/report.py`). The endpoint 404s on purpose, per the `/score` rule | — | — |
+| 3,5 | **Confirm** | Commit the armed bracket result (#43). One press, four effects: the result is written and both players routed, the next ready match loads at 0–0 with its own targets, `POST /api/rack` fires (a new match is a new rack), and the TV flips to the bracket so the update is on the wall while the next pair racks. Unarmed it is a label naming the loaded match; pressed unarmed it flashes `NOT YET` rather than swallowing the press | `MATCH 4`/`A SIDE` → `PRIYA`/`WINS 5-2`+`PRESS TO CONFIRM` on blue → `SAVING…`, flashes `SAVED`/`ERROR` | **bracket loaded**, match |
+
+Before #43 this cell held **I shot** (`POST /api/groundtruth`, #19) from
+2026-08-02 until 2026-08-05, then stood empty. The key was correct in every
+respect except the one that mattered: it asked the player to do something on
+every shot, and it was pressed in 2 sessions out of 29. The denominator it
+existed to provide was already in the journal — `ShotClock.balls_settled` bumps
+`rack_shots` exactly when vision missed the strike — so `cueclock report`
+derives the miss rate with nothing asked of the table (`server/report.py`), and
+the endpoint 404s on purpose per the `/score` rule. **What that removal
+established still holds**: the deck never asks the player to classify anything.
+Confirm is the opposite kind of key — no deadline, present only while a
+tournament is, and what it commits is already on the wall before the press.
+
+**Why arming rather than auto-advance** (#43 §7): plus/minus is the easiest
+control on the deck to fat-finger, and advancing on the winning point would
+turn one stray press into a bracket somebody has to unwind mid-party. Arming
+costs one deliberate press and makes that failure a shrug — hold the winner's
+key to drop them a point and the arm clears itself, so there is no undo to
+find. The arm is *derived* from the score against each player's own race
+target, not stored, which is why taking the point back is all it takes.
 
 Press outcomes flash as background colour (green ok / red error) for 1.2 s —
 words only, no decorative glyphs. The only graphics are *data*: extension pips,
