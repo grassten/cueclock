@@ -704,8 +704,13 @@
         // From the broadcast, not the fetched draw: the two are the same thing
         // a moment apart, and this is the one that is never stale.
         liveMatchId = loaded ? summary.match.id : null;
-        panel.hidden = !loaded;
+        // The panel follows the *bracket*, not the loaded match: with a bracket
+        // built and nothing loaded, Switch match is the only way to start one,
+        // so hiding it there is a dead end.
+        panel.hidden = !summary;
         header.hidden = !loaded;
+        document.getElementById('match-routes').hidden = !loaded;
+        document.getElementById('report-btn').hidden = !loaded;
         if (!loaded) { document.getElementById('race-chip').hidden = false; return; }
         header.innerText = summary.match.header;
         const routes = summary.match.routes;

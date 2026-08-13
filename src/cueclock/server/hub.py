@@ -829,6 +829,15 @@ class Hub:
             handicap=self.bracket.handicap,
             seeding=self.bracket.seeding,
         )
+        # Building the draw puts the first match up. Without this the bracket
+        # exists with nothing loaded, which is a state the deck can only show as
+        # "—" and the phone has no obvious way out of — and it is not a state
+        # anybody wants anyway: you build the draw because you are about to play
+        # the first match.
+        opener = self.bracket.next_ready()
+        if opener is not None:
+            self.bracket.load(opener.id)
+            self._apply_match_to_score(self.bracket, opener)
         await self.broadcast(self.clock.snapshot())
         return self.bracket
 

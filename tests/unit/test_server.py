@@ -1489,6 +1489,18 @@ def test_no_bracket_means_every_page_behaves_as_before() -> None:
         assert client.post("/api/bracket/archive").status_code == 404
 
 
+def test_building_the_draw_puts_the_first_match_up() -> None:
+    # Otherwise the bracket exists with nothing loaded, which the deck can only
+    # show as "—" and which nobody wants anyway: you build the draw because you
+    # are about to play the first match.
+    with make_client() as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        assert client.get("/api/bracket").json()["bracket"]["loaded"] == 1
+        state = client.get("/api/state").json()
+        assert state["bracket"]["match"]["id"] == 1
+        assert state["score"]["p1"]["name"] == "Hank Harrison"
+
+
 def test_create_build_and_load_a_match() -> None:
     with make_client() as client:
         created = client.post("/api/bracket", json=BRACKET_BODY).json()

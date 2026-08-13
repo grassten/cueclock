@@ -296,6 +296,12 @@ survive unchanged in `design.md`.
     unstarted matches showing `0` where they should show a dash, and at sixteen
     the B final landing under the *second* final, where a straight connector
     would have run through it.
+  * **Follow-up the same day, found while writing the walkthrough:** building a
+    draw left nothing loaded, and the Play tab hid the whole bracket panel —
+    including Switch match — when no match was loaded, so there was no way to
+    start the first one. Building now puts the first ready match up (which is
+    what you built the draw for), and the panel follows the *bracket* rather
+    than the loaded match.
   * Shipped with it: `/bracket` (1920×1080, geometry computed from the field so
     3-16 players draw without scrolling), the Bracket tab on `/control` plus the
     match header / per-player targets / report / switch-match additions to the
