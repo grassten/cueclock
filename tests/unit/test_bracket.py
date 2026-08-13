@@ -6,6 +6,7 @@ still *runs*, it just quietly replays first-round pairings.
 """
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -25,7 +26,9 @@ FIELD8 = [
 
 
 def build(players=None, **kwargs) -> Bracket:
-    return Bracket.create("Test Cup", list(players or FIELD8), **kwargs)
+    # Copied, not aliased: `Player` carries mutable state now (a withdrawal),
+    # so sharing the module-level field would leak one test into the next.
+    return Bracket.create("Test Cup", [replace(p) for p in (players or FIELD8)], **kwargs)
 
 
 def refs(b: Bracket, match_id: int) -> list[tuple[str, int]]:
@@ -369,7 +372,11 @@ def test_orphaned_results_are_cleared_when_the_draw_moves() -> None:
     b.report(2, (5, 2))
     b.report(5, (5, 0))
     b.clear_result(5)  # so match 1 is correctable again
-    b.report(1, (2, 5))
+    # Clearing keeps the score for the pair who played it, so it is there to be
+    # confirmed again rather than re-keyed by hand.
+    assert b.match(5).winner is None and b.match(5).scores == [5, 0]
+    b.report(1, (2, 5))  # a different player now comes out of match 1
+    # ...but that score belonged to the old pairing, and goes with it.
     assert b.match(5).winner is None and b.match(5).scores == [0, 0]
 
 
@@ -532,3 +539,201 @@ def test_archive_writes_beside_the_journals(tmp_path) -> None:
     assert second.name == "bracket-test-cup-2.json"  # never overwrites
     saved = json.loads(first.read_text())
     assert saved["results"][0]["scores"] == [5, 2]
+
+
+# ---------------------------------------------------- sticky targets (defect)
+
+
+def test_an_overridden_target_survives_the_next_result() -> None:
+    """The override used to live in `targets`, which every resolve recomputes.
+
+    It therefore held until the next thing happened anywhere in the draw and
+    then silently reverted — and if the overridden match was the loaded one,
+    the wall kept the number the bracket had just thrown away.
+    """
+    b = build(handicap="medium")
+    b.set_targets(3, 9, 2)
+    assert b.match(3).targets == [9, 2]
+    b.report(1, (5, 1))
+    assert b.match(3).targets == [9, 2]
+    b.report(2, (5, 1))
+    assert b.match(3).targets == [9, 2]
+
+
+def test_an_override_does_not_follow_a_different_pairing_in() -> None:
+    b = build(handicap="off")
+    b.set_targets(1, 7, 3)
+    b.edit(1, 7, 0)  # two different people now play Match 1
+    assert b.match(1).targets == [b.a_race, b.a_race]
+
+
+def test_overriding_a_played_match_is_refused_by_name() -> None:
+    b = build()
+    b.report(1, (5, 2))
+    with pytest.raises(BracketError, match="already been played"):
+        b.set_targets(1, 7, 3)
+
+
+# ---------------------------------------------------- parked scores (defect)
+
+
+def test_switching_away_parks_the_score_and_coming_back_resumes_it() -> None:
+    """`MatchScore` is one slot, so switching used to destroy what was in it."""
+    b = build()
+    b.load(1)
+    b.park(1, (3, 2))
+    b.load(2)
+    assert b.status(b.match(1)) == "paused"
+    assert b.match(1).scores == [3, 2]
+    b.load(1)
+    assert b.match(1).scores == [3, 2]
+
+
+def test_a_paused_score_survives_a_restart(tmp_path) -> None:
+    path = tmp_path / "bracket.json"
+    b = build()
+    b.path = path
+    b.load(1)
+    b.park(1, (3, 2))
+    b.load(2)  # saves
+    again = bk.load(path)
+    assert again is not None
+    assert again.match(1).scores == [3, 2] and again.status(again.match(1)) == "paused"
+
+
+def test_clearing_a_result_keeps_the_score_to_report_again() -> None:
+    b = build()
+    b.report(1, (5, 2))
+    b.clear_result(1)
+    assert b.match(1).scores == [5, 2] and not b.match(1).played
+    b.report(1)  # the kept score is the result; nothing re-keyed
+    assert b.match(1).scores == [5, 2] and b.match(1).winner == 0
+
+
+# ---------------------------------------------------------------- withdrawal
+
+
+def test_withdrawing_concedes_every_unplayed_match_down_both_sides() -> None:
+    b = build()
+    quitter = b.match(1).slots[0]
+    b.withdraw(quitter)
+    m1 = b.match(1)
+    assert b.status(m1) == "forfeit" and m1.winner == 1
+    # It cascades: they lost Match 1, so they drop to the B side and concede
+    # there too, as soon as that match has both its players.
+    b.report(2, (5, 1))
+    assert b.status(b.match(8)) == "forfeit"
+    # And they are never offered as somebody to go and play.
+    assert not any(quitter in m.slots and b.status(m) in ("ready", "paused") for m in b.matches)
+
+
+def test_a_withdrawal_invents_no_score() -> None:
+    b = build()
+    b.withdraw(b.match(1).slots[0])
+    assert b.match(1).scores == [0, 0]
+
+
+def test_reinstating_a_player_puts_their_matches_back() -> None:
+    """The concessions are derived, so coming back is one press, not an unwind."""
+    b = build()
+    quitter = b.match(1).slots[0]
+    b.withdraw(quitter)
+    b.withdraw(quitter, out=False)
+    assert b.status(b.match(1)) == "ready" and not b.match(1).played
+
+
+def test_a_withdrawal_leaves_results_already_played_alone(tmp_path) -> None:
+    """Going home concedes what is still to come, never what already happened.
+
+    Both directions matter: the match they *won* must not turn into a forfeit
+    against them, and the one they *lost* must stay a loss on a real scoreline
+    rather than being rewritten as a walkover. A withdrawal only ever reaches
+    matches nobody has played.
+    """
+    b = build(handicap="off")
+    b.path = tmp_path / "bracket.json"
+    b.report(1, (5, 2))
+    winner, loser = b.match(1).slots[0], b.match(1).slots[1]
+    for mid in (2, 3, 4):
+        b.report(mid, (5, 0))
+    b.report(8, (5, 3))  # the loser of Match 1 plays on, and wins, on the B side
+
+    b.withdraw(winner)
+    b.withdraw(loser)
+    for mid, scores in ((1, [5, 2]), (8, [5, 3])):
+        assert b.status(b.match(mid)) == "played"
+        assert b.match(mid).winner == 0 and b.match(mid).scores == scores
+
+    # And they are still results, not concessions, on the far side of a restart
+    # — which is where a derived walkover would have overwritten them.
+    again = bk.load(b.path)
+    assert again is not None
+    for mid, scores in ((1, [5, 2]), (8, [5, 3])):
+        assert again.status(again.match(mid)) == "played"
+        assert again.match(mid).winner == 0 and again.match(mid).scores == scores
+
+
+def test_a_forfeit_is_not_a_result_and_cannot_be_cleared_or_played() -> None:
+    b = build()
+    b.withdraw(b.match(1).slots[0])
+    with pytest.raises(BracketError, match="forfeit"):
+        b.clear_result(1)
+    with pytest.raises(BracketError, match="forfeit"):
+        b.load(1)
+
+
+def test_a_withdrawal_survives_a_restart_and_is_still_reversible(tmp_path) -> None:
+    path = tmp_path / "bracket.json"
+    b = build()
+    b.path = path
+    quitter = b.match(1).slots[0]
+    b.withdraw(quitter)
+    again = bk.load(path)
+    assert again is not None and again.status(again.match(1)) == "forfeit"
+    # Stored as the player's state, never as a written-down result — which is
+    # what keeps it undoable on the far side of a restart.
+    assert all(r["id"] != 1 for r in again.state_dict()["results"])
+    again.withdraw(quitter, out=False)
+    assert again.status(again.match(1)) == "ready"
+
+
+def test_withdrawing_everybody_still_reaches_a_champion() -> None:
+    b = build()
+    for i in range(1, len(b.players)):
+        b.withdraw(i)
+    assert b.champion() == b.players[0].name
+
+
+# -------------------------------------------------------- mid-bracket races
+
+
+def test_shortening_the_races_moves_only_what_is_unplayed() -> None:
+    b = build(handicap="off", a_race=5, b_race=4)
+    b.report(1, (5, 2))
+    b.set_races(3, 2)
+    assert b.match(1).targets == [5, 5]  # played under a race to five; still is
+    assert b.match(3).targets == [3, 3]
+    assert b.a_race == 3 and b.b_race == 2
+
+
+def test_changing_the_races_supersedes_a_hand_set_target() -> None:
+    b = build(handicap="off", a_race=5)
+    b.set_targets(3, 7, 2)
+    b.set_races(3, None)
+    assert b.match(3).targets == [3, 3]
+
+
+def test_an_impossible_race_is_refused() -> None:
+    b = build()
+    with pytest.raises(BracketError, match="race must be"):
+        b.set_races(1, None)
+
+
+def test_has_results_ignores_byes() -> None:
+    """A bye is the shape of the draw, not an evening worth archiving."""
+    b = build(FIELD8[:6])  # two byes, already "won" the moment the draw is built
+    assert any(b.status(m) == "bye" for m in b.matches)
+    assert not b.has_results
+    contested = next(m for m in b.matches if b.status(m) == "ready")
+    b.report(contested.id, (5, 2))
+    assert b.has_results

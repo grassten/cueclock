@@ -93,8 +93,12 @@ class MatchScore:
 
     def reset_scores(self) -> None:
         """Back to zero; names, ratings and race-to survive (next match, same players)."""
-        self.p1_score = 0
-        self.p2_score = 0
+        self.set_scores(0, 0)
+
+    def set_scores(self, p1: int, p2: int) -> None:
+        """Put a specific score up — the bracket resuming a match it parked."""
+        self.p1_score = max(0, p1)
+        self.p2_score = max(0, p2)
         self._save()
 
     def configure(self, updates: Mapping[str, object]) -> None:

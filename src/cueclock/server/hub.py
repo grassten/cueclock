@@ -847,15 +847,28 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return self.bracket
 
-    async def clear_bracket(self) -> None:
+    async def clear_bracket(self) -> Path | None:
         """Back to casual: the pages behave exactly as they did before #43.
 
         The file goes with it — a cleared bracket that reappears on the next
         server restart is a bracket nobody can get rid of at the table.
+
+        **Anything played is archived on the way out**, and the path comes back
+        so the phone can say where it went. Clearing is how you get back to
+        casual scoring, not how you throw an evening away; leaving that to a
+        separate Save & archive button meant the destructive path was the one
+        nobody had to remember anything to take.
         """
         if self.bracket is None:
-            return
-        self._log("bracket_cleared", name=self.bracket.name)
+            return None
+        archived: Path | None = None
+        if self.archive_dir is not None and self.bracket.has_results:
+            archived = self.bracket.archive(self.archive_dir)
+        self._log(
+            "bracket_cleared",
+            name=self.bracket.name,
+            archived=str(archived) if archived is not None else None,
+        )
         self.bracket = None
         if self.bracket_path is not None:
             self.bracket_path.unlink(missing_ok=True)
@@ -865,6 +878,7 @@ class Hub:
         # stay: they are whoever is at the table right now.
         self.score.configure({"p1_target": None, "p2_target": None})
         await self.broadcast(self.clock.snapshot())
+        return archived
 
     def archive_bracket(self) -> Path:
         """Write the bracket beside the journals (`archive_dir`)."""
@@ -900,11 +914,24 @@ class Hub:
     async def load_match(self, match_id: int) -> Match:
         """Put a match's two players and their own race targets on the wall."""
         bracket = self.require_bracket()
+        self._park_loaded(bracket)
         match = bracket.load(match_id)
         self._apply_match_to_score(bracket, match)
         self._log("bracket_match_loaded", match=match.id, targets=match.targets)
         await self.score_changed()
         return match
+
+    def _park_loaded(self, bracket: Bracket) -> None:
+        """Put the live score back with its own match before loading another.
+
+        `MatchScore` is one slot, so switching away used to *be* the act of
+        destroying what was in it — and the Switch match list offers the live
+        match as a row, on a page passed round the room. Parking makes the
+        switch reversible instead: interrupt a match at 3-2, play somebody
+        else's, come back to 3-2.
+        """
+        if bracket.loaded is not None:
+            bracket.park(bracket.loaded, self.live_scores())
 
     def _apply_match_to_score(self, bracket: Bracket, match: Match) -> None:
         """The bracket's one job against `MatchScore`: two players, two targets.
@@ -914,6 +941,10 @@ class Hub:
         rating only rides across when it is **established**: an estimate typed
         in for an unrated relative is a fine seed and a fine handicap input, but
         putting it on the wall under a FARGO label would be a lie.
+
+        The score comes from the match rather than being zeroed, which is the
+        same statement in the other direction: a fresh match carries 0-0 anyway,
+        and one being resumed or corrected carries what it had.
         """
         updates: dict[str, object] = {"race_to": None}
         for slot, prefix in ((0, "p1"), (1, "p2")):
@@ -925,7 +956,7 @@ class Hub:
             )
             updates[f"{prefix}_target"] = match.targets[slot]
         self.score.configure(updates)
-        self.score.reset_scores()
+        self.score.set_scores(match.scores[0], match.scores[1])
 
     async def report_result(
         self, match_id: int, scores: tuple[int, int] | None = None
@@ -975,11 +1006,58 @@ class Hub:
             "champion": bracket.champion(),
         }
 
+    async def withdraw_player(self, index: int, out: bool) -> Player:
+        """Somebody has gone home, or come back. Their matches follow.
+
+        Every unplayed match of theirs is conceded — down both sides of the draw
+        — without anybody inventing a score for a match that was not played.
+        If the concession takes the match currently on the wall, the wall moves
+        on to the next one rather than sitting on a match nobody will play.
+        """
+        bracket = self.require_bracket()
+        self._park_loaded(bracket)
+        player = bracket.withdraw(index, out=out)
+        self._log("bracket_withdrawal", player=player.name, index=index, withdrawn=out)
+        await self._follow_the_draw(bracket)
+        return player
+
+    async def set_bracket_races(self, body: Mapping[str, object]) -> Bracket:
+        """Change the base races mid-tournament — unplayed matches only."""
+        bracket = self.require_bracket()
+        bracket.set_races(_as_opt_int(body.get("a_race")), _as_opt_int(body.get("b_race")))
+        self._log("bracket_races_changed", a_race=bracket.a_race, b_race=bracket.b_race)
+        if bracket.loaded is not None:
+            live = bracket.match(bracket.loaded)
+            self.score.configure({"p1_target": live.targets[0], "p2_target": live.targets[1]})
+        await self.score_changed()
+        return bracket
+
+    async def _follow_the_draw(self, bracket: Bracket) -> None:
+        """Keep the wall on a match somebody can actually play.
+
+        A withdrawal can settle the loaded match from off the table, which is
+        the one way the score bar can end up naming a match that is already
+        over. Moving on is the same act a confirmed result performs, rack reset
+        and all — a new match is a new rack.
+        """
+        loaded = bracket.loaded
+        if loaded is not None and not bracket.match(loaded).played:
+            await self.score_changed()
+            return
+        nxt = bracket.next_ready()
+        if nxt is not None:
+            bracket.load(nxt.id)
+            self._apply_match_to_score(bracket, nxt)
+        else:
+            bracket.unload()
+        await self.new_rack()
+        await self.score_changed()
+
     async def clear_result(self, match_id: int) -> Match:
         """Un-play a match so the one feeding it can be corrected."""
         bracket = self.require_bracket()
         match = bracket.clear_result(match_id)
-        self._log("bracket_result_cleared", match=match.id)
+        self._log("bracket_result_cleared", match=match.id, scores=match.scores)
         await self.broadcast(self.clock.snapshot())
         return match
 

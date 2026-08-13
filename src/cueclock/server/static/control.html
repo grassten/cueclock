@@ -162,11 +162,18 @@
             color: var(--slate); border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 7px;
         }
         .matchlist .tag.live { color: var(--accent); border-color: rgba(46,134,200,.5); }
-        .matchlist .tag.waiting { color: #55606C; }
+        .matchlist .tag.waiting, .matchlist .tag.forfeit, .matchlist .tag.bye { color: #55606C; }
+        /* Paused reads as "still going", because it is: a score is waiting in
+           there to be resumed rather than started again at 0-0. */
+        .matchlist .tag.paused { color: var(--accent); }
 
         .plist { display: flex; flex-direction: column; gap: 10px; }
         .prow { display: flex; gap: 8px; align-items: center; }
         .prow input.pname { flex: 1; min-width: 0; }
+        /* The withdraw buttons line up down the right regardless of name length
+           — a ragged column of them reads as a list of different things. */
+        .prow .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .prow .who.out { color: var(--slate); }
         .prow input.prating { width: 74px; text-align: center; }
         .prow .drop { min-width: 44px; padding: 12px 8px; }
         .prow .fargo-go { padding: 0 12px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; }
@@ -461,6 +468,37 @@
             <section id="bracket-state" hidden>
                 <h2 id="bracket-state-h">Bracket</h2>
                 <div class="racechip" id="bracket-summary"></div>
+
+                <!-- The 9pm lever. Eight players is fourteen matches on one
+                     table, and the first thing anyone asks for when it runs
+                     late is shorter races. Only unplayed matches move. -->
+                <div class="two">
+                    <div class="race">
+                        <label style="min-width:58px">A race</label>
+                        <div class="stepper">
+                            <button aria-label="A race, one fewer" onclick="stepLiveRace('a', -1)">&minus;</button>
+                            <div class="val" id="live-a-race">5</div>
+                            <button aria-label="A race, one more" onclick="stepLiveRace('a', 1)">+</button>
+                        </div>
+                    </div>
+                    <div class="race">
+                        <label style="min-width:58px">B race</label>
+                        <div class="stepper">
+                            <button aria-label="B race, one fewer" onclick="stepLiveRace('b', -1)">&minus;</button>
+                            <div class="val" id="live-b-race">4</div>
+                            <button aria-label="B race, one more" onclick="stepLiveRace('b', 1)">+</button>
+                        </div>
+                    </div>
+                </div>
+                <p class="hint">Matches already played keep the race they were played
+                    under &mdash; only what is still to come changes.</p>
+
+                <h2>Players</h2>
+                <div class="plist" id="bracket-players"></div>
+                <p class="hint">Withdraw somebody who has gone home: every match of
+                    theirs still to play is conceded, down both sides. Nothing is
+                    scored that nobody played, and it undoes if they come back.</p>
+
                 <div class="matchlist" id="bracket-all"></div>
                 <button class="ghost" onclick="archiveBracket()">Save &amp; archive</button>
                 <div class="danger-row"><button class="danger" onclick="clearBracket()">Clear bracket</button></div>
@@ -769,7 +807,8 @@
     // Only matches with both players known can be played, so the list says which
     // is which rather than offering rows that do nothing.
     const STATUS_LABEL = { live: 'Live', ready: 'Ready', waiting: 'Waiting',
-                           played: 'Played', bye: 'Bye', conditional: 'If needed' };
+                           played: 'Played', bye: 'Bye', conditional: 'If needed',
+                           paused: 'Paused', forfeit: 'Forfeit' };
 
     // `enabled` decides which rows are tappable, because the two lists want
     // different things from the same row: Switch match loads one, the Bracket
@@ -779,7 +818,10 @@
         const who = document.createElement('span');
         who.className = 'who';
         const names = [m.p1, m.p2].map(s => s.name || s.ref).join(' v ');
-        who.innerText = `${m.title} · ${names}`;
+        // A paused match says where it got to, so picking it up again is an
+        // informed choice rather than a guess at what is waiting inside.
+        const at = m.status === 'paused' ? ` · ${m.p1.score}–${m.p2.score}` : '';
+        who.innerText = `${m.title} · ${names}${at}`;
         const tag = document.createElement('span');
         tag.className = 'tag ' + m.status;
         tag.innerText = STATUS_LABEL[m.status] || m.status;
@@ -794,7 +836,7 @@
         host.innerHTML = '';
         if (!bracket) return;
         for (const m of bracket.matches) {
-            if (m.status === 'bye' || m.status === 'conditional') continue;
+            if (['bye', 'forfeit', 'conditional'].includes(m.status)) continue;
             host.appendChild(matchRow(m, async (match) => {
                 if (match.status === 'played' && !confirm(
                     `Reopen ${match.title} to fix the score?`)) return;
@@ -803,7 +845,11 @@
                 switcherOpen = false;
                 host.hidden = true;
                 refreshBracket();
-            }, (match) => ['ready', 'live', 'played'].includes(match.status)));
+            // The live match is shown but not tappable: it is already up, so the
+            // only thing tapping it could do is reload it — which is how a score
+            // in progress used to get wiped by the most prominent row in the list.
+            // A paused one is tappable and resumes where it stopped.
+            }, (match) => ['ready', 'paused', 'played'].includes(match.status)));
         }
     }
 
@@ -817,17 +863,75 @@
             ? `Finished — champion ${bracket.champion}`
             : `${bracket.field} players · A race ${bracket.a_race} · B race ${bracket.b_race}`
               + ` · handicap ${bracket.handicap}`;
+        // Don't clobber a stepper somebody is in the middle of pressing.
+        for (const [side, value] of [['a', bracket.a_race], ['b', bracket.b_race]]) {
+            const el = document.getElementById(`live-${side}-race`);
+            if (!liveRacePending) el.innerText = value;
+        }
+        renderBracketPlayers();
         const host = document.getElementById('bracket-all');
         host.innerHTML = '';
         for (const m of bracket.matches) {
             host.appendChild(matchRow(m, async (match) => {
-                if (!confirm(`Clear the result of ${match.title}?`)) return;
+                if (!confirm(
+                    `Clear the result of ${match.title}? The score stays, so it can be `
+                    + `reported again without re-entering it.`)) return;
                 const res = await postJson(
                     `/api/bracket/match/${match.id}/result`, null, 'DELETE');
                 document.getElementById('bracket-error').innerText = res.ok ? '' : res.error;
                 refreshBracket();
             }, (match) => match.status === 'played'));
         }
+    }
+
+    // A withdrawal is a bye that happens mid-tournament: it concedes every
+    // unplayed match down both sides rather than asking anybody to invent a
+    // score, and it is derived, so putting somebody back is one press.
+    function renderBracketPlayers() {
+        const host = document.getElementById('bracket-players');
+        host.innerHTML = '';
+        bracket.players.forEach((p, i) => {
+            const row = document.createElement('div');
+            row.className = 'prow';
+            const who = document.createElement('span');
+            who.className = p.withdrawn ? 'who out' : 'who';
+            who.innerText = p.name + (p.rating == null ? '' : ` · ${p.rating}`)
+                + (p.withdrawn ? ' · withdrawn' : '');
+            const act = document.createElement('button');
+            act.className = p.withdrawn ? 'ghost' : 'ghost drop';
+            act.innerText = p.withdrawn ? 'Reinstate' : 'Withdraw';
+            act.onclick = async () => {
+                if (!p.withdrawn && !confirm(
+                    `Withdraw ${p.name}? Every match of theirs still to play is `
+                    + `conceded to their opponent.`)) return;
+                const res = await postJson(`/api/bracket/player/${i}/withdraw`, null,
+                                           p.withdrawn ? 'DELETE' : 'POST');
+                document.getElementById('bracket-error').innerText = res.ok ? '' : res.error;
+                refreshBracket();
+            };
+            row.append(who, act);
+            host.append(row);
+        });
+    }
+
+    // The steppers are the value, same as the build form — but this one talks to
+    // a live bracket, so it debounces rather than firing a rebuild per press.
+    let liveRacePending = null;
+    function stepLiveRace(side, delta) {
+        const el = document.getElementById(`live-${side}-race`);
+        const now = parseInt(el.innerText, 10);
+        if (!Number.isFinite(now)) return;
+        el.innerText = Math.max(RACE_MIN, Math.min(RACE_MAX, now + delta));
+        clearTimeout(liveRacePending);
+        liveRacePending = setTimeout(async () => {
+            liveRacePending = null;
+            const res = await postJson('/api/bracket', {
+                a_race: parseInt(document.getElementById('live-a-race').innerText, 10),
+                b_race: parseInt(document.getElementById('live-b-race').innerText, 10),
+            }, 'PATCH');
+            document.getElementById('bracket-error').innerText = res.ok ? '' : res.error;
+            refreshBracket();
+        }, 700);
     }
 
     function renderPlayers() {
@@ -933,12 +1037,19 @@
     }
 
     async function clearBracket() {
-        if (!confirm('Clear the bracket and go back to casual scoring?')) return;
-        await fetch('/api/bracket', { method: 'DELETE' });
+        // Anything played is archived by the server on the way out, so this is
+        // a question about the evening ending rather than about losing it.
+        const played = bracket && bracket.matches.some(m => m.status === 'played');
+        if (!confirm('Clear the bracket and go back to casual scoring?'
+            + (played ? '\n\nResults so far are archived first.' : ''))) return;
+        const res = await fetch('/api/bracket', { method: 'DELETE' })
+            .then(r => r.json()).catch(() => ({}));
         // Only the field goes: the races, handicap and draw on the form are
         // whatever you last chose, and they are still what Build will send.
         build = { players: [] };
         refreshBracket();
+        document.getElementById('build-error').innerText =
+            res && res.archived ? `Archived as ${res.archived}.` : '';
     }
 
     async function archiveBracket() {

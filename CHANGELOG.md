@@ -232,6 +232,55 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-13 (checkpoint 93 — #43: state that outlives the wall):** A UX pass
+  over the bracket from the player / tournament-director side, and the five
+  things it turned up. Two were defects. **A hand-set race target reverted
+  silently**: `set_targets` wrote into `Match.targets`, which every resolve
+  recomputes off the handicap chart, so an override held until the next result
+  landed anywhere in the draw and then vanished — and on the loaded match the
+  old number had already gone to `MatchScore`, so the wall and the bracket
+  disagreed, which is the one failure the single-source rule exists to prevent.
+  **Switching match destroyed the live score**: `load_match` called
+  `reset_scores()` unconditionally and the Switch match list offered the *live*
+  match as a tappable row, on a page passed round the room with no auth.
+
+  Underneath both: `MatchScore` is the right single source of truth for what is
+  on the TV, but it is a *single slot*, so anything not loaded had nowhere to
+  live and the answer to "I need a minute" was to destroy what was there.
+  Overrides are now stored against the pairing they were chosen for; an
+  interrupted match is parked on itself and restored on reload (new `paused`
+  status); clearing a result keeps its score, so a correction behind a played
+  match does not cost re-keying eight presses while the wall counts through
+  them; and clearing a bracket archives anything contested on the way out
+  instead of unlinking it.
+
+  **Forfeits, by way of withdrawal.** There was no honest way to advance an
+  opponent when somebody went home — only plussing them to their target and
+  confirming, recording a match nobody played. A withdrawal concedes every
+  unplayed match down both sides, invents no score, and is expressed in
+  `_auto_advance` beside byes, because that is what it is: a bye that happens
+  mid-tournament. It is derived and never stored, so reinstating is one press
+  and it survives a restart as the player's state; matches already played are
+  untouched in both directions, a win never turning into a forfeit against
+  them. **And the base races can change mid-tournament** (`PATCH /api/bracket`)
+  — the 9pm lever, unplayed matches only.
+
+  **On the wall the result is said by the winner's row and nowhere else.** A
+  caption per state was built and cut on sight: "Final" already means the A
+  Final and the B Final, and "Forfeit" was the third place one box said the
+  same thing. So a finished match steps back — it is history, and the eye
+  belongs on what is still to play — and the winner is the one thing in it left
+  at full strength: white edge, lifted ground, name and score bold white
+  against a loser that drops back. A conceded match scores **FF** against
+  whoever gave it up and **W** against the player who advanced, which is what
+  every bracket in every pool room already says. An estimated rating is
+  prefixed `~`, so the bracket stops showing plainly what the score bar already
+  refuses to put under a FARGO label. Verified by rendering both pages against
+  a live server at 8 and 16 players, which caught the forfeit box contradicting
+  itself and the withdraw buttons landing on a grid built for a different
+  form. `docs/design.md` §10.2 and the §2.1 API row;
+  mockup note amended with four more deliberate departures.
+
 - **2026-08-13 (checkpoint 92 — #43: the bracket, and it never keeps a score of
   its own):** A double-elimination bracket as its own OBS scene, an auto-built
   and editable draw, and player-facing scoring that feeds it. Prompted by a

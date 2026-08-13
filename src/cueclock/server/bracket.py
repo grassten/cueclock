@@ -202,10 +202,28 @@ class Match:
     scores: list[int] = field(default_factory=lambda: [0, 0])
     targets: list[int | None] = field(default_factory=lambda: [None, None])
     winner: int | None = None  # 0 or 1 once played
+    # "bye" or "forfeit": won by default rather than played. Derived on every
+    # resolve and never stored, which is what makes a withdrawal reversible.
+    walkover: str | None = None
+    # Hand-set race targets. Kept apart from `targets` because `targets` is
+    # recomputed from the handicap chart on every resolve — before this the
+    # override survived until the next result landed and then silently
+    # reverted, taking the wall's copy out of step with the bracket's.
+    override: list[int | None] = field(default_factory=lambda: [None, None])
+    # The pairing `scores` and `override` were entered against, or None if
+    # nobody has entered either. Both are somebody's judgement about the two
+    # players who were in this box at the time, so an edit upstream that puts
+    # different players here has to throw them away.
+    entered_for: list[int | None] | None = None
 
     @property
     def played(self) -> bool:
         return self.winner is not None
+
+    @property
+    def contested(self) -> bool:
+        """Played by two people, rather than awarded by a bye or a forfeit."""
+        return self.winner is not None and self.walkover is None
 
     @property
     def ready(self) -> bool:
@@ -365,9 +383,15 @@ class Player:
     name: str
     rating: int | None = None  # the 0-800 Fargo scale, estimated or looked up
     established: bool = True  # FargoRate robustness >= 200; False shows as prov
+    withdrawn: bool = False  # gone home: every unplayed match of theirs forfeits
 
     def as_dict(self) -> dict[str, object]:
-        return {"name": self.name, "rating": self.rating, "established": self.established}
+        return {
+            "name": self.name,
+            "rating": self.rating,
+            "established": self.established,
+            "withdrawn": self.withdrawn,
+        }
 
 
 @dataclass
@@ -453,14 +477,8 @@ class Bracket:
         whole draw is a few dozen matches. Runs after every result, every edit
         and every load, so a stale reference has nowhere to survive.
         """
-        for m in self.matches:
-            m.slots = [_UNKNOWN, _UNKNOWN]
-        # Ids ascend with dependency order on both sides, so one pass suffices.
-        for m in sorted(self.matches, key=lambda m: m.id):
-            for i, ref in enumerate(m.src):
-                m.slots[i] = self._resolve_ref(ref)
-            self._auto_advance(m)
-            self._set_targets(m)
+        self._forget_walkovers()
+        self._pass()
         self._clear_orphan_results()
         # A correction upstream can take the players out from under the loaded
         # match. Nothing crashes if it does — every reader handles an unknown
@@ -468,6 +486,43 @@ class Bracket:
         # players in it, so it stops being the loaded one.
         if self.loaded is not None and not self.match(self.loaded).ready:
             self.loaded = None
+
+    def _forget_walkovers(self) -> None:
+        """Throw away every derived win before re-deriving it.
+
+        A bye and a forfeit are facts about the *draw*, not results anybody
+        played, so they are recomputed from scratch rather than stored. That is
+        what lets a player who withdrew and came back be put straight back in:
+        their conceded matches were never written down as results to undo.
+        """
+        for m in self.matches:
+            m.slots = [_UNKNOWN, _UNKNOWN]
+            if m.walkover is not None:
+                m.winner, m.walkover = None, None
+
+    def _pass(self) -> None:
+        """One resolution sweep. Ids ascend with dependency order, so one does."""
+        for m in sorted(self.matches, key=lambda m: m.id):
+            for i, ref in enumerate(m.src):
+                m.slots[i] = self._resolve_ref(ref)
+            self._auto_advance(m)
+            self._invalidate_stale_entries(m)
+            self._set_targets(m)
+
+    def _invalidate_stale_entries(self, m: Match) -> None:
+        """Forget a score or a hand-set race that belongs to a different pairing.
+
+        Both are entered by a person against the two players in the box at the
+        time. Correcting a result upstream can put somebody else there, and a
+        3-2 left over from the previous pair is worse than no score at all.
+        A contested match is exempt because it *is* the record of what happened
+        — and cannot be reached by an upstream edit anyway, which is refused
+        while it stands.
+        """
+        if m.contested or m.entered_for == m.slots:
+            return
+        m.scores = [0, 0]
+        m.override, m.entered_for = [None, None], None
 
     def _resolve_ref(self, ref: Ref) -> int | None:
         if ref.kind == "position":
@@ -480,21 +535,33 @@ class Bracket:
         return feeder.slots[slot]
 
     def _auto_advance(self, m: Match) -> None:
-        """A match nobody has to play: one real player against a bye.
+        """A match nobody has to play: a bye, or an opponent who has gone home.
 
-        Byes cascade — the B-side match waiting on that match's loser receives a
-        bye in turn — so this is the same rule applied down the chain rather
-        than a special case per round.
+        Both cascade — the B-side match waiting on this one's loser receives a
+        walkover in turn — so this is one rule applied down the chain rather
+        than a special case per round. **A withdrawal is a bye that happens
+        mid-tournament**, which is the whole reason it is expressed here: it
+        needs no separate routing, no fabricated score, and no second way for
+        the draw to advance somebody.
         """
-        if m.played or m.conditional:
+        if m.played or (m.conditional and not self._second_final_needed()):
             return
         left, right = m.slots
         if left == BYE and right == BYE:
-            m.winner = 0  # nobody advances; the slot below reads BYE too
+            m.winner, m.walkover = 0, "bye"  # nobody advances; the slot below reads BYE too
         elif left == BYE and isinstance(right, int):
-            m.winner = 1
+            m.winner, m.walkover = 1, "bye"
         elif right == BYE and isinstance(left, int):
-            m.winner = 0
+            m.winner, m.walkover = 0, "bye"
+        elif isinstance(left, int) and isinstance(right, int):
+            gone = [self.players[left].withdrawn, self.players[right].withdrawn]
+            if gone[0] != gone[1]:
+                m.winner, m.walkover = (1 if gone[0] else 0), "forfeit"
+            elif gone[0]:
+                # Both gone. Somebody still has to come out of the box or the
+                # draw stalls on a match neither player is here for; whoever it
+                # is forfeits again one round later.
+                m.winner, m.walkover = 0, "forfeit"
 
     def _clear_orphan_results(self) -> None:
         """Drop results whose players no longer exist (an edit re-drew them)."""
@@ -502,14 +569,12 @@ class Bracket:
         while changed:
             changed = False
             for m in self.matches:
-                if m.winner is not None and not m.ready and BYE not in m.slots:
-                    m.winner, m.scores = None, [0, 0]
+                if m.contested and not m.ready:
+                    m.winner, m.scores, m.entered_for = None, [0, 0], None
                     changed = True
             if changed:
-                for m in sorted(self.matches, key=lambda m: m.id):
-                    for i, ref in enumerate(m.src):
-                        m.slots[i] = self._resolve_ref(ref)
-                    self._auto_advance(m)
+                self._forget_walkovers()
+                self._pass()
 
     def base_race(self, m: Match) -> int:
         """The side's configured race. Both finals play the A-side length —
@@ -518,12 +583,27 @@ class Bracket:
         return self.b_race if m.side == "B" else self.a_race
 
     def _set_targets(self, m: Match) -> None:
-        base = self.base_race(m)
+        """The two race targets, recomputed — except where they are history.
+
+        A match that was contested keeps the targets it was played under: a
+        5-3 means "first to five", and rewriting that after the fact would make
+        the record lie about a match that is over. Everything unplayed follows
+        the current chart, so changing the base races mid-tournament reaches it.
+
+        A hand-set override wins over the chart, but only for the pairing it was
+        chosen for — move a different player into the match and the number
+        somebody picked for the last two stops applying.
+        """
+        if m.contested:
+            return
         if not m.ready:
             m.targets = [None, None]
             return
         left, right = (self.players[s] for s in m.slots)  # type: ignore[index]
-        m.targets = list(handicap_race(base, left.rating, right.rating, self.handicap))
+        m.targets = list(handicap_race(self.base_race(m), left.rating, right.rating, self.handicap))
+        for i, value in enumerate(m.override):
+            if value is not None:
+                m.targets[i] = value
 
     # ---------- mutation ----------
 
@@ -536,6 +616,10 @@ class Bracket:
         m = self.match(match_id)
         if not m.ready:
             raise BracketError(f"Match {m.id} does not have both players yet")
+        if m.walkover == "forfeit":
+            raise BracketError(f"Match {m.id} is a forfeit — reinstate the player to play it")
+        if m.walkover == "bye":
+            raise BracketError(f"Match {m.id} is a bye — there is nobody to play")
         if m.conditional and not self._second_final_needed():
             raise BracketError("the second final is only played if the B side wins the final")
         self.loaded = m.id
@@ -581,6 +665,7 @@ class Bracket:
         if m.played:
             self._refuse_if_downstream_played(m)
         m.scores = [max(0, int(scores[0])), max(0, int(scores[1]))]
+        m.entered_for = list(m.slots)
         m.winner = 0 if m.scores[0] > m.scores[1] else 1
         self._resolve()
         self._touch()
@@ -591,15 +676,22 @@ class Bracket:
 
         The other half of the refusal above: a correction is walked back one
         match at a time, and each step is a deliberate act. A walkover is not a
-        result and cannot be cleared — the bye is a fact about the draw.
+        result and cannot be cleared — a bye is a fact about the draw, and a
+        forfeit is undone by reinstating the player who withdrew.
+
+        **The score is kept.** Clearing says "this result is wrong", not "this
+        match never happened", and the usual reason to clear Match 5 is to fix
+        something behind it — after which 5 has to be replayed from a scoreline
+        somebody would otherwise be re-keying from memory, eight presses at a
+        time, while the wall counts up through every one of them.
         """
         m = self.match(match_id)
         if not m.played:
             return m
-        if self._is_bye_walkover(m):
-            raise BracketError(f"Match {m.id} was a bye, not a result")
+        if m.walkover is not None:
+            raise BracketError(f"Match {m.id} was a {m.walkover}, not a result")
         self._refuse_if_downstream_played(m)
-        m.winner, m.scores = None, [0, 0]
+        m.winner = None
         if self.loaded == m.id:
             self.loaded = None
         self._resolve()
@@ -619,15 +711,10 @@ class Bracket:
                 continue
             fed = (ref.kind in ("winner", "loser") and ref.value in dependents for ref in other.src)
             if any(fed):
-                if other.played and not self._is_bye_walkover(other):
+                if other.contested:
                     return other.id
                 dependents.add(other.id)
         return None
-
-    @staticmethod
-    def _is_bye_walkover(m: Match) -> bool:
-        """A match "played" only because somebody had a bye — not a result."""
-        return BYE in m.slots
 
     def edit(self, match_id: int, p1: int | None, p2: int | None) -> Match:
         """Swap who is in a Round-1 match; downstream references re-derive.
@@ -651,23 +738,92 @@ class Bracket:
                     if held == value:
                         self.positions[pos] = None
             self.positions[ref.value] = value
-        m.winner, m.scores = None, [0, 0]
+        m.winner, m.scores, m.entered_for = None, [0, 0], None
         self._resolve()
         self._touch()
         return m
 
     def set_targets(self, match_id: int, p1: int | None, p2: int | None) -> Match:
-        """Override a match's race targets (the handicap chart is a default)."""
+        """Override a match's race targets (the handicap chart is a default).
+
+        Recorded as an override rather than written into ``targets``, so it
+        survives the next result — see :meth:`_set_targets`.
+        """
         m = self.match(match_id)
         for value in (p1, p2):
             if value is not None and not MIN_RACE <= value <= MAX_RACE:
                 raise BracketError(f"race must be {MIN_RACE}-{MAX_RACE}")
-        if p1 is not None:
-            m.targets[0] = p1
-        if p2 is not None:
-            m.targets[1] = p2
+        if m.contested:
+            raise BracketError(f"Match {m.id} has already been played — clear its result first")
+        if not m.ready:
+            raise BracketError(f"Match {m.id} does not have both players yet")
+        if m.entered_for != m.slots:
+            m.override = [None, None]
+        m.entered_for = list(m.slots)
+        for i, value in enumerate((p1, p2)):
+            if value is not None:
+                m.override[i] = value
+        self._set_targets(m)
         self._touch()
         return m
+
+    def set_races(self, a_race: int | None, b_race: int | None) -> None:
+        """Change the base races on a bracket already underway — the 9pm lever.
+
+        Eight players is fourteen matches on one table and family events run
+        long, so "shorten the races, it is getting late" is the first thing a
+        tournament director reaches for. Only unplayed matches move: a contested
+        result keeps the race it was played under, and hand-set overrides are
+        dropped because they were chosen against the base being replaced.
+        """
+        for race in (a_race, b_race):
+            if race is not None and not MIN_RACE <= race <= MAX_RACE:
+                raise BracketError(f"race must be {MIN_RACE}-{MAX_RACE}")
+        if a_race is not None:
+            self.a_race = a_race
+        if b_race is not None:
+            self.b_race = b_race
+        for m in self.matches:
+            if not m.contested:
+                m.override = [None, None]
+        self._resolve()
+        self._touch()
+
+    def withdraw(self, index: int, *, out: bool = True) -> Player:
+        """Take a player out of the tournament, or put them back in.
+
+        Somebody goes home — bedtime, a drive, a lost interest — and every
+        unplayed match of theirs is conceded to whoever they were due to meet,
+        down both sides of the draw. **Nothing is fabricated**: the matches read
+        as forfeits rather than as a score nobody made, which is the only reason
+        this exists instead of plussing an opponent up to their target.
+
+        Results they already played stand. Reversible on purpose, because the
+        concessions are derived rather than recorded (:meth:`_forget_walkovers`)
+        — a cousin who comes back after all is one press, not an unwind.
+        """
+        if not 0 <= index < len(self.players):
+            raise BracketError(f"no such player: {index}")
+        if out and self.finished:
+            raise BracketError("the tournament is already over")
+        self.players[index].withdrawn = out
+        self._resolve()
+        self._touch()
+        return self.players[index]
+
+    def park(self, match_id: int, scores: tuple[int, int]) -> None:
+        """Keep an unfinished match's score with the match it belongs to.
+
+        ``MatchScore`` is a single slot, so loading another match used to be the
+        same act as destroying whatever was in it. Parking here is what makes
+        switching away reversible — the score goes back up on reload — and what
+        lets a corrected match be reopened without re-keying it by hand.
+        """
+        m = self.match(match_id)
+        if m.played:
+            return
+        m.scores = [max(0, int(scores[0])), max(0, int(scores[1]))]
+        m.entered_for = list(m.slots)
 
     # ---------- reading ----------
 
@@ -694,15 +850,20 @@ class Bracket:
         return None
 
     def status(self, m: Match) -> str:
-        if m.played and not self._is_bye_walkover(m):
+        if m.walkover is not None:
+            return m.walkover  # "bye" | "forfeit"
+        if m.played:
             return "played"
         if m.conditional and not self._second_final_needed():
             return "conditional"
-        if m.played:
-            return "bye"
         if m.id == self.loaded:
             return "live"
-        return "ready" if m.ready else "waiting"
+        if not m.ready:
+            return "waiting"
+        # Started, then something else was loaded. Distinct from "ready" because
+        # the score is sitting there waiting to be resumed, and a list that
+        # called it ready would be inviting somebody to start it again at 0-0.
+        return "paused" if any(s > 0 for s in m.scores) else "ready"
 
     def _slot_dict(self, m: Match, i: int, live: tuple[int, int] | None) -> dict[str, object]:
         slot = m.slots[i]
@@ -722,6 +883,7 @@ class Bracket:
                 name=player.name,
                 rating=player.rating,
                 established=player.established,
+                withdrawn=player.withdrawn,
                 index=slot,
             )
         elif slot == BYE:
@@ -838,8 +1000,21 @@ class Bracket:
 
     # ---------- persistence ----------
 
+    @property
+    def has_results(self) -> bool:
+        """Anything worth keeping — a bye is the draw, not something that happened."""
+        return any(m.walkover != "bye" and m.winner is not None for m in self.matches)
+
     def state_dict(self) -> dict[str, object]:
-        """The on-disk shape — results and the draw, not the derived slots."""
+        """The on-disk shape — results and the draw, not the derived slots.
+
+        Walkovers are skipped deliberately: a bye follows from the positions and
+        a forfeit from ``Player.withdrawn``, so writing either down would only
+        create a way for a reloaded bracket to hold a concession that the draw
+        no longer agrees with — and would make a withdrawal irreversible across
+        a restart. Scores ride along even for unplayed matches, because a parked
+        or cleared scoreline is exactly the thing a restart must not lose.
+        """
         return {
             "name": self.name,
             "a_race": self.a_race,
@@ -851,9 +1026,17 @@ class Bracket:
             "players": [p.as_dict() for p in self.players],
             "positions": self.positions,
             "results": [
-                {"id": m.id, "winner": m.winner, "scores": m.scores, "targets": m.targets}
+                {
+                    "id": m.id,
+                    "winner": m.winner,
+                    "scores": m.scores,
+                    "targets": m.targets,
+                    "override": m.override,
+                    "entered_for": m.entered_for,
+                }
                 for m in self.matches
-                if m.winner is not None or m.targets != [None, None]
+                if m.walkover is None
+                and (m.winner is not None or m.scores != [0, 0] or m.targets != [None, None])
             ],
         }
 
@@ -896,6 +1079,7 @@ def from_state(data: dict[str, Any], path: Path | None = None) -> Bracket:
             name=str(p.get("name") or "?"),
             rating=int(p["rating"]) if p.get("rating") is not None else None,
             established=bool(p.get("established", True)),
+            withdrawn=bool(p.get("withdrawn", False)),
         )
         for p in data.get("players", [])
     ]
@@ -928,6 +1112,14 @@ def from_state(data: dict[str, Any], path: Path | None = None) -> Bracket:
         m.scores = [max(0, int(scores[0])), max(0, int(scores[1]))]
         targets = record.get("targets") or [None, None]
         m.targets = [int(t) if t is not None else None for t in targets]
+        override = record.get("override") or [None, None]
+        m.override = [int(t) if t is not None else None for t in override]
+        entered_for = record.get("entered_for")
+        m.entered_for = (
+            [None if s is None else int(s) for s in entered_for]
+            if isinstance(entered_for, list)
+            else None
+        )
     if bracket.loaded is not None and bracket.loaded not in by_id:
         # A file naming a match that isn't in this draw would otherwise make
         # every payload raise — a saved bracket must never be able to do that.

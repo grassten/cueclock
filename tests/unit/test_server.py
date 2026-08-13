@@ -1620,7 +1620,9 @@ def test_bracket_survives_a_restart_and_clearing_removes_it(tmp_path: Path) -> N
         assert first["status"] == "played"
         client.post("/api/bracket/match/2/load")
         assert client.get("/api/score").json()["p1"]["target"] == 5
-        assert client.delete("/api/bracket").json() == {"ok": True}
+        # No archive directory on this server, so nothing is written — but the
+        # answer still carries the key, because the phone reads it either way.
+        assert client.delete("/api/bracket").json() == {"ok": True, "archived": None}
         assert client.get("/api/bracket").json()["bracket"] is None
         # Casual again, all the way down: a handicap nothing can now explain
         # must not be left on the wall.
@@ -1656,3 +1658,94 @@ def test_a_bad_field_is_a_400_not_a_500() -> None:
         assert client.post("/api/bracket", json={"players": "nope"}).status_code == 400
         bad = {**BRACKET_BODY, "handicap": "spicy"}
         assert client.post("/api/bracket", json=bad).status_code == 400
+
+
+def test_switching_match_parks_the_score_instead_of_destroying_it() -> None:
+    """`MatchScore` is one slot; the Switch match list offers the live match.
+
+    Loading another match used to be the same act as wiping whatever was in it,
+    with no confirmation, on a page passed round the room.
+    """
+    with TestClient(create_app()) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        loaded = client.get("/api/state").json()["bracket"]["match"]["id"]
+        client.post("/api/score/p1/increment")
+        client.post("/api/score/p1/increment")
+        client.post("/api/score/p2/increment")
+        other = next(
+            m["id"]
+            for m in client.get("/api/bracket").json()["bracket"]["matches"]
+            if m["status"] == "ready"
+        )
+        client.post(f"/api/bracket/match/{other}/load")
+        assert client.get("/api/score").json()["p1"]["score"] == 0  # the new match
+        parked = next(
+            m for m in client.get("/api/bracket").json()["bracket"]["matches"] if m["id"] == loaded
+        )
+        assert parked["status"] == "paused"
+        assert (parked["p1"]["score"], parked["p2"]["score"]) == (2, 1)
+        client.post(f"/api/bracket/match/{loaded}/load")
+        resumed = client.get("/api/score").json()
+        assert (resumed["p1"]["score"], resumed["p2"]["score"]) == (2, 1)
+
+
+def test_withdrawing_moves_the_wall_on_to_a_match_somebody_can_play() -> None:
+    with TestClient(create_app()) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        live = client.get("/api/state").json()["bracket"]["match"]["id"]
+        match = next(
+            m for m in client.get("/api/bracket").json()["bracket"]["matches"] if m["id"] == live
+        )
+        quitter = match["p1"]["index"]
+        res = client.post(f"/api/bracket/player/{quitter}/withdraw").json()
+        assert res["ok"] and res["withdrawn"]
+        after = client.get("/api/bracket").json()["bracket"]
+        conceded = next(m for m in after["matches"] if m["id"] == live)
+        assert conceded["status"] == "forfeit"
+        # No score was invented for a match nobody played...
+        assert (conceded["p1"]["score"], conceded["p2"]["score"]) == (0, 0)
+        # ...and the wall is not left naming a match that is already over.
+        assert after["loaded"] is not None and after["loaded"] != live
+
+
+def test_reinstating_a_player_is_one_press() -> None:
+    with TestClient(create_app()) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/player/0/withdraw")
+        assert client.get("/api/bracket").json()["bracket"]["players"][0]["withdrawn"]
+        assert client.delete("/api/bracket/player/0/withdraw").json()["ok"]
+        after = client.get("/api/bracket").json()["bracket"]
+        assert not after["players"][0]["withdrawn"]
+        assert not any(m["status"] == "forfeit" for m in after["matches"])
+
+
+def test_clearing_a_played_bracket_archives_it_first(tmp_path: Path) -> None:
+    """Clearing is how you get back to casual, not how you lose an evening."""
+    with TestClient(create_app(archive_dir=tmp_path)) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/result", json={"scores": [5, 2]})
+        archived = client.delete("/api/bracket").json()["archived"]
+        assert archived == "bracket-asten-family-8-ball.json"
+        assert (tmp_path / archived).is_file()
+        assert client.get("/api/bracket").json()["bracket"] is None
+        # It is offered straight back in the Load past bracket list.
+        assert archived in client.get("/api/bracket/archives").json()["archives"]
+
+
+def test_clearing_an_unplayed_bracket_leaves_no_archive(tmp_path: Path) -> None:
+    with TestClient(create_app(archive_dir=tmp_path)) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        assert client.delete("/api/bracket").json()["archived"] is None
+        assert not list(tmp_path.glob("bracket-*.json"))
+
+
+def test_races_can_be_shortened_mid_tournament() -> None:
+    with TestClient(create_app()) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/result", json={"scores": [5, 2]})
+        assert client.patch("/api/bracket", json={"a_race": 3, "b_race": 2}).json()["ok"]
+        matches = {m["id"]: m for m in client.get("/api/bracket").json()["bracket"]["matches"]}
+        assert matches[1]["p1"]["target"] == 5  # played under a race to five
+        assert matches[2]["p1"]["target"] == 3
+        # The match on the wall follows, or the bar would show the old race.
+        assert client.get("/api/score").json()["p1"]["target"] == 3

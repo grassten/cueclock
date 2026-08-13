@@ -278,9 +278,37 @@ def create_app(
         return JSONResponse({"ok": True, "bracket": bracket.as_dict(hub.live_scores())})
 
     @app.delete("/api/bracket")
-    async def api_bracket_clear() -> dict[str, bool]:
-        await hub.clear_bracket()
-        return {"ok": True}
+    async def api_bracket_clear() -> dict[str, object]:
+        """Back to casual. Anything played is archived on the way out."""
+        archived = await hub.clear_bracket()
+        return {"ok": True, "archived": archived.name if archived is not None else None}
+
+    @app.patch("/api/bracket")
+    async def api_bracket_races(body: dict[str, object]) -> JSONResponse:
+        """Change the base races on a bracket underway: `{a_race, b_race}`."""
+        try:
+            bracket = await hub.set_bracket_races(body)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, "a_race": bracket.a_race, "b_race": bracket.b_race})
+
+    @app.post("/api/bracket/player/{index}/withdraw")
+    async def api_bracket_withdraw(index: int) -> JSONResponse:
+        """Concede every unplayed match of a player who has gone home."""
+        try:
+            player = await hub.withdraw_player(index, True)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, "player": player.name, "withdrawn": True})
+
+    @app.delete("/api/bracket/player/{index}/withdraw")
+    async def api_bracket_reinstate(index: int) -> JSONResponse:
+        """They came back. The concessions were derived, so they simply undo."""
+        try:
+            player = await hub.withdraw_player(index, False)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, "player": player.name, "withdrawn": False})
 
     @app.post("/api/bracket/archive")
     async def api_bracket_archive() -> JSONResponse:
