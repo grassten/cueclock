@@ -15,7 +15,6 @@ drawn from the same snapshot and none of them can drift apart.
 from __future__ import annotations
 
 import contextlib
-import json
 import queue
 import time
 from dataclasses import replace
@@ -194,22 +193,19 @@ def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckS
     raise TypeError(f"{key.name}: action has no dispatch path")  # pragma: no cover
 
 
-def _ends_the_tournament(detail: str) -> bool:
-    """Whether the confirm just sent was the one that decided it.
+def _decided_of(payload: object) -> int | None:
+    """How many matches the draw has finished, out of a state payload.
 
-    The server's own answer says so — `report_result` returns the champion — so
-    this is exact and arrives *with* the press. Reading it off the next poll
-    instead would put the champion up on a timer and take them away again while
-    the room was still looking at it.
-
-    An unreadable body is treated as an ordinary result: a dwell that expires is
-    a recoverable wrong guess, a bracket left up forever is not.
+    `None` in casual play and with the server down — both meaning "no answer",
+    which the loop treats as no news rather than as a result.
     """
-    try:
-        body = json.loads(detail)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return False
-    return isinstance(body, dict) and body.get("champion") is not None
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("bracket")
+    if not isinstance(summary, dict):
+        return None
+    value = summary.get("decided")
+    return value if isinstance(value, int) else None
 
 
 def _dwell_done(showing: bracket.Showing, now: float, clock_state: str | None) -> bool:
@@ -296,13 +292,20 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
     # no face draws it, and adding it there would repaint all fifteen keys on
     # every RUNNING/IDLE transition — several times a rack, for nothing.
     clock_state: str | None = None
+    # Results on the draw, and how many the TV has already reacted to. A result
+    # can land without this deck pressing anything — somebody concedes a match
+    # or reports a score from a phone — and to the room that is the same event
+    # as the confirm key, so the wall does the same thing.
+    decided: int | None = None
+    shown_decided: int | None = None
 
     def poll() -> DeckState:
         """One request serves both the session machine and every face."""
-        nonlocal clock_state
+        nonlocal clock_state, decided
         data = client.get_json(base, "/api/state")
         raw_clock = data.get("state") if isinstance(data, dict) else None
         clock_state = raw_clock if isinstance(raw_clock, str) else None
+        decided = _decided_of(data)
         # The session machine advances on this same poll: STARTING becomes ON
         # the moment the server answers (that is when OBS is launched), and
         # STOPPING becomes OFF when `run` finally exits.
@@ -338,6 +341,24 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 state = polled
                 _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
             next_poll = now + POLL_S
+            # A result landed that nobody pressed a key for — a match conceded
+            # or a score reported from a phone. The wall does what the confirm
+            # key does, because to the room it is the same event: a match
+            # ended, the draw moved, and the next pair are about to rack.
+            # `None` on either side is no news (casual play, or a server that
+            # stopped answering), never a result.
+            if decided is not None and shown_decided is not None and decided > shown_decided:
+                if showing is None:
+                    showing = bracket.show(dwell_s=bracket.DWELL_S)
+                    state = replace(state, on_bracket=showing is not None)
+                    reasons = reason_deadline is not None
+                    _draw_all(deck, state, reasons=reasons, skip=frozenset(flashes))
+                elif showing.until is not None:
+                    # Already up on a timer — a second result inside the dwell
+                    # gives it a fresh one rather than a new scene cut. A
+                    # showing somebody *chose* keeps having no deadline.
+                    showing = replace(showing, until=now + bracket.DWELL_S)
+            shown_decided = decided
         if playing is not None and now >= playing.until:
             # The file ran out — cut back to whatever was live when it started.
             # A failed cut still clears the handle: leaving the key saying BACK
@@ -485,15 +506,13 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 # and takes itself down again — the flip out being automatic
                 # while the flip back waited on somebody remembering a key is
                 # how a match gets played with no shot clock on the TV.
-                # **Unless that was the last match**: the champion keeps the
-                # wall until somebody takes it, because there is no next pair to
-                # rack for and a timer would end the evening on a shot of an
-                # empty table.
                 # A failed flip is not a failed result: the bracket has already
                 # advanced, so the key still says SAVED and the TV stays put.
-                decided = _ends_the_tournament(result.detail)
-                showing = bracket.show(dwell_s=None if decided else bracket.DWELL_S) or showing
+                showing = bracket.show(dwell_s=bracket.DWELL_S) or showing
                 state = poll()
+                # This press *is* the result the watcher above reacts to, and
+                # it has already been acted on — so it is news to nobody.
+                shown_decided = decided
                 _draw_all(deck, state, skip=frozenset(flashes) | {index})
             outcome = faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")
             _set_key(deck, index, outcome)

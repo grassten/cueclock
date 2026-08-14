@@ -27,10 +27,6 @@ SCENE_NAME = "Bracket"
 # resumes. Thirty seconds is long enough for a room to read who advanced and who
 # is up next, and still shorter than any rack: the TV is back watching them rack
 # before anybody breaks.
-#
-# **The result that ends the tournament gets no dwell at all** — see
-# `daemon._ends_the_tournament`. There is no next match to rack for, and a
-# champion who is swept off the wall on a timer is the opposite of the point.
 DWELL_S = 30.0
 
 

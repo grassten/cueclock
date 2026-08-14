@@ -93,6 +93,20 @@ def _start_loop(deck: FakeDeck) -> threading.Thread:
     return thread
 
 
+def _stop(thread: threading.Thread) -> None:
+    """End the loop, and *fail* if it will not go.
+
+    Asserted rather than hoped for: a surviving loop is not a slow test, it is
+    a loop that will call `bracket.hide` through the next test's patches — or,
+    once pytest has restored them, through the real `obs-websocket` client, at
+    which point a test suite is switching scenes on the wall TV. That happened
+    on 2026-08-13, during a live session.
+    """
+    _STOP.set()
+    thread.join(timeout=SETTLE_S)
+    assert not thread.is_alive(), "the deck loop outlived its test"
+
+
 def _stoppable(payload: Any) -> Any:
     """A `client.get_json` stand-in that raises the loop out on `_STOP`."""
 
@@ -140,8 +154,17 @@ def rig(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FakeDeck, Spy]]:
     deck = FakeDeck()
     thread = _start_loop(deck)
     yield deck, spy
-    _STOP.set()
-    thread.join(timeout=SETTLE_S)
+    _stop(thread)
+
+
+def _wait(cond: Any, timeout: float = SETTLE_S) -> bool:
+    """Spin until `cond()` or the timeout — for what the loop does on its own."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 def _await(spy: Spy, timeout: float = SETTLE_S) -> None:
@@ -235,12 +258,13 @@ class SceneSpy:
         return True
 
 
-def _armed_payload(clock: str = "IDLE") -> dict[str, object]:
+def _armed_payload(clock: str = "IDLE", decided: int = 3) -> dict[str, object]:
     return {
         "state": clock,
         "mode": "match",
         "bracket": {
             "revision": 4,
+            "decided": decided,
             "match": {"id": 4, "side": "A", "header": "Match 4 · A Side"},
             "armed": {"slot": 0, "name": "Priya Shah", "score": 5, "other": 2},
         },
@@ -258,21 +282,30 @@ def tv(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
     documented exit is an exception out of the poll.
     """
     spy = SceneSpy()
-    clock = {"state": "IDLE"}
+    # One mutable dict a test can move under the running loop: the clock's
+    # state, and how many matches the draw has decided.
+    live: dict[str, object] = {"state": "IDLE", "decided": 3, "polls": 0}
     _STOP.clear()
+
+    def payload() -> dict[str, object]:
+        # Counted, because a test that changes the draw has to know the loop
+        # has already seen it *unchanged* — the first count a loop sees is
+        # deliberately never news, and the loop polls on its own cadence.
+        live["polls"] = int(live["polls"]) + 1
+        return _armed_payload(str(live["state"]), int(live["decided"]))
+
     monkeypatch.setattr(deck_bracket, "show", spy.show)
     monkeypatch.setattr(deck_bracket, "hide", spy.hide)
     monkeypatch.setattr(deck_bracket, "DWELL_S", DWELL_S)
-    monkeypatch.setattr(client, "get_json", _stoppable(lambda: _armed_payload(str(clock["state"]))))
+    monkeypatch.setattr(client, "get_json", _stoppable(payload))
     monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "{}"))
     monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
     monkeypatch.setattr(daemon, "POLL_S", 0.05)  # the early return is only as quick as the poll
 
     deck = FakeDeck()
     thread = _start_loop(deck)
-    yield deck, spy, clock
-    _STOP.set()
-    thread.join(timeout=SETTLE_S)
+    yield deck, spy, live
+    _stop(thread)
 
 
 def test_a_confirmed_result_puts_the_bracket_up_and_takes_it_down_again(tv: Any) -> None:
@@ -282,7 +315,7 @@ def test_a_confirmed_result_puts_the_bracket_up_and_takes_it_down_again(tv: Any)
     bracket scene carries no shot clock and no table, so the one thing the rig
     exists to show would be missing exactly when play resumes.
     """
-    deck, spy, _clock = tv
+    deck, spy, _live = tv
     deck.press(CONFIRM_KEY.index)
     assert spy.up.wait(SETTLE_S), "the confirmed result never reached the wall"
     assert spy.shown == [DWELL_S]
@@ -294,56 +327,66 @@ def test_a_confirmed_result_puts_the_bracket_up_and_takes_it_down_again(tv: Any)
     assert spy.hidden == 1
 
 
-def test_the_next_pair_breaking_takes_the_bracket_down_early(tv: Any) -> None:
-    """A rack that goes quickly must not be played under a bracket."""
-    deck, spy, clock = tv
+def test_the_next_pair_breaking_takes_the_bracket_down_early(
+    monkeypatch: pytest.MonkeyPatch, tv: Any
+) -> None:
+    """A rack that goes quickly must not be played under a bracket.
+
+    The dwell is set to the real thirty seconds here rather than the compressed
+    one every other test uses: a hide inside a second then means the *break*
+    took the bracket down, with no race against a deadline that would have
+    taken it down anyway.
+    """
+    deck, spy, live = tv
+    monkeypatch.setattr(deck_bracket, "DWELL_S", 30.0)
     deck.press(CONFIRM_KEY.index)
     assert spy.up.wait(SETTLE_S)
-    started = time.monotonic()
-    clock["state"] = "RUNNING"  # somebody broke
-    deadline = started + DWELL_S + SETTLE_S
+    live["state"] = "RUNNING"  # somebody broke
+    deadline = time.monotonic() + SETTLE_S
+    while spy.hidden == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert spy.hidden == 1, "the bracket sat there with play under way"
+
+
+def test_a_result_nobody_pressed_a_key_for_still_reaches_the_wall(tv: Any) -> None:
+    """A match conceded, or a score reported from a phone.
+
+    The confirm key is not the only way a match ends, and to the room it is the
+    same event either way — a match is over, the draw has moved, the next pair
+    are about to rack. Watching the *count of decided matches* rather than the
+    bracket's revision is what keeps a race stepper or a Switch match from
+    taking over the wall, since those move the revision too.
+    """
+    _deck, spy, live = tv
+    # The first count a loop sees is never news — a deck restarted mid-event
+    # must not flip the wall over results already in the draw — so wait for the
+    # loop to have taken that baseline *inside* its own loop before moving it.
+    assert _wait(lambda: int(live["polls"]) >= 2), "the loop never polled twice"
+    assert spy.shown == []
+    live["decided"] = int(live["decided"]) + 1  # somebody conceded, from a phone
+    assert spy.up.wait(SETTLE_S), "the result never reached the wall"
+    assert spy.shown == [DWELL_S]  # and on the same timer a confirm gets
+
+    deadline = time.monotonic() + DWELL_S + SETTLE_S
     while spy.hidden == 0 and time.monotonic() < deadline:
         time.sleep(0.01)
     assert spy.hidden == 1
-    assert time.monotonic() - started < DWELL_S, "waited out the dwell with play under way"
 
 
-def test_the_result_that_ends_it_leaves_the_champion_on_the_wall(
-    monkeypatch: pytest.MonkeyPatch, tv: Any
-) -> None:
-    """No dwell on the last match of the night.
-
-    There is no next pair to rack for, and a timer would take the champion off
-    the wall while the room was still looking at it — ending the evening on a
-    shot of an empty table.
-    """
-    deck, spy, _clock = tv
-    monkeypatch.setattr(
-        client, "post", lambda *a, **k: client.PostResult(True, 200, '{"champion": "Priya Shah"}')
-    )
-    deck.press(CONFIRM_KEY.index)
-    assert spy.up.wait(SETTLE_S)
-    assert spy.shown == [None]  # no deadline asked for
-    time.sleep(DWELL_S * 3)
+def test_a_draw_that_only_moves_does_not_touch_the_wall(tv: Any) -> None:
+    """Loading a match, editing one, changing the races — all move `revision`,
+    and none of them is a result. A wall that flips on every stepper tap is a
+    wall nobody can play under."""
+    _deck, spy, _live = tv
+    time.sleep(DWELL_S * 2)  # several polls, nothing decided
+    assert spy.shown == []
     assert spy.hidden == 0
-
-
-def test_a_body_the_deck_cannot_read_is_an_ordinary_result(
-    monkeypatch: pytest.MonkeyPatch, tv: Any
-) -> None:
-    """A dwell that expires is a recoverable wrong guess; a bracket left up
-    forever, with no shot clock under it, is not."""
-    deck, spy, _clock = tv
-    monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "not json"))
-    deck.press(CONFIRM_KEY.index)
-    assert spy.up.wait(SETTLE_S)
-    assert spy.shown == [DWELL_S]
 
 
 def test_a_scene_somebody_chose_stays_up(tv: Any) -> None:
     """Only the confirm key's flip is on a timer: nobody chose to look at that
     one. A key press is a decision, and a timer must not second-guess it."""
-    deck, spy, _clock = tv
+    deck, spy, _live = tv
     deck.press(SCENE_KEY.index)
     assert spy.up.wait(SETTLE_S)
     assert spy.shown == [None]  # no dwell asked for

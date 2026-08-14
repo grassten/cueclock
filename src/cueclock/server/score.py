@@ -82,14 +82,44 @@ class MatchScore:
     # ---------- mutations (each saves; the caller broadcasts) ----------
 
     def adjust(self, player: str, delta: int) -> None:
-        """Add ``delta`` to a player's score, flooring at 0 (mis-press undo)."""
+        """Add ``delta`` to a player's score, floored at 0 and capped at the race.
+
+        The floor is the mis-press undo. **The cap is the race itself**: a race
+        to five is over at five, so a sixth is not a score anybody made — it is
+        a finger on a key, and every press past the target buries the confirm
+        the deck is already offering. Capping is silent rather than a refusal
+        because the key that lands there is the same key that armed the result:
+        it has nothing left to do, and saying so would be noise at the exact
+        moment somebody is reaching for Confirm.
+
+        Casual play caps at ``race_to`` by the same rule; with neither set —
+        no race, no bracket — nothing is capped and the score just counts.
+        """
+        target = self.p1_target if player == "p1" else self.p2_target
+        ceiling = target if target is not None else self.race_to
         if player == "p1":
-            self.p1_score = max(0, self.p1_score + delta)
+            self.p1_score = self._bounded(self.p1_score, delta, ceiling)
         elif player == "p2":
-            self.p2_score = max(0, self.p2_score + delta)
+            self.p2_score = self._bounded(self.p2_score, delta, ceiling)
         else:
             raise KeyError(player)
         self._save()
+
+    @staticmethod
+    def _bounded(score: int, delta: int, ceiling: int | None) -> int:
+        """Where a press leaves a score: never below zero, never past the race.
+
+        The cap is on the way **up** only. Applying it to a decrement as well
+        would snap a score of six under a race to four down to four in one
+        press, which is a correction nobody asked for; minus has to stay worth
+        exactly one point wherever it is pressed. And a score already above the
+        race — the race was shortened under it, or it predates the target — is
+        held rather than pulled down, because plus must never *lower* a score.
+        """
+        moved = score + delta
+        if delta > 0 and ceiling is not None:
+            moved = min(moved, max(ceiling, score))
+        return max(0, moved)
 
     def reset_scores(self) -> None:
         """Back to zero; names, ratings and race-to survive (next match, same players)."""
