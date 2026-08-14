@@ -568,6 +568,21 @@ request, being the same on every interface. `url: null` when the machine has no
 LAN address, and the pages say so rather than showing a code for an address
 nobody can reach.
 
+**The confirm key's scene flip takes itself back down** (`bracket.DWELL_S`, 20 s,
+with an early return the moment the clock leaves IDLE). As first built, the flip
+*out* was automatic and the flip *back* waited on somebody pressing the scene
+key — and the bracket scene carries no shot clock and no table, so the wall
+could sit on a bracket through a whole live match, missing the one thing the rig
+exists to put on that TV. The flip itself is right: the instant a result lands
+is when the bracket has information everybody wants, and during racking there is
+nothing to watch on the play scene. It is a **beat, not a mode**, so it is
+bounded — twenty seconds reads as who advanced and who is up next, and is
+shorter than any rack, so the TV is back watching them rack well before anybody
+breaks. A showing that a *person* chose (the scene key) carries no deadline and
+never expires: a timer must not second-guess a decision. A server that has
+stopped answering reads as IDLE, so a dead poll can only leave the bracket up
+for the rest of its dwell, never pull it down early.
+
 **Late entry is a hard cutoff, and that is the decision.** The field freezes at
 Build; somebody who arrives after it waits for the next bracket. The tempting
 alternative is to drop a latecomer into an unplayed bye slot, but a bye is not a

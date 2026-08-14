@@ -193,6 +193,23 @@ def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckS
     raise TypeError(f"{key.name}: action has no dispatch path")  # pragma: no cover
 
 
+def _dwell_done(showing: bracket.Showing, now: float, clock_state: str | None) -> bool:
+    """Whether a confirmed result has had its moment on the wall.
+
+    Two ways it can be over: the dwell runs out, or the next pair simply start
+    — a rack that goes quickly must not be played under a bracket, and the
+    clock leaving IDLE is that fact arriving. A server that has stopped
+    answering reads as IDLE, so a dead poll can only ever leave the bracket up
+    for the rest of its dwell rather than pulling it down early.
+
+    A showing with no deadline is somebody's own press (`SceneToggle`) and
+    never expires: a timer must not second-guess a decision.
+    """
+    if showing.until is None:
+        return False
+    return now >= showing.until or (clock_state or "IDLE") != "IDLE"
+
+
 def _start_replay(deck: Any, index: int, base: str, span: replay.Span) -> replay.Playing | None:
     """Cue and cut to a replay, saying on the key which span is being cued.
 
@@ -256,10 +273,17 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
 
     playing: replay.Playing | None = None  # a replay currently on the TV
     showing: bracket.Showing | None = None  # the bracket is on the TV
+    # The clock's own state, kept beside the poll rather than in `DeckState`:
+    # no face draws it, and adding it there would repaint all fifteen keys on
+    # every RUNNING/IDLE transition — several times a rack, for nothing.
+    clock_state: str | None = None
 
     def poll() -> DeckState:
         """One request serves both the session machine and every face."""
+        nonlocal clock_state
         data = client.get_json(base, "/api/state")
+        raw_clock = data.get("state") if isinstance(data, dict) else None
+        clock_state = raw_clock if isinstance(raw_clock, str) else None
         # The session machine advances on this same poll: STARTING becomes ON
         # the moment the server answers (that is when OBS is launched), and
         # STOPPING becomes OFF when `run` finally exits.
@@ -302,6 +326,13 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
             replay.stop(playing)
             playing = None
             state = replace(state, replaying=False)
+            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+        if showing is not None and _dwell_done(showing, now, clock_state):
+            # A failed cut still clears the handle, exactly as the replay return
+            # does: a stuck key is worse than one press that does nothing.
+            bracket.hide(showing)
+            showing = None
+            state = replace(state, on_bracket=False)
             _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
         if reason_deadline is not None and now >= reason_deadline:
             # Walked away: an unspecified flag has always meant OTHER, and a
@@ -410,6 +441,9 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 bracket.hide(showing)
                 showing = None
             else:
+                # No dwell: a scene somebody chose stays until they choose
+                # otherwise. Only the confirm key's flip is on a timer, because
+                # only that one was nobody's decision to look at the bracket.
                 showing = bracket.show()
             state = replace(state, on_bracket=showing is not None)
             _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
@@ -428,10 +462,13 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
             )
             print(f"confirm: match {state.bracket_match_id} -> {result.status}", flush=True)
             if result.ok:
-                # The wall shows the updated bracket while the next pair racks.
+                # The wall shows the updated bracket while the next pair racks,
+                # and takes itself down again — the flip out being automatic
+                # while the flip back waited on somebody remembering a key is
+                # how a match gets played with no shot clock on the TV.
                 # A failed flip is not a failed result: the bracket has already
                 # advanced, so the key still says SAVED and the TV stays put.
-                showing = bracket.show() or showing
+                showing = bracket.show(dwell_s=bracket.DWELL_S) or showing
                 state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes) | {index})
             outcome = faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")

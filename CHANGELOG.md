@@ -272,6 +272,16 @@ survive unchanged in `design.md`.
   cannot work it out for itself — OBS loads it over loopback — so the host is
   discovered server-side and the port comes off the request.
 
+  **Amended the same day — the scene flip takes itself back down** (20 s, or
+  the moment the clock leaves IDLE). The flip out was automatic and the flip
+  back waited on somebody remembering the scene key, and the bracket scene has
+  no shot clock and no table on it, so the wall could sit on a bracket through a
+  live match. The flip is still right — the instant a result lands is when the
+  bracket has what everybody wants to know, and during racking there is nothing
+  to watch on the play scene — so it is bounded rather than dropped: a beat, not
+  a mode. A showing somebody *chose* with the scene key carries no deadline and
+  never expires.
+
   **Late entry is a hard cutoff**, decided rather than built: the field freezes
   at Build. A bye is not a parking space — it has already advanced somebody — so
   dropping a latecomer in un-resolves a walkover, and once that player has played
