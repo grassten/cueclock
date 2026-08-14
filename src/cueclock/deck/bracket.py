@@ -24,10 +24,14 @@ SCENE_NAME = "Bracket"
 # remembering a key**, which is a wall that can sit on the bracket through a
 # live match — and the bracket scene has no shot clock and no table on it, so
 # that is the one thing this rig exists to show, missing exactly when play
-# resumes. Twenty seconds is long enough for a room to read who advanced and who
-# is up next, and shorter than any rack: the TV is back watching them rack well
+# resumes. Thirty seconds is long enough for a room to read who advanced and who
+# is up next, and still shorter than any rack: the TV is back watching them rack
 # before anybody breaks.
-DWELL_S = 20.0
+#
+# **The result that ends the tournament gets no dwell at all** — see
+# `daemon._ends_the_tournament`. There is no next match to rack for, and a
+# champion who is swept off the wall on a timer is the opposite of the point.
+DWELL_S = 30.0
 
 
 @dataclass(frozen=True)

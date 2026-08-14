@@ -15,6 +15,7 @@ drawn from the same snapshot and none of them can drift apart.
 from __future__ import annotations
 
 import contextlib
+import json
 import queue
 import time
 from dataclasses import replace
@@ -191,6 +192,24 @@ def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckS
         )
         return faces.flash_ok(key.face(moved).text), moved
     raise TypeError(f"{key.name}: action has no dispatch path")  # pragma: no cover
+
+
+def _ends_the_tournament(detail: str) -> bool:
+    """Whether the confirm just sent was the one that decided it.
+
+    The server's own answer says so — `report_result` returns the champion — so
+    this is exact and arrives *with* the press. Reading it off the next poll
+    instead would put the champion up on a timer and take them away again while
+    the room was still looking at it.
+
+    An unreadable body is treated as an ordinary result: a dwell that expires is
+    a recoverable wrong guess, a bracket left up forever is not.
+    """
+    try:
+        body = json.loads(detail)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return isinstance(body, dict) and body.get("champion") is not None
 
 
 def _dwell_done(showing: bracket.Showing, now: float, clock_state: str | None) -> bool:
@@ -466,9 +485,14 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 # and takes itself down again — the flip out being automatic
                 # while the flip back waited on somebody remembering a key is
                 # how a match gets played with no shot clock on the TV.
+                # **Unless that was the last match**: the champion keeps the
+                # wall until somebody takes it, because there is no next pair to
+                # rack for and a timer would end the evening on a shot of an
+                # empty table.
                 # A failed flip is not a failed result: the bracket has already
                 # advanced, so the key still says SAVED and the TV stays put.
-                showing = bracket.show(dwell_s=bracket.DWELL_S) or showing
+                decided = _ends_the_tournament(result.detail)
+                showing = bracket.show(dwell_s=None if decided else bracket.DWELL_S) or showing
                 state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes) | {index})
             outcome = faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")

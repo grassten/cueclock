@@ -272,7 +272,7 @@ survive unchanged in `design.md`.
   cannot work it out for itself — OBS loads it over loopback — so the host is
   discovered server-side and the port comes off the request.
 
-  **Amended the same day — the scene flip takes itself back down** (20 s, or
+  **Amended the same day — the scene flip takes itself back down** (30 s, or
   the moment the clock leaves IDLE). The flip out was automatic and the flip
   back waited on somebody remembering the scene key, and the bracket scene has
   no shot clock and no table on it, so the wall could sit on a bracket through a
@@ -281,6 +281,16 @@ survive unchanged in `design.md`.
   to watch on the play scene — so it is bounded rather than dropped: a beat, not
   a mode. A showing somebody *chose* with the scene key carries no deadline and
   never expires.
+
+  **And the last result of the night gets no dwell**, which is where the champion
+  plate and the timer turned out to disagree: the plate is drawn the moment the
+  final lands, and the dwell then swept it off the wall half a minute later, back
+  to an empty table — the opposite of the moment it exists for. There is no next
+  pair to rack for, so there is nothing for the return to be in aid of. The deck
+  knows at press time because the confirm's own answer carries the champion.
+  Also fixed on the way through: `test_deck_loop.py` leaked its `_loop` threads,
+  and a leaked loop resolves `bracket.hide` through whatever the *next* test has
+  patched in — which is a test seeing a scene change nobody in it made.
 
   **Late entry is a hard cutoff**, decided rather than built: the field freezes
   at Build. A bye is not a parking space — it has already advanced somebody — so
