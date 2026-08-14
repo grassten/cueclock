@@ -28,6 +28,14 @@ hot-reload was never implemented in the old app and stays backlog.
 
 from dataclasses import dataclass
 
+# Extension pools are data, not law, while this is False: `extension()` grants
+# past `extensions_per_frame` and the snapshot reports the pool as 0 so no
+# surface draws a count. Off since 2026-08-13 — the verbal extension can be
+# triggered by table-side conversation, and against an unlimited pool a false
+# grant costs nothing instead of burning a real one mid-rack. Flip back on
+# when the microphone earns enforcement.
+ENFORCE_EXTENSION_LIMIT = False
+
 
 @dataclass(frozen=True)
 class Ruleset:
@@ -38,6 +46,10 @@ class Ruleset:
     extensions_per_frame: int
     grace_seconds: float
     post_expiry_seconds: float
+    # False = this ruleset has no shot clock at all: the countdown never runs,
+    # vision keeps journaling but can never move the clock, and every clock
+    # surface (wall, deck, phone) drops its countdown controls.
+    timed: bool = True
 
 
 RULESETS: dict[str, Ruleset] = {
@@ -74,6 +86,23 @@ RULESETS: dict[str, Ruleset] = {
             extensions_per_frame=2,
             grace_seconds=2.0,
             post_expiry_seconds=2.0,
+        ),
+        # Match play with no shot clock (2026-08-13). A ruleset rather than a
+        # session mode because the mode axis says what you're doing at the
+        # table, and this is still a match — racks, scores, two players — just
+        # untimed. `no_clock` mode is the drill surface (no racks, rep
+        # counters); this keeps everything match mode has except the countdown.
+        # The clock fields are inert while `timed` is False; base_seconds keeps
+        # a sane value so `current_base()` never has to special-case.
+        Ruleset(
+            name="freestyle",
+            base_seconds=30,
+            first_shot_seconds=30,
+            extension_seconds=0,
+            extensions_per_frame=0,
+            grace_seconds=2.0,
+            post_expiry_seconds=2.0,
+            timed=False,
         ),
     )
 }

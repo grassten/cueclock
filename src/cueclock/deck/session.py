@@ -30,7 +30,7 @@ from enum import Enum
 from pathlib import Path
 from typing import IO, Protocol
 
-from cueclock.deck import obsws, tv
+from cueclock.deck import client, obsws, tv
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUN_LOG = Path.home() / "Library" / "Logs" / "cueclock-run.log"
@@ -209,6 +209,13 @@ def _spawn(cmd: Sequence[str]) -> Process:
     )
 
 
+def _clear_match() -> bool:
+    """End-of-day reset over the CLI's default server URL (`--server` in
+    `run_deck` swaps in the real base). Short timeout: this rides the stop
+    press, and a wedged server must not hold the shutdown hostage."""
+    return client.post("http://127.0.0.1:8000", "/api/match/clear", timeout=3.0).ok
+
+
 def _call(cmd: Sequence[str]) -> int:
     """Run a short command to completion; never raise into the deck loop."""
     try:
@@ -244,6 +251,7 @@ class SessionManager:
     open_projector: Callable[[], bool] = obsws.open_projector
     tv_on: Callable[[], bool] = tv.ensure_on
     tv_off: Callable[[], bool] = tv.power_off
+    clear_match: Callable[[], bool] = _clear_match
     pidfile: Path = PIDFILE
     process_for_pid: Callable[[int], Process] = PidProcess
 
@@ -296,6 +304,13 @@ class SessionManager:
             return
         self._stopping_since = self.now()
         self._escalated = False
+        # End of day (2026-08-13): the match state clears on the way down, so
+        # tomorrow's session comes up on PLAYER 1 / PLAYER 2 instead of
+        # yesterday's score, and a loaded bracket is archived. Before the
+        # SIGINT, while the server is still up to hear it; best-effort,
+        # because clearing a match must never block stopping the camera.
+        if not self.clear_match():
+            print("session: match clear failed — last match may reappear next start", flush=True)
         # `run` first, always: it owns the camera, and it must not wait on
         # anything OBS does. Measured 2026-08-02 — a modal OBS dialog blocked
         # the quit for the full 20 s timeout, which both delayed the camera

@@ -232,6 +232,63 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-13 (checkpoint 96 — the UX pass: two tabs, freestyle, unlimited
+  extensions, a clean morning):** Six items from Steven in one sweep, all
+  surface and policy, no detection.
+
+  **The control page is two tabs — Play and Match.** With a handicapped
+  tournament live, the old Setup tab's single "Race to" had nothing true to
+  say (`Race to –`) and its name fields could fight the draw that set them:
+  two workflows, one page, both claiming it. Setup and Bracket merged into
+  one Match tab behind a **Single match / Tournament** segmented control that
+  follows the bracket (a tap wins until the bracket changes); with a bracket
+  loaded the single-match editors yield to a read-only card naming the
+  tournament, the loaded match and its races. Chosen from rendered mockups
+  (option B) over the minimal fix (yield card alone, three tabs).
+
+  **Mode and Vision left the phone.** Mode is always `match` when a phone is
+  out — the deck's Mode key still cycles it for drills — and the vision kill
+  switch was never once used from a phone. Both APIs stay (§2.1). The Session
+  header that would have held one orphaned select became a **Ruleset** section:
+  friendly labels and a caption of the rulebook's numbers off `GET
+  /api/rulesets`' new `details`, so the pick never needs the docs.
+
+  **Freestyle** (`clock/rulesets.py`, `timed: false`): match play with no shot
+  clock — the thing `no_clock` mode is not, because that is the drill surface
+  (no racks, no score keys, rep counters). Freestyle keeps everything match
+  mode has except the countdown: operator start/restart/push/extension are
+  no-ops in the clock itself, the hub gates vision exactly as it does for
+  `no_clock` (same journal kinds — evidence keeps flowing, Flag and Replay
+  keep working), the wall shows `FREE STYLE` where the digits were, and the
+  deck's amber clock keys go dark with the countdown (`TIMED` in
+  `deck/layout.py`, derived so the next untimed ruleset costs no edit).
+
+  **Extensions are unlimited** behind `ENFORCE_EXTENSION_LIMIT = False`
+  (`clock/rulesets.py`). The verbal extension can mishear table-side talk, and
+  against a limited pool a false grant burns a real extension that has to be
+  argued about mid-rack; against an unlimited one it costs nothing. The
+  snapshot reports `extensions_allowed: 0` while unenforced, so the deck's
+  pips and the phone's counter disappear rather than drawing a pool that
+  cannot run out. Per-ruleset allowances stay in the data for the day the mic
+  earns the flag back.
+
+  **Shutdown ends the match day.** The Session hold now fires `POST
+  /api/match/clear` before the SIGINT: score back to PLAYER 1 / PLAYER 2, a
+  loaded bracket archived-and-cleared (reopenable from "Load past bracket").
+  Deliberately on the deliberate gesture and not on server exit — a mid-match
+  restart to deploy a fix must keep the score, which is why `MatchScore`
+  persists at all. Best-effort: a wedged server costs yesterday's match
+  reappearing, never a camera left open.
+
+  **The join QR left the phone's bracket view** — whoever is reading that page
+  already has it open; the wall's bracket scene keeps the code for everyone
+  else.
+
+  New: `POST /api/match/clear` (`cmd_match_clear`), snapshot `timed`,
+  `/api/rulesets` `details`. Verification: 566 unit tests (16 new), ruff,
+  mypy --strict; no detection change, so no corpus battery (the gate is for
+  detection diffs).
+
 - **2026-08-13 (checkpoint 95 — #43: what the first live hour said):** Five
   things from Steven driving a real bracket, four of them found at the table.
 

@@ -71,6 +71,9 @@ class Group(Enum):
 CLOCKED = frozenset({"match", "run_out"})
 RACKED = frozenset({"match"})
 NINE_BALL = frozenset({"wnt_9ball"})
+# Rulesets with a countdown — derived, so a new untimed ruleset (freestyle)
+# darkens the clock keys without another edit here.
+TIMED = frozenset(name for name, ruleset in RULESETS.items() if ruleset.timed)
 
 
 @dataclass(frozen=True)
@@ -259,6 +262,7 @@ RULESET_FACES: dict[str, str] = {
     "ultimate_pool_8ball": "8-BALL",
     "ultimate_pool_8ball_final10": "FINAL\n10",
     "wnt_9ball": "9-BALL",
+    "freestyle": "FREE\nSTYLE",
 }
 
 _CYCLES: dict[str, tuple[Mapping[str, str], tuple[str, ...], str, str]] = {
@@ -429,7 +433,15 @@ LAYOUT: tuple[Key, ...] = (
     # set the countdown to full and both are rack-aware; one landed IDLE, the
     # other RUNNING. The stopped variant moved to `no_clock`, where it's
     # visible. "Force 30" was misnamed too — it gives 60 in the WNT window.
-    Key(1, 3, "start", Group.CLOCK, ApiPost("/api/restart", "GO", "ERROR"), modes=CLOCKED),
+    Key(
+        1,
+        3,
+        "start",
+        Group.CLOCK,
+        ApiPost("/api/restart", "GO", "ERROR"),
+        modes=CLOCKED,
+        rulesets=TIMED,
+    ),
     # Push outs are a 9-ball rule and need a break to follow, so the key is
     # absent under 8-ball and outside a rack.
     Key(
@@ -444,8 +456,10 @@ LAYOUT: tuple[Key, ...] = (
     ),
     # Top-right corner: the one key a player under the clock hunts for — it
     # must be findable without reading faces (Steven, 2026-08-01 match day).
-    # It never goes dark inside a clocked mode; a spent pool shows as empty
-    # pips, because those are the only readout of how many are left.
+    # It never goes dark inside a clocked mode with a clock to extend (under
+    # freestyle there is no countdown, so it leaves with the other clock
+    # keys); while the extension limit is unenforced the pool reads 0 and the
+    # face shows no pips.
     Key(
         1,
         5,
@@ -453,6 +467,7 @@ LAYOUT: tuple[Key, ...] = (
         Group.CLOCK,
         ApiPost("/api/extension", "OK", "NO EXT"),
         modes=CLOCKED,
+        rulesets=TIMED,
     ),
     # --- the match: bottom row, blue block ---
     Key(3, 1, "ruleset", Group.MATCH, Cycle("ruleset"), modes=CLOCKED),

@@ -89,7 +89,12 @@ class Harness:
             open_projector=self._open_projector,
             tv_on=self._tv_on,
             tv_off=self._tv_off,
+            clear_match=self._clear_match,
         )
+
+    def _clear_match(self) -> bool:
+        self.called.append(("api", "MatchClear"))
+        return True
 
     def _stop_outputs(self) -> bool:
         self.called.append(("obsws", "StopOutputs"))
@@ -266,12 +271,19 @@ def test_stop_quits_obs_then_interrupts_run_and_settles_on_off() -> None:
     h.called.clear()
 
     h.manager.stop()
-    # Order matters, every step measured the hard way (2026-08-02): `run` is
-    # signalled first so nothing OBS does can delay the camera shutdown, OBS's
-    # outputs are stopped before the quit because any active output raises a
-    # modal dialog no one can click at the table, and the quit is verified
-    # because that dialog blocks it silently.
-    assert h.called == [("signal", "SIGINT"), ("obsws", "StopOutputs"), OBS_QUIT]
+    # Order matters, every step measured the hard way (2026-08-02): the match
+    # clear goes first because it needs the server alive to hear it
+    # (2026-08-13 — stopping ends the match day, so the next session comes up
+    # on PLAYER 1 / PLAYER 2), `run` is signalled next so nothing OBS does can
+    # delay the camera shutdown, OBS's outputs are stopped before the quit
+    # because any active output raises a modal dialog no one can click at the
+    # table, and the quit is verified because that dialog blocks it silently.
+    assert h.called == [
+        ("api", "MatchClear"),
+        ("signal", "SIGINT"),
+        ("obsws", "StopOutputs"),
+        OBS_QUIT,
+    ]
 
     # `run` closes the camera on its way out, so OFF waits for the exit.
     assert h.manager.tick(server_up=True) is SessionState.STOPPING
@@ -281,6 +293,17 @@ def test_stop_quits_obs_then_interrupts_run_and_settles_on_off() -> None:
     assert h.manager.tick(server_up=False) is SessionState.OFF
     assert h.caffeinate_proc.terminated
     assert not h.manager.owns_session
+
+
+def test_a_failed_match_clear_never_blocks_the_stop() -> None:
+    # The server may already be wedged when the hold lands — the worst that
+    # may cost is yesterday's match reappearing, never a camera left open.
+    h = Harness()
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    h.manager.clear_match = lambda: False
+    h.manager.stop()
+    assert ("signal", "SIGINT") in h.called
 
 
 def test_a_clean_quit_is_never_mistaken_for_the_dialog() -> None:

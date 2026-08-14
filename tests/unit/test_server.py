@@ -35,6 +35,9 @@ def test_state_snapshot_shape() -> None:
             "display",
             "ruleset",
             "mode",
+            # False only under an untimed ruleset (freestyle) — the overlays
+            # drop their countdown surfaces on it.
+            "timed",
             # What a fresh countdown gives you right now. The deck's START key
             # renders it, so the face can't drift from the behaviour.
             "base",
@@ -72,11 +75,16 @@ def test_start_pause_reset() -> None:
         assert client.get("/api/state").json()["display"] == 30
 
 
-def test_extension_accepted_then_rejected() -> None:
+def test_extension_unlimited_over_the_api() -> None:
+    # The pool cap is unenforced (rulesets.ENFORCE_EXTENSION_LIMIT, off since
+    # 2026-08-13) — a third call is granted where it used to be refused. A
+    # call with no countdown running is still refused: there is nothing to
+    # extend, and the denial tone is the answer to a misheard verbal call.
     with make_client() as client:
         client.post("/api/start")
-        assert client.post("/api/extension").json() == {"ok": True, "accepted": True}
-        assert client.post("/api/extension").json()["accepted"] is True  # pool of 2
+        for _ in range(3):
+            assert client.post("/api/extension").json() == {"ok": True, "accepted": True}
+        client.post("/api/pause")
         assert client.post("/api/extension").json()["accepted"] is False
 
 
@@ -107,8 +115,10 @@ def test_extension_cues_the_overlay_to_announce_it() -> None:
     asyncio.run(hub.start())
     assert asyncio.run(hub.extension()) is True
     assert ws.messages[-1]["cue"] == "extension"
-    asyncio.run(hub.extension())  # second of the rack's two
-    assert asyncio.run(hub.extension()) is False  # pool spent
+    asyncio.run(hub.extension())  # granted again — the pool is unlimited now
+    assert ws.messages[-1]["cue"] == "extension"
+    asyncio.run(hub.pause())  # no countdown — nothing to extend
+    assert asyncio.run(hub.extension()) is False
     assert ws.messages[-1]["cue"] == "extension_denied"
 
 
@@ -124,8 +134,9 @@ def test_only_a_granted_extension_deafens_the_mic() -> None:
     asyncio.run(hub.start())
     asyncio.run(hub.extension())
     assert len(muted) == 1
-    asyncio.run(hub.extension())  # second grant of the rack: announced, so muted again
+    asyncio.run(hub.extension())  # every grant is announced, so muted again
     assert len(muted) == 2
+    asyncio.run(hub.pause())
     asyncio.run(hub.extension())  # refused — a denial speaks no words to hear
     assert len(muted) == 2
 
@@ -785,6 +796,45 @@ def test_no_clock_ignores_vision_but_still_journals_it(tmp_path: Path) -> None:
     kinds = [line.split('"kind": "')[1].split('"')[0] for line in journal.read_text().splitlines()]
     assert "vision_shot_taken_no_clock" in kinds
     assert "vision_balls_settled_no_clock" in kinds
+
+
+def test_freestyle_parks_the_clock_but_keeps_the_match(tmp_path: Path) -> None:
+    # The untimed ruleset (2026-08-13): vision is journaled but never clocked
+    # (same gate as `no_clock` mode), operator keys have nothing to start —
+    # and it is still a *match*: score, racks, mode all stay.
+    journal = tmp_path / "session.jsonl"
+    app = create_app(journal_path=journal)
+    hub: Hub = app.state.hub
+    with TestClient(app) as client:
+        client.post("/api/ruleset/freestyle")
+        client.post("/api/start")  # a stray phone press must not start a countdown
+        client.post("/api/restart")
+        asyncio.run(hub.shot_taken(t=1.0, speed_mms=4000.0))
+        asyncio.run(hub.balls_settled(t=2.0))
+        snap = client.get("/api/state").json()
+        assert snap["state"] == "IDLE"
+        assert snap["timed"] is False
+        assert snap["mode"] == "match"
+        client.post("/api/score/p1/increment")
+        assert client.get("/api/score").json()["p1"]["score"] == 1
+    kinds = [line.split('"kind": "')[1].split('"')[0] for line in journal.read_text().splitlines()]
+    assert "vision_shot_taken_no_clock" in kinds
+    assert "vision_balls_settled_no_clock" in kinds
+
+
+def test_ruleset_listing_carries_details_for_the_picker() -> None:
+    # The control page captions the pick from these instead of hardcoding the
+    # rulebook (2026-08-13).
+    with make_client() as client:
+        listing = client.get("/api/rulesets").json()
+        assert listing["available"][-1] == "freestyle"
+        assert listing["details"]["wnt_9ball"] == {
+            "base_seconds": 30,
+            "first_shot_seconds": 60,
+            "extension_seconds": 30,
+            "timed": True,
+        }
+        assert listing["details"]["freestyle"]["timed"] is False
 
 
 def test_both_replay_anchors_are_null_until_something_happens() -> None:
@@ -1569,6 +1619,37 @@ def test_create_build_and_load_a_match() -> None:
         state = client.get("/api/state").json()["bracket"]
         assert state["match"]["header"] == "Match 1 · A Side · Race to 5"
         assert state["armed"] is None
+
+
+def test_match_clear_resets_the_score_and_archives_the_bracket(tmp_path: Path) -> None:
+    # The deck's Session hold calls this on the way down (2026-08-13): the
+    # next session must come up on PLAYER 1 / PLAYER 2, and an unfinished
+    # tournament must be reopenable from "Load past bracket".
+    app = create_app(archive_dir=tmp_path)
+    with TestClient(app) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/result", json={"scores": [5, 2]})
+        out = client.post("/api/match/clear").json()
+        assert out["ok"] is True
+        assert out["archived"] is not None and out["archived"].startswith("bracket-")
+        assert (tmp_path / out["archived"]).is_file()
+        assert client.get("/api/bracket").json()["bracket"] is None
+        assert client.get("/api/score").json() == {
+            "p1": {"name": "PLAYER 1", "score": 0, "fargo": None, "target": None},
+            "p2": {"name": "PLAYER 2", "score": 0, "fargo": None, "target": None},
+            "race_to": None,
+        }
+
+
+def test_match_clear_without_a_bracket_still_clears_the_score() -> None:
+    with make_client() as client:
+        client.post("/api/score/config", json={"p1_name": "Steven", "race_to": 7})
+        client.post("/api/score/p1/increment")
+        assert client.post("/api/match/clear").json() == {"ok": True, "archived": None}
+        score = client.get("/api/score").json()
+        assert score["p1"]["name"] == "PLAYER 1"
+        assert score["p1"]["score"] == 0
+        assert score["race_to"] is None
 
 
 def test_an_estimated_rating_seeds_but_is_not_shown_as_fargo() -> None:

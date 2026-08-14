@@ -1,5 +1,7 @@
 """Shot-clock state machine — behavior locked to docs/design.md §2.1."""
 
+import pytest
+
 from cueclock.clock import (
     MODES,
     RULESETS,
@@ -89,7 +91,24 @@ def test_extension_accepted_only_in_running_and_grace() -> None:
     assert snap.time == 44  # 30 - 1 + 15
 
 
-def test_extension_pool_is_per_rack() -> None:
+def test_extension_pool_unlimited_while_unenforced() -> None:
+    # ENFORCE_EXTENSION_LIMIT is off (2026-08-13): the verbal extension can
+    # mishear table-side talk, and against an unlimited pool a false grant
+    # costs nothing instead of burning a real one mid-rack. Every call over a
+    # live countdown is granted; the snapshot hides the pool so no surface
+    # draws a count that cannot run out.
+    clock = make_clock()
+    clock.start(now=0.0)
+    for _ in range(5):
+        assert clock.extension()
+    assert clock.extensions_used == 5
+    assert clock.snapshot().extensions_allowed == 0
+
+
+def test_extension_pool_is_per_rack_when_enforced(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The rulebook pool, behind the feature flag. `state.py` holds the binding
+    # `extension()` reads, so that is what flips here.
+    monkeypatch.setattr("cueclock.clock.state.ENFORCE_EXTENSION_LIMIT", True)
     clock = make_clock()
     clock.start(now=0.0)
     assert clock.extension()
@@ -101,6 +120,7 @@ def test_extension_pool_is_per_rack() -> None:
     clock.new_rack(now=2.0)  # only a new rack refills the pool
     clock.start(now=2.0)
     assert clock.extension()
+    assert clock.snapshot().extensions_allowed == 2
 
 
 def test_extension_in_grace_resumes_running() -> None:
@@ -176,6 +196,7 @@ def test_rulesets_validated_values() -> None:
         "ultimate_pool_8ball",
         "ultimate_pool_8ball_final10",
         "wnt_9ball",
+        "freestyle",
     }
     default = RULESETS["ultimate_pool_8ball"]
     # extensions_per_frame is the whole-rack pool: one per player, two players.
@@ -186,6 +207,9 @@ def test_rulesets_validated_values() -> None:
     # WNT Event Rules §5: 30 s shot, 60 s first shot, 30 s extension;
     # the pool of 2 is one-per-player, self-policed (no turn tracking).
     assert RULESETS["wnt_9ball"] == Ruleset("wnt_9ball", 30, 60, 30, 2, 2.0, 2.0)
+    # Freestyle (2026-08-13): match play with no shot clock. The clock fields
+    # are inert while `timed` is False.
+    assert RULESETS["freestyle"] == Ruleset("freestyle", 30, 30, 0, 0, 2.0, 2.0, timed=False)
 
 
 def test_ruleset_aliases_resolve() -> None:
@@ -193,6 +217,28 @@ def test_ruleset_aliases_resolve() -> None:
     assert get_ruleset("ultimate_9ball") is RULESETS["wnt_9ball"]
     assert get_ruleset("matchroom_9ball") is RULESETS["wnt_9ball"]
     assert get_ruleset("ultimate_pool_8ball") is RULESETS["ultimate_pool_8ball"]
+
+
+def test_freestyle_never_runs() -> None:
+    # No shot clock at all: every operator key that starts a countdown is a
+    # no-op, so a stray press on the phone's Play tab cannot start one either.
+    # (Vision events are gated in the hub, same as `no_clock` mode.)
+    clock = make_clock("freestyle")
+    clock.start(now=0.0)
+    assert clock.state is State.IDLE
+    clock.restart(now=1.0)
+    assert clock.state is State.IDLE
+    clock.push(now=2.0)
+    assert clock.state is State.IDLE
+    assert not clock.extension()  # nothing running to extend
+    snap = clock.tick(now=10.0)
+    assert snap.state == "IDLE"
+    assert snap.timed is False
+    assert clock.tick(now=100.0).time == 30  # nothing ever drains
+
+
+def test_timed_rulesets_say_so_in_the_snapshot() -> None:
+    assert make_clock().snapshot().timed is True
 
 
 # ---------- rack context (WNT Event Rules §5, added 2026-07-31) ----------
@@ -232,7 +278,8 @@ def test_8ball_behavior_unchanged_by_rack_context() -> None:
     assert clock.state is State.RUNNING
 
 
-def test_wnt_extension_pool_of_two_per_rack() -> None:
+def test_wnt_extension_pool_of_two_per_rack(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("cueclock.clock.state.ENFORCE_EXTENSION_LIMIT", True)
     clock = make_clock("wnt_9ball")
     clock.new_rack(now=0.0)
     clock.start(now=0.0)
