@@ -1030,6 +1030,12 @@ class Bracket:
             "state": "finished" if self.finished else "live",
             "name": self.name,
             "champion": self.champion(),
+            # Matches that are over, however they got there. The deck watches
+            # this for *a result landed* — which is not the same as `revision`,
+            # since that moves for loads and edits and race changes too, and a
+            # wall that flips to the bracket every time somebody taps a stepper
+            # is a wall nobody can play under.
+            "decided": sum(1 for m in self.matches if m.played),
             "match": None,
             "armed": None,
         }

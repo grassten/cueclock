@@ -180,6 +180,8 @@ def test_html_pages_served() -> None:
         # is gone rather than deprecated: a route still answering would let a
         # stale OBS source look like it still worked.
         assert "bar-p1-score" in page and "bar-race" in page
+        # Handicapped play draws each target under its own score (#43).
+        assert "bar-p1-goal" in page and "bar-p2-goal" in page
         assert client.get("/score").status_code == 404
         assert "Shot Clock Control" in client.get("/control").text
 
@@ -280,6 +282,57 @@ def test_score_increment_decrement_floor_and_404s() -> None:
         assert client.post("/api/score/p2/decrement").json()["score"]["p2"]["score"] == 0  # floors
         assert client.post("/api/score/p3/increment").status_code == 404
         assert client.post("/api/score/p1/double").status_code == 404
+
+
+def test_a_score_stops_at_the_race() -> None:
+    """A race to five is over at five, so a sixth is a finger, not a score.
+
+    Found live: a race to 5 with a player sitting on 7. Every press past the
+    target also buries the confirm the deck is already offering, which is the
+    one thing that should be happening at that moment.
+    """
+    with make_client() as client:
+        client.post("/api/score/config", json={"race_to": 3})
+        for _ in range(5):
+            client.post("/api/score/p1/increment")
+        assert client.get("/api/score").json()["p1"]["score"] == 3
+        # Taking one back still works, from the cap like anywhere else.
+        assert client.post("/api/score/p1/decrement").json()["score"]["p1"]["score"] == 2
+
+
+def test_a_handicapped_race_caps_each_player_at_their_own_target() -> None:
+    with make_client() as client:
+        client.post("/api/score/config", json={"p1_target": 7, "p2_target": 2})
+        for _ in range(9):
+            client.post("/api/score/p1/increment")
+            client.post("/api/score/p2/increment")
+        score = client.get("/api/score").json()
+        assert (score["p1"]["score"], score["p2"]["score"]) == (7, 2)
+
+
+def test_with_no_race_at_all_nothing_caps() -> None:
+    """Casual knocking about: no target, no race, so the score just counts."""
+    with make_client() as client:
+        for _ in range(12):
+            client.post("/api/score/p1/increment")
+        assert client.get("/api/score").json()["p1"]["score"] == 12
+
+
+def test_a_race_that_shortens_under_a_score_leaves_it_alone() -> None:
+    """The cap is a rule about a *press*, not a rewrite of what is on the wall.
+
+    Both directions matter. Plus must never *lower* a score to enforce a race
+    it was not played under, and minus must stay worth exactly one point —
+    clamping it too would snap a six under a race to four down to four in a
+    single press, a correction nobody asked for.
+    """
+    with make_client() as client:
+        for _ in range(6):
+            client.post("/api/score/p1/increment")
+        client.post("/api/score/config", json={"race_to": 4})
+        assert client.get("/api/score").json()["p1"]["score"] == 6
+        assert client.post("/api/score/p1/increment").json()["score"]["p1"]["score"] == 6
+        assert client.post("/api/score/p1/decrement").json()["score"]["p1"]["score"] == 5
 
 
 def test_score_config_and_reset() -> None:

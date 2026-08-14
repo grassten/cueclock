@@ -434,6 +434,29 @@
         /* Casual play has no target, so it says nothing at all. */
         body.bar .scores.no-race .race { display: none; }
 
+        /* Handicapped: each player's own target, under their own score and on
+           their own side of the tally rule. Right-aligned on the left, left-
+           aligned on the right — the same x the digits above them use, so the
+           target hangs off the score it belongs to rather than floating in the
+           gap. The centre line stands down while these are up: the same fact
+           in two places is how a bar starts contradicting itself. */
+        body.bar .goal {
+            display: none;
+            position: absolute;
+            top: 112px;
+            transform: translateY(-50%);
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 2.5px;
+            color: var(--slate);
+            opacity: 0.86;
+            white-space: nowrap;
+        }
+        body.bar .goal.p1 { right: 840px; }  /* right edge at x=494, with the digits */
+        body.bar .goal.p2 { left: 550px; }
+        body.bar .scores.split-race .goal { display: block; }
+        body.bar .scores.split-race .race { display: none; }
+
         /* ---- the solo panel (#30): run_out / no_clock ----
            Both are single-player, so a two-player score is noise there; the
            same area instead carries what a solo session actually generates —
@@ -515,6 +538,9 @@
             <div class="pname right"><span id="bar-p2-name"></span></div>
             <div class="pfargo right empty" id="bar-p2-fargo-row"><span class="flabel">FARGO</span><span class="fnum" id="bar-p2-fargo"></span></div>
             <div class="race" id="bar-race"></div>
+            <!-- Only drawn when the two targets differ; see setRace(). -->
+            <div class="goal p1" id="bar-p1-goal"></div>
+            <div class="goal p2" id="bar-p2-goal"></div>
         </div>
 
         <!-- The solo panel (#30). Three fixed slots; the n2/n3 class on the
@@ -811,21 +837,31 @@
             setRace(sc);
         }
 
-        // The race line. Casual play has one target or none, and says so in the
-        // centre as it always has. A handicapped bracket match (issue #43) gives
-        // each player their own — a 563 against a 240 races 7 to 2 — so a single
-        // centre number would be a lie about at least one of them, and the line
-        // carries both. Equal targets collapse back to the familiar wording:
-        // that is what a bracket with handicapping off looks like, and it should
-        // not read as something new.
+        // The race. **One fact goes in the centre; two facts go under the
+        // players they belong to.** Casual play has a single target or none and
+        // says so in the middle as it always has. A handicapped bracket match
+        // (issue #43) gives each player their own — a 563 against a 240 races 7
+        // to 2 — and the centre line used to carry both as `3 OF 5 · 2 OF 4`,
+        // which said each score twice (they are already 48 px above it) and
+        // made four numbers in a row that had to be read left to right to work
+        // out who was playing to what. Each target now sits under its own
+        // score, on the side of the tally rule that player owns, so there is
+        // nothing to map and nothing repeated.
+        //
+        // Equal targets collapse back to the familiar centre line: that is what
+        // a bracket with handicapping off looks like, and printing `TO 5` twice
+        // would make one fact look like two.
         function setRace(sc) {
             const t1 = sc.p1.target, t2 = sc.p2.target;
             const paired = t1 != null && t2 != null;
+            const split = paired && t1 !== t2;
             scoresEl.classList.toggle('no-race', !paired && sc.race_to == null);
-            if (paired) {
-                raceEl.innerText = t1 === t2
-                    ? 'RACE TO ' + t1
-                    : `${sc.p1.score} OF ${t1} · ${sc.p2.score} OF ${t2}`;
+            scoresEl.classList.toggle('split-race', split);
+            if (split) {
+                document.getElementById('bar-p1-goal').innerText = 'TO ' + t1;
+                document.getElementById('bar-p2-goal').innerText = 'TO ' + t2;
+            } else if (paired) {
+                raceEl.innerText = 'RACE TO ' + t1;
             } else if (sc.race_to != null) {
                 raceEl.innerText = 'RACE TO ' + sc.race_to;
             }

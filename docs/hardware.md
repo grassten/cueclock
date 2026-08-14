@@ -213,9 +213,9 @@ actually runs — the original plan called them *Table* / *Clock*):
   page has no timeline to preserve and no pre-cut load, so reloading at the cut
   is the cheapest way to heal a source that first loaded while the server was
   down. The deck's scene key (2,3) switches to it and back, and a confirmed
-  result flips to it for 30 seconds and then returns by itself — except the last
-  one, where the champion keeps the wall (§C2, the confirm key); both only exist
-  while a bracket is loaded.
+  result flips to it for 30 seconds and then returns by itself, whether the
+  result came from the confirm key, a concession or a phone (§C2, the confirm
+  key); both only exist while a bracket is loaded.
   With none loaded the page says so rather than drawing an empty grid.
 - **Canvas**: standby card shown between sessions (still image, no cueclock
   sources).
@@ -391,7 +391,7 @@ three.
 | 3,2 | **New Rack** | `POST /api/rack` — you're not shooting, you're building the next rack: clock parks, extensions refill, shot count zeroes. One key for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `NEW RACK`, flashes `RACK` / `ERROR` | match, run out |
 | 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
 | 3,4 | **P2** | as P1 | `P2` over the score | match |
-| 3,5 | **Confirm** | Commit the armed bracket result (#43). One press, four effects: the result is written and both players routed, the next ready match loads at 0–0 with its own targets, `POST /api/rack` fires (a new match is a new rack), and the TV flips to the bracket so the update is on the wall while the next pair racks — **and comes back on its own after `bracket.DWELL_S` (30 s), or the instant the clock leaves IDLE.** The bracket scene carries no shot clock and no table, so a flip out that waits on somebody remembering the scene key is a match played with nothing on the wall. **The result that ends the tournament gets no dwell**: the server's answer to the confirm carries the champion, and when it does the bracket stays up until somebody takes it, because there is no next pair to rack for and a timer would end the evening on a shot of an empty table. Unarmed it is a label naming the loaded match; pressed unarmed it flashes `NOT YET` rather than swallowing the press | `MATCH 4`/`A SIDE` → `PRIYA`/`WINS 5-2`+`PRESS TO CONFIRM` on blue → `SAVING…`, flashes `SAVED`/`ERROR` | **bracket loaded**, match |
+| 3,5 | **Confirm** | Commit the armed bracket result (#43). One press, four effects: the result is written and both players routed, the next ready match loads at 0–0 with its own targets, `POST /api/rack` fires (a new match is a new rack), and the TV flips to the bracket so the update is on the wall while the next pair racks — **and comes back on its own after `bracket.DWELL_S` (30 s), or the instant the clock leaves IDLE.** The bracket scene carries no shot clock and no table, so a flip out that waits on somebody remembering the scene key is a match played with nothing on the wall. **The confirm key is not the only thing that flips it**: the deck watches the draw's count of decided matches, so a match conceded or a score reported from a phone puts the bracket up for the same 30 s — to the room it is the same event. (It watches that count and not `revision`, which also moves for loads, edits and race changes.) Unarmed it is a label naming the loaded match; pressed unarmed it flashes `NOT YET` rather than swallowing the press | `MATCH 4`/`A SIDE` → `PRIYA`/`WINS 5-2`+`PRESS TO CONFIRM` on blue → `SAVING…`, flashes `SAVED`/`ERROR` | **bracket loaded**, match |
 
 Before #43 this cell held **I shot** (`POST /api/groundtruth`, #19) from
 2026-08-02 until 2026-08-05, then stood empty. The key was correct in every

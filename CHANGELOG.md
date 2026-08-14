@@ -232,6 +232,51 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-13 (checkpoint 95 — #43: what the first live hour said):** Five
+  things from Steven driving a real bracket, four of them found at the table.
+
+  **The score kept counting past the race** — a race to five with a player
+  sitting on seven. A press past the target is a finger, not a score, and every
+  one of them buries the confirm the deck is already offering. Increments cap at
+  that player's target (at `race_to` in casual play, at nothing when neither is
+  set). The cap is on the way **up** only: clamping a decrement would snap a six
+  under a race to four down to four in one press, and minus has to stay worth
+  exactly one point wherever it is pressed. A score already above its race is
+  held rather than pulled down, because plus must never *lower* a score.
+
+  **Conceding a match did not move the wall.** The scene flip lived entirely in
+  the confirm key, so a result that arrived any other way — a concession, a
+  score reported from a phone — left the TV on the play scene. The deck now
+  watches the draw's count of **decided matches** and does the same thing for
+  any of them, because to the room it is the same event. It watches that count
+  and not `revision` deliberately: revision also moves for loads, edits and race
+  changes, and a wall that flips every time somebody taps a stepper is a wall
+  nobody can play under. The first count a loop sees is never news, so a deck
+  restarted mid-event does not flip over results already in the draw.
+
+  **The champion plate is gone**, one day old: it did not show at the table, and
+  rather than debug a thing nobody had asked for twice, the header line that
+  preceded it is back. The wall after a final is the draw with the winner's row
+  already reading as won.
+
+  **The race line stops saying the score twice.** `3 OF 5 · 2 OF 4` repeated
+  both scores — they are 48 px above it — and made four numbers in a row that
+  had to be read left to right to work out who was playing to what. One fact
+  goes in the centre; two facts go under the players they belong to, so a
+  handicapped match draws `TO 5` and `TO 4` beneath each player's own score, on
+  their own side of the tally rule. Equal targets collapse back to `RACE TO n`,
+  because printing it twice would make one fact look like two. Chosen from four
+  rendered options at the bar's real geometry.
+
+  **And a note on how this went wrong.** Two full corpus batteries were run
+  while `cueclock run` was live, and `test_deck_loop.py` leaked its `_loop`
+  threads — a leaked loop outlives its test and still resolves `bracket.hide`
+  through whatever the next test patched in, so **the suite was firing real
+  `obs-websocket` scene switches at the wall** while Steven was at the table.
+  Both fixtures now stop their loop through one shared event. The rule that
+  already existed (no batteries while a session is live) applies to anything
+  driving `_loop` as much as to the corpus.
+
 - **2026-08-13 (checkpoint 94 — #43: the night before the tournament):** Three
   of the things #43 parked for evidence from a real event, built on the eve of
   one, and the fourth settled as a decision instead of as code.
