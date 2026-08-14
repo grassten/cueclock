@@ -167,6 +167,14 @@
            there to be resumed rather than started again at 0-0. */
         .matchlist .tag.paused { color: var(--accent); }
 
+        /* The LAN address, so the tournament director stops dictating an IP to
+           one relative at a time. The wall carries the same code — this copy is
+           for handing a phone to somebody standing next to you. */
+        .joinrow { display: flex; gap: 14px; align-items: center; }
+        .joinrow img { width: 96px; height: 96px; flex: none; background: #fff;
+                       border-radius: 8px; padding: 4px; }
+        .joinurl { font-size: 15px; font-weight: 700; word-break: break-all; margin-bottom: 4px; }
+
         .plist { display: flex; flex-direction: column; gap: 10px; }
         .prow { display: flex; gap: 8px; align-items: center; }
         .prow input.pname { flex: 1; min-width: 0; }
@@ -328,6 +336,12 @@
                     <button class="primary" id="report-btn" onclick="reportResult()">Report result</button>
                     <button class="ghost" onclick="toggleSwitcher()">Switch match</button>
                     <div class="matchlist" id="match-list" hidden></div>
+                    <!-- One match given up, the rest of the tournament kept.
+                         Two-step on purpose: it hands a match away, and which
+                         player did the conceding is half of what it means, so
+                         the button opens a choice made by name. -->
+                    <button class="ghost" id="forfeit-btn" onclick="toggleForfeit()">Forfeit match</button>
+                    <div class="matchlist" id="forfeit-pick" hidden></div>
                 </div>
             </section>
     </main>
@@ -500,6 +514,19 @@
                     scored that nobody played, and it undoes if they come back.</p>
 
                 <div class="matchlist" id="bracket-all"></div>
+                <p class="hint">Tap a played match to clear its result, or a
+                    conceded one to put it back. Both are refused behind a match
+                    that has been played &mdash; clear that one first.</p>
+
+                <h2>Scoring on phones</h2>
+                <div class="joinrow" id="join-row">
+                    <img id="join-qr" alt="" hidden>
+                    <div>
+                        <div class="joinurl" id="join-url">&mdash;</div>
+                        <p class="hint" id="join-hint">Same wifi, no app, no sign-in.</p>
+                    </div>
+                </div>
+
                 <button class="ghost" onclick="archiveBracket()">Save &amp; archive</button>
                 <div class="danger-row"><button class="danger" onclick="clearBracket()">Clear bracket</button></div>
                 <p class="hint" id="bracket-error"></p>
@@ -718,7 +745,10 @@
     let bracketRev = -1;        // the revision the fetched copy is at
     let armed = null;           // who has reached their target, per the server
     let liveMatchId = null;     // the loaded match, straight off the broadcast
+    let liveMatchNames = [];    // its two players, in slot order
     let switcherOpen = false;
+    let forfeitOpen = false;
+    let forfeitFor = null;      // the match the concede buttons were drawn for
     // Only the player list is held in JS, because it is a list of objects with
     // no DOM to read it back from. Everything else on the build form — name,
     // races, handicap, seeding — is read out of its own control at build time.
@@ -751,6 +781,7 @@
         // From the broadcast, not the fetched draw: the two are the same thing
         // a moment apart, and this is the one that is never stale.
         liveMatchId = loaded ? summary.match.id : null;
+        liveMatchNames = loaded ? summary.match.names : [];
         // The panel follows the *bracket*, not the loaded match: with a bracket
         // built and nothing loaded, Switch match is the only way to start one,
         // so hiding it there is a dead end.
@@ -758,7 +789,17 @@
         header.hidden = !loaded;
         document.getElementById('match-routes').hidden = !loaded;
         document.getElementById('report-btn').hidden = !loaded;
-        if (!loaded) { document.getElementById('race-chip').hidden = false; return; }
+        document.getElementById('forfeit-btn').hidden = !loaded;
+        if (!loaded) {
+            closeForfeit();
+            document.getElementById('race-chip').hidden = false;
+            return;
+        }
+        // The names are in the buttons, so a match change has to redraw them or
+        // the open list would offer to concede on behalf of the last pair. Only
+        // on a *change*, though: this runs ten times a second, and rebuilding
+        // the buttons under a finger is how a tap goes missing.
+        if (forfeitOpen && forfeitFor !== liveMatchId) renderForfeitPick();
         header.innerText = summary.match.header;
         const routes = summary.match.routes;
         const parts = [];
@@ -802,6 +843,51 @@
         switcherOpen = !switcherOpen;
         document.getElementById('match-list').hidden = !switcherOpen;
         if (switcherOpen) renderSwitcher();
+    }
+
+    // ---- Forfeit: one match given up, the rest of the tournament kept ----
+    // A withdrawal is this for somebody's whole draw, and it was the only
+    // answer here for a while — but withdrawing and reinstating to concede one
+    // match concedes every other unplayed match of theirs on the way through,
+    // which on the B side is exactly where somebody has two more waiting.
+    function toggleForfeit() {
+        forfeitOpen = !forfeitOpen;
+        document.getElementById('forfeit-pick').hidden = !forfeitOpen;
+        if (forfeitOpen) renderForfeitPick();
+    }
+
+    function closeForfeit() {
+        forfeitOpen = false;
+        forfeitFor = null;
+        document.getElementById('forfeit-pick').hidden = true;
+    }
+
+    function renderForfeitPick() {
+        const host = document.getElementById('forfeit-pick');
+        host.innerHTML = '';
+        forfeitFor = liveMatchId;
+        if (liveMatchId == null) return;
+        liveMatchNames.forEach((name, slot) => {
+            const btn = document.createElement('button');
+            const who = document.createElement('span');
+            who.className = 'who';
+            who.innerText = `${name} concedes`;
+            const tag = document.createElement('span');
+            tag.className = 'tag forfeit';
+            tag.innerText = 'Forfeit';
+            btn.append(who, tag);
+            btn.onclick = async () => {
+                const other = liveMatchNames[1 - slot];
+                if (!confirm(`${name} concedes this match to ${other}? `
+                    + `Nothing is scored, and the rest of ${name}'s matches stand.`)) return;
+                const res = await postJson(
+                    `/api/bracket/match/${liveMatchId}/concede`, { slot });
+                if (!res.ok) alert(res.error);
+                closeForfeit();
+                refreshBracket();
+            };
+            host.appendChild(btn);
+        });
     }
 
     // Only matches with both players known can be played, so the list says which
@@ -873,15 +959,50 @@
         host.innerHTML = '';
         for (const m of bracket.matches) {
             host.appendChild(matchRow(m, async (match) => {
-                if (!confirm(
-                    `Clear the result of ${match.title}? The score stays, so it can be `
-                    + `reported again without re-entering it.`)) return;
+                // Two different corrections through one row, because to the
+                // person holding the phone they are the same thought: this
+                // match is not what the bracket says it is. A conceded match
+                // has no result to clear, so it is put back the way it was
+                // given up — which is also why a forfeit from a *withdrawal*
+                // is not tappable here: that one undoes at the player.
+                const undo = match.conceded != null;
+                const ask = undo
+                    ? `Put ${match.title} back? It becomes playable again.`
+                    : `Clear the result of ${match.title}? The score stays, so it can be `
+                      + `reported again without re-entering it.`;
+                if (!confirm(ask)) return;
                 const res = await postJson(
-                    `/api/bracket/match/${match.id}/result`, null, 'DELETE');
+                    `/api/bracket/match/${match.id}/${undo ? 'concede' : 'result'}`,
+                    null, 'DELETE');
                 document.getElementById('bracket-error').innerText = res.ok ? '' : res.error;
                 refreshBracket();
-            }, (match) => match.status === 'played'));
+            }, (match) => match.status === 'played' || match.conceded != null));
         }
+        loadJoin();
+    }
+
+    // The LAN address, fetched once and kept — it cannot change while the
+    // server is up, and this runs off every bracket render. The wall carries
+    // the same code; this copy is for the phone in your hand.
+    let joinFetched = false;
+    async function loadJoin() {
+        if (joinFetched) return;
+        joinFetched = true;
+        let data = null;
+        try {
+            data = await fetch('/api/lan').then(r => r.json());
+        } catch (e) { joinFetched = false; return; }
+        const url = document.getElementById('join-url');
+        if (!data || !data.url) {
+            url.innerText = 'No network';
+            document.getElementById('join-hint').innerText =
+                'This Mac has no address on the LAN, so phones have nowhere to reach it.';
+            return;
+        }
+        const img = document.getElementById('join-qr');
+        img.src = data.qr;
+        img.hidden = false;
+        url.innerText = data.url.replace(/^https?:\/\//, '');
     }
 
     // A withdrawal is a bye that happens mid-tournament: it concedes every

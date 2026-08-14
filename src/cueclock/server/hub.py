@@ -1021,6 +1021,26 @@ class Hub:
         await self._follow_the_draw(bracket)
         return player
 
+    async def concede_match(self, match_id: int, body: Mapping[str, object] | None) -> Match:
+        """One match given up by one player, the rest of their draw kept.
+
+        The same two steps a withdrawal takes, because it is the same act at the
+        scale of a single match: park whatever is on the wall, then follow the
+        draw to a match somebody can actually play. No ``slot`` undoes it.
+        """
+        bracket = self.require_bracket()
+        slot = _as_opt_int((body or {}).get("slot"))
+        self._park_loaded(bracket)
+        match = bracket.concede(match_id, slot)
+        who: str | None = None
+        if slot is not None:
+            index = match.slots[slot]
+            if isinstance(index, int) and index >= 0:
+                who = bracket.players[index].name
+        self._log("bracket_conceded", match=match.id, slot=slot, player=who)
+        await self._follow_the_draw(bracket)
+        return match
+
     async def set_bracket_races(self, body: Mapping[str, object]) -> Bracket:
         """Change the base races mid-tournament — unplayed matches only."""
         bracket = self.require_bracket()

@@ -205,6 +205,12 @@ class Match:
     # "bye" or "forfeit": won by default rather than played. Derived on every
     # resolve and never stored, which is what makes a withdrawal reversible.
     walkover: str | None = None
+    # The slot that gave this one match up, for somebody who concedes a match
+    # and keeps playing (a withdrawal is the whole rest of their tournament).
+    # Stored, unlike the walkover it produces: it is a fact about this match
+    # that nothing else in the draw implies, where a bye follows from the
+    # positions and a forfeit-by-withdrawal from `Player.withdrawn`.
+    conceded: int | None = None
     # Hand-set race targets. Kept apart from `targets` because `targets` is
     # recomputed from the handicap chart on every resolve — before this the
     # override survived until the next result landed and then silently
@@ -505,24 +511,27 @@ class Bracket:
         for m in sorted(self.matches, key=lambda m: m.id):
             for i, ref in enumerate(m.src):
                 m.slots[i] = self._resolve_ref(ref)
-            self._auto_advance(m)
+            # Before advancing, not after: a concession is one of the things a
+            # stale entry can be, and auto-advance has to be able to trust it.
             self._invalidate_stale_entries(m)
+            self._auto_advance(m)
             self._set_targets(m)
 
     def _invalidate_stale_entries(self, m: Match) -> None:
-        """Forget a score or a hand-set race that belongs to a different pairing.
+        """Forget a score, a hand-set race or a concession from another pairing.
 
-        Both are entered by a person against the two players in the box at the
-        time. Correcting a result upstream can put somebody else there, and a
-        3-2 left over from the previous pair is worse than no score at all.
-        A contested match is exempt because it *is* the record of what happened
-        — and cannot be reached by an upstream edit anyway, which is refused
-        while it stands.
+        All three are entered by a person against the two players in the box at
+        the time. Correcting a result upstream can put somebody else there, and
+        a 3-2 left over from the previous pair is worse than no score at all —
+        a concession worse still, since it would hand a match away on behalf of
+        somebody who was never in it. A contested match is exempt because it
+        *is* the record of what happened — and cannot be reached by an upstream
+        edit anyway, which is refused while it stands.
         """
         if m.contested or m.entered_for == m.slots:
             return
         m.scores = [0, 0]
-        m.override, m.entered_for = [None, None], None
+        m.override, m.entered_for, m.conceded = [None, None], None, None
 
     def _resolve_ref(self, ref: Ref) -> int | None:
         if ref.kind == "position":
@@ -535,14 +544,15 @@ class Bracket:
         return feeder.slots[slot]
 
     def _auto_advance(self, m: Match) -> None:
-        """A match nobody has to play: a bye, or an opponent who has gone home.
+        """A match nobody has to play: a bye, a player gone home, a concession.
 
-        Both cascade — the B-side match waiting on this one's loser receives a
-        walkover in turn — so this is one rule applied down the chain rather
-        than a special case per round. **A withdrawal is a bye that happens
-        mid-tournament**, which is the whole reason it is expressed here: it
-        needs no separate routing, no fabricated score, and no second way for
-        the draw to advance somebody.
+        All three cascade — the B-side match waiting on this one's loser
+        receives a walkover in turn — so this is one rule applied down the chain
+        rather than a special case per round. **A withdrawal is a bye that
+        happens mid-tournament**, which is the whole reason it is expressed
+        here: it needs no separate routing, no fabricated score, and no second
+        way for the draw to advance somebody. A concession is the same act
+        narrowed to one match.
         """
         if m.played or (m.conditional and not self._second_final_needed()):
             return
@@ -562,6 +572,12 @@ class Bracket:
                 # draw stalls on a match neither player is here for; whoever it
                 # is forfeits again one round later.
                 m.winner, m.walkover = 0, "forfeit"
+            elif m.conceded is not None:
+                # Checked last so that a withdrawal outranks it, which is the
+                # rule that keeps the draw moving: somebody who has gone home
+                # cannot be handed a win by their opponent conceding, or the
+                # match below would wait on a player who is not in the room.
+                m.winner, m.walkover = 1 - m.conceded, "forfeit"
 
     def _clear_orphan_results(self) -> None:
         """Drop results whose players no longer exist (an edit re-drew them)."""
@@ -617,7 +633,7 @@ class Bracket:
         if not m.ready:
             raise BracketError(f"Match {m.id} does not have both players yet")
         if m.walkover == "forfeit":
-            raise BracketError(f"Match {m.id} is a forfeit — reinstate the player to play it")
+            raise BracketError(f"Match {m.id} is a forfeit — {self._forfeit_fix(m)} to play it")
         if m.walkover == "bye":
             raise BracketError(f"Match {m.id} is a bye — there is nobody to play")
         if m.conditional and not self._second_final_needed():
@@ -677,7 +693,8 @@ class Bracket:
         The other half of the refusal above: a correction is walked back one
         match at a time, and each step is a deliberate act. A walkover is not a
         result and cannot be cleared — a bye is a fact about the draw, and a
-        forfeit is undone by reinstating the player who withdrew.
+        forfeit is undone where it was made: at the player who withdrew, or at
+        the match somebody conceded (:meth:`_forfeit_fix` names which).
 
         **The score is kept.** Clearing says "this result is wrong", not "this
         match never happened", and the usual reason to clear Match 5 is to fix
@@ -688,6 +705,10 @@ class Bracket:
         m = self.match(match_id)
         if not m.played:
             return m
+        if m.walkover == "forfeit":
+            raise BracketError(
+                f"Match {m.id} was a forfeit, not a result — {self._forfeit_fix(m)} instead"
+            )
         if m.walkover is not None:
             raise BracketError(f"Match {m.id} was a {m.walkover}, not a result")
         self._refuse_if_downstream_played(m)
@@ -697,6 +718,21 @@ class Bracket:
         self._resolve()
         self._touch()
         return m
+
+    def _forfeit_fix(self, m: Match) -> str:
+        """The lever that undoes this forfeit, so a refusal can be acted on.
+
+        Two things produce one status, and they are undone in different places:
+        a withdrawal at the player, a concession at the match. A withdrawal wins
+        the naming for the same reason it wins the match (:meth:`_auto_advance`)
+        — while somebody in the box has gone home, taking the concession back
+        would not make the match playable, and a refusal that sends you to a
+        button that changes nothing is worse than no refusal at all.
+        """
+        gone = any(isinstance(s, int) and s != BYE and self.players[s].withdrawn for s in m.slots)
+        if m.conceded is not None and not gone:
+            return "take the concession back"
+        return "reinstate the player"
 
     def _refuse_if_downstream_played(self, m: Match) -> None:
         blocker = self._played_downstream(m)
@@ -810,6 +846,46 @@ class Bracket:
         self._resolve()
         self._touch()
         return self.players[index]
+
+    def concede(self, match_id: int, slot: int | None) -> Match:
+        """Give up one match without giving up the tournament.
+
+        A withdrawal is the whole rest of somebody's draw; this is the same act
+        narrowed to a single match, for the cousin who has had enough of the B
+        side but is staying to play the final. Withdraw-then-reinstate covers it
+        in two presses and was the answer for a while, but it concedes every
+        *other* unplayed match of theirs in between — so the two presses are
+        only equivalent when nothing else of theirs is waiting, which on the B
+        side is exactly when it is not.
+
+        Stored against the pairing it was entered for, so a correction upstream
+        that puts different players in the box throws it away like any other
+        entry. ``slot=None`` undoes it, and is the only way back: a concession
+        is not a result, so it cannot be cleared as one.
+        """
+        m = self.match(match_id)
+        if slot is not None and slot not in (0, 1):
+            raise BracketError("a concession names one of the two players")
+        if m.conditional and not self._second_final_needed():
+            raise BracketError("the second final is only played if the B side wins the final")
+        if m.contested:
+            raise BracketError(f"Match {m.id} has already been played — clear its result first")
+        if not m.ready:
+            raise BracketError(f"Match {m.id} does not have both players yet")
+        if slot is not None and any(self.players[s].withdrawn for s in m.slots if s is not None):
+            raise BracketError(f"Match {m.id} is already a forfeit — somebody in it has withdrawn")
+        # Both directions: conceding routes a different player onward, and so
+        # does taking it back, so neither may reach behind a played match.
+        self._refuse_if_downstream_played(m)
+        m.entered_for = list(m.slots)
+        m.conceded = slot
+        if slot is not None and self.loaded == m.id:
+            # It is not going to be played, so it has no business being the
+            # match the score keys are keeping.
+            self.loaded = None
+        self._resolve()
+        self._touch()
+        return m
 
     def park(self, match_id: int, scores: tuple[int, int]) -> None:
         """Keep an unfinished match's score with the match it belongs to.
@@ -928,6 +1004,10 @@ class Bracket:
                     "title": m.title(),
                     "conditional": m.conditional,
                     "status": self.status(m),
+                    # Which slot gave it up, so the page can tell a conceded
+                    # match from one forfeited by a withdrawal — they are undone
+                    # by different levers and it must offer the right one.
+                    "conceded": m.conceded,
                     "base_race": self.base_race(m),
                     "routes": self.routes(m),
                     "p1": self._slot_dict(m, 0, live_scores if m.id == self.loaded else None),
@@ -1012,8 +1092,12 @@ class Bracket:
         a forfeit from ``Player.withdrawn``, so writing either down would only
         create a way for a reloaded bracket to hold a concession that the draw
         no longer agrees with — and would make a withdrawal irreversible across
-        a restart. Scores ride along even for unplayed matches, because a parked
-        or cleared scoreline is exactly the thing a restart must not lose.
+        a restart. **A per-match concession is the one walkover that is written
+        down**, because nothing else in the draw implies it; what is stored is
+        who gave the match up, never the win it produces, so it is re-derived on
+        load like every other walkover and stays just as reversible. Scores ride
+        along even for unplayed matches, because a parked or cleared scoreline
+        is exactly the thing a restart must not lose.
         """
         return {
             "name": self.name,
@@ -1028,14 +1112,17 @@ class Bracket:
             "results": [
                 {
                     "id": m.id,
-                    "winner": m.winner,
+                    # Never the derived half: a walkover's winner is recomputed
+                    # from the concession (or the draw) on the way back in.
+                    "winner": None if m.walkover else m.winner,
+                    "conceded": m.conceded,
                     "scores": m.scores,
                     "targets": m.targets,
                     "override": m.override,
                     "entered_for": m.entered_for,
                 }
                 for m in self.matches
-                if m.walkover is None
+                if (m.walkover is None or m.conceded is not None)
                 and (m.winner is not None or m.scores != [0, 0] or m.targets != [None, None])
             ],
         }
@@ -1108,6 +1195,8 @@ def from_state(data: dict[str, Any], path: Path | None = None) -> Bracket:
             continue
         winner = record.get("winner")
         m.winner = int(winner) if winner in (0, 1) else None
+        conceded = record.get("conceded")
+        m.conceded = int(conceded) if conceded in (0, 1) else None
         scores = record.get("scores") or [0, 0]
         m.scores = [max(0, int(scores[0])), max(0, int(scores[1]))]
         targets = record.get("targets") or [None, None]

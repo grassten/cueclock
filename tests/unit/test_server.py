@@ -1739,6 +1739,58 @@ def test_clearing_an_unplayed_bracket_leaves_no_archive(tmp_path: Path) -> None:
         assert not list(tmp_path.glob("bracket-*.json"))
 
 
+def test_conceding_the_live_match_moves_the_wall_on_and_keeps_the_rest() -> None:
+    """A forfeit of one match, not of an evening.
+
+    The wall cannot be left naming a match nobody is going to play, and the
+    player who gave it up keeps every other match they have — which is the
+    whole difference from the withdrawal that used to be the only answer.
+    """
+    with TestClient(create_app()) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        live = client.get("/api/bracket").json()["bracket"]["loaded"]
+        res = client.post(f"/api/bracket/match/{live}/concede", json={"slot": 0})
+        assert res.json()["ok"] and res.json()["conceded"] == 0
+        after = client.get("/api/bracket").json()["bracket"]
+        conceded = next(m for m in after["matches"] if m["id"] == live)
+        assert conceded["status"] == "forfeit" and conceded["conceded"] == 0
+        assert (conceded["p1"]["score"], conceded["p2"]["score"]) == (0, 0)
+        assert after["loaded"] is not None and after["loaded"] != live
+        # Nobody withdrew: this is one match, and the B side is still theirs.
+        assert not any(p["withdrawn"] for p in after["players"])
+
+
+def test_a_conceded_match_is_put_back_by_undoing_it_not_by_clearing_it() -> None:
+    with TestClient(create_app()) as client:
+        client.post("/api/bracket", json=BRACKET_BODY)
+        client.post("/api/bracket/match/1/concede", json={"slot": 1})
+        refused = client.delete("/api/bracket/match/1/result")
+        assert refused.status_code == 409
+        assert "take the concession back" in refused.json()["error"]
+        assert client.delete("/api/bracket/match/1/concede").json()["ok"]
+        after = client.get("/api/bracket").json()["bracket"]
+        back = next(m for m in after["matches"] if m["id"] == 1)
+        assert back["status"] in ("ready", "live") and back["conceded"] is None
+
+
+def test_the_lan_address_is_the_one_a_phone_can_reach() -> None:
+    """Never the loopback the page was loaded over — that is the whole point.
+
+    OBS loads the bracket overlay as `127.0.0.1:8000`, so the page cannot work
+    the address out for itself; the port is right on any interface, and only
+    the host has to be discovered.
+    """
+    with make_client() as client:
+        res = client.get("/api/lan").json()
+        assert res["ok"]
+        if res["url"] is None:  # a machine with no route out (offline CI)
+            assert res["qr"] is None
+            return
+        assert not res["url"].startswith("http://127.")
+        assert res["url"].endswith("/control")
+        assert res["qr"].startswith("data:image/svg+xml")
+
+
 def test_races_can_be_shortened_mid_tournament() -> None:
     with TestClient(create_app()) as client:
         client.post("/api/bracket", json=BRACKET_BODY)
