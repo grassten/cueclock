@@ -21,8 +21,9 @@ from typing import Any
 
 import pytest
 
+from cueclock.deck import bracket as deck_bracket
 from cueclock.deck import client, daemon, replay
-from cueclock.deck.layout import LAYOUT, ReplayShow
+from cueclock.deck.layout import LAYOUT, BracketConfirm, ReplayShow, SceneToggle
 from cueclock.deck.session import SessionManager
 
 REPLAY_KEY = next(k for k in LAYOUT if isinstance(k.action, ReplayShow))
@@ -167,6 +168,113 @@ def test_a_press_during_a_replay_goes_back_to_live(rig: tuple[FakeDeck, Spy]) ->
     # The release must not arm a hold, and must not start anything.
     assert spy.spans == [replay.Span.SHOT]
     assert spy.stops == 1
+
+
+# ---------------------------------------------------------- the bracket dwell
+
+
+CONFIRM_KEY = next(k for k in LAYOUT if isinstance(k.action, BracketConfirm))
+SCENE_KEY = next(k for k in LAYOUT if isinstance(k.action, SceneToggle))
+DWELL_S = 0.4  # the real 20 s, compressed — the behaviour is the deadline, not its length
+
+
+class SceneSpy:
+    """Records what the loop did to the TV, and fakes OBS agreeing."""
+
+    def __init__(self) -> None:
+        self.shown: list[float | None] = []  # the dwell each show asked for
+        self.hidden = 0
+        self.up = threading.Event()
+
+    def show(self, dwell_s: float | None = None) -> deck_bracket.Showing:
+        self.shown.append(dwell_s)
+        self.up.set()
+        until = None if dwell_s is None else time.monotonic() + dwell_s
+        return deck_bracket.Showing(live_scene="Stream Detail", until=until)
+
+    def hide(self, showing: deck_bracket.Showing) -> bool:
+        self.hidden += 1
+        return True
+
+
+def _armed_payload(clock: str = "IDLE") -> dict[str, object]:
+    return {
+        "state": clock,
+        "mode": "match",
+        "bracket": {
+            "revision": 4,
+            "match": {"id": 4, "side": "A", "header": "Match 4 · A Side"},
+            "armed": {"slot": 0, "name": "Priya Shah", "score": 5, "other": 2},
+        },
+    }
+
+
+@pytest.fixture
+def tv(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A `_loop` with a bracket loaded, an armed result, and a fake TV."""
+    spy = SceneSpy()
+    clock = {"state": "IDLE"}
+    monkeypatch.setattr(deck_bracket, "show", spy.show)
+    monkeypatch.setattr(deck_bracket, "hide", spy.hide)
+    monkeypatch.setattr(deck_bracket, "DWELL_S", DWELL_S)
+    monkeypatch.setattr(client, "get_json", lambda *a, **k: _armed_payload(clock["state"]))
+    monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "{}"))
+    monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)  # the early return is only as quick as the poll
+
+    deck = FakeDeck()
+    threading.Thread(
+        target=daemon._loop, args=(deck, "http://x", SessionManager()), daemon=True
+    ).start()
+    deadline = time.monotonic() + SETTLE_S
+    while deck.callback is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert deck.callback is not None
+    return deck, spy, clock
+
+
+def test_a_confirmed_result_puts_the_bracket_up_and_takes_it_down_again(tv: Any) -> None:
+    """The flip out was automatic and the flip back was a human remembering.
+
+    That is a wall that can sit on the bracket through a live match — and the
+    bracket scene carries no shot clock and no table, so the one thing the rig
+    exists to show would be missing exactly when play resumes.
+    """
+    deck, spy, _clock = tv
+    deck.press(CONFIRM_KEY.index)
+    assert spy.up.wait(SETTLE_S), "the confirmed result never reached the wall"
+    assert spy.shown == [DWELL_S]
+    assert spy.hidden == 0  # the moment is still on the wall
+
+    deadline = time.monotonic() + DWELL_S + SETTLE_S
+    while spy.hidden == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert spy.hidden == 1
+
+
+def test_the_next_pair_breaking_takes_the_bracket_down_early(tv: Any) -> None:
+    """A rack that goes quickly must not be played under a bracket."""
+    deck, spy, clock = tv
+    deck.press(CONFIRM_KEY.index)
+    assert spy.up.wait(SETTLE_S)
+    started = time.monotonic()
+    clock["state"] = "RUNNING"  # somebody broke
+    deadline = started + DWELL_S + SETTLE_S
+    while spy.hidden == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert spy.hidden == 1
+    assert time.monotonic() - started < DWELL_S, "waited out the dwell with play under way"
+
+
+def test_a_scene_somebody_chose_stays_up(tv: Any) -> None:
+    """Only the confirm key's flip is on a timer: nobody chose to look at that
+    one. A key press is a decision, and a timer must not second-guess it."""
+    deck, spy, _clock = tv
+    deck.press(SCENE_KEY.index)
+    assert spy.up.wait(SETTLE_S)
+    assert spy.shown == [None]  # no dwell asked for
+    time.sleep(DWELL_S * 3)
+    assert spy.hidden == 0
 
 
 def test_events_are_ignored_while_the_server_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
