@@ -87,9 +87,11 @@ uv run python -m cueclock.cli deck
   badge — lives only in the Replay scene, which `scripts/setup_obs_replay.py`
   builds; never assemble it by hand), and `http://localhost:8000/bracket` (the
   double-elimination bracket, its own scene, built by
-  `scripts/setup_obs_bracket.py`). Phone control page: `/control` — player
-  names, race-to, scores, clock and session mode.
-- **Tournament nights** (issue #43): the Bracket tab on `/control` builds a
+  `scripts/setup_obs_bracket.py`). Phone control page: `/control` — two tabs:
+  Play (clock keys, scores) and Match (players, race, ruleset — or the whole
+  tournament behind its Single match / Tournament toggle).
+- **Tournament nights** (issue #43): the Match tab's Tournament side on
+  `/control` builds a
   double-elimination draw from FargoRate ratings (or typed estimates on the
   same scale), handicaps every match FargoRate-chart style, and drives the same
   scoreboard the casual nights use. Players score from their own phones on the

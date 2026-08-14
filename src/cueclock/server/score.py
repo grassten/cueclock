@@ -125,6 +125,20 @@ class MatchScore:
         """Back to zero; names, ratings and race-to survive (next match, same players)."""
         self.set_scores(0, 0)
 
+    def clear(self) -> None:
+        """Everything back to defaults — names, scores, ratings, targets, race.
+
+        The end-of-day reset (2026-08-13): shutting the rig down ends the
+        match, so the next session comes up on PLAYER 1 / PLAYER 2 instead of
+        yesterday's score. `reset_scores` stays the between-games button.
+        """
+        self.p1_name, self.p2_name = "PLAYER 1", "PLAYER 2"
+        self.p1_score = self.p2_score = 0
+        self.p1_fargo = self.p2_fargo = None
+        self.p1_target = self.p2_target = None
+        self.race_to = None
+        self._save()
+
     def set_scores(self, p1: int, p2: int) -> None:
         """Put a specific score up — the bracket resuming a match it parked."""
         self.p1_score = max(0, p1)

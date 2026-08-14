@@ -10,10 +10,13 @@
 
            Two tabs for the page's two jobs: Play is everything touched
            mid-game (clock keys, score bumps) laid out for a thumb — big
-           targets, nothing to scroll past; Setup is everything touched once a
-           match (names, Fargo, race, session). The old single scroll put the
-           clock keys below the fold on a phone, which is exactly when they
-           are needed in a hurry. */
+           targets, nothing to scroll past; Match is everything decided before
+           play (players, race, ruleset — or the whole tournament). Setup and
+           Bracket were separate tabs until 2026-08-13; with a handicapped
+           tournament live, Setup's single "Race to" had nothing true to say
+           ("Race to –") and its name fields could fight the bracket that set
+           them — so the two workflows became two sides of one segmented
+           control that can never both claim the page. */
         :root {
             color-scheme: dark;
             --ink: #0B0E13;
@@ -167,14 +170,6 @@
            there to be resumed rather than started again at 0-0. */
         .matchlist .tag.paused { color: var(--accent); }
 
-        /* The LAN address, so the tournament director stops dictating an IP to
-           one relative at a time. The wall carries the same code — this copy is
-           for handing a phone to somebody standing next to you. */
-        .joinrow { display: flex; gap: 14px; align-items: center; }
-        .joinrow img { width: 96px; height: 96px; flex: none; background: #fff;
-                       border-radius: 8px; padding: 4px; }
-        .joinurl { font-size: 15px; font-weight: 700; word-break: break-all; margin-bottom: 4px; }
-
         .plist { display: flex; flex-direction: column; gap: 10px; }
         .prow { display: flex; gap: 8px; align-items: center; }
         .prow input.pname { flex: 1; min-width: 0; }
@@ -238,17 +233,34 @@
             border-radius: 9px; padding: 12px 13px; font-size: 16px; font-family: inherit; width: 100%;
         }
         .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-        .vision {
-            display: flex; align-items: center; justify-content: space-between; gap: 12px;
-            border-top: 1px solid var(--line); padding-top: 14px;
-        }
-        .vision .txt { display: flex; flex-direction: column; gap: 3px; }
-        .vision .txt b { font-size: 14px; font-weight: 650; }
-        .vision button { min-width: 76px; }
-        button.on { background: rgba(46,134,200,.16); border-color: rgba(46,134,200,.5); color: var(--accent); }
-        button.off { background: rgba(255,77,77,.14); border-color: rgba(255,77,77,.5); color: var(--alarm); }
 
         .danger-row { display: flex; justify-content: flex-end; }
+
+        /* ---- Match tab ---- */
+        /* The segmented control: which of the two workflows owns the page.
+           A toggle rather than more tabs, because the two are exclusive —
+           the confusion this replaced was both claiming the page at once. */
+        .seg {
+            display: flex; background: var(--field); border: 1px solid var(--line-strong);
+            border-radius: 10px; padding: 3px;
+        }
+        .seg button {
+            flex: 1; background: none; border: none; border-radius: 8px;
+            font-size: 13px; font-weight: 700; padding: 9px 0; color: var(--slate);
+        }
+        .seg button.on { background: var(--accent); color: #04121F; }
+        /* The yield card: with a bracket loaded, the single-match editors
+           would fight it, so this stands in their place. */
+        .tcard {
+            border: 1px solid rgba(46,134,200,.45); background: rgba(46,134,200,.07);
+            border-radius: 10px; padding: 13px; display: flex; flex-direction: column; gap: 6px;
+        }
+        .tcard .tname {
+            font-size: 11px; font-weight: 700; letter-spacing: 1.6px;
+            text-transform: uppercase; color: var(--accent);
+        }
+        .tcard .tmatch { font-size: 16px; font-weight: 650; }
+        .tcard .ttargets { font-size: 13px; color: var(--slate); }
 
         /* ---- Tab bar ---- */
         /* Fixed to the bottom because that is the reach zone a thumb owns;
@@ -297,7 +309,11 @@
                     </div>
                     <div class="num" id="time">–</div>
                 </div>
-                <div class="keys">
+                <!-- Two key sets, one visible: under Freestyle there is no
+                     countdown, so every key about one leaves and New Rack
+                     keeps the row (racks still happen — they scope the journal
+                     and the replay). -->
+                <div class="keys" id="keys-timed">
                     <button class="primary xl" id="start-n" onclick="post('/api/restart')">Start</button>
                     <div class="grid2">
                         <button class="lg" onclick="post('/api/rack')">New Rack</button>
@@ -307,6 +323,9 @@
                         <button onclick="post('/api/push')">Push</button>
                         <button onclick="post('/api/pause')">Pause</button>
                     </div>
+                </div>
+                <div class="keys" id="keys-untimed" hidden>
+                    <button class="lg" onclick="post('/api/rack')">New Rack</button>
                 </div>
             </section>
 
@@ -346,10 +365,20 @@
             </section>
     </main>
 
-    <!-- Setup: touched once a match. -->
-    <main id="view-setup" hidden>
-            <section>
+    <!-- Match: everything decided before play. Two exclusive workflows — a
+         single race and a tournament — behind one segmented control, so they
+         can never both claim the page (which is what the old Setup/Bracket
+         split let happen: a handicapped tournament left Setup showing
+         "Race to –" over name fields that could fight the draw). -->
+    <main id="view-match" hidden>
+            <div class="seg">
+                <button id="seg-single" onclick="showSeg('single')">Single match</button>
+                <button id="seg-tourney" onclick="showSeg('tourney')">Tournament</button>
+            </div>
+
+            <section id="single-section" hidden>
                 <h2>Players</h2>
+                <div class="stack" id="single-edit">
                 <div class="player">
                     <label for="p1-name">Player 1<span class="fargo-badge" id="p1-fargo-badge" hidden></span></label>
                     <!-- The button exists because onchange alone is undiscoverable
@@ -385,41 +414,23 @@
                 <p class="hint">Cleared means casual &mdash; the wall hides the race line entirely.</p>
 
                 <div class="danger-row"><button class="danger" onclick="resetScores()">Reset scores</button></div>
-            </section>
-
-            <section>
-                <h2>Session</h2>
-                <div class="two">
-                    <div class="field">
-                        <label for="ruleset">Ruleset</label>
-                        <select id="ruleset" onchange="setRuleset(this.value)"></select>
-                    </div>
-                    <div class="field">
-                        <!-- Session mode — orthogonal to the ruleset (design.md §2.1).
-                             match: rack rules + the break gate. run_out: no rack, so no
-                             first-shot allowance. no_clock: vision keeps journaling but
-                             never drives the clock. Mirrored here because the deck's
-                             Mode key is otherwise the only way out of no_clock. -->
-                        <label for="mode">Mode</label>
-                        <select id="mode" onchange="setMode(this.value)"></select>
-                    </div>
                 </div>
-                <div class="vision">
-                    <div class="txt">
-                        <b>Vision</b>
-                        <span class="hint">Off means shots and settles stop moving the clock.</span>
+                <!-- Bracket loaded: the editors above would fight it, so a
+                     read-only card stands in until the bracket is cleared. -->
+                <div class="stack" id="single-yield" hidden>
+                    <div class="tcard">
+                        <div class="tname" id="yield-name">Tournament</div>
+                        <div class="tmatch" id="yield-match">&mdash;</div>
+                        <div class="ttargets" id="yield-targets"></div>
                     </div>
-                    <button id="vision" onclick="toggleVision()">—</button>
+                    <p class="hint">The tournament owns the players and races.
+                        Switch matches and report results on the Play tab; the
+                        draw is under Tournament above.</p>
                 </div>
             </section>
-    </main>
 
-    <!-- Bracket: built once a night, then only looked at. Lives on its own tab
-         rather than inside Setup because Setup is the *match* — names, race,
-         ruleset — and a tournament replaces all three. -->
-    <main id="view-bracket" hidden>
-            <!-- No bracket: the builder. -->
-            <section id="bracket-build">
+            <!-- Tournament, no bracket yet: the builder. -->
+            <section id="bracket-build" hidden>
                 <h2>Build a bracket</h2>
                 <div class="field">
                     <label for="bracket-name">Name</label>
@@ -518,18 +529,24 @@
                     conceded one to put it back. Both are refused behind a match
                     that has been played &mdash; clear that one first.</p>
 
-                <h2>Scoring on phones</h2>
-                <div class="joinrow" id="join-row">
-                    <img id="join-qr" alt="" hidden>
-                    <div>
-                        <div class="joinurl" id="join-url">&mdash;</div>
-                        <p class="hint" id="join-hint">Same wifi, no app, no sign-in.</p>
-                    </div>
-                </div>
-
+                <!-- No join QR here (removed 2026-08-13): whoever is reading
+                     this page already has it open. The wall's bracket scene
+                     carries the code for everyone else. -->
                 <button class="ghost" onclick="archiveBracket()">Save &amp; archive</button>
                 <div class="danger-row"><button class="danger" onclick="clearBracket()">Clear bracket</button></div>
                 <p class="hint" id="bracket-error"></p>
+            </section>
+
+            <!-- The ruleset rides below both workflows: it is about the table,
+                 not the pairing. Mode (match / run_out / no_clock) left this
+                 page on 2026-08-13 — in real use it is always `match` when a
+                 phone is out, and the deck's Mode key still cycles it for
+                 drills. The Vision kill switch left the same day, never used
+                 from a phone; both APIs stay (design.md §2.1). -->
+            <section>
+                <h2>Ruleset</h2>
+                <select id="ruleset" onchange="setRuleset(this.value)"></select>
+                <p class="hint" id="ruleset-detail"></p>
             </section>
     </main>
 
@@ -539,23 +556,33 @@
     <button class="active" id="tab-play" onclick="showTab('play')" aria-label="Play tab">
         <span class="glyph">&#9201;</span>Play
     </button>
-    <button id="tab-setup" onclick="showTab('setup')" aria-label="Setup tab">
-        <span class="glyph">&#9881;</span>Setup
-    </button>
-    <button id="tab-bracket" onclick="showTab('bracket')" aria-label="Bracket tab">
-        <span class="glyph">&#9776;</span>Bracket
+    <button id="tab-match" onclick="showTab('match')" aria-label="Match tab">
+        <span class="glyph">&#9776;</span>Match
     </button>
 </nav>
 
 <script>
     // ---- Tabs ----
-    const TABS = ['play', 'setup', 'bracket'];
+    const TABS = ['play', 'match'];
     function showTab(which) {
         for (const t of TABS) {
             document.getElementById('view-' + t).hidden = t !== which;
             document.getElementById('tab-' + t).classList.toggle('active', t === which);
         }
-        if (which === 'bracket') refreshBracket();
+        if (which === 'match') refreshBracket();
+    }
+
+    // ---- The Match tab's segmented control ----
+    // Which workflow owns the page. It follows the bracket by default (built
+    // one → you're running a tournament) but a tap wins until the bracket
+    // itself changes, so peeking at the other side is never fought.
+    let seg = null; // null = follow the bracket
+    function showSeg(which) {
+        seg = which;
+        renderMatchTab();
+    }
+    function activeSeg() {
+        return seg !== null ? seg : (bracket ? 'tourney' : 'single');
     }
 
     async function post(url) {
@@ -563,37 +590,50 @@
     }
     async function setRuleset(name) {
         await fetch('/api/ruleset/' + encodeURIComponent(name), { method: 'POST' });
+        renderRulesetDetail(name);
     }
-    async function setMode(name) {
-        await fetch('/api/mode/' + encodeURIComponent(name), { method: 'POST' });
+
+    // ---- Ruleset select ----
+    // Friendly labels over the API's canonical names; the caption states the
+    // rulebook's numbers so the pick never needs the docs. Both fall back to
+    // the raw name / nothing for a ruleset this page hasn't met.
+    const RULESET_LABELS = {
+        ultimate_pool_8ball: 'Ultimate Pool 8-Ball',
+        ultimate_pool_8ball_final10: 'Ultimate Pool 8-Ball — Final 10',
+        wnt_9ball: 'WNT 9-Ball',
+        freestyle: 'Freestyle — no shot clock',
+    };
+    let rulesetDetails = {}; // per-ruleset facts off /api/rulesets
+
+    function renderRulesetDetail(name) {
+        const d = rulesetDetails[name];
+        const el = document.getElementById('ruleset-detail');
+        if (!d) { el.innerText = ''; return; }
+        if (!d.timed) {
+            el.innerText = 'No shot clock — play at your own pace. '
+                + 'Scores, racks and replays all still work.';
+            return;
+        }
+        const parts = [`${d.base_seconds} s per shot`];
+        if (d.first_shot_seconds !== d.base_seconds) {
+            parts.push(`${d.first_shot_seconds} s after the break or a push out`);
+        }
+        parts.push(`extensions +${d.extension_seconds} s`);
+        el.innerText = parts.join(' · ');
     }
-    function fillSelect(id, listing) {
-        const sel = document.getElementById(id);
+
+    async function loadRulesets() {
+        const listing = await fetch('/api/rulesets').then(x => x.json());
+        rulesetDetails = listing.details || {};
+        const sel = document.getElementById('ruleset');
         sel.innerHTML = '';
         for (const n of listing.available) {
             const opt = document.createElement('option');
-            opt.value = n; opt.textContent = n;
+            opt.value = n; opt.textContent = RULESET_LABELS[n] || n;
             if (n === listing.active) opt.selected = true;
             sel.appendChild(opt);
         }
-    }
-    async function loadRulesets() {
-        fillSelect('ruleset', await fetch('/api/rulesets').then(x => x.json()));
-        fillSelect('mode', await fetch('/api/modes').then(x => x.json()));
-    }
-
-    // ---- Vision kill switch ----
-    let visionOn = null; // unknown until the first payload
-    function renderVision(on) {
-        visionOn = on;
-        const b = document.getElementById('vision');
-        b.innerText = on ? 'On' : 'Off';
-        b.classList.toggle('on', on);
-        b.classList.toggle('off', !on);
-    }
-    async function toggleVision() {
-        if (visionOn === null) return; // no payload yet — state unknown
-        await post(visionOn ? '/api/vision/off' : '/api/vision/on');
+        renderRulesetDetail(listing.active);
     }
 
     // ---- Match ----
@@ -765,7 +805,7 @@
             bracket = (await fetch('/api/bracket').then(r => r.json())).bracket;
         } catch (e) { return; }
         bracketRev = bracket ? bracket.revision : -1;
-        renderBracketTab();
+        renderMatchTab();
         if (switcherOpen) renderSwitcher();
     }
 
@@ -782,6 +822,14 @@
         // a moment apart, and this is the one that is never stale.
         liveMatchId = loaded ? summary.match.id : null;
         liveMatchNames = loaded ? summary.match.names : [];
+        // The Match tab's yield card rides the same broadcast, so it names the
+        // loaded match without waiting for a draw refetch.
+        if (summary) {
+            document.getElementById('yield-match').innerText =
+                loaded ? summary.match.names.join(' v ') : 'No match loaded';
+            document.getElementById('yield-targets').innerText =
+                loaded ? summary.match.header : 'Pick one on the Play tab';
+        }
         // The panel follows the *bracket*, not the loaded match: with a bracket
         // built and nothing loaded, Switch match is the only way to start one,
         // so hiding it there is a dead end.
@@ -939,10 +987,19 @@
         }
     }
 
-    // ---- Bracket tab ----
-    function renderBracketTab() {
-        document.getElementById('bracket-build').hidden = !!bracket;
-        document.getElementById('bracket-state').hidden = !bracket;
+    // ---- Match tab ----
+    function renderMatchTab() {
+        const which = activeSeg();
+        document.getElementById('seg-single').classList.toggle('on', which === 'single');
+        document.getElementById('seg-tourney').classList.toggle('on', which === 'tourney');
+        document.getElementById('single-section').hidden = which !== 'single';
+        document.getElementById('bracket-build').hidden = which !== 'tourney' || !!bracket;
+        document.getElementById('bracket-state').hidden = which !== 'tourney' || !bracket;
+        // With a bracket loaded the single-match editors yield to a read-only
+        // card — they would fight the draw that set the names and targets.
+        document.getElementById('single-edit').hidden = !!bracket;
+        document.getElementById('single-yield').hidden = !bracket;
+        if (bracket) document.getElementById('yield-name').innerText = bracket.name;
         if (!bracket) { renderPlayers(); loadArchives(); return; }
         document.getElementById('bracket-state-h').innerText = bracket.name;
         document.getElementById('bracket-summary').innerText = bracket.champion
@@ -978,31 +1035,6 @@
                 refreshBracket();
             }, (match) => match.status === 'played' || match.conceded != null));
         }
-        loadJoin();
-    }
-
-    // The LAN address, fetched once and kept — it cannot change while the
-    // server is up, and this runs off every bracket render. The wall carries
-    // the same code; this copy is for the phone in your hand.
-    let joinFetched = false;
-    async function loadJoin() {
-        if (joinFetched) return;
-        joinFetched = true;
-        let data = null;
-        try {
-            data = await fetch('/api/lan').then(r => r.json());
-        } catch (e) { joinFetched = false; return; }
-        const url = document.getElementById('join-url');
-        if (!data || !data.url) {
-            url.innerText = 'No network';
-            document.getElementById('join-hint').innerText =
-                'This Mac has no address on the LAN, so phones have nowhere to reach it.';
-            return;
-        }
-        const img = document.getElementById('join-qr');
-        img.src = data.qr;
-        img.hidden = false;
-        url.innerText = data.url.replace(/^https?:\/\//, '');
     }
 
     // A withdrawal is a bye that happens mid-tournament: it concedes every
@@ -1154,7 +1186,7 @@
             seeding: document.getElementById('build-seeding').value,
         });
         err.innerText = res.ok ? '' : res.error;
-        if (res.ok) refreshBracket();
+        if (res.ok) { seg = null; refreshBracket(); }  // follow the new bracket
     }
 
     async function clearBracket() {
@@ -1168,6 +1200,7 @@
         // Only the field goes: the races, handicap and draw on the form are
         // whatever you last chose, and they are still what Build will send.
         build = { players: [] };
+        seg = null;  // no bracket — the page goes back to the single match
         refreshBracket();
         document.getElementById('build-error').innerText =
             res && res.archived ? `Archived as ${res.archived}.` : '';
@@ -1200,35 +1233,45 @@
         if (!name) return;
         const res = await postJson('/api/bracket/archives/' + encodeURIComponent(name), {});
         document.getElementById('build-error').innerText = res.ok ? '' : res.error;
+        if (res.ok) seg = null;  // follow the reopened bracket
         refreshBracket();
     }
 
     // ---- Clock ----
     const ALARM_STATES = ['GRACE', 'EXPIRED'];
     function render(s) {
+        // Freestyle (`timed: false`): there is no countdown, so the number
+        // and every key about one leave and the pill says why.
+        const untimed = s.timed === false;
+        document.getElementById('time').hidden = untimed;
+        document.getElementById('keys-timed').hidden = untimed;
+        document.getElementById('keys-untimed').hidden = !untimed;
         const t = s.display ?? s.time ?? null;
         document.getElementById('time').innerText = t ?? '–';
         document.getElementById('time').classList.toggle(
             'urgent', (s.time ?? 99) <= 5 && s.state !== 'IDLE');
         const pill = document.getElementById('state');
-        pill.innerText = s.state;
-        pill.classList.toggle('live', s.state === 'RUNNING');
-        pill.classList.toggle('alarm', ALARM_STATES.includes(s.state));
-        document.getElementById('extensions').innerText =
-            `Extensions ${s.extensions_used} of ${s.extensions_allowed}`;
+        pill.innerText = untimed ? 'FREESTYLE' : s.state;
+        pill.classList.toggle('live', !untimed && s.state === 'RUNNING');
+        pill.classList.toggle('alarm', !untimed && ALARM_STATES.includes(s.state));
+        // No counter while the pool is unlimited (`extensions_allowed: 0`,
+        // the limit is unenforced) — "2 of 0" would be nonsense.
+        const ext = document.getElementById('extensions');
+        ext.hidden = untimed || !s.extensions_allowed;
+        if (!ext.hidden) {
+            ext.innerText = `Extensions ${s.extensions_used} of ${s.extensions_allowed}`;
+        }
         // Same trick as the deck's START key: name the countdown the press
         // will hand you, straight off the server's rack-aware `base`.
         if (typeof s.base === 'number') {
             document.getElementById('start-n').innerText = `Start ${s.base}`;
         }
-        // re-sync the dropdowns if either axis changed elsewhere (the deck)
-        for (const [id, active] of [['ruleset', s.ruleset], ['mode', s.mode]]) {
-            const sel = document.getElementById(id);
-            if (active && sel.value !== active) {
-                for (const o of sel.options) if (o.value === active) o.selected = true;
-            }
+        // re-sync the ruleset dropdown if it changed elsewhere (the deck)
+        const sel = document.getElementById('ruleset');
+        if (s.ruleset && sel.value !== s.ruleset) {
+            for (const o of sel.options) if (o.value === s.ruleset) o.selected = true;
+            renderRulesetDetail(s.ruleset);
         }
-        if (typeof s.vision === 'boolean') renderVision(s.vision);
         if (s.score) renderScore(s.score);
         renderBracketLive(s.bracket);
     }

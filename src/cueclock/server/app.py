@@ -164,10 +164,22 @@ def create_app(
 
     @app.get("/api/rulesets")
     async def api_rulesets() -> dict[str, object]:
+        """The listing plus per-ruleset facts, so the control page can caption
+        the pick (shot time, first-shot allowance, extension length, untimed)
+        without hardcoding the rulebook."""
         return {
             "active": hub.clock.ruleset.name,
             "available": list(RULESETS),
             "aliases": ALIASES,
+            "details": {
+                name: {
+                    "base_seconds": r.base_seconds,
+                    "first_shot_seconds": r.first_shot_seconds,
+                    "extension_seconds": r.extension_seconds,
+                    "timed": r.timed,
+                }
+                for name, r in RULESETS.items()
+            },
         }
 
     @app.get("/api/modes")
@@ -204,6 +216,16 @@ def create_app(
     @app.get("/api/score")
     async def api_score() -> dict[str, object]:
         return hub.score.as_dict()
+
+    @app.post("/api/match/clear")
+    async def api_match_clear() -> dict[str, object]:
+        """End of day: bracket archived-and-cleared, score back to defaults.
+
+        The deck's Session hold calls this on the way down so the next
+        session comes up on PLAYER 1 / PLAYER 2 instead of yesterday's match.
+        """
+        archived = await hub.clear_match_day()
+        return {"ok": True, "archived": archived.name if archived is not None else None}
 
     @app.post("/api/score/reset")
     async def api_score_reset() -> dict[str, object]:

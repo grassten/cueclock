@@ -565,7 +565,12 @@ def run_deck(base: str, brightness: int, reference: str) -> int:
         print(f"HID transport unavailable ({exc}) — `brew install hidapi`?", flush=True)
         return 1
 
-    session = SessionManager(reference=reference)
+    session = SessionManager(
+        reference=reference,
+        # The daemon's --server base, not session.py's default — the one deck
+        # talking to a non-default port must clear the match on that port too.
+        clear_match=lambda: client.post(base, "/api/match/clear", timeout=3.0).ok,
+    )
 
     while True:
         try:

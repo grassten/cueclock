@@ -467,6 +467,17 @@ class Hub:
             return None
         return time.monotonic() - self._rack_break_mono
 
+    @property
+    def clock_live(self) -> bool:
+        """May vision move the clock right now?
+
+        Two axes park it: `no_clock` mode (drills) and an untimed ruleset
+        (freestyle — a match with no shot clock). The journal lines on the
+        False branch keep their `_no_clock` names for both; the payload's
+        `mode`/`ruleset` fields say which axis it was.
+        """
+        return self.clock.mode.clock_live and self.clock.ruleset.timed
+
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
         """The composed broadcast/state payload: clock + `vision` + `score` +
         `solo` + `bracket`."""
@@ -880,6 +891,22 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return archived
 
+    async def clear_match_day(self) -> Path | None:
+        """The end-of-day reset: the deck's Session hold calls this on the way
+        down (2026-08-13), so the next session comes up clean instead of
+        wearing yesterday's match.
+
+        A loaded bracket is archived-and-cleared first (same path as the
+        phone's Clear bracket button — an unfinished tournament reopens from
+        "Load past bracket"), then the whole `MatchScore` goes back to
+        defaults: PLAYER 1 / PLAYER 2, 0-0, no race, no ratings.
+        """
+        archived = await self.clear_bracket()
+        self.score.clear()
+        self._log("cmd_match_clear", archived=str(archived) if archived is not None else None)
+        await self.broadcast(self.clock.snapshot())
+        return archived
+
     def archive_bracket(self) -> Path:
         """Write the bracket beside the journals (`archive_dir`)."""
         bracket = self.require_bracket()
@@ -1135,10 +1162,11 @@ class Hub:
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock
-        if not self.clock.mode.clock_live:
-            self._drill_reps += 1  # the solo panel's REPS — approximate by design
+        if not self.clock_live:
+            if not self.clock.mode.clock_live:
+                self._drill_reps += 1  # the solo panel's REPS — approximate by design
             self._log("vision_shot_taken_no_clock", **detail)
-            return  # no_clock mode: still journaled as evidence, never clocked
+            return  # no_clock mode / freestyle: journaled as evidence, never clocked
         floor = self.clock.mode.break_floor_mms
         if self.clock.state is State.IDLE:
             # E8 evidence, stamped before the floor gate: whatever the gate
@@ -1220,7 +1248,7 @@ class Hub:
         if not self.vision_enabled:
             self._log("vision_balls_settled_killed", **detail)
             return  # kill switch, as above
-        if not self.clock.mode.clock_live:
+        if not self.clock_live:
             self._log("vision_balls_settled_no_clock", **detail)
             return  # journaled, not clocked — as above
         now = time.monotonic()
@@ -1431,7 +1459,7 @@ class Hub:
         optimize it (#33): the 0.2 s displacement window dominates, stride 1
         is a measured null (plan §3.1 item 4).
         """
-        if not self.vision_enabled or not self.clock.mode.clock_live:
+        if not self.vision_enabled or not self.clock_live:
             return
         now = time.monotonic()
         if not self.clock.motion_started(now):
@@ -1451,7 +1479,7 @@ class Hub:
         discards unfired episodes (a fired one always ends in a settle), so
         the provisional reverts outright: no shot, exact remaining restored.
         """
-        if not self.vision_enabled or not self.clock.mode.clock_live:
+        if not self.vision_enabled or not self.clock_live:
             return
         now = time.monotonic()
         if self.clock.motion_reverted(now):
@@ -1564,7 +1592,7 @@ class Hub:
         """
         if self._scratch_hold_done or not self._scratch_candidate_open:
             return
-        if not self.vision_enabled or not self.clock.mode.clock_live:
+        if not self.vision_enabled or not self.clock_live:
             return
         if self.clock.state is not State.RUNNING:
             return

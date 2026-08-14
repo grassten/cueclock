@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 
 from cueclock.clock.modes import DEFAULT_MODE, Mode, get_mode
-from cueclock.clock.rulesets import Ruleset
+from cueclock.clock.rulesets import ENFORCE_EXTENSION_LIMIT, Ruleset
 
 
 class State(Enum):
@@ -52,9 +52,10 @@ class Snapshot:
     display: int
     ruleset: str
     mode: str
+    timed: bool  # False = untimed ruleset (freestyle): no countdown exists
     base: int  # what a fresh countdown gives you now — the deck's START N face
     extensions_used: int
-    extensions_allowed: int
+    extensions_allowed: int  # 0 while the extension limit is unenforced
     cue: str | None
 
     def as_dict(self) -> dict[str, object]:
@@ -108,6 +109,8 @@ class ShotClock:
     # ---------- operator commands (HTTP API / Stream Deck) ----------
 
     def start(self, now: float) -> None:
+        if not self.ruleset.timed:
+            return  # freestyle: there is no countdown to start
         if self.state in (State.IDLE, State.EXPIRED):
             self.remaining = float(self.current_base())
             self._cues_fired.clear()
@@ -169,6 +172,8 @@ class ShotClock:
         60 s window replays on the shot after (live, 2026-08-05 19:59 and
         2026-08-06 01:53: break missed, Start pressed, 60 s handed out twice).
         """
+        if not self.ruleset.timed:
+            return
         if self.mode.rack_scoped and self._rack_shots == 0:
             self._rack_shots = 1
         self.remaining = float(self.current_base())
@@ -190,6 +195,8 @@ class ShotClock:
         only the window is re-armed, so the following settle starts at 60 s.
         Extensions untouched.
         """
+        if not self.ruleset.timed:
+            return
         self._rack_shots = 1  # as if the break just happened
         if self.state is not State.MOTION:
             # current_base(), not first_shot_seconds directly: outside a
@@ -233,10 +240,15 @@ class ShotClock:
         self.reset()
 
     def extension(self) -> bool:
-        """Grant an extension if allowed; returns True when accepted."""
+        """Grant an extension if allowed; returns True when accepted.
+
+        The pool cap applies only while ``ENFORCE_EXTENSION_LIMIT`` is on
+        (`rulesets.py` — off since 2026-08-13, so every call over a live
+        countdown is granted).
+        """
         if self.state not in (State.RUNNING, State.GRACE):
             return False
-        if self.extensions_used >= self.ruleset.extensions_per_frame:
+        if ENFORCE_EXTENSION_LIMIT and self.extensions_used >= self.ruleset.extensions_per_frame:
             return False
         self.extensions_used += 1
         self.remaining += float(self.ruleset.extension_seconds)
@@ -469,8 +481,13 @@ class ShotClock:
             display=0 if self.state is State.EXPIRED else math.ceil(self.remaining),
             ruleset=self.ruleset.name,
             mode=self.mode.name,
+            timed=self.ruleset.timed,
             base=self.current_base(),
             extensions_used=self.extensions_used,
-            extensions_allowed=self.ruleset.extensions_per_frame,
+            # 0 while unenforced: no surface draws pips or an "x of y" for a
+            # pool that cannot run out.
+            extensions_allowed=(
+                self.ruleset.extensions_per_frame if ENFORCE_EXTENSION_LIMIT else 0
+            ),
             cue=cue,
         )

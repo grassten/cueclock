@@ -125,6 +125,15 @@ def test_no_clock_collapses_to_the_spine() -> None:
     assert visible_names(NO_CLOCK) == ALWAYS_ON
 
 
+def test_freestyle_drops_the_countdown_keys_but_keeps_the_match() -> None:
+    # The untimed ruleset (2026-08-13): no countdown, so Start and Extension
+    # go dark with it (and Push is 9-ball-only anyway) — but it is still a
+    # match, so the score keys and New Rack stay exactly where they are.
+    freestyle = replace(MATCH, ruleset="freestyle", base=30)
+    assert visible_names(MATCH) - visible_names(freestyle) == {"start", "push", "extension"}
+    assert {"p1", "p2", "new_rack", "ruleset"} <= visible_names(freestyle)
+
+
 def test_the_retired_ground_truth_cell_holds_the_bracket_confirm() -> None:
     """(3,5) held "I shot" (#19) until 2026-08-05, then stood empty until #43.
 

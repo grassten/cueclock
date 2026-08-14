@@ -86,10 +86,12 @@
             fill: white;
         }
 
-        /* no_clock mode: a parked countdown rendering a static 30 is
-           indistinguishable from the stalled clock a missed settle produces —
-           the exact failure Steven is trained to distrust. So the digits go
-           away entirely and the overlay says why it is quiet. */
+        /* no_clock mode — and the freestyle ruleset, which is the same
+           quietness with a different label: a parked countdown rendering a
+           static 30 is indistinguishable from the stalled clock a missed
+           settle produces — the exact failure Steven is trained to distrust.
+           So the digits go away entirely and the overlay says why it is
+           quiet. */
         .no-clock .time-number,
         .no-clock .clock-icon {
             display: none;
@@ -705,7 +707,7 @@
         // here *is* the precedence: quiet beats loud, because a clock that
         // isn't counting must never be able to look like one that is.
         function barPhase(state) {
-            if (state.mode === 'no_clock')                     return 'no-clock';
+            if (state.mode === 'no_clock' || state.timed === false) return 'no-clock';
             if (state.state === 'EXPIRED')                     return 'expired';
             if (state.state === 'GRACE')                       return 'grace';
             if (state.state === 'MOTION' || state.state === 'IDLE') return 'parked';
@@ -871,9 +873,15 @@
             if (barView) renderBar(state);
             // Sessions before mode existed (and any older server) send no
             // `mode` — treat that as a normal clocked session, not as quiet.
-            const noClock = state.mode === 'no_clock';
+            // `timed: false` is the freestyle ruleset (2026-08-13): the same
+            // quietness as no_clock, wearing the ruleset's own name.
+            const noClock = state.mode === 'no_clock' || state.timed === false;
             clockEl.classList.toggle('no-clock', noClock);
             if (noClock) {
+                const untimed = state.timed === false;
+                document.getElementById('mode-label').innerHTML = barView
+                    ? (untimed ? 'FREE<br>STYLE' : 'NO<br>CLOCK')
+                    : (untimed ? 'FREESTYLE' : 'NO CLOCK');
                 // Drop any countdown styling with it — an EXPIRED flash left
                 // behind would keep pulsing red over a clock that isn't there.
                 clockEl.classList.remove('motion', 'grace', 'expired');
