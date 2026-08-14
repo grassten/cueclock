@@ -14,9 +14,11 @@ the table is a key that quietly does the wrong replay.
 
 from __future__ import annotations
 
+import contextlib
 import queue
 import threading
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -65,6 +67,43 @@ class FakeDeck:
         self.callback(self, index, False)
 
 
+# `_loop` runs until something raises out of it, so a test that just walks away
+# leaves a live loop behind — and a leaked one still resolves `client.get_json`
+# and `bracket.hide` through whatever the *next* test has patched in, which is
+# how a test can see a scene change nobody in it made. Both fixtures stop their
+# loop on the way out, through this one event so that any older leak stops too.
+_STOP = threading.Event()
+
+
+def _start_loop(deck: FakeDeck) -> threading.Thread:
+    """`_loop` in a thread that ends quietly when `_STOP` is set."""
+
+    def run() -> None:
+        # KeyboardInterrupt out of the poll is the loop's own documented exit;
+        # swallowing it here is what keeps the thread from dying "unhandled".
+        with contextlib.suppress(KeyboardInterrupt):
+            daemon._loop(deck, "http://x", SessionManager())
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + SETTLE_S
+    while deck.callback is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert deck.callback is not None, "loop never registered its key callback"
+    return thread
+
+
+def _stoppable(payload: Any) -> Any:
+    """A `client.get_json` stand-in that raises the loop out on `_STOP`."""
+
+    def poll(*_a: object, **_k: object) -> Any:
+        if _STOP.is_set():
+            raise KeyboardInterrupt
+        return payload() if callable(payload) else payload
+
+    return poll
+
+
 class Spy:
     """Records the spans `_loop` asked for, and fakes a replay being on air."""
 
@@ -85,25 +124,24 @@ class Spy:
 
 
 @pytest.fixture
-def rig(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeDeck, Spy]:
+def rig(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FakeDeck, Spy]]:
     """A `_loop` running against a fake deck and a server that is up."""
     spy = Spy()
+    _STOP.clear()
     monkeypatch.setattr(replay, "show", spy.show)
     monkeypatch.setattr(replay, "stop", spy.stop)
-    monkeypatch.setattr(client, "get_json", lambda *a, **k: {"state": "IDLE", "mode": "match"})
+    monkeypatch.setattr(client, "get_json", _stoppable({"state": "IDLE", "mode": "match"}))
     # PILHelper wants a real device; the faces are not what this file is about.
     monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
+    # Nothing here is timed against the poll, and the loop only notices it
+    # should stop on its next one — at the stock 2 s that is the whole teardown.
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)
 
     deck = FakeDeck()
-    thread = threading.Thread(
-        target=daemon._loop, args=(deck, "http://x", SessionManager()), daemon=True
-    )
-    thread.start()
-    deadline = time.monotonic() + SETTLE_S
-    while deck.callback is None and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert deck.callback is not None, "loop never registered its key callback"
-    return deck, spy
+    thread = _start_loop(deck)
+    yield deck, spy
+    _STOP.set()
+    thread.join(timeout=SETTLE_S)
 
 
 def _await(spy: Spy, timeout: float = SETTLE_S) -> None:
@@ -175,7 +213,7 @@ def test_a_press_during_a_replay_goes_back_to_live(rig: tuple[FakeDeck, Spy]) ->
 
 CONFIRM_KEY = next(k for k in LAYOUT if isinstance(k.action, BracketConfirm))
 SCENE_KEY = next(k for k in LAYOUT if isinstance(k.action, SceneToggle))
-DWELL_S = 0.4  # the real 20 s, compressed — the behaviour is the deadline, not its length
+DWELL_S = 0.4  # the real 30 s, compressed — the behaviour is the deadline, not its length
 
 
 class SceneSpy:
@@ -210,27 +248,31 @@ def _armed_payload(clock: str = "IDLE") -> dict[str, object]:
 
 
 @pytest.fixture
-def tv(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """A `_loop` with a bracket loaded, an armed result, and a fake TV."""
+def tv(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
+    """A `_loop` with a bracket loaded, an armed result, and a fake TV.
+
+    **The loop is stopped on the way out**, unlike `rig` above, because these
+    tests assert that nothing happened *later* — and a leaked loop outlives its
+    test while `bracket.hide` still resolves to whichever spy is patched in
+    now, so the next test sees a scene change nobody in it made. The loop's own
+    documented exit is an exception out of the poll.
+    """
     spy = SceneSpy()
     clock = {"state": "IDLE"}
+    _STOP.clear()
     monkeypatch.setattr(deck_bracket, "show", spy.show)
     monkeypatch.setattr(deck_bracket, "hide", spy.hide)
     monkeypatch.setattr(deck_bracket, "DWELL_S", DWELL_S)
-    monkeypatch.setattr(client, "get_json", lambda *a, **k: _armed_payload(clock["state"]))
+    monkeypatch.setattr(client, "get_json", _stoppable(lambda: _armed_payload(str(clock["state"]))))
     monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "{}"))
     monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
     monkeypatch.setattr(daemon, "POLL_S", 0.05)  # the early return is only as quick as the poll
 
     deck = FakeDeck()
-    threading.Thread(
-        target=daemon._loop, args=(deck, "http://x", SessionManager()), daemon=True
-    ).start()
-    deadline = time.monotonic() + SETTLE_S
-    while deck.callback is None and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert deck.callback is not None
-    return deck, spy, clock
+    thread = _start_loop(deck)
+    yield deck, spy, clock
+    _STOP.set()
+    thread.join(timeout=SETTLE_S)
 
 
 def test_a_confirmed_result_puts_the_bracket_up_and_takes_it_down_again(tv: Any) -> None:
@@ -264,6 +306,38 @@ def test_the_next_pair_breaking_takes_the_bracket_down_early(tv: Any) -> None:
         time.sleep(0.01)
     assert spy.hidden == 1
     assert time.monotonic() - started < DWELL_S, "waited out the dwell with play under way"
+
+
+def test_the_result_that_ends_it_leaves_the_champion_on_the_wall(
+    monkeypatch: pytest.MonkeyPatch, tv: Any
+) -> None:
+    """No dwell on the last match of the night.
+
+    There is no next pair to rack for, and a timer would take the champion off
+    the wall while the room was still looking at it — ending the evening on a
+    shot of an empty table.
+    """
+    deck, spy, _clock = tv
+    monkeypatch.setattr(
+        client, "post", lambda *a, **k: client.PostResult(True, 200, '{"champion": "Priya Shah"}')
+    )
+    deck.press(CONFIRM_KEY.index)
+    assert spy.up.wait(SETTLE_S)
+    assert spy.shown == [None]  # no deadline asked for
+    time.sleep(DWELL_S * 3)
+    assert spy.hidden == 0
+
+
+def test_a_body_the_deck_cannot_read_is_an_ordinary_result(
+    monkeypatch: pytest.MonkeyPatch, tv: Any
+) -> None:
+    """A dwell that expires is a recoverable wrong guess; a bracket left up
+    forever, with no shot clock under it, is not."""
+    deck, spy, _clock = tv
+    monkeypatch.setattr(client, "post", lambda *a, **k: client.PostResult(True, 200, "not json"))
+    deck.press(CONFIRM_KEY.index)
+    assert spy.up.wait(SETTLE_S)
+    assert spy.shown == [DWELL_S]
 
 
 def test_a_scene_somebody_chose_stays_up(tv: Any) -> None:

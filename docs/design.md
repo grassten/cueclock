@@ -568,7 +568,7 @@ request, being the same on every interface. `url: null` when the machine has no
 LAN address, and the pages say so rather than showing a code for an address
 nobody can reach.
 
-**The confirm key's scene flip takes itself back down** (`bracket.DWELL_S`, 20 s,
+**The confirm key's scene flip takes itself back down** (`bracket.DWELL_S`, 30 s,
 with an early return the moment the clock leaves IDLE). As first built, the flip
 *out* was automatic and the flip *back* waited on somebody pressing the scene
 key — and the bracket scene carries no shot clock and no table, so the wall
@@ -576,12 +576,23 @@ could sit on a bracket through a whole live match, missing the one thing the rig
 exists to put on that TV. The flip itself is right: the instant a result lands
 is when the bracket has information everybody wants, and during racking there is
 nothing to watch on the play scene. It is a **beat, not a mode**, so it is
-bounded — twenty seconds reads as who advanced and who is up next, and is
-shorter than any rack, so the TV is back watching them rack well before anybody
+bounded — thirty seconds reads as who advanced and who is up next, and is still
+shorter than any rack, so the TV is back watching them rack before anybody
 breaks. A showing that a *person* chose (the scene key) carries no deadline and
 never expires: a timer must not second-guess a decision. A server that has
 stopped answering reads as IDLE, so a dead poll can only leave the bracket up
 for the rest of its dwell, never pull it down early.
+
+**The result that ends the tournament is the exception: no dwell at all.** The
+champion plate (above) and the dwell were built an hour apart and did not agree
+— the plate is drawn the moment the last result lands, and the timer then swept
+it off the wall thirty seconds later, back to a shot of an empty table, which is
+the *opposite* of the moment it exists for. There is no next pair to rack for,
+so there is nothing for the return to be in aid of. The deck knows at press
+time because `report_result`'s own answer carries the champion; reading it off
+the next poll instead would put the plate up and take it away while the room was
+still looking at it. An unreadable body falls back to an ordinary dwell, the
+recoverable wrong guess of the two.
 
 **Late entry is a hard cutoff, and that is the decision.** The field freezes at
 Build; somebody who arrives after it waits for the next bracket. The tempting
