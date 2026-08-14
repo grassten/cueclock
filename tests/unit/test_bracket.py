@@ -704,6 +704,167 @@ def test_withdrawing_everybody_still_reaches_a_champion() -> None:
     assert b.champion() == b.players[0].name
 
 
+# ------------------------------------------------------ per-match concession
+
+
+def test_conceding_one_match_leaves_the_rest_of_their_draw_alone() -> None:
+    """The whole reason this exists next to `withdraw`.
+
+    Withdraw-then-reinstate concedes one match in two presses, but it concedes
+    every *other* unplayed match of theirs on the way through — and on the B
+    side, where somebody with two matches left is exactly the person who wants
+    to give one up, that is the difference between conceding a match and
+    conceding an evening.
+    """
+    b = build(handicap="off")
+    quitter = b.match(1).slots[0]
+    b.concede(1, 0)
+    assert b.status(b.match(1)) == "forfeit" and b.match(1).winner == 1
+    # Their B-side match is still theirs to play, which a withdrawal would have
+    # conceded in the same breath.
+    b.report(2, (5, 1))
+    assert b.status(b.match(8)) == "ready" and quitter in b.match(8).slots
+    assert not b.players[quitter].withdrawn
+
+
+def test_a_concession_invents_no_score_and_is_not_a_result() -> None:
+    b = build()
+    b.concede(1, 0)
+    assert b.match(1).scores == [0, 0]
+    assert not b.match(1).contested
+    # It is put back where it was given up, not cleared like a result — and the
+    # refusal says which, because two things produce one "forfeit" status.
+    with pytest.raises(BracketError, match="take the concession back"):
+        b.clear_result(1)
+    with pytest.raises(BracketError, match="take the concession back"):
+        b.load(1)
+
+
+def test_undoing_a_concession_puts_the_match_back() -> None:
+    b = build()
+    b.concede(1, 1)
+    b.concede(1, None)
+    assert b.status(b.match(1)) == "ready" and not b.match(1).played
+
+
+def test_a_concession_survives_a_restart_and_is_still_undoable(tmp_path) -> None:
+    """The one walkover written to disk — nothing else in the draw implies it.
+
+    What is stored is who gave the match up, never the win it produced, so it
+    is re-derived on the way back in like a bye or a withdrawal and stays just
+    as reversible.
+    """
+    path = tmp_path / "bracket.json"
+    b = build()
+    b.path = path
+    b.concede(1, 0)
+    record = next(r for r in b.state_dict()["results"] if r["id"] == 1)
+    assert record["conceded"] == 0 and record["winner"] is None
+    again = bk.load(path)
+    assert again is not None and again.status(again.match(1)) == "forfeit"
+    assert again.match(1).winner == 1
+    again.concede(1, None)
+    assert again.status(again.match(1)) == "ready"
+
+
+def test_a_concession_routes_the_other_player_onward() -> None:
+    b = build(handicap="off")
+    survivor = b.match(1).slots[1]
+    b.concede(1, 0)
+    assert b.match(5).slots[0] == survivor  # winner of Match 1 → Match 5
+    assert b.match(8).slots[0] == b.match(1).slots[0]  # loser still drops to the B side
+
+
+def test_taking_a_concession_back_behind_a_played_match_is_refused_by_name() -> None:
+    """Undoing routes a different player onward, so it obeys the same rule.
+
+    Only this direction can reach the guard, which is worth knowing: conceding
+    a match whose downstream has been played is impossible on the way in — that
+    match would have to be played itself, and a played match is refused a step
+    earlier, by name, pointing at the result to clear.
+    """
+    b = build(handicap="off")
+    b.report(1, (5, 2))
+    b.concede(2, 0)
+    b.report(5, (5, 0))  # the conceded match's survivor plays on and wins
+    with pytest.raises(BracketError, match="Match 5 has already been played"):
+        b.concede(2, None)
+    b.clear_result(5)
+    b.concede(2, None)
+    assert b.status(b.match(2)) == "ready"
+
+
+def test_a_played_match_is_cleared_not_conceded() -> None:
+    b = build()
+    b.report(1, (5, 2))
+    with pytest.raises(BracketError, match="clear its result first"):
+        b.concede(1, 0)
+
+
+def test_a_concession_needs_two_players_and_names_one_of_them() -> None:
+    b = build()
+    with pytest.raises(BracketError, match="does not have both players"):
+        b.concede(5, 0)
+    with pytest.raises(BracketError, match="names one of the two"):
+        b.concede(1, 7)
+
+
+def test_a_withdrawal_outranks_a_concession_in_the_same_match() -> None:
+    """Whoever is left in the room advances.
+
+    Somebody who has gone home cannot be handed a win by their opponent
+    conceding — the match below would then be waiting on a player who is not
+    there, and the draw stalls one round later instead of now.
+    """
+    b = build()
+    conceder, opponent = b.match(1).slots[0], b.match(1).slots[1]
+    b.concede(1, 0)
+    b.withdraw(opponent)
+    assert b.match(1).winner == 0 and b.match(1).slots[0] == conceder
+    # Reinstating them restores the concession, which was never thrown away.
+    b.withdraw(opponent, out=False)
+    assert b.match(1).winner == 1
+
+
+def test_a_refusal_names_the_lever_that_applies_to_this_forfeit() -> None:
+    """Two things make a forfeit, and they are undone in different places."""
+    b = build()
+    b.concede(1, 0)
+    with pytest.raises(BracketError, match="take the concession back"):
+        b.load(1)
+    # While somebody in the box has gone home, taking the concession back would
+    # not make the match playable — so the refusal sends you to the player.
+    b.withdraw(b.match(1).slots[1])
+    with pytest.raises(BracketError, match="reinstate the player"):
+        b.load(1)
+
+
+def test_conceding_a_match_somebody_has_withdrawn_from_is_refused() -> None:
+    b = build()
+    b.withdraw(b.match(1).slots[0])
+    with pytest.raises(BracketError, match="already a forfeit"):
+        b.concede(1, 1)
+
+
+def test_a_correction_upstream_throws_a_concession_away() -> None:
+    """It was entered about two specific people, like a score or an override."""
+    b = build(handicap="off")
+    b.report(1, (5, 2))
+    b.report(2, (5, 2))
+    b.concede(5, 0)
+    assert b.status(b.match(5)) == "forfeit"
+    b.clear_result(1)
+    b.report(1, (2, 5))  # the other player comes out of Match 1 now
+    assert b.match(5).conceded is None and b.status(b.match(5)) == "ready"
+
+
+def test_conceding_the_loaded_match_moves_the_wall_on() -> None:
+    b = build()
+    b.load(1)
+    b.concede(1, 0)
+    assert b.loaded is None
+
+
 # -------------------------------------------------------- mid-bracket races
 
 

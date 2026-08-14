@@ -11,11 +11,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from cueclock.clock import ALIASES, MODES, RULESETS
-from cueclock.server import fargo
+from cueclock.server import fargo, lan
 from cueclock.server.bracket import BracketError
 from cueclock.server.hub import Hub
 
@@ -375,6 +375,29 @@ def create_app(
             return _bracket_error(exc)
         return JSONResponse({"ok": True, **result})
 
+    @app.post("/api/bracket/match/{match_id}/concede")
+    async def api_bracket_concede(match_id: int, body: dict[str, object]) -> JSONResponse:
+        """`{slot: 0|1}` — one player gives up one match and plays the rest.
+
+        Distinct from a withdrawal, which concedes every unplayed match they
+        have. Undone by the DELETE below rather than by clearing a result: a
+        conceded match was never played, so there is no result to clear.
+        """
+        try:
+            match = await hub.concede_match(match_id, body)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, "match": match.id, "conceded": match.conceded})
+
+    @app.delete("/api/bracket/match/{match_id}/concede")
+    async def api_bracket_unconcede(match_id: int) -> JSONResponse:
+        """They will play it after all."""
+        try:
+            match = await hub.concede_match(match_id, None)
+        except BracketError as exc:
+            return _bracket_error(exc)
+        return JSONResponse({"ok": True, "match": match.id, "conceded": None})
+
     @app.delete("/api/bracket/match/{match_id}/result")
     async def api_bracket_clear_result(match_id: int) -> JSONResponse:
         try:
@@ -382,6 +405,22 @@ def create_app(
         except BracketError as exc:
             return _bracket_error(exc)
         return JSONResponse({"ok": True})
+
+    @app.get("/api/lan")
+    async def api_lan(request: Request) -> JSONResponse:
+        """Where the scoring page lives on the LAN, and a QR code of it (#43).
+
+        The port comes off the request because it is the same port whatever
+        address you arrived on; only the host has to be discovered, since a page
+        OBS loaded over loopback cannot tell a phone where to go. `url: null`
+        means this machine has no LAN address — the page says so rather than
+        printing a QR of the loopback nobody can reach.
+        """
+        port = request.url.port or 80
+        url = lan.join_url(port)
+        if url is None:
+            return JSONResponse({"ok": True, "url": None, "qr": None})
+        return JSONResponse({"ok": True, "url": url, "qr": lan.qr_data_uri(url)})
 
     @app.post("/api/vision/on")
     async def api_vision_on() -> dict[str, object]:

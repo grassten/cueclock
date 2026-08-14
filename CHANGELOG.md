@@ -232,6 +232,55 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-13 (checkpoint 94 — #43: the night before the tournament):** Three
+  of the things #43 parked for evidence from a real event, built on the eve of
+  one, and the fourth settled as a decision instead of as code.
+
+  **A concession is a withdrawal narrowed to one match.** Somebody gives up a
+  single match and keeps the rest of their draw — the cousin who has had enough
+  of the B side but wants to be at the table for the final. Withdraw then
+  reinstate was the standing answer and is two presses, but it concedes every
+  *other* unplayed match of theirs on the way through, so the two are equivalent
+  only when nothing else of theirs is waiting, which on the B side is exactly
+  when it is not. What is stored is **who gave the match up**, never the win it
+  produces, and the walkover is expressed in `_auto_advance` beside byes and
+  withdrawals — one rule down the chain rather than a second way for the draw to
+  advance somebody. It is the one walkover written to disk, because nothing else
+  in the draw implies it, and the derived half stays derived, so it is as
+  reversible as the rest. **A withdrawal outranks a concession** in the same
+  match: somebody who has gone home cannot be handed a win, or the match below
+  waits on a player who is not in the room.
+
+  **The champion is a moment rather than a header line** — a plate over the whole
+  page with the draw ghosted behind it, spending the accent, which is free
+  exactly then: the one colour on that page belongs to the live match and when
+  the tournament is over there isn't one. It carries **no entrance animation**,
+  and that is the finding worth keeping. The fade-and-rise built first rendered
+  as *nothing at all*: a browser source in a scene that is not on program paints
+  nothing, so the animation never starts and `animation-fill-mode: both` holds
+  the plate at its `from` keyframe — opacity zero — for as long as that lasts.
+  The same class of bug as checkpoint 92's `requestAnimationFrame` connector, and
+  the same rule follows: the page must be correct in a source that has never
+  painted, because that is its state every time the scene is cut to. Caught by
+  rendering it, not by reading it.
+
+  **The wall carries the address** (`GET /api/lan`, `server/lan.py`, `segno`).
+  Scoring from phones needs no install and no auth by design, which left the
+  tournament director reciting an IP to eleven relatives one at a time; the
+  bracket page now shows a QR of `/control` in its header while a tournament is
+  live, and the Bracket tab a larger one for the phone in your hand. The page
+  cannot work it out for itself — OBS loads it over loopback — so the host is
+  discovered server-side and the port comes off the request.
+
+  **Late entry is a hard cutoff**, decided rather than built: the field freezes
+  at Build. A bye is not a parking space — it has already advanced somebody — so
+  dropping a latecomer in un-resolves a walkover, and once that player has played
+  their next match it collides with the rule that refuses corrections behind a
+  played match. A feature that works at 6:05 and refuses at 6:35 is worse at a
+  party than one that never worked: the second is a rule, the first is a bug with
+  a schedule. `docs/design.md` §10.3 and the §2.1 API row; the mockup note gains
+  two more deliberate departures.
+
 - **2026-08-13 (checkpoint 93 — #43: state that outlives the wall):** A UX pass
   over the bracket from the player / tournament-director side, and the five
   things it turned up. Two were defects. **A hand-set race target reverted

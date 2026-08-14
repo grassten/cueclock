@@ -74,6 +74,62 @@
         }
         header .right { margin-left: auto; }
 
+        /* **Scan to score.** The scoring page is on the LAN so everybody keeps
+           score on their own phone, and the wall is the one surface every
+           relative is already looking at — so the address lives here rather
+           than being read out eleven times. It cannot be derived in the page:
+           OBS loads this over loopback, so `location.host` is 127.0.0.1. */
+        header .join { display: flex; align-items: center; gap: 12px; }
+        header .join[hidden] { display: none; }
+        header .join img {
+            width: 60px; height: 60px; flex: none;
+            background: #fff; border-radius: 4px; padding: 2px;
+        }
+        header .join .lines { display: flex; flex-direction: column; gap: 4px; }
+        header .join .cap {
+            font-size: 13px; font-weight: 700; letter-spacing: 2px;
+            text-transform: uppercase; color: var(--slate);
+        }
+        header .join .url {
+            font-size: 15px; font-weight: 700; letter-spacing: 0.5px; color: #fff;
+        }
+
+        /* **The champion.** A finished tournament was a line in the header,
+           which is the right weight for a fact and the wrong one for the moment
+           the night ends on. The bracket stays visible behind the scrim because
+           the draw is how they got there. The accent is spent here, and only
+           here, for the same reason it is spent on the live match everywhere
+           else: with the tournament over there is no live match, so the one
+           colour on the page belongs to the only thing still happening. */
+        #champ {
+            position: absolute; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 16px;
+            background: rgba(11, 14, 19, 0.88);
+        }
+        #champ[hidden] { display: none; }
+        #champ .cap {
+            font-size: 24px; font-weight: 700; letter-spacing: 12px;
+            text-transform: uppercase; color: var(--accent); padding-left: 12px;
+        }
+        #champ .who {
+            font-size: 116px; font-weight: 700; line-height: 1;
+            max-width: 1600px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        #champ .ev {
+            font-size: 17px; font-weight: 700; letter-spacing: 4px;
+            text-transform: uppercase; color: var(--slate);
+        }
+        /* **No entrance animation, deliberately.** A fade-and-rise was the
+           first thing built here and it rendered as nothing at all: an OBS
+           browser source in a scene that is not on program paints nothing, so
+           the animation never starts, and `animation-fill-mode: both` holds the
+           plate at the `from` keyframe — opacity 0 — for as long as that lasts.
+           The same class of bug as the `requestAnimationFrame` connector caught
+           in checkpoint 92, and the same rule follows: **this page must be
+           correct in a source that has never painted**, because that is the
+           state it is in every time the scene is cut to. The moment is the cut. */
+
         main { flex: 1; padding: 16px 40px 24px; display: flex; flex-direction: column; }
         .sidelab {
             height: 34px; flex: none; display: flex; align-items: center;
@@ -172,6 +228,13 @@
         <div class="title" id="hdr-title">Bracket</div>
         <div class="meta" id="hdr-meta"></div>
         <div class="right" id="hdr-right"></div>
+        <div class="join" id="join" hidden>
+            <img id="join-qr" alt="">
+            <div class="lines">
+                <span class="cap">Scan to score</span>
+                <span class="url" id="join-url"></span>
+            </div>
+        </div>
     </header>
     <main id="board">
         <div class="sidelab">A Side</div>
@@ -182,6 +245,11 @@
     <div class="cross" id="cross-down" hidden></div>
     <div class="cross" id="cross-along" hidden></div>
     <div class="cross" id="cross-up" hidden></div>
+    <div id="champ" hidden>
+        <div class="cap">Champion</div>
+        <div class="who" id="champ-name"></div>
+        <div class="ev" id="champ-event"></div>
+    </div>
     <div id="empty">No bracket loaded</div>
 </div>
 
@@ -203,6 +271,28 @@
     // patched straight from the payload's `score` without a re-render.
     let bracket = null;
     let shownRevision = -1;
+    let joinReady = false;
+
+    // Fetched once, deliberately: the address cannot change while the server is
+    // up, and a code that re-renders on every result is a code somebody is
+    // trying to scan while it moves.
+    async function loadJoin() {
+        let data = null;
+        try { data = await fetch('/api/lan').then(r => r.json()); } catch (e) { return; }
+        if (!data || !data.url) return;   // no LAN address: show nothing at all
+        document.getElementById('join-qr').src = data.qr;
+        // The scheme is for the phone, not for the reader — dropping it keeps
+        // the line short enough to also be typed by somebody without a camera.
+        document.getElementById('join-url').innerText = data.url.replace(/^https?:\/\//, '');
+        joinReady = true;
+        paintJoin();
+    }
+
+    // Only while there is a tournament to join: casual nights are untouched,
+    // and once it is over the champion has the wall to itself.
+    function paintJoin() {
+        document.getElementById('join').hidden = !(joinReady && bracket && !bracket.champion);
+    }
 
     async function refetch() {
         try {
@@ -375,6 +465,8 @@
         const board = document.getElementById('board');
         empty.hidden = !!bracket;
         board.style.visibility = bracket ? 'visible' : 'hidden';
+        paintChampion();
+        paintJoin();
         if (!bracket) {
             document.getElementById('hdr-title').innerText = 'Bracket';
             document.getElementById('hdr-meta').innerText = '';
@@ -398,16 +490,28 @@
         const playable = bracket.matches.filter(
             m => !m.conditional || m.status !== 'conditional');
         const played = playable.filter(m => m.status === 'played' || m.status === 'bye').length;
-        document.getElementById('hdr-right').innerText = bracket.champion
-            ? `Champion · ${bracket.champion}`
-            : (bracket.loaded != null
-                ? `A Race ${bracket.a_race} · B Race ${bracket.b_race} · Match ${bracket.loaded} of ${playable.length}`
-                : `A Race ${bracket.a_race} · B Race ${bracket.b_race} · ${played} of ${playable.length} played`);
+        // The champion is not named here any more — it is the plate over the
+        // whole page, and a header line saying the same thing would be the
+        // moment competing with a caption of itself.
+        document.getElementById('hdr-right').innerText = bracket.loaded != null
+            ? `A Race ${bracket.a_race} · B Race ${bracket.b_race} · Match ${bracket.loaded} of ${playable.length}`
+            : `A Race ${bracket.a_race} · B Race ${bracket.b_race} · ${played} of ${playable.length} played`;
         // Synchronously, not on the next animation frame: an OBS browser source
         // that is loaded while its scene is dark paints nothing, so a
         // requestAnimationFrame callback can sit unfired until the cut — and
         // this is the one connector that would be missing when it arrives.
         drawCrossLink();
+    }
+
+    function paintChampion() {
+        // Only the last match of the night reaches this, and the plate stays up
+        // until the bracket is cleared or archived: the wall's job after the
+        // final is to say who won, not to go back to being a table of results.
+        const champ = document.getElementById('champ');
+        champ.hidden = !bracket || !bracket.champion;
+        if (champ.hidden) return;
+        document.getElementById('champ-name').innerText = bracket.champion;
+        document.getElementById('champ-event').innerText = bracket.name;
     }
 
     function drawCrossLink() {
@@ -482,6 +586,7 @@
         ws.onerror = () => ws.close();
     }
     refetch();
+    loadJoin();
     connect();
 </script>
 </body>
