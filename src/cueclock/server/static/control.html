@@ -10,13 +10,14 @@
 
            Two tabs for the page's two jobs: Play is everything touched
            mid-game (clock keys, score bumps) laid out for a thumb — big
-           targets, nothing to scroll past; Match is everything decided before
+           targets, nothing to scroll past; Setup is everything decided before
            play (players, race, ruleset — or the whole tournament). Setup and
            Bracket were separate tabs until 2026-08-13; with a handicapped
-           tournament live, Setup's single "Race to" had nothing true to say
-           ("Race to –") and its name fields could fight the bracket that set
-           them — so the two workflows became two sides of one segmented
-           control that can never both claim the page. */
+           tournament live, the old Setup's single "Race to" had nothing true
+           to say ("Race to –") and its name fields could fight the bracket
+           that set them — so the two workflows became two sides of one
+           segmented control that can never both claim the page, under the
+           name players already knew. */
         :root {
             color-scheme: dark;
             --ink: #0B0E13;
@@ -236,7 +237,7 @@
 
         .danger-row { display: flex; justify-content: flex-end; }
 
-        /* ---- Match tab ---- */
+        /* ---- Setup tab ---- */
         /* The segmented control: which of the two workflows owns the page.
            A toggle rather than more tabs, because the two are exclusive —
            the confusion this replaced was both claiming the page at once. */
@@ -365,12 +366,12 @@
             </section>
     </main>
 
-    <!-- Match: everything decided before play. Two exclusive workflows — a
+    <!-- Setup: everything decided before play. Two exclusive workflows — a
          single race and a tournament — behind one segmented control, so they
          can never both claim the page (which is what the old Setup/Bracket
          split let happen: a handicapped tournament left Setup showing
          "Race to –" over name fields that could fight the draw). -->
-    <main id="view-match" hidden>
+    <main id="view-setup" hidden>
             <div class="seg">
                 <button id="seg-single" onclick="showSeg('single')">Single match</button>
                 <button id="seg-tourney" onclick="showSeg('tourney')">Tournament</button>
@@ -556,30 +557,30 @@
     <button class="active" id="tab-play" onclick="showTab('play')" aria-label="Play tab">
         <span class="glyph">&#9201;</span>Play
     </button>
-    <button id="tab-match" onclick="showTab('match')" aria-label="Match tab">
-        <span class="glyph">&#9776;</span>Match
+    <button id="tab-setup" onclick="showTab('setup')" aria-label="Setup tab">
+        <span class="glyph">&#9881;</span>Setup
     </button>
 </nav>
 
 <script>
     // ---- Tabs ----
-    const TABS = ['play', 'match'];
+    const TABS = ['play', 'setup'];
     function showTab(which) {
         for (const t of TABS) {
             document.getElementById('view-' + t).hidden = t !== which;
             document.getElementById('tab-' + t).classList.toggle('active', t === which);
         }
-        if (which === 'match') refreshBracket();
+        if (which === 'setup') refreshBracket();
     }
 
-    // ---- The Match tab's segmented control ----
+    // ---- The Setup tab's segmented control ----
     // Which workflow owns the page. It follows the bracket by default (built
     // one → you're running a tournament) but a tap wins until the bracket
     // itself changes, so peeking at the other side is never fought.
     let seg = null; // null = follow the bracket
     function showSeg(which) {
         seg = which;
-        renderMatchTab();
+        renderSetupTab();
     }
     function activeSeg() {
         return seg !== null ? seg : (bracket ? 'tourney' : 'single');
@@ -805,7 +806,7 @@
             bracket = (await fetch('/api/bracket').then(r => r.json())).bracket;
         } catch (e) { return; }
         bracketRev = bracket ? bracket.revision : -1;
-        renderMatchTab();
+        renderSetupTab();
         if (switcherOpen) renderSwitcher();
     }
 
@@ -822,7 +823,7 @@
         // a moment apart, and this is the one that is never stale.
         liveMatchId = loaded ? summary.match.id : null;
         liveMatchNames = loaded ? summary.match.names : [];
-        // The Match tab's yield card rides the same broadcast, so it names the
+        // The Setup tab's yield card rides the same broadcast, so it names the
         // loaded match without waiting for a draw refetch.
         if (summary) {
             document.getElementById('yield-match').innerText =
@@ -987,8 +988,8 @@
         }
     }
 
-    // ---- Match tab ----
-    function renderMatchTab() {
+    // ---- Setup tab ----
+    function renderSetupTab() {
         const which = activeSeg();
         document.getElementById('seg-single').classList.toggle('on', which === 'single');
         document.getElementById('seg-tourney').classList.toggle('on', which === 'tourney');
