@@ -249,6 +249,172 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-20 (checkpoint 99 — minigames phase 3: the catalog, safeties, and
+  a Drills tab):** #46's last of three, and the card closes.
+
+  **Shots persist as one JSON per shot, definitions only** (`config/games/shots/`)
+  — the bracket's pattern at the scale it deserves: a directory of small files,
+  no index to maintain, deleting a shot is deleting a file, a torn one skipped
+  rather than taking the catalog down with it. **Attempts, makes and last
+  played are deliberately not in the file**; they come from the journal
+  (`report.shot_records`), which is what makes the phone's make % and `cueclock
+  report` agree by construction, keeps a rename from losing a shot's history,
+  and lets the record be recomputed over every session ever recorded.
+
+  A zone's typed envelope now does the job it was added for: **an unknown type
+  raises rather than degrading.** Silently reading a future circle zone as a
+  cell block would judge the shot against a target nobody set.
+
+  **PLAY serves uniform random**, excluding whatever is currently served so two
+  presses never land on the same shot and read as a stuck key. Weighting toward
+  the shots you miss stays out of scope until the catalog is big enough for the
+  weights to mean anything — the journal already records everything weighting
+  would need, so waiting costs nothing.
+
+  **Safeties came out of the mechanism rather than needing one.** Attribution
+  by vacated ghost is role-general, and because a ball that has already been
+  placed is accounted for against the target it set, picking up a second one
+  leaves exactly one vacated ghost and one unaccounted ball — so the second
+  requirement is captured the same way the first is, with nothing new to learn
+  and no new code path. A scratch fails the cue's zone and an object ball
+  potted during a safety attempt fails its own, both because they are not in
+  the zone they were asked to be in. No pocket attribution anywhere.
+
+  **A third phone tab: Play · Drills · Setup.** The list is the weakness report
+  (name, ball count, last played, make % over attempts); the editor renames,
+  re-sizes and re-places zones on the same 8×4 grid the TV and the table speak,
+  serves one, deletes. It **never** edits ball or ghost positions — the table
+  is a millimetre-accurate input device and a map you can drag balls around on
+  is a second, worse one that would disagree with what the camera measured.
+  "Serve this shot" is the one live control and it refuses rather than
+  switching the mode for you, on the same rule the picker POSTs follow.
+  The tab refetches while it is the one on screen, because a shot captured at
+  the table is the one change nothing on the WebSocket announces.
+
+  Both surfaces rendered for real before shipping, list and editor.
+
+- **2026-08-20 (checkpoint 98 — minigames phase 2: the drill core):** #46's
+  second of three. The shot catalog's whole loop — capture, ghosts, auto-arm,
+  the grid judge, PASS/FAIL — on the platform checkpoint 97 built.
+
+  **Capture is by placing, not configuring.** Set the shot up, press CAPTURE to
+  snapshot the settled layout (the crown names the cue), then **pick a ball up
+  and put it where the shot should leave it**; the cell it lands in becomes
+  that ball's target and the ZONE key sizes the block around it. The system
+  attributes each placement by **which ghost was vacated**, so there is nothing
+  to tell it — and because a ball that has already been placed is accounted for
+  against the target it set, picking a second one up for a safety still leaves
+  exactly one vacated ghost and one unaccounted ball. Anything more ambiguous
+  than that is left alone rather than guessed at. Re-placing in the *same* cell
+  deliberately does not re-anchor, which is what lets a ZONE resize survive the
+  hand still hovering over the ball.
+
+  Placement rather than demonstration is the point: these are shots being
+  practised *because* they don't come off, so a demonstration would rarely land
+  in its own target.
+
+  **The shot arms itself.** Ghosts up, per-ball offsets counting down in the
+  bar and collapsing to a quiet tick inside tolerance; when every ball is
+  placed and the table is still, it arms — no press, because the press would be
+  one more thing to remember while bent over a layout you are rebuilding.
+  "Still" is the vision layer's identity-free motion bit, so a hand still
+  lowering the last ball keeps the shot unarmed. At the arm the **ghosts drop**
+  (the balls are standing on them, so from there they are only noise under the
+  shot) and the **zone stays lit** the whole way, because it is the thing being
+  aimed at.
+
+  **Zones are diamond-grid cells and the criteria is a list.** Point-in-
+  rectangle in table millimetres, one entry per (role → zone) — the list schema
+  in on day one even though most shots carry one entry, because retrofitting a
+  list under a hardcoded cue judge later is pointless churn. A zone grows
+  *toward the middle of the table* when the ZONE key sizes it: growing outward
+  from a rail target would push half the block off the cloth for nothing.
+  Roles at settle use #46's three tiers — crown, then elimination, then
+  lineage — so a mid-shot label swap cannot change the cue's verdict, which
+  a unit test pins by crowning a ball carrying the wrong track id.
+
+  **Both new constants are asserted from `EventConfig`, not tuned.** Placement
+  tolerance 15 mm: 3x `settle_creep_mm` (below it a resting ball's own wobble
+  flips the verdict) and half `moving_enter_mm` (at or above it, a ball the
+  event layer would call *moved* still reads as placed). Cell edge margin
+  5.0 mm, straight off `settle_creep_mm`, applied **outward** so the
+  chalk-line dispute fails toward the player.
+
+  **Two visual defects the real render caught**, both the same shape — a mark
+  drawn underneath the ball it describes. Ghost rings were 30 mm against a
+  28.575 mm ball, so a ball arriving on its ghost hid the ring exactly when it
+  mattered (now 38 mm). And the miss line ran from the ball's *centre*, so a
+  miss of a ball radius or less was entirely invisible (now from the ball's
+  edge, and under a radius it is not drawn at all — the bar's millimetres say
+  it instead).
+
+  **One caption is not the mockup's.** A miss reads `ONE CELL OUT`, not
+  `ONE CELL SHORT`: short and long are relative to the path the cue was meant
+  to take, which nothing here knows. The direction is on the cloth instead,
+  drawn exactly, as the miss line from the ball to the edge it missed — so the
+  caption says how big and the picture says which way, and neither guesses.
+
+- **2026-08-20 (checkpoint 97 — minigames phase 1: the platform, and lag as its
+  proof):** #46's first of three. A **games** session mode, fourth on the mode
+  axis, hosting a registry of on-table minigames — and the deliberately minimal
+  lag trainer, whose whole job is to prove the contract is right before the
+  shot catalog leans on it (the rule of two: the contract is frozen to exactly
+  what these two games need, nothing speculative). `docs/design.md` §11 is the
+  contract's home; `docs/mockups/games-v1.html` remains the design of record for
+  the surfaces.
+
+  **A game is a registered event consumer**, same pattern as `RULESETS`. It
+  receives the event stream plus the resting layout and the cue crown, and
+  provides deck verbs, HUD bar state, on-cloth marks and journal kinds
+  (`server/games.py`). **The vision core is untouched by construction** — games
+  sit at the Hub seam the clock and `last_settle_movers` already use, so the
+  corpus stays green without anything in `vision/` moving, and this checkpoint
+  gates on unit tests rather than a cold battery. Games are fed after the kill
+  switch and before the mode gate: a vision the operator has disowned must not
+  drive a game either, but a mode gate that exists to keep events off the
+  *clock* has no business keeping them off a game.
+
+  **Everything on the cloth is drawn server-side into the display frame**
+  (`display/marks.py` as the language, `display/pipeline.py` as the only
+  rasterizer). The pipeline already owns the table image and the mm→display
+  mapping, so orientation is right for free and OBS stays dumb; the rejected
+  alternative — a browser overlay aligned on top of the Syphon feed — needs an
+  exported mapping that has to survive every recalibration. The cost is stated
+  rather than hidden: **no `--rectify`, no markings**, and `run` says so at
+  startup instead of drawing something approximately right.
+
+  **The picker is deck row 3** — the row that is the mode's own block in every
+  other mode, and whose declared keys are all gated to `match`/`run out`, so
+  nothing collides. It is the one part of the deck the *server* describes
+  rather than `layout.py` declaring, because what is on it depends on which
+  games are registered and which is active. All of it wears the MATCH stripe:
+  every games press is a between-shots press, so there is no new colour.
+
+  **One Games scene, one HUD source.** `/games` is a single browser source with
+  two postures — opaque menu of cards while the picker is up, chrome-only bar
+  once a game owns the table — over the play scene's own Syphon input added
+  full-bleed. Adding a future game touches zero OBS configuration
+  (`scripts/setup_obs_games.py`). The scene follows the Mode key with no dwell
+  and no scene key: games mode is a thing you are *in*, and the mode is the
+  choice. Rendered for real in both postures before shipping (checkpoint 92/96
+  rule) — which is how the menu's never-played card was caught printing `—MM`,
+  a unit attached to nothing.
+
+  **Lag scores every settle, and arms nothing.** Only the best attempt matters,
+  so a bad one is free and a retrieval push you did not mean is a number you
+  ignore rather than a state you have to clear. It measures the **gap** — the
+  ball's near edge to the head rail, not its centre — because that is what a
+  player measures with a piece of chalk, and a ball frozen on the cushion
+  should read ~0 rather than one ball radius. Which ball: the crown (identity
+  tier 1), falling back to elimination on a one-ball table, refusing anything
+  else. `lag_attempt` journal lines; `report.game_stats` derives the cards.
+
+  **One deviation from the mockups, and it is the issue's own rule winning:**
+  the bar's per-ball lockups read `CUE` / `OBJECT` / `BALL n`, not `RED` /
+  `BLACK`. Colour names are an identity claim, and #46 puts 16-ball identity
+  out of scope on every surface — the three tiers it does specify (crown,
+  elimination, lineage) can name a role but never a colour.
+
 - **2026-08-13 (checkpoint 96 — the UX pass: two tabs, freestyle, unlimited
   extensions, a clean morning):** Six items from Steven in one sweep, all
   surface and policy, no detection.

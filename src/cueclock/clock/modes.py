@@ -13,6 +13,13 @@ all of them. Steven runs three (2026-08-02):
 - **no_clock** — actual drills: repeat a shot as long as you like. Vision keeps
   running and keeps journaling (a drill still produces evidence, and a flag
   press still dumps a real ring) — it just doesn't drive the clock.
+- **games** — the minigames platform (#46, 2026-08-20). Like ``no_clock`` to the
+  clock (a game is neither clocked nor racked), but a *different activity*: the
+  deck's row 3 becomes the game picker, OBS cuts to the Games scene, and the
+  event stream feeds the active game instead of only the journal. It is its own
+  mode rather than a flag on ``no_clock`` for the reason every other mode
+  exists — what is on the deck and on the wall differs, so what you are doing
+  has to be nameable.
 
 Modes are hardcoded and ordered: the Stream Deck's Mode key cycles them in the
 order below, so it reads as decreasing formality.
@@ -93,6 +100,15 @@ MODES: dict[str, Mode] = {
         ),
         Mode(
             name="no_clock",
+            clock_live=False,
+            rack_scoped=False,
+            break_floor_mms=None,
+        ),
+        # Minigames (#46). Clock-dead for the same reason `no_clock` is — a
+        # drill has no shot clock — and rack-free because a game is not a rack.
+        # The games layer consumes the same event stream the clock declines.
+        Mode(
+            name="games",
             clock_live=False,
             rack_scoped=False,
             break_floor_mms=None,

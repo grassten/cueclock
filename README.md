@@ -85,11 +85,26 @@ uv run python -m cueclock.cli deck
   `http://localhost:8000/shotclock?view=full&audio=off` (full-screen
   broadcast-style clock scene), `http://localhost:8000/replay` (the REPLAY
   badge — lives only in the Replay scene, which `scripts/setup_obs_replay.py`
-  builds; never assemble it by hand), and `http://localhost:8000/bracket` (the
+  builds; never assemble it by hand), `http://localhost:8000/bracket` (the
   double-elimination bracket, its own scene, built by
-  `scripts/setup_obs_bracket.py`). Phone control page: `/control` — two tabs:
-  Play (clock keys, scores) and Setup (players, race, ruleset — or the whole
+  `scripts/setup_obs_bracket.py`), and `http://localhost:8000/games` (the
+  minigames HUD, its own scene over the overhead feed, built by
+  `scripts/setup_obs_games.py`). Phone control page: `/control` — three tabs:
+  Play (clock keys, scores), Drills (the shot catalog — rename, re-zone,
+  serve, delete) and Setup (players, race, ruleset — or the whole
   tournament behind its Single match / Tournament toggle).
+- **Minigames** (issue #46): the Stream Deck's Mode key has a fourth step,
+  `games`, which turns its bottom row into a game picker and cuts the TV to the
+  Games scene. Two games:
+  **Shots** — capture a practice shot by setting it up and then *placing* the
+  cue ball where the shot should leave it (its diamond-grid cell becomes the
+  target). Playing it back puts ghost markers on the table, arms itself when
+  every ball is on its ghost, and judges where the balls finish: PASS/FAIL with
+  the miss in millimetres and in cells.
+  **Lag** — every settle scores itself, distance off the head rail in
+  millimetres, best of the session on the wall.
+  Markings on the cloth are drawn into the video feed itself, so they need
+  `--rectify` (which the launch command above already passes).
 - **Tournament nights** (issue #43): the Setup tab's Tournament side on
   `/control` builds a
   double-elimination draw from FargoRate ratings (or typed estimates on the
