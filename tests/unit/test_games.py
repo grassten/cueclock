@@ -34,18 +34,22 @@ from cueclock.server.games import (
     PLAY_X1_MM,
     PLAY_Y0_MM,
     PLAY_Y1_MM,
+    POTTED,
     TABLE_LENGTH_MM,
     TABLE_WIDTH_MM,
     Ball,
     GameCtx,
     GameSession,
     GameStats,
+    Judgement,
     LagGame,
     ShotsGame,
     Zone,
+    _judge,
     cell_of,
     cells_out,
     size_face,
+    target_from_dict,
 )
 from cueclock.server.report import game_stats, shot_records
 
@@ -424,6 +428,24 @@ def test_zone_round_trips_through_its_typed_envelope() -> None:
         Zone.from_dict({"type": "circle", "x": 1, "y": 2})
 
 
+def test_a_pot_is_a_target_like_a_zone_is_a_target() -> None:
+    """The typed envelope earning its keep: an addition, not a migration (§11.5)."""
+    assert POTTED.as_dict() == {"type": "potted"}
+    assert target_from_dict(POTTED.as_dict()) is POTTED
+    assert target_from_dict(Zone(col=3, row=1).as_dict()) == Zone(col=3, row=1)
+    with pytest.raises(ValueError, match="unknown zone type"):
+        target_from_dict({"type": "circle", "r": 5})
+
+
+def test_a_pot_is_judged_by_absence_in_both_directions() -> None:
+    """Nothing in `vision/` reports a pot, so a pot is a ball that is not there."""
+    on_table = Ball(x_mm=900.0, y_mm=400.0)
+    assert _judge("obj1", POTTED, None) == Judgement(role="obj1", ok=True, miss_mm=None)
+    assert _judge("obj1", POTTED, on_table) == Judgement(role="obj1", ok=False, miss_mm=None)
+    # The same absence fails a zone — for the cue that is a scratch.
+    assert _judge("cue", Zone(col=0, row=0), None).ok is False
+
+
 def test_a_miss_is_captioned_in_cells_not_in_directions() -> None:
     assert cells_out(60.0) == "INSIDE ONE CELL"
     assert cells_out(214.0) == "ONE CELL OUT"
@@ -452,8 +474,21 @@ def _layout(cue: tuple[float, float], obj: tuple[float, float]) -> list[Ball]:
     ]
 
 
+def _made(cue: tuple[float, float]) -> list[Ball]:
+    """The settle of a shot that went in: the cue at rest, the object gone.
+
+    Absence is the only evidence of a pot there is — nothing in `vision/`
+    reports one — so a made shot is a settle the object ball is not in.
+    """
+    return [Ball(x_mm=cue[0], y_mm=cue[1], is_cue=True, ball_id=1)]
+
+
 def _capture_a_cue_shot(game: ShotsGame, target: tuple[float, float]) -> None:
-    """CAPTURE, pick the cue up and put it at `target`, SAVE."""
+    """CAPTURE, pick the cue up and put it at `target`, SAVE.
+
+    The object ball is never picked up, which is what makes this a potting
+    drill: an object ball you leave alone is one you meant to pot.
+    """
     game.press("capture", _layout(CUE_SPOT, OBJ_SPOT))
     game.tick(_layout(target, OBJ_SPOT), moving=False)
 
@@ -550,7 +585,7 @@ def test_the_shot_arms_itself_when_the_balls_are_on_the_ghosts_and_still() -> No
     assert game.state == ShotsGame.SERVING  # placed, but a hand is still moving
     game.tick(_layout(on_the_ghost, OBJ_SPOT), moving=False)
     assert game.state == ShotsGame.ARMED
-    assert game.hud().stats[0].value == "CUE IN ZONE"
+    assert game.hud().stats[0].value == "CUE IN ZONE · OBJECT POTTED"
 
 
 def test_the_ghosts_drop_at_arm_and_the_zone_stays_lit() -> None:
@@ -578,20 +613,51 @@ def test_the_drawn_grid_is_the_judged_grid() -> None:
     assert (grid.x1_mm, grid.y1_mm) == Zone(col=7, row=3).bounds_mm[2:]
 
 
-def test_a_pass_is_every_requirement_in_its_zone() -> None:
+def test_a_pass_is_every_requirement_met_pot_included() -> None:
     game, lines = _shots()
     _capture_a_cue_shot(game, _centre(1, 2))
     game.press("save", [])
     game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)  # arms
-    game.on_settle(9.0, _layout(_centre(1, 2), (900.0, 700.0)))
+    game.on_settle(9.0, _made(_centre(1, 2)))
     assert game.passed is True
     assert game.state == ShotsGame.VERDICT
     answer = game.hud().answer
     assert answer is not None and (answer.word, answer.fill) == ("PASS", "pass")
     kinds = [kind for kind, _ in lines]
     assert kinds == ["drill_armed", "drill_attempt"]
-    assert lines[-1][1]["misses"] == [{"role": "cue", "miss_mm": 0}]
+    assert lines[-1][1]["misses"] == [
+        {"role": "cue", "ok": True, "wanted": "zone", "miss_mm": 0},
+        {"role": "obj1", "ok": True, "wanted": "pot", "miss_mm": None},
+    ]
     assert lines[-1][1]["pass"] is True
+    assert [s.sub for s in game.hud().stats] == ["IN ZONE", "POTTED"]
+
+
+def test_a_missed_pot_fails_however_good_the_leave_is() -> None:
+    """The whole point of a potting drill (Steven, 2026-08-20).
+
+    The cue finishes dead in the middle of its zone and the object ball is
+    still sitting there. That used to read PASS, on the strength of a leave
+    from a shot that never went in.
+    """
+    game, lines = _shots()
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    game.on_settle(9.0, _layout(_centre(1, 2), (900.0, 700.0)))
+    assert game.passed is False
+    assert [j.ok for j in game.verdict] == [True, False]
+    assert [(s.value, s.sub) for s in game.hud().stats] == [("✓", "IN ZONE"), ("—", "NOT POTTED")]
+    # A ring round the ball that did not drop: no direction to draw, but on a
+    # two-object layout there is very much a *which*.
+    (ring,) = [m for m in game.marks() if isinstance(m, Circle)]
+    assert (ring.role, ring.x_mm, ring.y_mm) == ("miss", 900.0, 700.0)
+    assert lines[-1][1]["misses"][1] == {
+        "role": "obj1",
+        "ok": False,
+        "wanted": "pot",
+        "miss_mm": None,
+    }
 
 
 def test_a_fail_measures_the_miss_and_draws_the_line() -> None:
@@ -601,7 +667,7 @@ def test_a_fail_measures_the_miss_and_draws_the_line() -> None:
     game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
     # One whole cell to the left of the target block's left edge.
     x0, y0, _x1, _y1 = Zone(col=1, row=2).bounds_mm
-    game.on_settle(9.0, _layout((x0 - 214.0, y0 + 60.0), (900.0, 700.0)))
+    game.on_settle(9.0, _made((x0 - 214.0, y0 + 60.0)))
     assert game.passed is False
     answer = game.hud().answer
     assert answer is not None and (answer.word, answer.fill) == ("FAIL", "fail")
@@ -613,7 +679,12 @@ def test_a_fail_measures_the_miss_and_draws_the_line() -> None:
     # ...and starts at the ball's edge, not its centre, or the first ball
     # radius of it would be drawn underneath the ball.
     assert line.x1_mm == pytest.approx(x0 - 214.0 + BALL_RADIUS_MM)
-    assert lines[-1][1]["misses"] == [{"role": "cue", "miss_mm": 214}]
+    assert lines[-1][1]["misses"][0] == {
+        "role": "cue",
+        "ok": False,
+        "wanted": "zone",
+        "miss_mm": 214,
+    }
 
 
 def test_a_scratch_fails_the_cues_requirement() -> None:
@@ -624,7 +695,12 @@ def test_a_scratch_fails_the_cues_requirement() -> None:
     game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
     game.on_settle(9.0, [Ball(x_mm=900.0, y_mm=700.0, ball_id=2)])  # no crown left
     assert game.passed is False
-    assert lines[-1][1]["misses"] == [{"role": "cue", "miss_mm": None}]
+    assert lines[-1][1]["misses"][0] == {
+        "role": "cue",
+        "ok": False,
+        "wanted": "zone",
+        "miss_mm": None,
+    }
     assert game.hud().stats[0].sub == "OFF THE TABLE"
 
 
@@ -642,7 +718,9 @@ def test_the_cue_is_judged_by_the_crown_not_by_lineage() -> None:
             Ball(x_mm=900.0, y_mm=700.0, ball_id=1),
         ],
     )
-    assert game.passed is True
+    # The cue's own requirement, not the whole shot: the object ball is still
+    # on the table, so the pot failed and the shot with it.
+    assert game.verdict[0] == Judgement(role="cue", ok=True, miss_mm=0.0)
 
 
 def test_retry_reserves_the_same_shot_and_next_serves_again() -> None:
@@ -668,7 +746,7 @@ def test_a_miss_smaller_than_a_ball_draws_no_line() -> None:
     game = _served()
     game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
     x0, y0, _x1, _y1 = Zone(col=1, row=2).bounds_mm
-    game.on_settle(9.0, _layout((x0 - 20.0, y0 + 60.0), (900.0, 700.0)))
+    game.on_settle(9.0, _made((x0 - 20.0, y0 + 60.0)))
     assert game.passed is False
     assert not [m for m in game.marks() if isinstance(m, Line)]
     assert game.hud().stats[0].value == "20"
@@ -700,12 +778,30 @@ def test_a_saved_shot_is_one_json_of_definitions(tmp_path: Path) -> None:
     assert path.name == "shot-1.json"
     stored = json.loads(path.read_text())
     assert stored["requirements"] == [
-        {"role": "cue", "zone": {"type": "cells", "col": 1, "row": 2, "w": 1, "h": 1}}
+        {"role": "cue", "target": {"type": "cells", "col": 1, "row": 2, "w": 1, "h": 1}},
+        {"role": "obj1", "target": {"type": "potted"}},
     ]
     assert [e["role"] for e in stored["layout"]] == ["cue", "obj1"]
     # Definitions ONLY: attempts live in the journal, so the file cannot drift
     # from what `cueclock report` says about the same shot.
     assert "attempts" not in stored and "made" not in stored
+
+
+def test_an_object_ball_left_alone_is_one_you_meant_to_pot(tmp_path: Path) -> None:
+    """The per-shot setting, and it needs no key: place it, or leave it.
+
+    Placing an object ball says "finish here" — a safety. Leaving it where it
+    stands says "this one drops". The old default, no requirement at all, is
+    what let a missed pot ride the cue's leave to a PASS.
+    """
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    (shot,) = game.shots
+    assert shot.requirements == [("cue", Zone(col=1, row=2)), ("obj1", POTTED)]
+    assert shot.safety is False  # a pot is not a safety; a patch of cloth is
+    # Nothing to draw for it: a pot is a requirement about all six pockets.
+    assert len(shot.zones()) == 1
 
 
 def test_the_catalog_survives_a_restart_and_reads_its_record_back(tmp_path: Path) -> None:
@@ -782,8 +878,8 @@ def test_a_safety_carries_two_requirements_and_judges_both(tmp_path: Path) -> No
     game.on_settle(9.0, _layout(cue_target, obj_target))
     assert game.passed is True
     assert lines[-1][1]["misses"] == [
-        {"role": "cue", "miss_mm": 0},
-        {"role": "obj1", "miss_mm": 0},
+        {"role": "cue", "ok": True, "wanted": "zone", "miss_mm": 0},
+        {"role": "obj1", "ok": True, "wanted": "zone", "miss_mm": 0},
     ]
     labels = [s.label for s in game.hud().stats]
     assert labels == ["CUE", "OBJECT"]  # never a colour: no 16-ball identity
@@ -798,9 +894,12 @@ def test_an_object_ball_potted_during_a_safety_fails_its_own_zone(tmp_path: Path
     game.tick(_layout(cue_target, obj_target), moving=False)
     game.press("save", [])
     game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
-    game.on_settle(9.0, [Ball(x_mm=cue_target[0], y_mm=cue_target[1], is_cue=True, ball_id=1)])
+    game.on_settle(9.0, _made(cue_target))
     assert game.passed is False
-    assert game.verdict == [("cue", 0.0), ("obj1", None)]
+    assert game.verdict == [
+        Judgement(role="cue", ok=True, miss_mm=0.0),
+        Judgement(role="obj1", ok=False, miss_mm=None),
+    ]
 
 
 def test_the_editor_renames_and_rezones_but_never_moves_a_ball(tmp_path: Path) -> None:
@@ -809,10 +908,10 @@ def test_the_editor_renames_and_rezones_but_never_moves_a_ball(tmp_path: Path) -
     game.press("save", [])
     layout_before = list(game.shots[0].layout)
     moved = Zone(col=5, row=1, w=2, h=2)
-    shot = game.edit("shot-1", name="  Thin cut, top-right  ", zones={"cue": moved.as_dict()})
+    shot = game.edit("shot-1", name="  Thin cut, top-right  ", targets={"cue": moved.as_dict()})
     assert shot is not None
     assert shot.name == "Thin cut, top-right"
-    assert shot.requirements == [("cue", Zone(col=5, row=1, w=2, h=2))]
+    assert shot.requirements == [("cue", Zone(col=5, row=1, w=2, h=2)), ("obj1", POTTED)]
     assert shot.layout == layout_before
     # ...and it is on disk, so it survives the restart the phone never sees.
     reopened, _ = _stored(tmp_path)
@@ -824,7 +923,7 @@ def test_editing_the_served_shot_keeps_it_served(tmp_path: Path) -> None:
     game, _ = _stored(tmp_path)
     _capture_a_cue_shot(game, _centre(1, 2))
     game.press("save", [])
-    game.edit("shot-1", name=None, zones={"cue": Zone(col=6, row=0).as_dict()})
+    game.edit("shot-1", name=None, targets={"cue": Zone(col=6, row=0).as_dict()})
     game.reload()
     assert game.served is not None and game.served.id == "shot-1"
     assert game.state == ShotsGame.SERVING
@@ -849,6 +948,70 @@ def test_the_phone_reads_the_catalog_in_any_mode(tmp_path: Path) -> None:
         assert client.delete("/api/games/shots/nope").status_code == 404
 
 
+def test_a_shot_saved_before_pots_existed_still_has_to_be_potted(tmp_path: Path) -> None:
+    """The one file already on the rig, read the way a new capture would be.
+
+    It was written with the `zone` key and no object requirement at all — the
+    exact shape that let a missed pot pass. Reading gives it the pot, so the
+    fix reaches the shots already saved and not only the next ones.
+    """
+    store_dir = tmp_path / "shots"
+    store_dir.mkdir(parents=True)
+    (store_dir / "shot-1.json").write_text(
+        json.dumps(
+            {
+                "id": "shot-1",
+                "name": "Shot 1",
+                "layout": [
+                    {"role": "cue", "x_mm": 510.6, "y_mm": 700.1},
+                    {"role": "obj1", "x_mm": 1413.9, "y_mm": 484.6},
+                ],
+                "requirements": [
+                    {"role": "cue", "zone": {"type": "cells", "col": 2, "row": 0, "w": 1, "h": 1}}
+                ],
+            }
+        )
+    )
+    game, _ = _stored(tmp_path)
+    (shot,) = game.shots
+    assert shot.requirements == [("cue", Zone(col=2, row=0)), ("obj1", POTTED)]
+
+
+def test_the_phone_switches_a_ball_between_a_pot_and_a_zone(tmp_path: Path) -> None:
+    """The Drills editor's one new control, over the wire it actually uses."""
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    shot = game.edit("shot-1", name=None, targets={"obj1": Zone(col=7, row=0).as_dict()})
+    assert shot is not None and shot.requirements[1] == ("obj1", Zone(col=7, row=0))
+    assert shot.safety is True  # giving it cloth to finish on is what a safety is
+    back = game.edit("shot-1", name=None, targets={"obj1": {"type": "potted"}})
+    assert back is not None and back.requirements[1] == ("obj1", POTTED)
+    assert back.safety is False
+    # ...and it is on disk, so the wall agrees with the phone after a restart.
+    reopened, _ = _stored(tmp_path)
+    assert reopened.shots[0].requirements[1] == ("obj1", POTTED)
+
+
+def test_the_control_page_quotes_the_same_playing_surface(tmp_path: Path) -> None:
+    """The phone's mini-table is the grid, so it maps balls against the same rectangle.
+
+    A fourth copy of the geometry, in JavaScript this time, held to the Python
+    by the same rule the rest of them are: drift fails a test rather than
+    silently drawing a ball in the wrong cell.
+    """
+    import re
+
+    from cueclock.server.app import STATIC_DIR
+
+    page = (STATIC_DIR / "control.html").read_text()
+    found = dict(re.findall(r"(PLAY_[A-Z0-9_]+_MM)\s*=\s*([0-9.]+)", page))
+    assert float(found["PLAY_X0_MM"]) == pytest.approx(PLAY_X0_MM)
+    assert float(found["PLAY_Y0_MM"]) == pytest.approx(PLAY_Y0_MM)
+    assert float(found["PLAY_LENGTH_MM"]) == pytest.approx(PLAY_LENGTH_MM)
+    assert float(found["PLAY_WIDTH_MM"]) == pytest.approx(PLAY_WIDTH_MM)
+
+
 def test_an_unknown_zone_type_is_refused_not_degraded(tmp_path: Path) -> None:
     store_dir = tmp_path / "games" / "shots"
     store_dir.mkdir(parents=True)
@@ -859,13 +1022,14 @@ def test_an_unknown_zone_type_is_refused_not_degraded(tmp_path: Path) -> None:
                 "name": "Shot 1",
                 "layout": [{"role": "cue", "x_mm": 600.0, "y_mm": 600.0}],
                 "requirements": [{"role": "cue", "zone": {"type": "cells", "col": 1, "row": 2}}],
+                # ^ the pre-target key, still readable: one fallback, no migration.
             }
         )
     )
     with TestClient(create_app(score_path=tmp_path / "score.json")) as client:
         assert len(client.get("/api/games/shots").json()["shots"]) == 1
         bad = client.patch(
-            "/api/games/shots/shot-1", json={"zones": {"cue": {"type": "circle", "r": 5}}}
+            "/api/games/shots/shot-1", json={"targets": {"cue": {"type": "circle", "r": 5}}}
         )
         assert bad.status_code == 400
         assert "unknown zone type" in bad.json()["error"]

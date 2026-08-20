@@ -90,8 +90,9 @@ uv run python -m cueclock.cli deck
   `scripts/setup_obs_bracket.py`), and `http://localhost:8000/games` (the
   minigames HUD, its own scene over the overhead feed, built by
   `scripts/setup_obs_games.py`). Phone control page: `/control` — three tabs:
-  Play (clock keys, scores), Drills (the shot catalog — rename, re-zone,
-  serve, delete) and Setup (players, race, ruleset — or the whole
+  Play (clock keys, scores), Drills (the shot catalog — rename, re-target each
+  ball to a zone or the pocket, serve, delete) and Setup (players, race,
+  ruleset — or the whole
   tournament behind its Single match / Tournament toggle).
 - **Minigames** (issue #46): the Stream Deck's Mode key has a fourth step,
   `games`, which turns its bottom row into a game picker and cuts the TV to the

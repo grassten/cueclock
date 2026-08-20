@@ -672,13 +672,15 @@ quantitative ("214 mm"), and capture becomes single-press — the cell containin
 the placed ball is the default target. Each zone is a typed object
 (`{"type": "cells", …}`) so a future zone type is an addition, not a migration.
 
-A shot's pass criteria is a **list of (ball role → zone) requirements**, judged
-with one point-in-rectangle primitive per entry, never a hardcoded cue rule.
-The list schema goes in on day one even while only one entry is ever populated:
-retrofitting a list under a hardcoded judge later is pointless churn. Every
-shot requires the cue in its zone; a **safety** adds the object ball in its own.
-Failure semantics then fall out — a scratch fails the cue's requirement, and an
-object ball potted during a safety attempt has left its zone and fails its own.
+A shot's pass criteria is a **list of (ball role → target) requirements**,
+judged one primitive per entry, never a hardcoded cue rule. The list schema
+goes in on day one even while only one entry is ever populated: retrofitting a
+list under a hardcoded judge later is pointless churn. Every shot requires the
+cue in its zone, and **every object ball is required to do something too** —
+drop, or finish in a zone of its own, which is the per-shot setting **§11.7**
+describes. Failure semantics then fall out — a scratch fails the cue's
+requirement, and an object ball potted during a safety attempt has left its
+zone and fails its own.
 
 **How each role is identified at settle — three tiers, weakest last:**
 
@@ -747,10 +749,12 @@ report` agree by construction rather than by two implementations staying in
 step, keeps a rename from losing a shot's history, and lets the whole record be
 recomputed over every session ever recorded the day the reader improves.
 
-Zones are stored as typed objects, and **an unknown type raises rather than
+Targets are stored as typed objects, and **an unknown type raises rather than
 degrading**: the envelope only earns its keep if reading one this build does
 not understand is an error, because silently treating a future circle zone as a
-cell block would judge the shot against a target nobody set.
+cell block would judge the shot against a target nobody set. It earned its keep
+the same day it shipped — `{"type": "potted"}` (§11.7) went in beside
+`{"type": "cells"}` as an addition, exactly as designed.
 
 `PLAY` serves **uniform random**, excluding whatever is currently served so two
 presses never land on the same shot and read as a stuck key. Weighting toward
@@ -815,3 +819,53 @@ Three things follow, and one is worth flagging beyond the games layer:
   wrong today and nothing should be rescaled — but this is the size of the prize
   for **#16** (ChArUco intrinsics + a measured homography), and the first
   concrete measurement of it.
+
+### 11.7 A pot is a target (2026-08-20)
+
+The first live use of the shots game found the judge answering the wrong
+question. Miss the pot, leave the cue dead in the middle of its zone, and the
+wall said **PASS** — because the only requirement the shot carried was the cue's
+leave. A leave from a shot that never went in is not a shot you made.
+
+The fix is not a special case, it is the missing half of the model: **a pot is a
+target, like a zone is a target.** A requirement is `(role → target)`, and a
+target is a block of diamond cells or `POTTED`. That is precisely the addition
+the typed envelope in §11.5 was put in for — `{"type": "potted"}` beside
+`{"type": "cells"}`, one new type, no migration, and an unknown one still
+raises.
+
+**The evidence is absence, and it was already trusted.** Nothing in `vision/`
+reports a pot: scratch is cue-specific by construction — its whiteness census
+exists precisely to *refuse* a scratch when a potted object ball wore the crown
+— so a ball in a pocket is a ball that is not in the resting roster. The judge
+already read that fact, in the other direction, to fail a safety whose object
+ball dropped. Asking for it on purpose adds no new dependence on the detector.
+
+**The per-shot setting needs no key**, because capture already has the gesture:
+
+- Place a ball at a spot during capture → it must **finish there** (a safety).
+- Leave it where it stands → it must **drop**.
+
+So a potting drill is captured by picking up only the cue, which is what
+capturing a potting drill already looked like. The old default for an untouched
+object ball — *no requirement at all* — is the bug, and it is not a state a
+`Shot` can be in any more: one function fills the list from the layout, and both
+the capture path and the file reader go through it, so a shot saved before any
+of this existed judges the way a newly captured one does.
+
+Two consequences worth naming:
+
+- **A safety is derived, not declared.** It is what having given an object ball
+  a patch of cloth to finish on *means*, so the flag cannot disagree with the
+  requirements the shot is actually judged against.
+- **The cue is never given a pot target.** A potted cue is a scratch — a way to
+  fail a shot, never a way to set one — so the phone offers `POT` on object
+  rows only. The mechanism stays role-general because the judge is; it is the
+  editor that declines to offer it.
+
+On the surfaces: the bar reads `CUE IN ZONE · OBJECT POTTED` while armed, and
+`✓ POTTED` / `— NOT POTTED` at the verdict, with no millimetres either way
+because a pot is binary. On the cloth a failed pot draws an **alarm ring around
+the ball that did not drop** — there is no direction to point (the pockets are
+all six of them), but on a layout with two object balls there is very much a
+*which*, and a ball still sitting there is the whole answer.

@@ -509,10 +509,10 @@ def create_app(
 
     @app.patch("/api/games/shots/{shot_id}")
     async def api_shot_edit(shot_id: str, body: dict[str, object]) -> JSONResponse:
-        """`{name, zones: {role: {"type":"cells", ...}}}` — never ball positions."""
+        """`{name, targets: {role: {"type":"cells"|"potted", …}}}` — never positions."""
         try:
             shot = await hub.edit_shot(shot_id, body)
-        except ValueError as exc:  # an unknown zone type
+        except ValueError as exc:  # an unknown target type
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         if shot is None:
             return JSONResponse({"ok": False, "error": f"no such shot: {shot_id}"}, status_code=404)

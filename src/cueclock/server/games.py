@@ -290,6 +290,74 @@ class Zone:
         )
 
 
+@dataclass(frozen=True)
+class Potted:
+    """A requirement that a ball is **in a pocket** — off the table at settle.
+
+    The other half of a shot, and for a potting drill the half that matters:
+    landing the cue in its zone having missed the pot is a fail, not a pass
+    (Steven, 2026-08-20). It is a target like a zone is a target, so it rides
+    the same `(role → target)` list and the same typed envelope — which is
+    exactly the addition-not-migration the envelope was put in for (§11.5).
+
+    **The evidence is absence.** Nothing in `vision/` reports a pot: scratch is
+    cue-specific by construction (its whiteness census exists precisely to
+    refuse a scratch when a potted *object* ball wore the crown), so a ball in a
+    pocket is a ball that is not in the resting roster. That is the same
+    evidence this game already read the other way round — a missing ball used to
+    be scored as a failed zone — so nothing new is being trusted here, only
+    something already trusted being asked for on purpose.
+    """
+
+    def as_dict(self) -> dict[str, object]:
+        return {"type": "potted"}
+
+
+POTTED = Potted()
+
+# What a requirement can ask of a ball. A union, not a base class: there are
+# two of them, they share no behaviour, and `isinstance` at the three places
+# that care reads better than a protocol nobody else implements.
+Target = Zone | Potted
+
+
+def target_from_dict(raw: Mapping[str, object]) -> Target:
+    """Parse a stored target. Unknown types raise rather than degrade (§11.5)."""
+    if raw.get("type") == "potted":
+        return POTTED
+    return Zone.from_dict(raw)
+
+
+@dataclass(frozen=True)
+class Judgement:
+    """One requirement's answer: did it hold, and by how far did it miss.
+
+    ``miss_mm`` is a distance only when there is one to quote — a zone target
+    with its ball still on the table. It is None both when the ball is off the
+    table (there is nothing to measure from) and for a pot, which is binary.
+    """
+
+    role: str
+    ok: bool
+    miss_mm: float | None = None
+
+
+def _judge(role: str, target: Target, ball: Ball | None) -> Judgement:
+    """Did `ball` — None meaning off the table — satisfy `target`?
+
+    Absence is the evidence in both directions, which is why one judge covers
+    both targets: a ball that is not in the resting roster went in a pocket, so
+    it satisfies a pot and fails any zone. For the cue that second case is a
+    scratch, which fails its zone, which is exactly right.
+    """
+    if isinstance(target, Potted):
+        return Judgement(role=role, ok=ball is None)
+    if ball is None:
+        return Judgement(role=role, ok=False)
+    miss = target.miss_mm(ball.x_mm, ball.y_mm)
+    return Judgement(role=role, ok=miss == 0.0, miss_mm=miss)
+
+
 def cells_out(miss_mm: float) -> str:
     """A miss in the grid's own vocabulary, for the bar's caption.
 
@@ -638,6 +706,32 @@ def _lag_ball(balls: Sequence[Ball]) -> Ball | None:
 CUE_ROLE = "cue"
 
 
+def _requirements(
+    layout: Sequence[tuple[str, float, float]], targets: Mapping[str, Target]
+) -> list[tuple[str, Target]]:
+    """Every ball's requirement, in layout order — a shot's invariant.
+
+    Layout order so the bar's lockups read left to right the way the roles were
+    assigned, and **every object ball has one**: whatever target it was given,
+    or `POTTED` if it was given none.
+
+    That default is the whole per-shot pot/safety setting, and it needs no key.
+    At capture, placing a ball says "finish here" — a safety — and leaving it
+    alone says "this one drops". *No* requirement, which is what an object ball
+    used to get, is what let a shot pass on the strength of the cue's leave
+    having never gone in (Steven, 2026-08-20). So it is not a state a Shot can
+    be in, however it was built and whenever it was written to disk.
+    """
+    out: list[tuple[str, Target]] = []
+    for role, _, _ in layout:
+        target = targets.get(role)
+        if target is not None:
+            out.append((role, target))
+        elif role != CUE_ROLE:
+            out.append((role, POTTED))
+    return out
+
+
 def role_label(role: str, object_count: int) -> str:
     """The face a role wears in the bar.
 
@@ -656,24 +750,30 @@ def role_label(role: str, object_count: int) -> str:
 class Shot:
     """One saved practice shot: a layout, and a list of requirements.
 
-    The criteria is a **list** of (role → zone) from day one even while most
-    shots carry exactly one entry, because retrofitting a list under a
+    The criteria is a **list** of (role → target) from day one even while most
+    shots carry exactly two entries, because retrofitting a list under a
     hardcoded cue judge later is pointless churn (#46). Every shot requires the
-    cue in its zone; a **safety** adds the object ball in its own, which is the
-    full discipline of a safety — hiding the cue *and* leaving the object ball
-    where intended.
+    cue in its zone. **Every object ball is required to do something too**, and
+    which one is the per-shot setting: `POTTED` for a potting drill, a zone for
+    a safety — hiding the cue *and* leaving the object ball where intended.
     """
 
     id: str
     name: str
     layout: list[tuple[str, float, float]]  # (role, x_mm, y_mm) — the ghosts
-    requirements: list[tuple[str, Zone]]
+    requirements: list[tuple[str, Target]]
     attempts: int = 0
     made: int = 0
 
     @property
     def safety(self) -> bool:
-        return any(role != CUE_ROLE for role, _ in self.requirements)
+        """A shot that asks an object ball to *stay* somewhere, rather than drop.
+
+        Read off the targets rather than stored: a safety is not a flag you set,
+        it is what having given an object ball a patch of cloth to finish on
+        means.
+        """
+        return any(role != CUE_ROLE and isinstance(t, Zone) for role, t in self.requirements)
 
     @property
     def object_count(self) -> int:
@@ -697,24 +797,30 @@ class Shot:
             "id": self.id,
             "name": self.name,
             "layout": [{"role": r, "x_mm": x, "y_mm": y} for r, x, y in self.layout],
-            "requirements": [{"role": r, "zone": z.as_dict()} for r, z in self.requirements],
+            "requirements": [{"role": r, "target": t.as_dict()} for r, t in self.requirements],
         }
 
     @classmethod
     def from_state(cls, data: Mapping[str, object]) -> Shot:
-        layout = data.get("layout")
-        requirements = data.get("requirements")
+        raw_layout = data.get("layout")
+        raw_requirements = data.get("requirements")
+        layout = [
+            (str(e["role"]), float(e["x_mm"]), float(e["y_mm"]))
+            for e in (raw_layout if isinstance(raw_layout, list) else [])
+        ]
+        # `zone` is the key shots written before targets existed; every one of
+        # those is a cell block, and reading it costs one fallback. Those shots
+        # also predate the pot requirement, and `_requirements` is what gives it
+        # to them — an old shot judges the way a newly captured one does.
+        targets: dict[str, Target] = {
+            str(e["role"]): target_from_dict(e.get("target") or e["zone"])
+            for e in (raw_requirements if isinstance(raw_requirements, list) else [])
+        }
         return cls(
             id=str(data["id"]),
             name=str(data.get("name") or data["id"]),
-            layout=[
-                (str(e["role"]), float(e["x_mm"]), float(e["y_mm"]))
-                for e in (layout if isinstance(layout, list) else [])
-            ],
-            requirements=[
-                (str(e["role"]), Zone.from_dict(e["zone"]))
-                for e in (requirements if isinstance(requirements, list) else [])
-            ],
+            layout=layout,
+            requirements=_requirements(layout, targets),
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -730,7 +836,8 @@ class Shot:
         }
 
     def zones(self) -> tuple[Mark, ...]:
-        return tuple(_zone_mark(zone, role) for role, zone in self.requirements)
+        """The cloth marks. A pot has no rectangle — the pockets are the table's."""
+        return tuple(_zone_mark(t, role) for role, t in self.requirements if isinstance(t, Zone))
 
     def ghosts(self) -> tuple[Mark, ...]:
         return tuple(
@@ -885,7 +992,7 @@ class ShotsGame(Game):
         self.state = self.IDLE
         self.served: Shot | None = None
         self.offsets: dict[str, float] = {}
-        self.verdict: list[tuple[str, float | None]] = []  # (role, miss_mm | None)
+        self.verdict: list[Judgement] = []
         self.passed = False
         self._armed_ids: dict[str, int] = {}
         self._rest_mm: dict[str, tuple[float, float]] = {}  # where each role came to rest
@@ -1039,11 +1146,7 @@ class ShotsGame(Game):
     def _save(self) -> bool:
         if CUE_ROLE not in self._targets:
             return False
-        # Requirements ride in layout order, so the cue's is always first and
-        # the bar's lockups read left to right the way the roles were assigned.
-        requirements = [
-            (role, self._targets[role]) for role, _, _ in self._snapshot if role in self._targets
-        ]
+        requirements = _requirements(self._snapshot, self._targets)
         shot_id, name = self.store.next_id()
         shot = Shot(
             id=shot_id,
@@ -1087,18 +1190,18 @@ class ShotsGame(Game):
     # the millimetres the camera measured.
 
     def edit(
-        self, shot_id: str, name: str | None, zones: Mapping[str, object] | None
+        self, shot_id: str, name: str | None, targets: Mapping[str, object] | None
     ) -> Shot | None:
         shot = next((s for s in self.shots if s.id == shot_id), None)
         if shot is None:
             return None
         if name is not None and name.strip():
             shot.name = name.strip()[:60]
-        for role, raw in (zones or {}).items():
+        for role, raw in (targets or {}).items():
             if not isinstance(raw, Mapping):
                 continue
             shot.requirements = [
-                (r, Zone.from_dict(raw) if r == role else z) for r, z in shot.requirements
+                (r, target_from_dict(raw) if r == role else t) for r, t in shot.requirements
             ]
         self.store.save(shot)
         return shot
@@ -1203,16 +1306,10 @@ class ShotsGame(Game):
             return
         shot = self.served
         resting = self._resting_roles(shot, balls)
-        verdict: list[tuple[str, float | None]] = []
-        for role, zone in shot.requirements:
-            ball = resting.get(role)
-            # No ball for a role is a failed requirement, not an unjudgeable
-            # one: for the cue that is a scratch (it fails its zone, which is
-            # exactly right), and for an object ball it is a pot, which has
-            # equally left the zone it was asked to stay in.
-            verdict.append((role, None if ball is None else zone.miss_mm(ball.x_mm, ball.y_mm)))
-        self.verdict = verdict
-        self.passed = all(miss == 0.0 for _, miss in verdict)
+        self.verdict = [
+            _judge(role, target, resting.get(role)) for role, target in shot.requirements
+        ]
+        self.passed = all(j.ok for j in self.verdict)
         self._rest_mm = {role: (ball.x_mm, ball.y_mm) for role, ball in resting.items()}
         self.state = self.VERDICT
         shot.attempts += 1
@@ -1223,8 +1320,13 @@ class ShotsGame(Game):
             shot_id=shot.id,
             **{"pass": self.passed},
             misses=[
-                {"role": role, "miss_mm": None if miss is None else round(miss)}
-                for role, miss in verdict
+                {
+                    "role": j.role,
+                    "ok": j.ok,
+                    "wanted": "pot" if isinstance(t, Potted) else "zone",
+                    "miss_mm": None if j.miss_mm is None else round(j.miss_mm),
+                }
+                for (_, t), j in zip(shot.requirements, self.verdict, strict=True)
             ],
         )
 
@@ -1298,18 +1400,30 @@ class ShotsGame(Game):
         return (*grid, *shot.zones(), *self._miss_lines(shot))
 
     def _miss_lines(self, shot: Shot) -> tuple[Mark, ...]:
-        """One dashed alarm line per failed requirement, ball to zone edge.
+        """What alarm red says about a failure, on the cloth.
 
-        The one place alarm red touches the cloth, and the only thing that says
-        which *way* the shot missed — the bar's caption says how big, in cells,
-        and deliberately does not guess at a direction (see `cells_out`).
+        A missed **zone** gets a dashed line from the ball to the edge it missed
+        — the only thing that says which *way* the shot went wrong, since the
+        bar's caption gives magnitude in cells and deliberately does not guess
+        at a direction (see `cells_out`).
+
+        A missed **pot** gets a ring around the ball that did not drop. There is
+        no direction to draw — the pockets are all six of them — but on a layout
+        with two object balls there is very much a *which*, and a ball still
+        sitting there is the whole answer.
         """
         lines: list[Mark] = []
-        for (role, zone), (_, miss) in zip(shot.requirements, self.verdict, strict=True):
+        for (role, target), judged in zip(shot.requirements, self.verdict, strict=True):
             at = self._rest_mm.get(role)
-            if miss is None or miss == 0.0 or at is None:
+            if judged.ok or at is None:
                 continue
-            nx, ny = zone.nearest_mm(*at)
+            if isinstance(target, Potted):
+                lines.append(Circle(x_mm=at[0], y_mm=at[1], role="miss"))
+                continue
+            miss = judged.miss_mm
+            if miss is None:
+                continue
+            nx, ny = target.nearest_mm(*at)
             # From the ball's **edge**, not its centre: a miss of one ball
             # radius or less is entirely underneath the ball, and a line drawn
             # from the centre is a line nobody can see at the exact moment it
@@ -1360,8 +1474,8 @@ class ShotsGame(Game):
                     Stat(
                         label="REQUIRE",
                         value=" · ".join(
-                            f"{role_label(role, shot.object_count)} IN ZONE"
-                            for role, _ in shot.requirements
+                            f"{role_label(role, shot.object_count)} {_wanted_face(target)}"
+                            for role, target in shot.requirements
                         ),
                     ),
                 ),
@@ -1372,7 +1486,8 @@ class ShotsGame(Game):
             context=f"Attempt {shot.attempts}"
             + (f" · Make {shot.make_pct}%" if shot.make_pct is not None else ""),
             stats=tuple(
-                _verdict_stat(role, shot.object_count, miss) for role, miss in self.verdict
+                _verdict_stat(shot.object_count, target, judged)
+                for (_, target), judged in zip(shot.requirements, self.verdict, strict=True)
             ),
             answer=Answer(
                 word="PASS" if self.passed else "FAIL", fill="pass" if self.passed else "fail"
@@ -1428,14 +1543,25 @@ def _offset_stat(role: str, object_count: int, distance: float) -> Stat:
     return Stat(label=label, value=str(round(distance)), unit="MM")
 
 
-def _verdict_stat(role: str, object_count: int, miss: float | None) -> Stat:
-    label = role_label(role, object_count)
-    if miss is None:
-        # Off the table: a scratch for the cue, a pot for an object ball. Both
-        # have left the zone they were asked to be in.
+def _wanted_face(target: Target) -> str:
+    """What a requirement asks for, in the bar's voice."""
+    return "POTTED" if isinstance(target, Potted) else "IN ZONE"
+
+
+def _verdict_stat(object_count: int, target: Target, judged: Judgement) -> Stat:
+    label = role_label(judged.role, object_count)
+    if isinstance(target, Potted):
+        # Binary, so there is no number either way — the caption carries it.
+        if judged.ok:
+            return Stat(label=label, value="✓", sub="POTTED", ok=True)
+        return Stat(label=label, value="—", sub="NOT POTTED")
+    if judged.miss_mm is None:
+        # Off the table when it was asked to finish on it: a scratch for the
+        # cue, a pot for an object ball that was meant to stay put.
         return Stat(label=label, value="—", sub="OFF THE TABLE")
-    if miss == 0.0:
+    if judged.ok:
         return Stat(label=label, value="✓", sub="IN ZONE", ok=True)
+    miss = judged.miss_mm
     return Stat(label=label, value=str(round(miss)), unit="MM", sub=cells_out(miss))
 
 
