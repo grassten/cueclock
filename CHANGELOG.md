@@ -249,6 +249,50 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-20 (checkpoint 99 — minigames phase 3: the catalog, safeties, and
+  a Drills tab):** #46's last of three, and the card closes.
+
+  **Shots persist as one JSON per shot, definitions only** (`config/games/shots/`)
+  — the bracket's pattern at the scale it deserves: a directory of small files,
+  no index to maintain, deleting a shot is deleting a file, a torn one skipped
+  rather than taking the catalog down with it. **Attempts, makes and last
+  played are deliberately not in the file**; they come from the journal
+  (`report.shot_records`), which is what makes the phone's make % and `cueclock
+  report` agree by construction, keeps a rename from losing a shot's history,
+  and lets the record be recomputed over every session ever recorded.
+
+  A zone's typed envelope now does the job it was added for: **an unknown type
+  raises rather than degrading.** Silently reading a future circle zone as a
+  cell block would judge the shot against a target nobody set.
+
+  **PLAY serves uniform random**, excluding whatever is currently served so two
+  presses never land on the same shot and read as a stuck key. Weighting toward
+  the shots you miss stays out of scope until the catalog is big enough for the
+  weights to mean anything — the journal already records everything weighting
+  would need, so waiting costs nothing.
+
+  **Safeties came out of the mechanism rather than needing one.** Attribution
+  by vacated ghost is role-general, and because a ball that has already been
+  placed is accounted for against the target it set, picking up a second one
+  leaves exactly one vacated ghost and one unaccounted ball — so the second
+  requirement is captured the same way the first is, with nothing new to learn
+  and no new code path. A scratch fails the cue's zone and an object ball
+  potted during a safety attempt fails its own, both because they are not in
+  the zone they were asked to be in. No pocket attribution anywhere.
+
+  **A third phone tab: Play · Drills · Setup.** The list is the weakness report
+  (name, ball count, last played, make % over attempts); the editor renames,
+  re-sizes and re-places zones on the same 8×4 grid the TV and the table speak,
+  serves one, deletes. It **never** edits ball or ghost positions — the table
+  is a millimetre-accurate input device and a map you can drag balls around on
+  is a second, worse one that would disagree with what the camera measured.
+  "Serve this shot" is the one live control and it refuses rather than
+  switching the mode for you, on the same rule the picker POSTs follow.
+  The tab refetches while it is the one on screen, because a shot captured at
+  the table is the one change nothing on the WebSocket announces.
+
+  Both surfaces rendered for real before shipping, list and editor.
+
 - **2026-08-20 (checkpoint 98 — minigames phase 2: the drill core):** #46's
   second of three. The shot catalog's whole loop — capture, ghosts, auto-arm,
   the grid judge, PASS/FAIL — on the platform checkpoint 97 built.

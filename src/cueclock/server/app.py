@@ -498,6 +498,42 @@ def create_app(
             )
         return JSONResponse({"ok": True})
 
+    # The shot catalog — the phone's Drills tab. Readable in any mode, because
+    # curating the catalog is couch work; only *serving* one needs the game to
+    # be on the table.
+
+    @app.get("/api/games/shots")
+    async def api_shots() -> dict[str, object]:
+        """Every saved shot, with the journal's verdict on each."""
+        return {"ok": True, "shots": [s.as_dict() for s in hub.games.shots().shots]}
+
+    @app.patch("/api/games/shots/{shot_id}")
+    async def api_shot_edit(shot_id: str, body: dict[str, object]) -> JSONResponse:
+        """`{name, zones: {role: {"type":"cells", ...}}}` — never ball positions."""
+        try:
+            shot = await hub.edit_shot(shot_id, body)
+        except ValueError as exc:  # an unknown zone type
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        if shot is None:
+            return JSONResponse({"ok": False, "error": f"no such shot: {shot_id}"}, status_code=404)
+        return JSONResponse({"ok": True, "shot": shot})
+
+    @app.delete("/api/games/shots/{shot_id}")
+    async def api_shot_delete(shot_id: str) -> JSONResponse:
+        if not await hub.delete_shot(shot_id):
+            return JSONResponse({"ok": False, "error": f"no such shot: {shot_id}"}, status_code=404)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/games/shots/{shot_id}/serve")
+    async def api_shot_serve(shot_id: str) -> JSONResponse:
+        """What the deck's PLAY does, but with this shot instead of a random one."""
+        if not await hub.serve_shot(shot_id):
+            return JSONResponse(
+                {"ok": False, "error": "start the Shots game on the deck first"},
+                status_code=409,
+            )
+        return JSONResponse({"ok": True, "served": shot_id})
+
     @app.get("/api/lan")
     async def api_lan(request: Request) -> JSONResponse:
         """Where the scoring page lives on the LAN, and a QR code of it (#43).

@@ -33,9 +33,12 @@ arrives as arguments.
 
 from __future__ import annotations
 
+import json
+import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from math import hypot
+from pathlib import Path
 
 from cueclock.display.marks import Bracket, Circle, Grid, Line, Mark, Rect
 
@@ -373,6 +376,14 @@ class GameCtx:
 
     log: Callable[..., None]
     players: list[str] = field(default_factory=list)
+    # Where a game may keep **definitions** on disk. Never a score: attempts
+    # live in the journal, which is what makes abandoning a game lossless and
+    # what lets `cueclock report` and the phone agree by construction.
+    store_dir: Path | None = None
+    # Per-shot (attempts, made, last played) derived from the journals. A
+    # callable rather than a value so a game reads it when it needs it and a
+    # server with no log directory simply has no history.
+    history: Callable[[], dict[str, tuple[int, int, str | None]]] = dict
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +424,10 @@ class Game:
 
     def stop(self) -> None:
         """Games mode left, or another game picked. Nothing to save."""
+
+    def reload(self) -> None:
+        """Definitions this game reads changed underneath it (the phone edited
+        the catalog). Re-read them; keep whatever is on the table."""
 
     # -- the event stream -------------------------------------------------
     def on_shot(self, t: float, speed_mms: float | None) -> None:
@@ -621,9 +636,55 @@ class Shot:
     def object_count(self) -> int:
         return sum(1 for role, _, _ in self.layout if role != CUE_ROLE)
 
+    last_played: str | None = None
+
     @property
     def make_pct(self) -> int | None:
         return None if not self.attempts else round(100 * self.made / self.attempts)
+
+    def state_dict(self) -> dict[str, object]:
+        """What goes on disk: **definitions only**.
+
+        Not `attempts`/`made`/`last_played` — those are derived from the
+        journal (`report.shot_records`), which is what makes them survive a
+        deleted file, agree with `cueclock report` by construction, and be
+        recomputable over every session ever recorded.
+        """
+        return {
+            "id": self.id,
+            "name": self.name,
+            "layout": [{"role": r, "x_mm": x, "y_mm": y} for r, x, y in self.layout],
+            "requirements": [{"role": r, "zone": z.as_dict()} for r, z in self.requirements],
+        }
+
+    @classmethod
+    def from_state(cls, data: Mapping[str, object]) -> Shot:
+        layout = data.get("layout")
+        requirements = data.get("requirements")
+        return cls(
+            id=str(data["id"]),
+            name=str(data.get("name") or data["id"]),
+            layout=[
+                (str(e["role"]), float(e["x_mm"]), float(e["y_mm"]))
+                for e in (layout if isinstance(layout, list) else [])
+            ],
+            requirements=[
+                (str(e["role"]), Zone.from_dict(e["zone"]))
+                for e in (requirements if isinstance(requirements, list) else [])
+            ],
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        """The phone's view: the definition plus the journal's verdict on it."""
+        return {
+            **self.state_dict(),
+            "safety": self.safety,
+            "balls": len(self.layout),
+            "attempts": self.attempts,
+            "made": self.made,
+            "make_pct": self.make_pct,
+            "last_played": self.last_played,
+        }
 
     def zones(self) -> tuple[Mark, ...]:
         return tuple(_zone_mark(zone, role) for role, zone in self.requirements)
@@ -633,6 +694,75 @@ class Shot:
             Circle(x_mm=x, y_mm=y, role=CUE_ROLE if role == CUE_ROLE else "object")
             for role, x, y in self.layout
         )
+
+
+class ShotStore:
+    """The catalog on disk: **one JSON per shot, definitions only**.
+
+    The bracket's persistence pattern, at the scale it deserves — a directory
+    of small files, no index to maintain and nothing that can get out of step
+    with itself. Deleting a shot is deleting a file; a torn one is skipped
+    rather than taking the catalog down with it.
+
+    With no directory (a bare in-memory server, or a test) it is a working
+    catalog that simply forgets on restart, so nothing above it has to branch
+    on whether persistence exists.
+    """
+
+    def __init__(self, directory: Path | None) -> None:
+        self.directory = directory
+        self._memory: dict[str, Shot] = {}
+
+    def all(self) -> list[Shot]:
+        """Every saved shot, oldest id first — which is capture order."""
+        if self.directory is None:
+            return sorted(self._memory.values(), key=lambda s: _shot_number(s.id))
+        shots: list[Shot] = []
+        for path in sorted(self.directory.glob("shot-*.json")):
+            try:
+                shots.append(Shot.from_state(json.loads(path.read_text())))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue  # a torn or future-typed file must not hide the rest
+        return sorted(shots, key=lambda s: _shot_number(s.id))
+
+    def save(self, shot: Shot) -> None:
+        if self.directory is None:
+            self._memory[shot.id] = shot
+            return
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.directory / f"{shot.id}.json"
+        # The temp-file rename `MatchScore` and the bracket use: never leave a
+        # torn file where the loader looks.
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(shot.state_dict(), indent=2) + "\n")
+        tmp.replace(path)
+
+    def delete(self, shot_id: str) -> bool:
+        if self.directory is None:
+            return self._memory.pop(shot_id, None) is not None
+        path = self.directory / f"{Path(shot_id).name}.json"
+        if not path.is_file():
+            return False
+        path.unlink()
+        return True
+
+    def next_id(self) -> tuple[str, str]:
+        """The next free `(id, auto-name)` — the number the SAVE key promises.
+
+        The lowest unused number rather than a count, so deleting shot 3 and
+        capturing again reuses 3 instead of leaving a hole and a name that
+        counts something else.
+        """
+        used = {_shot_number(shot.id) for shot in self.all()}
+        n = 1
+        while n in used:
+            n += 1
+        return f"shot-{n}", f"Shot {n}"
+
+
+def _shot_number(shot_id: str) -> int:
+    tail = shot_id.removeprefix("shot-")
+    return int(tail) if tail.isdigit() else 0
 
 
 def _zone_mark(zone: Zone, role: str) -> Rect:
@@ -707,6 +837,7 @@ class ShotsGame(Game):
 
     def __init__(self, ctx: GameCtx) -> None:
         super().__init__(ctx)
+        self.store = ShotStore(None if ctx.store_dir is None else ctx.store_dir / "shots")
         self.shots: list[Shot] = []
         self.state = self.IDLE
         self.served: Shot | None = None
@@ -728,8 +859,31 @@ class ShotsGame(Game):
     def transient(self) -> bool:
         return self.state == self.CAPTURING
 
+    def start(self) -> None:
+        self.reload()
+
     def stop(self) -> None:
         self._cancel_capture()
+
+    def reload(self) -> None:
+        """Re-read the catalog, and re-derive every shot's record from the journal.
+
+        Called when the game starts and whenever the phone edits the catalog
+        underneath it. Definitions come off disk; **attempts, makes and last
+        played come from the journal**, so a shot renamed from the couch
+        mid-session keeps its history and a shot whose file was deleted takes
+        none of it with it.
+        """
+        history = self.ctx.history()
+        served = None if self.served is None else self.served.id
+        self.shots = self.store.all()
+        for shot in self.shots:
+            shot.attempts, shot.made, shot.last_played = history.get(shot.id, (0, 0, None))
+        # Keep serving the same shot across an edit — its zones may have just
+        # moved, which is exactly the thing you would want to try immediately.
+        self.served = next((s for s in self.shots if s.id == served), None)
+        if self.served is None and self.state in (self.SERVING, self.ARMED, self.VERDICT):
+            self.state = self.IDLE
 
     # -- the deck row -----------------------------------------------------
 
@@ -837,7 +991,7 @@ class ShotsGame(Game):
         return True
 
     def _next_name(self) -> str:
-        return f"Shot {len(self.shots) + 1}"
+        return self.store.next_id()[1]
 
     def _save(self) -> bool:
         if CUE_ROLE not in self._targets:
@@ -847,12 +1001,14 @@ class ShotsGame(Game):
         requirements = [
             (role, self._targets[role]) for role, _, _ in self._snapshot if role in self._targets
         ]
+        shot_id, name = self.store.next_id()
         shot = Shot(
-            id=f"shot-{len(self.shots) + 1}",
-            name=self._next_name(),
+            id=shot_id,
+            name=name,
             layout=list(self._snapshot),
             requirements=requirements,
         )
+        self.store.save(shot)
         self.shots.append(shot)
         self._cancel_capture()
         self._serve(shot)  # saving loads it, so the loop starts without a press
@@ -861,8 +1017,54 @@ class ShotsGame(Game):
     # -- serving and arming -----------------------------------------------
 
     def _pick(self) -> Shot | None:
-        """Which shot PLAY serves. Newest for now — random serving is #46 phase 3."""
-        return self.shots[-1] if self.shots else None
+        """Which shot PLAY serves: **uniform random**, deliberately.
+
+        Weighting toward the shots you miss is the obvious next move and is out
+        of scope until the catalog is populated enough for the weights to mean
+        anything (#46) — the journal is already recording everything that
+        weighting would need, so it costs nothing to wait.
+
+        A single-shot catalog serves that shot; otherwise the one currently
+        served is excluded, so PLAY twice never lands on the same shot twice
+        and reads as a broken key.
+        """
+        pool = [s for s in self.shots if s is not self.served] or self.shots
+        # Which practice shot comes next is not a secret.
+        return random.choice(pool) if pool else None  # nosec B311
+
+    def serve_id(self, shot_id: str) -> bool:
+        """Serve one named shot — the phone's "Serve this shot"."""
+        return self._serve(next((s for s in self.shots if s.id == shot_id), None))
+
+    # -- the catalog (the phone's Drills tab) ------------------------------
+    #
+    # Rename, re-size, re-place a zone, delete. **Never** ball or ghost
+    # positions: the table is the only positional input device, and a map you
+    # can drag balls around on is a second, worse one that would disagree with
+    # the millimetres the camera measured.
+
+    def edit(
+        self, shot_id: str, name: str | None, zones: Mapping[str, object] | None
+    ) -> Shot | None:
+        shot = next((s for s in self.shots if s.id == shot_id), None)
+        if shot is None:
+            return None
+        if name is not None and name.strip():
+            shot.name = name.strip()[:60]
+        for role, raw in (zones or {}).items():
+            if not isinstance(raw, Mapping):
+                continue
+            shot.requirements = [
+                (r, Zone.from_dict(raw) if r == role else z) for r, z in shot.requirements
+            ]
+        self.store.save(shot)
+        return shot
+
+    def remove(self, shot_id: str) -> bool:
+        if not self.store.delete(shot_id):
+            return False
+        self.reload()
+        return True
 
     def _serve(self, shot: Shot | None) -> bool:
         if shot is None:
@@ -1227,9 +1429,13 @@ class GameSession:
         self,
         log: Callable[..., None],
         stats: Callable[[], dict[str, GameStats]] | None = None,
+        store_dir: Path | None = None,
+        history: Callable[[], dict[str, tuple[int, int, str | None]]] = dict,
     ) -> None:
         self._log = log
         self._stats = stats
+        self._store_dir = store_dir
+        self._history = history
         self.active: Game | None = None
         # The live layout, rebound by the camera thread. A tuple so a reader on
         # the asyncio loop can never see it half-written.
@@ -1244,11 +1450,39 @@ class GameSession:
         if factory is None:
             return False
         self.back()
-        game = factory(GameCtx(log=self._log, players=players))
+        game = factory(self._ctx(players))
         self.active = game
         self._log(GAME_STARTED, game=name, players=players)
         game.start()
         return True
+
+    def _ctx(self, players: list[str] | None = None) -> GameCtx:
+        return GameCtx(
+            log=self._log,
+            players=players or [],
+            store_dir=self._store_dir,
+            history=self._history,
+        )
+
+    def shots(self) -> ShotsGame:
+        """A shot catalog to read, whatever mode the session is in.
+
+        The phone's Drills tab has to work from the couch with a match on the
+        wall, so it reads the same directory the game does rather than needing
+        a live game to ask. Disk is the single source of truth; when a game
+        *is* live, an edit tells it to :meth:`Game.reload`.
+        """
+        active = self.active
+        if isinstance(active, ShotsGame):
+            return active
+        game = ShotsGame(self._ctx())
+        game.reload()
+        return game
+
+    def reload_active(self) -> None:
+        """The catalog changed under a live game — have it re-read."""
+        if self.active is not None:
+            self.active.reload()
 
     def back(self) -> None:
         """End the active game and show the picker. Nothing is parked."""

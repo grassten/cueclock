@@ -428,7 +428,14 @@ class Hub:
         # mode axis exactly as the bracket is layered on the score — outside
         # `games` mode the payload carries `null` and every page behaves as it
         # did before the feature existed.
-        self.games = GameSession(log=self._log, stats=self._game_stats)
+        self.games = GameSession(
+            log=self._log,
+            stats=self._game_stats,
+            # Definitions beside the score and the bracket; attempts stay in
+            # the journal, which `history` reads back.
+            store_dir=None if score_path is None else score_path.parent / "games",
+            history=self._shot_history,
+        )
         # Where the games layer's on-cloth marks go: `cueclock run` points this
         # at the display pipeline, which owns the mm→display mapping (#46). The
         # tick loop calls it only when the marks change, so a still table costs
@@ -525,6 +532,18 @@ class Hub:
         from cueclock.server.report import game_stats
 
         return game_stats(self.archive_dir)
+
+    def _shot_history(self) -> dict[str, tuple[int, int, str | None]]:
+        """Per-shot (attempts, made, last played), off the journals.
+
+        Same reasoning as `_game_stats`: nothing in the games layer keeps a
+        score, so the phone's make % and `cueclock report` cannot disagree.
+        """
+        if self.archive_dir is None:
+            return {}
+        from cueclock.server.report import shot_records
+
+        return shot_records(self.archive_dir)
 
     def live_scores(self) -> tuple[int, int]:
         """What the loaded match's two players are on right now.
@@ -887,6 +906,52 @@ class Hub:
     async def press_game(self, verb: str) -> bool:
         """A press on the games row. False = no such verb right now."""
         if not self.in_games or not self.games.press(verb):
+            return False
+        await self.broadcast(self.clock.snapshot())
+        return True
+
+    async def edit_shot(self, shot_id: str, body: Mapping[str, object]) -> dict[str, object] | None:
+        """Rename or re-zone one saved shot — the phone's Drills editor.
+
+        Positions are never in `body`: the table is the only positional input
+        device (#46), so a shot's balls and ghosts come from the capture that
+        made it and from nowhere else.
+        """
+        zones = body.get("zones")
+        shot = self.games.shots().edit(
+            shot_id,
+            name=str(body["name"]) if isinstance(body.get("name"), str) else None,
+            zones=zones if isinstance(zones, Mapping) else None,
+        )
+        if shot is None:
+            return None
+        self.games.reload_active()
+        self._log("drill_edited", shot_id=shot.id, name=shot.name)
+        await self.broadcast(self.clock.snapshot())
+        return shot.as_dict()
+
+    async def delete_shot(self, shot_id: str) -> bool:
+        if not self.games.shots().remove(shot_id):
+            return False
+        self.games.reload_active()
+        self._log("drill_deleted", shot_id=shot_id)
+        await self.broadcast(self.clock.snapshot())
+        return True
+
+    async def serve_shot(self, shot_id: str) -> bool:
+        """Serve one named shot. Needs the Shots game to be the one on the table.
+
+        It refuses rather than starting the game for you, on the same rule the
+        picker POSTs follow: what is on the wall and under your hand is the
+        deck's to say, and a phone tap that silently changed the mode would be
+        a second answer to that question.
+        """
+        from cueclock.server.games import ShotsGame
+
+        active = self.games.active
+        if not self.in_games or not isinstance(active, ShotsGame):
+            return False
+        if not active.serve_id(shot_id):
             return False
         await self.broadcast(self.clock.snapshot())
         return True

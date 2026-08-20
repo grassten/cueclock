@@ -732,3 +732,37 @@ OBS gets **one Games scene**: the overhead feed full-bleed plus one full-canvas
 `/games` source, and nothing else. Adding a future game touches zero OBS
 configuration. The scene follows the Mode key with no dwell and no scene key of
 its own — games mode is a thing you are *in*, and the mode **is** the choice.
+
+### 11.5 The catalog, and what the phone may touch
+
+Shots persist as **one JSON per shot, definitions only** — the bracket's
+persistence pattern at the scale it deserves: a directory of small files, no
+index to maintain, deleting a shot is deleting a file, and a torn one is
+skipped rather than taking the catalog down with it. **Attempts, makes and last
+played are not in the file.** They are derived from the journal
+(`report.shot_records`), which is what makes the phone's make % and `cueclock
+report` agree by construction rather than by two implementations staying in
+step, keeps a rename from losing a shot's history, and lets the whole record be
+recomputed over every session ever recorded the day the reader improves.
+
+Zones are stored as typed objects, and **an unknown type raises rather than
+degrading**: the envelope only earns its keep if reading one this build does
+not understand is an error, because silently treating a future circle zone as a
+cell block would judge the shot against a target nobody set.
+
+`PLAY` serves **uniform random**, excluding whatever is currently served so two
+presses never land on the same shot and read as a stuck key. Weighting toward
+the shots you miss is the obvious next move and stays out of scope until the
+catalog is big enough for the weights to mean anything — the journal is already
+recording everything that weighting would need, so waiting costs nothing.
+
+**The phone's Drills tab curates; the table captures.** The list is the weakness
+report — name, ball count, last played, make % over attempts. The editor
+renames, re-sizes and re-places zones on the same 8×4 grid the TV and the table
+speak, serves a specific shot, and deletes. It **never** edits ball or ghost
+positions, and that is not an omission: the table is a millimetre-accurate
+input device, and a map you can drag balls around on is a second, worse one
+that would disagree with what the camera measured. "Serve this shot" is the one
+live control, and it **refuses rather than switching the mode for you** — the
+same rule the picker POSTs follow, because what is on the wall and under your
+hand is the deck's to say.

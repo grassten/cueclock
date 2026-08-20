@@ -610,3 +610,200 @@ def test_a_miss_smaller_than_a_ball_draws_no_line() -> None:
     assert game.passed is False
     assert not [m for m in game.marks() if isinstance(m, Line)]
     assert game.hud().stats[0].value == "20"
+
+
+# ---------------------------------------------------------------------------
+# The catalog: persistence, safeties, and the phone's endpoints
+# ---------------------------------------------------------------------------
+
+
+def _stored(tmp_path: Path, history: dict[str, tuple[int, int, str | None]] | None = None):
+    lines: list[tuple[str, dict[str, object]]] = []
+    game = ShotsGame(
+        GameCtx(
+            log=lambda kind, **detail: lines.append((kind, detail)),
+            store_dir=tmp_path,
+            history=lambda: history or {},
+        )
+    )
+    game.start()
+    return game, lines
+
+
+def test_a_saved_shot_is_one_json_of_definitions(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    (path,) = sorted((tmp_path / "shots").glob("*.json"))
+    assert path.name == "shot-1.json"
+    stored = json.loads(path.read_text())
+    assert stored["requirements"] == [
+        {"role": "cue", "zone": {"type": "cells", "col": 1, "row": 2, "w": 1, "h": 1}}
+    ]
+    assert [e["role"] for e in stored["layout"]] == ["cue", "obj1"]
+    # Definitions ONLY: attempts live in the journal, so the file cannot drift
+    # from what `cueclock report` says about the same shot.
+    assert "attempts" not in stored and "made" not in stored
+
+
+def test_the_catalog_survives_a_restart_and_reads_its_record_back(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    reopened, _ = _stored(tmp_path, history={"shot-1": (8, 2, "Aug 18")})
+    (shot,) = reopened.shots
+    assert (shot.id, shot.name) == ("shot-1", "Shot 1")
+    assert (shot.attempts, shot.made, shot.make_pct) == (8, 2, 25)
+    assert shot.last_played == "Aug 18"
+
+
+def test_a_deleted_number_is_reused_by_the_next_capture(tmp_path: Path) -> None:
+    """The SAVE key promises a name; the lowest free number is what it can keep."""
+    game, _ = _stored(tmp_path)
+    for _ in range(2):
+        _capture_a_cue_shot(game, _centre(1, 2))
+        game.press("save", [])
+    assert [s.id for s in game.shots] == ["shot-1", "shot-2"]
+    assert game.remove("shot-1") is True
+    assert [s.id for s in game.shots] == ["shot-2"]
+    game.press("capture", _layout(CUE_SPOT, OBJ_SPOT))
+    assert game.verbs()[-1].sub == "SHOT 1"
+
+
+def test_a_torn_file_does_not_hide_the_rest_of_the_catalog(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    (tmp_path / "shots" / "shot-9.json").write_text("{ not json")
+    game.reload()
+    assert [s.id for s in game.shots] == ["shot-1"]
+
+
+def test_play_serves_uniformly_and_never_twice_in_a_row(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    for cell in ((1, 2), (5, 1), (3, 0)):
+        _capture_a_cue_shot(game, _centre(*cell))
+        game.press("save", [])
+    served = [game.served.id]
+    for _ in range(12):
+        game.press("play", [])
+        assert game.served is not None
+        assert game.served.id != served[-1]  # PLAY twice must not read as a stuck key
+        served.append(game.served.id)
+    assert len(set(served)) == 3  # and over a dozen presses it reaches all of them
+
+
+def test_a_single_shot_catalog_serves_that_shot(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    assert game.press("play", []) is True
+    assert game.served is not None and game.served.id == "shot-1"
+
+
+def test_a_safety_carries_two_requirements_and_judges_both(tmp_path: Path) -> None:
+    """Pick up the cue, place it; pick up the object ball, place it. Two zones."""
+    game, lines = _stored(tmp_path)
+    game.press("capture", _layout(CUE_SPOT, OBJ_SPOT))
+    cue_target, obj_target = _centre(1, 2), _centre(7, 0)
+    game.tick(_layout(cue_target, OBJ_SPOT), moving=False)
+    # The cue is accounted for against the target it just set, so the object
+    # ball coming off its ghost is still unambiguous.
+    game.tick(_layout(cue_target, obj_target), moving=False)
+    assert set(game._targets) == {"cue", "obj1"}
+    game.press("save", [])
+    shot = game.served
+    assert shot is not None and shot.safety is True
+    assert [role for role, _ in shot.requirements] == ["cue", "obj1"]
+
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)  # arms
+    game.on_settle(9.0, _layout(cue_target, obj_target))
+    assert game.passed is True
+    assert lines[-1][1]["misses"] == [
+        {"role": "cue", "miss_mm": 0},
+        {"role": "obj1", "miss_mm": 0},
+    ]
+    labels = [s.label for s in game.hud().stats]
+    assert labels == ["CUE", "OBJECT"]  # never a colour: no 16-ball identity
+    assert game.hud().name.endswith("· Safety")
+
+
+def test_an_object_ball_potted_during_a_safety_fails_its_own_zone(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    game.press("capture", _layout(CUE_SPOT, OBJ_SPOT))
+    cue_target, obj_target = _centre(1, 2), _centre(7, 0)
+    game.tick(_layout(cue_target, OBJ_SPOT), moving=False)
+    game.tick(_layout(cue_target, obj_target), moving=False)
+    game.press("save", [])
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    game.on_settle(9.0, [Ball(x_mm=cue_target[0], y_mm=cue_target[1], is_cue=True, ball_id=1)])
+    assert game.passed is False
+    assert game.verdict == [("cue", 0.0), ("obj1", None)]
+
+
+def test_the_editor_renames_and_rezones_but_never_moves_a_ball(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    layout_before = list(game.shots[0].layout)
+    moved = Zone(col=5, row=1, w=2, h=2)
+    shot = game.edit("shot-1", name="  Thin cut, top-right  ", zones={"cue": moved.as_dict()})
+    assert shot is not None
+    assert shot.name == "Thin cut, top-right"
+    assert shot.requirements == [("cue", Zone(col=5, row=1, w=2, h=2))]
+    assert shot.layout == layout_before
+    # ...and it is on disk, so it survives the restart the phone never sees.
+    reopened, _ = _stored(tmp_path)
+    assert reopened.shots[0].name == "Thin cut, top-right"
+
+
+def test_editing_the_served_shot_keeps_it_served(tmp_path: Path) -> None:
+    """Moving a zone is exactly the thing you would want to try immediately."""
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    game.edit("shot-1", name=None, zones={"cue": Zone(col=6, row=0).as_dict()})
+    game.reload()
+    assert game.served is not None and game.served.id == "shot-1"
+    assert game.state == ShotsGame.SERVING
+    (zone,) = [m for m in game.marks() if isinstance(m, Rect)]
+    assert zone.x_mm == pytest.approx(6 * CELL_LENGTH_MM)
+
+
+def test_deleting_the_served_shot_leaves_nothing_served(tmp_path: Path) -> None:
+    game, _ = _stored(tmp_path)
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    assert game.remove("shot-1") is True
+    assert game.served is None and game.state == ShotsGame.IDLE
+    assert {v.name: v.enabled for v in game.verbs()}["play"] is False
+
+
+def test_the_phone_reads_the_catalog_in_any_mode(tmp_path: Path) -> None:
+    with TestClient(create_app(score_path=tmp_path / "score.json")) as client:
+        assert client.get("/api/games/shots").json() == {"ok": True, "shots": []}
+        assert client.post("/api/games/shots/shot-1/serve").status_code == 409  # not in games
+        assert client.patch("/api/games/shots/nope", json={"name": "x"}).status_code == 404
+        assert client.delete("/api/games/shots/nope").status_code == 404
+
+
+def test_an_unknown_zone_type_is_refused_not_degraded(tmp_path: Path) -> None:
+    store_dir = tmp_path / "games" / "shots"
+    store_dir.mkdir(parents=True)
+    (store_dir / "shot-1.json").write_text(
+        json.dumps(
+            {
+                "id": "shot-1",
+                "name": "Shot 1",
+                "layout": [{"role": "cue", "x_mm": 600.0, "y_mm": 600.0}],
+                "requirements": [{"role": "cue", "zone": {"type": "cells", "col": 1, "row": 2}}],
+            }
+        )
+    )
+    with TestClient(create_app(score_path=tmp_path / "score.json")) as client:
+        assert len(client.get("/api/games/shots").json()["shots"]) == 1
+        bad = client.patch(
+            "/api/games/shots/shot-1", json={"zones": {"cue": {"type": "circle", "r": 5}}}
+        )
+        assert bad.status_code == 400
+        assert "unknown zone type" in bad.json()["error"]
