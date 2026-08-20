@@ -94,10 +94,16 @@ uv run python -m cueclock.cli deck
   tournament behind its Single match / Tournament toggle).
 - **Minigames** (issue #46): the Stream Deck's Mode key has a fourth step,
   `games`, which turns its bottom row into a game picker and cuts the TV to the
-  Games scene. Launch game: **Lag** — every settle scores itself, distance off
-  the head rail in millimetres, best of the session on the wall. Markings on
-  the cloth are drawn into the video feed itself, so they need `--rectify`
-  (which the launch command above already passes).
+  Games scene. Two games:
+  **Shots** — capture a practice shot by setting it up and then *placing* the
+  cue ball where the shot should leave it (its diamond-grid cell becomes the
+  target). Playing it back puts ghost markers on the table, arms itself when
+  every ball is on its ghost, and judges where the balls finish: PASS/FAIL with
+  the miss in millimetres and in cells.
+  **Lag** — every settle scores itself, distance off the head rail in
+  millimetres, best of the session on the wall.
+  Markings on the cloth are drawn into the video feed itself, so they need
+  `--rectify` (which the launch command above already passes).
 - **Tournament nights** (issue #43): the Setup tab's Tournament side on
   `/control` builds a
   double-elimination draw from FargoRate ratings (or typed estimates on the

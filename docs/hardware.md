@@ -393,10 +393,16 @@ and nothing collides. Two levels, maximum: picker → game.
 
 ```
         col 1        col 2        col 3        col 4        col 5
-row 3   LAG          (·)          (·)          (·)          (·)      ← the picker
+row 3   SHOTS        LAG          (·)          (·)          (·)      ← the picker
         ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 
-row 3   BACK         (·)          (·)          (·)          (·)      ← a game's verbs
+row 3   BACK         CAPTURE      PLAY|NEXT    RETRY        (·)      ← SHOTS' verbs
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+
+row 3   CANCEL       1×1 / 2×1    (·)          (·)          SAVE     ← capture page
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+
+row 3   BACK         (·)          (·)          (·)          (·)      ← LAG's verbs
         ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
 
@@ -405,6 +411,22 @@ This row is the one part of the deck the server describes rather than
 which one is active, so `GET /api/state` carries the faces and `games_keys()`
 turns them into keys. Everything else about them is ordinary — MATCH stripe,
 dark when unpressable, no reflow when a key leaves.
+
+Three things about SHOTS' row are decisions rather than mechanics:
+
+- **PLAY and NEXT are one key with two faces** — the Replay-key precedent, and
+  a deviation from #46's own key list. With uniform-random serving they are the
+  same act, and the face says which press this is: `PLAY` with nothing served,
+  `NEXT` once something is. **RETRY is separate on purpose**: re-serving the
+  *same* shot and serving *another* must never be one mispress apart.
+- **The capture page takes the whole row** (the Flag reason-page mechanism), so
+  BACK steps aside while it is open — leaving games mode halfway through
+  capturing a shot is not a thing anybody means to do with one press.
+- **ZONE is a cycle key** (current size bright over next dim, the deck's own
+  grammar: 1×1 → 2×1 → 1×2 → 2×2) and it sizes the **most recently placed**
+  target, so there is no selection to make. **SAVE stays dark until the cue's
+  target exists**, then arms with the auto-name on its second line (`SHOT 15`)
+  — rule 3's other legitimate job, naming what a press writes.
 
 `*` = only while a **bracket** is loaded (#43); dark on every other night, so
 the casual deck is exactly the deck it has always been. The reason page still

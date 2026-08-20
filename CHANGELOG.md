@@ -249,6 +249,67 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-20 (checkpoint 98 — minigames phase 2: the drill core):** #46's
+  second of three. The shot catalog's whole loop — capture, ghosts, auto-arm,
+  the grid judge, PASS/FAIL — on the platform checkpoint 97 built.
+
+  **Capture is by placing, not configuring.** Set the shot up, press CAPTURE to
+  snapshot the settled layout (the crown names the cue), then **pick a ball up
+  and put it where the shot should leave it**; the cell it lands in becomes
+  that ball's target and the ZONE key sizes the block around it. The system
+  attributes each placement by **which ghost was vacated**, so there is nothing
+  to tell it — and because a ball that has already been placed is accounted for
+  against the target it set, picking a second one up for a safety still leaves
+  exactly one vacated ghost and one unaccounted ball. Anything more ambiguous
+  than that is left alone rather than guessed at. Re-placing in the *same* cell
+  deliberately does not re-anchor, which is what lets a ZONE resize survive the
+  hand still hovering over the ball.
+
+  Placement rather than demonstration is the point: these are shots being
+  practised *because* they don't come off, so a demonstration would rarely land
+  in its own target.
+
+  **The shot arms itself.** Ghosts up, per-ball offsets counting down in the
+  bar and collapsing to a quiet tick inside tolerance; when every ball is
+  placed and the table is still, it arms — no press, because the press would be
+  one more thing to remember while bent over a layout you are rebuilding.
+  "Still" is the vision layer's identity-free motion bit, so a hand still
+  lowering the last ball keeps the shot unarmed. At the arm the **ghosts drop**
+  (the balls are standing on them, so from there they are only noise under the
+  shot) and the **zone stays lit** the whole way, because it is the thing being
+  aimed at.
+
+  **Zones are diamond-grid cells and the criteria is a list.** Point-in-
+  rectangle in table millimetres, one entry per (role → zone) — the list schema
+  in on day one even though most shots carry one entry, because retrofitting a
+  list under a hardcoded cue judge later is pointless churn. A zone grows
+  *toward the middle of the table* when the ZONE key sizes it: growing outward
+  from a rail target would push half the block off the cloth for nothing.
+  Roles at settle use #46's three tiers — crown, then elimination, then
+  lineage — so a mid-shot label swap cannot change the cue's verdict, which
+  a unit test pins by crowning a ball carrying the wrong track id.
+
+  **Both new constants are asserted from `EventConfig`, not tuned.** Placement
+  tolerance 15 mm: 3x `settle_creep_mm` (below it a resting ball's own wobble
+  flips the verdict) and half `moving_enter_mm` (at or above it, a ball the
+  event layer would call *moved* still reads as placed). Cell edge margin
+  5.0 mm, straight off `settle_creep_mm`, applied **outward** so the
+  chalk-line dispute fails toward the player.
+
+  **Two visual defects the real render caught**, both the same shape — a mark
+  drawn underneath the ball it describes. Ghost rings were 30 mm against a
+  28.575 mm ball, so a ball arriving on its ghost hid the ring exactly when it
+  mattered (now 38 mm). And the miss line ran from the ball's *centre*, so a
+  miss of a ball radius or less was entirely invisible (now from the ball's
+  edge, and under a radius it is not drawn at all — the bar's millimetres say
+  it instead).
+
+  **One caption is not the mockup's.** A miss reads `ONE CELL OUT`, not
+  `ONE CELL SHORT`: short and long are relative to the path the cue was meant
+  to take, which nothing here knows. The direction is on the cloth instead,
+  drawn exactly, as the miss line from the ball to the edge it missed — so the
+  caption says how big and the picture says which way, and neither guesses.
+
 - **2026-08-20 (checkpoint 97 — minigames phase 1: the platform, and lag as its
   proof):** #46's first of three. A **games** session mode, fourth on the mode
   axis, hosting a registry of on-table minigames — and the deliberately minimal

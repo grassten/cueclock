@@ -92,7 +92,9 @@ def test_marks_land_where_the_millimetres_say() -> None:
     pipeline.draw_marks(frame, (Circle(x_mm=965.0, y_mm=482.5),))
     cx, cy = px(965.0, 482.5)
     assert not _lit(frame, cx, cy)  # a ghost is a ring, not a disc
-    edge = round(30.0 * scale)  # GHOST_RADIUS_MM out from the centre
+    from cueclock.display.marks import GHOST_RADIUS_MM
+
+    edge = round(GHOST_RADIUS_MM * scale)
     assert _lit(frame, cx + edge, cy)
     brightest = frame[cy - edge - 4 : cy + edge + 5, cx - edge - 4 : cx + edge + 5]
     channels = brightest.reshape(-1, 3).max(axis=0)

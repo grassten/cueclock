@@ -18,10 +18,13 @@ from fastapi.testclient import TestClient
 from cueclock.deck.daemon import _games_fields, build_state
 from cueclock.deck.layout import COLS, GAMES_FIRST_KEY, GAMES_MODE, GAMES_ROW, games_keys
 from cueclock.deck.session import SessionState
-from cueclock.display.marks import Bracket
+from cueclock.display.marks import Bracket, Circle, Grid, Line, Rect
 from cueclock.server import create_app
 from cueclock.server.games import (
     BALL_RADIUS_MM,
+    CELL_EDGE_MARGIN_MM,
+    CELL_LENGTH_MM,
+    CELL_WIDTH_MM,
     GAMES,
     GAMES_ROW_FIRST_KEY,
     LAG_ATTEMPT,
@@ -32,6 +35,11 @@ from cueclock.server.games import (
     GameSession,
     GameStats,
     LagGame,
+    ShotsGame,
+    Zone,
+    cell_of,
+    cells_out,
+    size_face,
 )
 from cueclock.server.report import game_stats, shot_records
 
@@ -317,3 +325,288 @@ def test_game_stats_derive_from_the_journal(tmp_path: Path) -> None:
 def test_shot_records_are_empty_without_drill_attempts(tmp_path: Path) -> None:
     _journal(tmp_path, "session-20260820-100000.jsonl", [{"kind": "lag_attempt", "game": "lag"}])
     assert shot_records(tmp_path) == {}
+
+
+# ---------------------------------------------------------------------------
+# The diamond grid
+# ---------------------------------------------------------------------------
+
+
+def test_a_cell_is_the_table_divided_by_the_grid() -> None:
+    assert (CELL_LENGTH_MM, CELL_WIDTH_MM) == (TABLE_LENGTH_MM / 8, TABLE_WIDTH_MM / 4)
+    assert cell_of(0.0, 0.0) == (0, 0)
+    assert cell_of(TABLE_LENGTH_MM - 1, TABLE_WIDTH_MM - 1) == (7, 3)
+    # Clamped, not refused: a ball against a cushion can read a hair outside
+    # the corpus-grade calibration rectangle and is still visibly on the table.
+    assert cell_of(-40.0, TABLE_WIDTH_MM + 40.0) == (0, 3)
+
+
+def test_the_edge_margin_fails_toward_the_player() -> None:
+    zone = Zone(col=2, row=1)
+    x0, y0, _x1, _y1 = zone.bounds_mm
+    inside = zone.contains(x0 + 10.0, y0 + 10.0)
+    on_the_line = zone.contains(x0 - CELL_EDGE_MARGIN_MM + 0.5, y0 + 10.0)
+    outside = zone.contains(x0 - CELL_EDGE_MARGIN_MM - 20.0, y0 + 10.0)
+    assert (inside, on_the_line, outside) == (True, True, False)
+    assert zone.miss_mm(x0 + 10.0, y0 + 10.0) == 0.0
+    assert zone.miss_mm(x0 - 105.0, y0 + 10.0) == pytest.approx(105.0)
+
+
+def test_a_zone_grows_toward_the_middle_of_the_table() -> None:
+    """Growing outward from a rail target would push half the block off the cloth."""
+    near_head = Zone(col=0, row=0).resized(2, 2, anchor=(0, 0))
+    assert (near_head.col, near_head.row, near_head.w, near_head.h) == (0, 0, 2, 2)
+    near_foot = Zone(col=7, row=3).resized(2, 2, anchor=(7, 3))
+    assert (near_foot.col, near_foot.row) == (6, 2)  # grew back toward the centre
+    assert near_foot.contains(*_centre(7, 3))  # and still covers the placed cell
+
+
+def _centre(col: int, row: int) -> tuple[float, float]:
+    return ((col + 0.5) * CELL_LENGTH_MM, (row + 0.5) * CELL_WIDTH_MM)
+
+
+def test_zone_round_trips_through_its_typed_envelope() -> None:
+    zone = Zone(col=3, row=2, w=2, h=1)
+    assert zone.as_dict() == {"type": "cells", "col": 3, "row": 2, "w": 2, "h": 1}
+    assert Zone.from_dict(zone.as_dict()) == zone
+    # An unknown type raises rather than degrading: judging a future circle
+    # zone as a cell block would score the shot against a target nobody set.
+    with pytest.raises(ValueError, match="unknown zone type"):
+        Zone.from_dict({"type": "circle", "x": 1, "y": 2})
+
+
+def test_a_miss_is_captioned_in_cells_not_in_directions() -> None:
+    assert cells_out(60.0) == "INSIDE ONE CELL"
+    assert cells_out(214.0) == "ONE CELL OUT"
+    assert cells_out(520.0) == "2 CELLS OUT"
+
+
+# ---------------------------------------------------------------------------
+# The shot catalog: capture by placing
+# ---------------------------------------------------------------------------
+
+
+def _shots() -> tuple[ShotsGame, list[tuple[str, dict[str, object]]]]:
+    lines: list[tuple[str, dict[str, object]]] = []
+    game = ShotsGame(GameCtx(log=lambda kind, **detail: lines.append((kind, detail))))
+    return game, lines
+
+
+CUE_SPOT = (600.0, 600.0)
+OBJ_SPOT = (1300.0, 260.0)
+
+
+def _layout(cue: tuple[float, float], obj: tuple[float, float]) -> list[Ball]:
+    return [
+        Ball(x_mm=cue[0], y_mm=cue[1], is_cue=True, ball_id=1),
+        Ball(x_mm=obj[0], y_mm=obj[1], ball_id=2),
+    ]
+
+
+def _capture_a_cue_shot(game: ShotsGame, target: tuple[float, float]) -> None:
+    """CAPTURE, pick the cue up and put it at `target`, SAVE."""
+    game.press("capture", _layout(CUE_SPOT, OBJ_SPOT))
+    game.tick(_layout(target, OBJ_SPOT), moving=False)
+
+
+def test_capture_attributes_a_placement_by_the_ghost_it_vacated() -> None:
+    game, _ = _shots()
+    assert game.press("capture", _layout(CUE_SPOT, OBJ_SPOT)) is True
+    assert game.transient is True  # the capture page owns the whole deck row
+    assert [v.name for v in game.verbs()] == ["cancel", "zone", "_gap1", "_gap2", "save"]
+    assert game.verbs()[-1].enabled is False  # SAVE dark until the cue's target exists
+
+    target = _centre(1, 2)
+    game.tick(_layout(target, OBJ_SPOT), moving=False)
+    assert game._targets["cue"] == Zone(col=1, row=2)
+    assert game.verbs()[-1].armed is True
+    assert game.verbs()[-1].sub == "SHOT 1"  # the face names what a press writes
+
+
+def test_a_hand_still_moving_places_nothing() -> None:
+    game, _ = _shots()
+    game.press("capture", _layout(CUE_SPOT, OBJ_SPOT))
+    game.tick(_layout(_centre(1, 2), OBJ_SPOT), moving=True)
+    assert game._targets == {}
+
+
+def test_the_zone_key_sizes_the_most_recently_placed_target() -> None:
+    game, _ = _shots()
+    _capture_a_cue_shot(game, _centre(1, 2))
+    assert game.verbs()[1].text == size_face(1, 1)
+    assert game.verbs()[1].sub == size_face(2, 1)  # a cycle key: current over next
+    game.press("zone", [])
+    assert (game._targets["cue"].w, game._targets["cue"].h) == (2, 1)
+    for _ in range(3):
+        game.press("zone", [])
+    assert (game._targets["cue"].w, game._targets["cue"].h) == (1, 1)  # wrapped
+
+
+def test_a_resize_survives_the_hand_hovering_over_the_same_cell() -> None:
+    """Re-placing in the SAME cell must not re-anchor and undo the size."""
+    game, _ = _shots()
+    target = _centre(1, 2)
+    _capture_a_cue_shot(game, target)
+    game.press("zone", [])
+    game.tick(_layout((target[0] + 8.0, target[1] - 6.0), OBJ_SPOT), moving=False)
+    assert (game._targets["cue"].w, game._targets["cue"].h) == (2, 1)
+    # A different cell does re-anchor, back to one cell.
+    game.tick(_layout(_centre(5, 1), OBJ_SPOT), moving=False)
+    assert game._targets["cue"] == Zone(col=5, row=1)
+
+
+def test_saving_loads_the_shot_and_hands_the_row_back() -> None:
+    game, lines = _shots()
+    _capture_a_cue_shot(game, _centre(1, 2))
+    assert game.press("save", []) is True
+    assert game.transient is False
+    assert [s.name for s in game.shots] == ["Shot 1"]
+    assert game.state == ShotsGame.SERVING  # saving loads it: no extra press
+    assert [v.name for v in game.verbs()] == ["capture", "play", "retry"]
+    assert game.verbs()[1].text == "NEXT"  # something is served, so it is NEXT
+    assert lines == []  # nothing journaled yet — an attempt is what gets recorded
+
+
+def test_cancel_discards_and_puts_back_what_was_on_the_wall() -> None:
+    game, _ = _shots()
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    game.press("capture", _layout(CUE_SPOT, OBJ_SPOT))
+    game.press("cancel", [])
+    assert game.state == ShotsGame.SERVING  # not IDLE: the served shot is still up
+    assert len(game.shots) == 1
+
+
+# ---------------------------------------------------------------------------
+# Serving, arming, judging
+# ---------------------------------------------------------------------------
+
+
+def _served(target_cell: tuple[int, int] = (1, 2)) -> ShotsGame:
+    game, _ = _shots()
+    _capture_a_cue_shot(game, _centre(*target_cell))
+    game.press("save", [])
+    return game
+
+
+def test_the_shot_arms_itself_when_the_balls_are_on_the_ghosts_and_still() -> None:
+    game = _served()
+    game.tick(_layout((CUE_SPOT[0] + 90.0, CUE_SPOT[1]), OBJ_SPOT), moving=False)
+    assert game.state == ShotsGame.SERVING
+    assert round(game.offsets["cue"]) == 90
+    assert game.hud().stats[0].value == "90"
+
+    on_the_ghost = (CUE_SPOT[0] + 6.0, CUE_SPOT[1] - 4.0)
+    game.tick(_layout(on_the_ghost, OBJ_SPOT), moving=True)
+    assert game.state == ShotsGame.SERVING  # placed, but a hand is still moving
+    game.tick(_layout(on_the_ghost, OBJ_SPOT), moving=False)
+    assert game.state == ShotsGame.ARMED
+    assert game.hud().stats[0].value == "CUE IN ZONE"
+
+
+def test_the_ghosts_drop_at_arm_and_the_zone_stays_lit() -> None:
+    game = _served()
+    serving = game.marks()
+    assert sum(isinstance(m, Circle) for m in serving) == 2  # both ghosts
+    assert sum(isinstance(m, Rect) for m in serving) == 1  # the cue's zone
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    armed = game.marks()
+    assert not any(isinstance(m, Circle) for m in armed)
+    assert sum(isinstance(m, Rect) for m in armed) == 1
+    assert any(isinstance(m, Grid) for m in armed)
+
+
+def test_a_pass_is_every_requirement_in_its_zone() -> None:
+    game, lines = _shots()
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)  # arms
+    game.on_settle(9.0, _layout(_centre(1, 2), (900.0, 700.0)))
+    assert game.passed is True
+    assert game.state == ShotsGame.VERDICT
+    answer = game.hud().answer
+    assert answer is not None and (answer.word, answer.fill) == ("PASS", "pass")
+    kinds = [kind for kind, _ in lines]
+    assert kinds == ["drill_armed", "drill_attempt"]
+    assert lines[-1][1]["misses"] == [{"role": "cue", "miss_mm": 0}]
+    assert lines[-1][1]["pass"] is True
+
+
+def test_a_fail_measures_the_miss_and_draws_the_line() -> None:
+    game, lines = _shots()
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    # One whole cell to the left of the target block's left edge.
+    x0, y0, _x1, _y1 = Zone(col=1, row=2).bounds_mm
+    game.on_settle(9.0, _layout((x0 - 214.0, y0 + 60.0), (900.0, 700.0)))
+    assert game.passed is False
+    answer = game.hud().answer
+    assert answer is not None and (answer.word, answer.fill) == ("FAIL", "fail")
+    stat = game.hud().stats[0]
+    assert (stat.label, stat.value, stat.unit, stat.sub) == ("CUE", "214", "MM", "ONE CELL OUT")
+    (line,) = [m for m in game.marks() if isinstance(m, Line)]
+    assert line.role == "miss"
+    assert (line.x2_mm, line.y2_mm) == (x0, y0 + 60.0)  # ends on the edge it missed
+    # ...and starts at the ball's edge, not its centre, or the first ball
+    # radius of it would be drawn underneath the ball.
+    assert line.x1_mm == pytest.approx(x0 - 214.0 + BALL_RADIUS_MM)
+    assert lines[-1][1]["misses"] == [{"role": "cue", "miss_mm": 214}]
+
+
+def test_a_scratch_fails_the_cues_requirement() -> None:
+    """The cue is not on the table, so it is not in its zone. Nothing special."""
+    game, lines = _shots()
+    _capture_a_cue_shot(game, _centre(1, 2))
+    game.press("save", [])
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    game.on_settle(9.0, [Ball(x_mm=900.0, y_mm=700.0, ball_id=2)])  # no crown left
+    assert game.passed is False
+    assert lines[-1][1]["misses"] == [{"role": "cue", "miss_mm": None}]
+    assert game.hud().stats[0].sub == "OFF THE TABLE"
+
+
+def test_the_cue_is_judged_by_the_crown_not_by_lineage() -> None:
+    """A mid-shot label swap must not be able to change the cue's verdict."""
+    game = _served()
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    target = _centre(1, 2)
+    # The ball wearing the crown at rest carries a track id that was NOT the
+    # cue's when the shot armed. The crown wins anyway.
+    game.on_settle(
+        9.0,
+        [
+            Ball(x_mm=target[0], y_mm=target[1], is_cue=True, ball_id=77),
+            Ball(x_mm=900.0, y_mm=700.0, ball_id=1),
+        ],
+    )
+    assert game.passed is True
+
+
+def test_retry_reserves_the_same_shot_and_next_serves_again() -> None:
+    game = _served()
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    game.on_settle(9.0, _layout(_centre(1, 2), (900.0, 700.0)))
+    shot = game.served
+    assert game.press("retry", []) is True
+    assert game.served is shot and game.state == ShotsGame.SERVING
+    assert game.served.attempts == 1  # the attempt is recorded, not re-run
+
+
+def test_play_is_dark_with_nothing_saved() -> None:
+    game, _ = _shots()
+    verbs = {v.name: v for v in game.verbs()}
+    assert verbs["play"].enabled is False and verbs["play"].text == "PLAY"
+    assert verbs["retry"].enabled is False  # dark until a shot has been served
+    assert game.press("play", []) is False
+
+
+def test_a_miss_smaller_than_a_ball_draws_no_line() -> None:
+    """There is no room for one, and the millimetres in the bar say it instead."""
+    game = _served()
+    game.tick(_layout(CUE_SPOT, OBJ_SPOT), moving=False)
+    x0, y0, _x1, _y1 = Zone(col=1, row=2).bounds_mm
+    game.on_settle(9.0, _layout((x0 - 20.0, y0 + 60.0), (900.0, 700.0)))
+    assert game.passed is False
+    assert not [m for m in game.marks() if isinstance(m, Line)]
+    assert game.hud().stats[0].value == "20"

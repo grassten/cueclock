@@ -658,7 +658,11 @@ class Hub:
                 self.games.note_balls((), False)
             return
         self.games.note_balls(
-            tuple(Ball(x_mm=b.x_mm, y_mm=b.y_mm, is_cue=b.is_cue) for b in balls if b.present),
+            tuple(
+                Ball(x_mm=b.x_mm, y_mm=b.y_mm, is_cue=b.is_cue, ball_id=b.ball_id)
+                for b in balls
+                if b.present
+            ),
             self._table_motion,
         )
 

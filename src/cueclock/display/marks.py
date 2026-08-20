@@ -47,7 +47,11 @@ ROLE_COLORS: dict[str, Rgb] = {
 # meaning it after any resize.
 STROKE_MM = 5.0
 GRID_STROKE_MM = 2.5
-GHOST_RADIUS_MM = 30.0  # a hair outside the ball, so the ball sits *in* the ring
+# A ball is 28.575 mm in radius, so a ring at 30 mm is a ring the ball *hides*
+# — which is exactly the moment it matters, with the ball arriving on its
+# ghost. 38 mm leaves a clear third of a ball of cloth between the two, which
+# is the ratio the mockups draw (52 px ring around a 44 px ball).
+GHOST_RADIUS_MM = 38.0
 # The alpha of a zone's interior wash. The zone is a target being aimed at
 # through the whole shot, so it has to read as a region rather than an
 # outline — but it is painted over live cloth the player is also reading.
