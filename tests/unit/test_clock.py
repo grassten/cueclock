@@ -654,7 +654,7 @@ def test_next_mode_cycles_and_wraps() -> None:
     seen = ["match"]
     for _ in MODES:
         seen.append(next_mode(seen[-1]))
-    assert seen == ["match", "run_out", "no_clock", "match"]
+    assert seen == ["match", "run_out", "no_clock", "games", "match"]
     assert next_mode("garbage") == "match"
 
 

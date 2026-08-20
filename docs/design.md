@@ -604,3 +604,131 @@ window in which it is safe is the window that closes fastest at a real event,
 and a feature that works at 6:05 and refuses at 6:35 is worse at a party than
 one that never worked: the second is a rule, the first is a bug with a
 schedule. Revisit with evidence if it actually bites.
+
+## 11. The minigames platform (issue #46, 2026-08-20)
+
+A **games** session mode, fourth on the mode axis, hosting on-table minigames.
+Launched with two: a **shot catalog** (capture practice shots as layouts plus
+target zones, replay them with guided setup and PASS/FAIL judging) and a **lag
+trainer** (settle → distance from the head rail, best of the session). The
+surfaces are agreed in `docs/mockups/games-v1.html`; where a shipped page and
+that file come to differ, the shipped page is right.
+
+**The contract is frozen to exactly what those two games need** — the rule of
+two. A minigame is a registered event consumer, the same registry pattern
+`RULESETS` uses: plain code in the repo, no plugin loading and no config-file
+game definitions.
+
+- **Receives** the event stream (`ShotTaken` / `BallsSettled` / `Scratch`), the
+  resting layout with the cue crown, and a 10 Hz tick for anything that has to
+  move between events (the placement countdown, the auto-arm).
+- **Provides** its deck verbs, the HUD bar state for the TV, the marks it wants
+  on the cloth, and namespaced journal kinds.
+- **One active game at a time**, owned by the Hub. Entering games mode shows the
+  picker; leaving it ends the game. **No parking** — and nothing is lost by
+  that, because a game's record is in the journal, which is also what lets
+  `cueclock report` derive make % without the games layer keeping a score of
+  its own.
+
+**The vision core is untouched by construction.** Games sit at the Hub seam the
+clock and `last_settle_movers` already use, so the corpus stays green without
+anything in `vision/` moving. Games are fed *after* the vision kill switch (a
+vision the operator has disowned must not drive a game either) and *before* the
+mode gate, which exists to keep events off the **clock**.
+
+### 11.1 Where the drawing happens, and why it is split
+
+**Everything on the cloth is drawn server-side into the display frame**;
+everything in the HUD bar is the `/games` browser source. The display pipeline
+already owns the table image and the mm→display mapping (`--rectify` composes
+the homography into the remap), so orientation and scale are correct for free
+and OBS stays dumb. The rejected alternative — a browser overlay aligned on top
+of the Syphon feed — needs an exported mm→display-px mapping that must survive
+every recalibration: a standing alignment liability, in exchange for nothing.
+
+The cost is stated rather than hidden: **without `--rectify` there are no
+on-cloth markings at all**, because a plain undistort has no mm→px mapping and
+there is nowhere honest to draw a zone. `run` says so at startup; the bar still
+works.
+
+On-cloth palette is a role code, not decoration: **white** is the cue ball's
+markings, **slate dashed** an object ball's, and the one **alarm red** is the
+miss line. Accent blue never touches the cloth — on blue cloth it is invisible
+— so accent and alarm live in the bar, where the answer cell escalates by area
+exactly as every other overlay does. Games mode has no clock, so a FAIL can
+never collide with an expiry alarm.
+
+### 11.2 Zones are diamond-grid cells, and pass criteria are a list
+
+Zones are rectangular blocks of **diamond-grid cells** — the standard layout's
+8×4 division of the playing surface — derived entirely from the calibrated
+homography, with no invented geometry constant. Circles were the first design
+and lost on one argument: **a grid is aimable from the table.** Sighting
+diamond-to-diamond is how players already carve the table up, so screen and
+cloth share a vocabulary, a miss becomes legible ("one cell short") as well as
+quantitative ("214 mm"), and capture becomes single-press — the cell containing
+the placed ball is the default target. Each zone is a typed object
+(`{"type": "cells", …}`) so a future zone type is an addition, not a migration.
+
+A shot's pass criteria is a **list of (ball role → zone) requirements**, judged
+with one point-in-rectangle primitive per entry, never a hardcoded cue rule.
+The list schema goes in on day one even while only one entry is ever populated:
+retrofitting a list under a hardcoded judge later is pointless churn. Every
+shot requires the cue in its zone; a **safety** adds the object ball in its own.
+Failure semantics then fall out — a scratch fails the cue's requirement, and an
+object ball potted during a safety attempt has left its zone and fails its own.
+
+**How each role is identified at settle — three tiers, weakest last:**
+
+1. **The cue is judged against the whiteness crown at rest, never against track
+   lineage.** The EMA freezes while a ball flies and re-converges within ~0.3 s
+   at rest, so whatever the tracks did mid-collision, "which resting ball is the
+   cue" is re-derived visually — the same machinery scratch adjudication trusts.
+   Cue verdicts are therefore immune to mid-shot label swaps.
+2. **One object ball — the common safety drill — is identified by elimination**:
+   the resting ball not wearing the crown. No lineage, zero identity risk.
+3. **Two or more object balls fall back to track lineage**, and the exposure is
+   narrower than it looks: a cue↔object swap is always corrected by tier 1, so
+   the only corruptible case is two *object* balls passing within merge distance
+   mid-shot. Recorded so nobody is surprised; a swapped verdict in live use is a
+   Flag-and-triage item like any other detection defect. **No 16-ball identity
+   anywhere** — which is why the bar's per-ball lockups read `CUE` / `OBJECT` /
+   `BALL n` rather than the mockup's `RED` / `BLACK`: a colour name is an
+   identity claim this system deliberately cannot make.
+
+### 11.3 The two constants, and their anchors
+
+Per the no-blind-thresholds rule both are asserted from measurements already in
+the repo (`EventConfig`, `vision/events.py`), with the anchor stated in code:
+
+- **Ghost placement tolerance — 15 mm.** Bounded below by
+  `settle_creep_mm = 5.0` (under it a resting ball's own wobble would flip the
+  verdict) and above by `moving_enter_mm = 30.0` (at or over it, a ball the
+  event layer would score as *moved from* the ghost would still read as
+  standing on it). 3× the creep, half the motion threshold.
+- **Cell edge margin — 5.0 mm**, straight off `settle_creep_mm`: a centre
+  within a resting ball's own wobble of a boundary genuinely cannot be assigned
+  to one side of it. Applied **outward**, so the unresolvable chalk-line case
+  fails toward giving the shot to the player — losing a shot you made to a
+  measurement nobody can take is the worse direction.
+
+### 11.4 The deck and the wall
+
+The picker is **the deck's row 3** — the row that is the mode's own block in
+every other mode — one game per key, and the selected game's verbs replace the
+picker on the same row. **Two levels maximum: picker → game.** No cursor
+navigation (arrow keys were considered and dropped): the screen is the brochure
+and the deck is the picker, so a choice is one press with nothing to read.
+Capture is a row-3 transient overlay, the mechanism Flag's reason page already
+uses. All games keys wear the **MATCH stripe** — the stripe channel answers
+"how much time do I have", and every games press is a between-shots press.
+
+**PLAY and NEXT are one key with two faces** (the Replay-key precedent — the
+face says which press this is). RETRY is its own key, dark until a shot has been
+served: re-serving the *same* shot and serving *another* must never be one
+mispress apart.
+
+OBS gets **one Games scene**: the overhead feed full-bleed plus one full-canvas
+`/games` source, and nothing else. Adding a future game touches zero OBS
+configuration. The scene follows the Mode key with no dwell and no scene key of
+its own — games mode is a thing you are *in*, and the mode **is** the choice.

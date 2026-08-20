@@ -249,6 +249,67 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-20 (checkpoint 97 — minigames phase 1: the platform, and lag as its
+  proof):** #46's first of three. A **games** session mode, fourth on the mode
+  axis, hosting a registry of on-table minigames — and the deliberately minimal
+  lag trainer, whose whole job is to prove the contract is right before the
+  shot catalog leans on it (the rule of two: the contract is frozen to exactly
+  what these two games need, nothing speculative). `docs/design.md` §11 is the
+  contract's home; `docs/mockups/games-v1.html` remains the design of record for
+  the surfaces.
+
+  **A game is a registered event consumer**, same pattern as `RULESETS`. It
+  receives the event stream plus the resting layout and the cue crown, and
+  provides deck verbs, HUD bar state, on-cloth marks and journal kinds
+  (`server/games.py`). **The vision core is untouched by construction** — games
+  sit at the Hub seam the clock and `last_settle_movers` already use, so the
+  corpus stays green without anything in `vision/` moving, and this checkpoint
+  gates on unit tests rather than a cold battery. Games are fed after the kill
+  switch and before the mode gate: a vision the operator has disowned must not
+  drive a game either, but a mode gate that exists to keep events off the
+  *clock* has no business keeping them off a game.
+
+  **Everything on the cloth is drawn server-side into the display frame**
+  (`display/marks.py` as the language, `display/pipeline.py` as the only
+  rasterizer). The pipeline already owns the table image and the mm→display
+  mapping, so orientation is right for free and OBS stays dumb; the rejected
+  alternative — a browser overlay aligned on top of the Syphon feed — needs an
+  exported mapping that has to survive every recalibration. The cost is stated
+  rather than hidden: **no `--rectify`, no markings**, and `run` says so at
+  startup instead of drawing something approximately right.
+
+  **The picker is deck row 3** — the row that is the mode's own block in every
+  other mode, and whose declared keys are all gated to `match`/`run out`, so
+  nothing collides. It is the one part of the deck the *server* describes
+  rather than `layout.py` declaring, because what is on it depends on which
+  games are registered and which is active. All of it wears the MATCH stripe:
+  every games press is a between-shots press, so there is no new colour.
+
+  **One Games scene, one HUD source.** `/games` is a single browser source with
+  two postures — opaque menu of cards while the picker is up, chrome-only bar
+  once a game owns the table — over the play scene's own Syphon input added
+  full-bleed. Adding a future game touches zero OBS configuration
+  (`scripts/setup_obs_games.py`). The scene follows the Mode key with no dwell
+  and no scene key: games mode is a thing you are *in*, and the mode is the
+  choice. Rendered for real in both postures before shipping (checkpoint 92/96
+  rule) — which is how the menu's never-played card was caught printing `—MM`,
+  a unit attached to nothing.
+
+  **Lag scores every settle, and arms nothing.** Only the best attempt matters,
+  so a bad one is free and a retrieval push you did not mean is a number you
+  ignore rather than a state you have to clear. It measures the **gap** — the
+  ball's near edge to the head rail, not its centre — because that is what a
+  player measures with a piece of chalk, and a ball frozen on the cushion
+  should read ~0 rather than one ball radius. Which ball: the crown (identity
+  tier 1), falling back to elimination on a one-ball table, refusing anything
+  else. `lag_attempt` journal lines; `report.game_stats` derives the cards.
+
+  **One deviation from the mockups, and it is the issue's own rule winning:**
+  the bar's per-ball lockups read `CUE` / `OBJECT` / `BALL n`, not `RED` /
+  `BLACK`. Colour names are an identity claim, and #46 puts 16-ball identity
+  out of scope on every surface — the three tiers it does specify (crown,
+  elimination, lineage) can name a role but never a colour.
+
 - **2026-08-13 (checkpoint 96 — the UX pass: two tabs, freestyle, unlimited
   extensions, a clean morning):** Six items from Steven in one sweep, all
   surface and policy, no detection.

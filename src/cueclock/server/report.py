@@ -90,8 +90,13 @@ pressing New Rack over a live roll-out.
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from statistics import median
+
+from cueclock.server.games import DRILL_ATTEMPT as DRILL_ATTEMPT_KIND
+from cueclock.server.games import LAG_ATTEMPT as LAG_ATTEMPT_KIND
+from cueclock.server.games import GameStats
 
 SETTLE_KIND = "vision_balls_settled"
 SHOT_KIND = "vision_shot_taken"
@@ -525,6 +530,112 @@ def find_journals(logs_dir: Path, since_s: float | None = None) -> list[Path]:
         return paths
     newest = max((p.stat().st_mtime for p in paths), default=0.0)
     return [p for p in paths if p.stat().st_mtime >= newest - since_s]
+
+
+# ---------- minigames (#46) ----------
+#
+# The picker cards' numbers and the phone Drills list's make % are *derived*
+# from the journal, exactly like every other number in this file — nothing in
+# the games layer keeps a score of its own. That is what makes abandoning a
+# game lossless, and it is why weighted-random serving becomes possible later
+# without any new bookkeeping: the weakness report is already on disk.
+
+
+def _wall_day(record: dict[str, object]) -> str | None:
+    """A journal record's wall date as the cards print it ("Aug 18")."""
+    wall = record.get("wall")
+    if not isinstance(wall, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(wall)
+    except ValueError:
+        return None
+    return f"{stamp:%b} {stamp.day}"
+
+
+def game_stats(logs_dir: Path) -> dict[str, GameStats]:
+    """Per-game history over every session journal, keyed by game name.
+
+    Free-form `numbers` because each game reads its own kinds and knows what
+    they mean — see `GameStats`. A game with no records is simply absent, which
+    its card renders as em-dashes rather than as zeroes: never played and
+    played badly are different facts.
+    """
+    numbers: dict[str, dict[str, float]] = {}
+    last_played: dict[str, str] = {}
+    # The shot catalog's two derived card numbers, accumulated in the same
+    # single pass: how many distinct shots have ever been attempted, and the
+    # longest streak of consecutive passes. A run does not end because a
+    # session did — journals are walked in chronological order — but it does
+    # end at any attempt that failed, which is all the number claims.
+    shot_ids: set[str] = set()
+    best_run = run = 0
+    for path in find_journals(logs_dir):
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # torn line from a killed session: skip, never fatal
+            if not isinstance(record, dict):
+                continue
+            kind = record.get("kind")
+            if kind not in (LAG_ATTEMPT_KIND, DRILL_ATTEMPT_KIND):
+                continue
+            game = record.get("game")
+            if not isinstance(game, str):
+                continue
+            tally = numbers.setdefault(game, {})
+            tally["attempts"] = tally.get("attempts", 0.0) + 1.0
+            day = _wall_day(record)
+            if day is not None:
+                last_played[game] = day
+            if kind == LAG_ATTEMPT_KIND:
+                distance = _number(record, "distance_mm")
+                if distance is not None:
+                    best = tally.get("best_mm")
+                    tally["best_mm"] = distance if best is None else min(best, distance)
+            else:
+                made = 1 if record.get("pass") is True else 0
+                tally["made"] = tally.get("made", 0.0) + made
+                run = run + 1 if made else 0
+                best_run = max(best_run, run)
+                shot_id = record.get("shot_id")
+                if isinstance(shot_id, str):
+                    shot_ids.add(shot_id)
+                tally["catalog"] = float(len(shot_ids))
+                tally["best_run"] = float(best_run)
+    return {
+        game: GameStats(numbers=tally, last_played=last_played.get(game))
+        for game, tally in numbers.items()
+    }
+
+
+def shot_records(logs_dir: Path) -> dict[str, tuple[int, int, str | None]]:
+    """Per-shot (attempts, made, last played) — the phone Drills list's numbers."""
+    tallies: dict[str, list[int]] = {}
+    days: dict[str, str] = {}
+    for path in find_journals(logs_dir):
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict) or record.get("kind") != DRILL_ATTEMPT_KIND:
+                continue
+            shot_id = record.get("shot_id")
+            if not isinstance(shot_id, str):
+                continue
+            tallies.setdefault(shot_id, []).append(1 if record.get("pass") is True else 0)
+            day = _wall_day(record)
+            if day is not None:
+                days[shot_id] = day
+    return {shot_id: (len(hits), sum(hits), days.get(shot_id)) for shot_id, hits in tallies.items()}
 
 
 def summary_detail(report: SessionReport) -> dict[str, object]:

@@ -14,10 +14,30 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from cueclock.display.marks import (
+    GRID_ALPHA,
+    GRID_STROKE_MM,
+    ROLE_COLORS,
+    STROKE_MM,
+    ZONE_FILL_ALPHA,
+    Bracket,
+    Circle,
+    Grid,
+    Line,
+    Mark,
+    Rect,
+)
+
 if TYPE_CHECKING:
     from cueclock.vision.calibration import TableCalibration
 
 DEFAULT_UNDISTORT_PATH = Path("config/display_undistort.json")
+
+# Dash geometry for every dashed mark, in table millimetres so a dash looks the
+# same whatever the rectified output width is. Half a ball per dash reads as a
+# dashed ring at the wall's distance without closing up into a solid one.
+DASH_MM = 26.0
+GAP_MM = 18.0
 
 
 @dataclass(frozen=True)
@@ -140,6 +160,25 @@ class DisplayPipeline:
     def __init__(self, undistort: UndistortParams | None = None) -> None:
         self._maps = build_undistort_maps(undistort) if undistort else None
         self.out_size: tuple[int, int] = (1920, 1200)  # (width, height)
+        # The mm→display-px mapping, present only on a rectified pipeline —
+        # (output px per table mm, the surround in mm). Every on-cloth mark
+        # goes through it, which is the whole reason the games layer draws
+        # here rather than in a browser source over the Syphon feed (#46).
+        self._mm: tuple[float, float] | None = None
+        self._table_mm: tuple[float, float] | None = None  # (length, width)
+        # What the games layer wants on the cloth right now. Rebound from the
+        # server's asyncio loop and read on the display thread — a plain
+        # attribute holding an immutable tuple, the same contract `Hub.note_frame`
+        # uses in the other direction. Empty in every other mode, which is why
+        # a match night pays nothing for this.
+        self.marks: tuple[Mark, ...] = ()
+        self._grid_cache: (
+            tuple[
+                tuple[int, int, tuple[int, int]],
+                tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]],
+            ]
+            | None
+        ) = None
 
     @classmethod
     def rectified(
@@ -149,7 +188,21 @@ class DisplayPipeline:
         map1, map2, width, height = build_rectified_maps(calibration, out_width, margin_mm)
         pipeline._maps = (map1, map2)
         pipeline.out_size = (width, height)
+        span_x = calibration.length_mm + 2 * margin_mm
+        pipeline._mm = (out_width / span_x, margin_mm)
+        pipeline._table_mm = (calibration.length_mm, calibration.width_mm)
         return pipeline
+
+    @property
+    def draws_marks(self) -> bool:
+        """Can this pipeline put marks on the cloth? (Only a rectified one.)
+
+        A plain undistort has no mm→px mapping — the table sits wherever the
+        mount put it in the frame — so there is nowhere honest to draw a zone.
+        `cueclock run --rectify` is the production launch (README), and the
+        games layer says so rather than drawing something approximately right.
+        """
+        return self._mm is not None
 
     def to_rgba(self, bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         # GenICam "BayerRG8" needs OpenCV's *BG* constant (opposite-corner
@@ -158,4 +211,235 @@ class DisplayPipeline:
         bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR_EA)
         if self._maps is not None:
             bgr = cv2.remap(bgr, self._maps[0], self._maps[1], cv2.INTER_LINEAR)
+        if self.marks:
+            self.draw_marks(cast(npt.NDArray[np.uint8], bgr), self.marks)
         return cast(npt.NDArray[np.uint8], cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA))
+
+    # ---------- on-cloth marks (#46) ----------
+
+    def draw_marks(self, bgr: npt.NDArray[np.uint8], marks: tuple[Mark, ...]) -> None:
+        """Rasterize `marks` into a rectified BGR frame, in place.
+
+        No-op without the mapping — see :attr:`draws_marks`. Public so a
+        screenshot test can render a known set of marks over a blank frame and
+        assert where they landed, which is the only way this gets checked
+        without the camera.
+        """
+        if self._mm is None or self._table_mm is None:
+            return
+        scale, margin = self._mm
+        stroke = max(1, round(STROKE_MM * scale))
+        for mark in marks:
+            color = _bgr(mark.role if not isinstance(mark, Grid) else "grid")
+            if isinstance(mark, Grid):
+                self._draw_grid(bgr, mark, scale, margin)
+            elif isinstance(mark, Rect):
+                self._draw_rect(bgr, mark, color, scale, margin, stroke)
+            elif isinstance(mark, Circle):
+                self._draw_circle(bgr, mark, color, scale, margin, stroke)
+            elif isinstance(mark, Line):
+                self._segment(
+                    bgr,
+                    mark.x1_mm,
+                    mark.y1_mm,
+                    mark.x2_mm,
+                    mark.y2_mm,
+                    color,
+                    scale,
+                    margin,
+                    stroke,
+                    mark.dashed,
+                )
+            elif isinstance(mark, Bracket):
+                self._draw_bracket(bgr, mark, color, scale, margin, stroke)
+
+    def _px(self, x_mm: float, y_mm: float, scale: float, margin: float) -> tuple[int, int]:
+        """Table mm → rectified output pixel — the inverse of `build_rectified_maps`."""
+        return round((x_mm + margin) * scale - 0.5), round((y_mm + margin) * scale - 0.5)
+
+    def _segment(
+        self,
+        bgr: npt.NDArray[np.uint8],
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        color: tuple[int, int, int],
+        scale: float,
+        margin: float,
+        stroke: int,
+        dashed: bool,
+    ) -> None:
+        """One straight run in table mm, solid or dashed."""
+        if not dashed:
+            cv2.line(
+                bgr,
+                self._px(x1, y1, scale, margin),
+                self._px(x2, y2, scale, margin),
+                color,
+                stroke,
+                cv2.LINE_AA,
+            )
+            return
+        length = float(np.hypot(x2 - x1, y2 - y1))
+        if length <= 0:
+            return
+        step = DASH_MM + GAP_MM
+        pos = 0.0
+        while pos < length:
+            end = min(pos + DASH_MM, length)
+            f0, f1 = pos / length, end / length
+            cv2.line(
+                bgr,
+                self._px(x1 + (x2 - x1) * f0, y1 + (y2 - y1) * f0, scale, margin),
+                self._px(x1 + (x2 - x1) * f1, y1 + (y2 - y1) * f1, scale, margin),
+                color,
+                stroke,
+                cv2.LINE_AA,
+            )
+            pos += step
+
+    def _draw_rect(
+        self,
+        bgr: npt.NDArray[np.uint8],
+        rect: Rect,
+        color: tuple[int, int, int],
+        scale: float,
+        margin: float,
+        stroke: int,
+    ) -> None:
+        x0, y0 = rect.x_mm, rect.y_mm
+        x1, y1 = rect.x_mm + rect.w_mm, rect.y_mm + rect.h_mm
+        if rect.fill:
+            # A wash rather than a solid fill: the zone is aimed at through the
+            # whole shot, so it has to read as a region while leaving the cloth
+            # (and any ball standing on it) readable underneath.
+            p0, p1 = self._px(x0, y0, scale, margin), self._px(x1, y1, scale, margin)
+            patch = bgr[max(0, p0[1]) : max(0, p1[1]), max(0, p0[0]) : max(0, p1[0])]
+            if patch.size:
+                wash = np.full(patch.shape, color, dtype=np.uint8)
+                cv2.addWeighted(wash, ZONE_FILL_ALPHA, patch, 1.0 - ZONE_FILL_ALPHA, 0.0, patch)
+        for a, b in (
+            ((x0, y0), (x1, y0)),
+            ((x1, y0), (x1, y1)),
+            ((x1, y1), (x0, y1)),
+            ((x0, y1), (x0, y0)),
+        ):
+            self._segment(bgr, a[0], a[1], b[0], b[1], color, scale, margin, stroke, rect.dashed)
+
+    def _draw_circle(
+        self,
+        bgr: npt.NDArray[np.uint8],
+        circle: Circle,
+        color: tuple[int, int, int],
+        scale: float,
+        margin: float,
+        stroke: int,
+    ) -> None:
+        center = self._px(circle.x_mm, circle.y_mm, scale, margin)
+        radius = max(1, round(circle.r_mm * scale))
+        if not circle.dashed:
+            cv2.circle(bgr, center, radius, color, stroke, cv2.LINE_AA)
+            return
+        # Dashes measured along the circumference, so a ghost ring and a miss
+        # line wear the same dash however big the ring is.
+        span = 360.0 * DASH_MM / (2.0 * np.pi * circle.r_mm)
+        gap = 360.0 * GAP_MM / (2.0 * np.pi * circle.r_mm)
+        angle = 0.0
+        while angle < 360.0:
+            cv2.ellipse(
+                bgr,
+                center,
+                (radius, radius),
+                0.0,
+                angle,
+                min(angle + span, 360.0),
+                color,
+                stroke,
+                cv2.LINE_AA,
+            )
+            angle += span + gap
+
+    def _draw_bracket(
+        self,
+        bgr: npt.NDArray[np.uint8],
+        bracket: Bracket,
+        color: tuple[int, int, int],
+        scale: float,
+        margin: float,
+        stroke: int,
+    ) -> None:
+        top = bracket.y_mm - bracket.half_height_mm
+        bottom = bracket.y_mm + bracket.half_height_mm
+        for a, b in (
+            ((bracket.x0_mm, top), (bracket.x1_mm, top)),
+            ((bracket.x0_mm, bottom), (bracket.x1_mm, bottom)),
+            ((bracket.x1_mm, top), (bracket.x1_mm, bottom)),
+        ):
+            self._segment(bgr, a[0], a[1], b[0], b[1], color, scale, margin, stroke, False)
+
+    def _draw_grid(
+        self, bgr: npt.NDArray[np.uint8], grid: Grid, scale: float, margin: float
+    ) -> None:
+        """The diamond grid across the whole calibrated playing area.
+
+        Thinner and far fainter than everything else on purpose: it is the
+        vocabulary a zone is quoted in, not a thing being aimed at, and at full
+        stroke it would compete with the zone it exists to locate.
+
+        Blended through a cached pixel index rather than an `addWeighted` over
+        the whole frame: the grid never moves, so its pixels are found once and
+        every later frame only touches the ~1% of the image the lines cover.
+        This runs on the display thread at 60 fps beside a ~10 ms publish, and
+        a full-frame blend per grid would be a third of that budget for
+        thirteen lines.
+        """
+        if self._table_mm is None:
+            return
+        index = self._grid_index(grid, scale, margin)
+        if index is None:
+            return
+        color = np.array(_bgr("grid"), dtype=np.float32)
+        patch = bgr[index].astype(np.float32)
+        bgr[index] = (patch * (1.0 - GRID_ALPHA) + color * GRID_ALPHA).astype(np.uint8)
+
+    def _grid_index(
+        self, grid: Grid, scale: float, margin: float
+    ) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+        key = (grid.cols, grid.rows, self.out_size)
+        cached = self._grid_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        if self._table_mm is None:
+            return None
+        length, width = self._table_mm
+        out_w, out_h = self.out_size
+        canvas = np.zeros((out_h, out_w), dtype=np.uint8)
+        stroke = max(1, round(GRID_STROKE_MM * scale))
+        for i in range(grid.cols + 1):
+            x = length * i / grid.cols
+            cv2.line(
+                canvas,
+                self._px(x, 0.0, scale, margin),
+                self._px(x, width, scale, margin),
+                255,
+                stroke,
+            )
+        for j in range(grid.rows + 1):
+            y = width * j / grid.rows
+            cv2.line(
+                canvas,
+                self._px(0.0, y, scale, margin),
+                self._px(length, y, scale, margin),
+                255,
+                stroke,
+            )
+        index = cast("tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]", np.nonzero(canvas))
+        self._grid_cache = (key, index)
+        return index
+
+
+def _bgr(role: str) -> tuple[int, int, int]:
+    """A mark role's colour, in the BGR order the frame is in at draw time."""
+    r, g, b = ROLE_COLORS.get(role, ROLE_COLORS["cue"])
+    return (b, g, r)

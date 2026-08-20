@@ -212,11 +212,12 @@ def test_cycle_faces_put_current_over_next() -> None:
         assert face.sub != face.text  # a cycle that showed itself as next is stuck
 
 
-def test_mode_cycle_runs_match_to_run_out_to_no_clock_and_wraps() -> None:
+def test_mode_cycle_runs_the_modes_in_order_and_wraps() -> None:
+    """Decreasing formality, then round again: match → run out → no clock → games."""
     seen = ["match"]
     for _ in MODES:
         seen.append(cycle_next("mode", seen[-1]))
-    assert seen == ["match", "run_out", "no_clock", "match"]
+    assert seen == ["match", "run_out", "no_clock", "games", "match"]
 
 
 def test_cycle_next_falls_back_to_the_first_value() -> None:

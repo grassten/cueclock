@@ -217,6 +217,23 @@ actually runs — the original plan called them *Table* / *Clock*):
   result came from the confirm key, a concession or a phone (§C2, the confirm
   key); both only exist while a bracket is loaded.
   With none loaded the page says so rather than drawing an empty grid.
+- **Games** (minigames, issue #46): exactly two sources — the play scene's
+  **own** `Syphon Client` input added full-bleed (one input, two scenes, so
+  `bind_syphon` and the colour filters serve both), under a browser source
+  `http://localhost:8000/games` filling the canvas. No side panel and no
+  side-angle camera: judging is overhead and a panel would only shrink the
+  table to make room for chrome. **Never build this scene by hand** —
+  `uv run python scripts/setup_obs_games.py` creates it and re-applies the
+  settings, including the bracket page's `restart_when_active: true` for the
+  same reason. The page has two postures: an opaque menu of game cards while
+  the picker is up, and chrome-only — a bottom bar over a transparent canvas —
+  once a game owns the table. **Everything on the cloth** (grid, ghost rings,
+  target zones, miss line, lag bracket) **arrives inside the Syphon frame**,
+  drawn server-side by the display pipeline that owns the mm→display mapping,
+  so this page never has to align itself with the table image. That mapping
+  only exists under `cueclock run --rectify`; without it there are no on-cloth
+  markings at all and `run` says so at startup. The Mode key's `games` step
+  cuts here and leaving cuts back — there is no scene key.
 - **Canvas**: standby card shown between sessions (still image, no cueclock
   sources).
 - **Replay**: replay-buffer playback (Stream Deck phase 3, built 2026-08-02).
@@ -370,6 +387,25 @@ row 3   RULESET      NEW RACK     P1  3        P2  2        MATCH 4*
         ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
 
+In **games mode** (#46) the whole of row 3 is the games layer's instead — every
+key declared there is gated to `match`/`run out`, so its cells are already dark
+and nothing collides. Two levels, maximum: picker → game.
+
+```
+        col 1        col 2        col 3        col 4        col 5
+row 3   LAG          (·)          (·)          (·)          (·)      ← the picker
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+
+row 3   BACK         (·)          (·)          (·)          (·)      ← a game's verbs
+        ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+```
+
+This row is the one part of the deck the server describes rather than
+`layout.py` declaring: what is on it depends on which games are registered and
+which one is active, so `GET /api/state` carries the faces and `games_keys()`
+turns them into keys. Everything else about them is ordinary — MATCH stripe,
+dark when unpressable, no reflow when a key leaves.
+
 `*` = only while a **bracket** is loaded (#43); dark on every other night, so
 the casual deck is exactly the deck it has always been. The reason page still
 unfolds into 2,3–2,5 and borrows the scene key's cell while it is open — the
@@ -379,7 +415,7 @@ three.
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
 | 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. Green dot = server answering | **always**, incl. server down |
-| 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → match | current over next: `MATCH`/`RUN OUT` | always |
+| 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → **games** → match. Entering `games` (#46) turns row 3 into the game picker and cuts the TV to the Games scene; leaving cuts back. There is no scene key for it, because the mode **is** the choice — and no dwell, because games mode is a thing you are in, not a beat you glance at | current over next: `MATCH`/`RUN OUT` | always |
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; timed rulesets |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left** — but only while the pool is enforced (`rulesets.ENFORCE_EXTENSION_LIMIT`, **off since 2026-08-13**: the verbal extension can mishear table-side talk, and against an unlimited pool a false grant costs nothing; the snapshot reports the pool as 0, so the face is a bare `EXT` and every press over a live countdown is granted). Flip the flag back on and the pips return | `EXT` (+ pips while enforced), flashes `OK` / `NO EXT` | match, run out; timed rulesets |
@@ -391,6 +427,7 @@ three.
 | 3,2 | **New Rack** | `POST /api/rack` — you're not shooting, you're building the next rack: clock parks, extensions refill, shot count zeroes. One key for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `NEW RACK`, flashes `RACK` / `ERROR` | match, run out |
 | 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
 | 3,4 | **P2** | as P1 | `P2` over the score | match |
+| 3,1–3,5 | **Games row** | The picker (`POST /api/games/select/{game}`, one game per key from 3,1) until a game is chosen, then that game's own verbs (`POST /api/games/press/{verb}`), `BACK` always first. Described by the server, not declared in `layout.py` — see above. A press re-polls immediately rather than waiting out the 2 s cadence, because the press rewrites the row it was on | the server's faces; flashes the pressed key's own word / `ERROR` | **games** |
 | 3,5 | **Confirm** | Commit the armed bracket result (#43). One press, four effects: the result is written and both players routed, the next ready match loads at 0–0 with its own targets, `POST /api/rack` fires (a new match is a new rack), and the TV flips to the bracket so the update is on the wall while the next pair racks — **and comes back on its own after `bracket.DWELL_S` (30 s), or the instant the clock leaves IDLE.** The bracket scene carries no shot clock and no table, so a flip out that waits on somebody remembering the scene key is a match played with nothing on the wall. **The confirm key is not the only thing that flips it**: the deck watches the draw's count of decided matches, so a match conceded or a score reported from a phone puts the bracket up for the same 30 s — to the room it is the same event. (It watches that count and not `revision`, which also moves for loads, edits and race changes.) Unarmed it is a label naming the loaded match; pressed unarmed it flashes `NOT YET` rather than swallowing the press | `MATCH 4`/`A SIDE` → `PRIYA`/`WINS 5-2`+`PRESS TO CONFIRM` on blue → `SAVING…`, flashes `SAVED`/`ERROR` | **bracket loaded**, match |
 
 Before #43 this cell held **I shot** (`POST /api/groundtruth`, #19) from

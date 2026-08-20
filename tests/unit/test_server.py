@@ -52,12 +52,15 @@ def test_state_snapshot_shape() -> None:
             # The bracket (#43): null in casual play, which is every session
             # that doesn't build one.
             "bracket",
+            # Minigames (#46): null in every mode but `games`.
+            "games",
         }
         assert snap["mode"] == "match"
         assert snap["base"] == 30
         assert snap["vision"] is True
         assert snap["solo"] is None
         assert snap["bracket"] is None
+        assert snap["games"] is None
         assert snap["score"] == {
             "p1": {"name": "PLAYER 1", "score": 0, "fargo": None, "target": None},
             "p2": {"name": "PLAYER 2", "score": 0, "fargo": None, "target": None},
@@ -765,7 +768,7 @@ def test_mode_listing_and_switch_and_unknown() -> None:
     with make_client() as client:
         listing = client.get("/api/modes").json()
         assert listing["active"] == "match"
-        assert listing["available"] == ["match", "run_out", "no_clock"]
+        assert listing["available"] == ["match", "run_out", "no_clock", "games"]
         assert client.post("/api/mode/run_out").json() == {"ok": True}
         assert client.get("/api/state").json()["mode"] == "run_out"
         assert client.post("/api/mode/no_such_mode").status_code == 404
