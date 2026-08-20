@@ -249,6 +249,54 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-20 (checkpoint 101 — a pot is a target):** the first live shots
+  session found the judge answering the wrong question. Miss the pot, leave the
+  cue dead in the middle of its zone, and the wall said **PASS** — because the
+  only requirement the shot carried was the cue's leave. A leave from a shot
+  that never went in is not a shot you made.
+
+  Not a special case: **the missing half of the model.** A requirement is
+  `(role → target)`, and a target is a block of diamond cells **or `POTTED`**.
+  That is exactly the addition §11.5's typed envelope was put in for —
+  `{"type": "potted"}` beside `{"type": "cells"}`, one new type, no migration,
+  unknown ones still raising. The envelope earned its keep the same day.
+
+  **The evidence is absence, and it was already trusted.** Nothing in `vision/`
+  reports a pot — scratch is cue-specific by construction, its whiteness census
+  existing precisely to *refuse* a scratch when a potted object ball wore the
+  crown — so a ball in a pocket is a ball missing from the resting roster. The
+  judge already read that fact in the other direction, to fail a safety whose
+  object ball dropped. Asking for it on purpose leans on nothing new.
+
+  **The per-shot setting needs no key**, because capture already has the
+  gesture: place a ball at a spot and it must *finish there* (a safety); leave
+  it where it stands and it must *drop*. A potting drill is captured by picking
+  up only the cue, which is what capturing one already looked like. The old
+  default for an untouched object ball — no requirement at all — was the bug,
+  and it is no longer a state a `Shot` can be in: one function fills the list
+  from the layout and both the capture path and the file reader go through it,
+  so **the shot already saved on the rig judges the way a new one does**.
+
+  Two things fall out. A **safety is derived, not declared** — it is what giving
+  an object ball a patch of cloth to finish on *means*, so the flag cannot
+  disagree with what the shot is judged against. And **the cue is never given a
+  pot**: a potted cue is a scratch, a way to fail a shot and never a way to set
+  one, so the phone offers POT on object rows only.
+
+  Surfaces: the bar reads `CUE IN ZONE · OBJECT POTTED` armed and `✓ POTTED` /
+  `— NOT POTTED` at the verdict, no millimetres either way. The cloth draws an
+  **alarm ring around the ball that did not drop** — no direction to point, but
+  on a two-object layout very much a *which*. The phone's Drills editor gets one
+  control per ball, `Pot · 1×1 · 2×1 · 1×2 · 2×2`, whose lit button is the
+  setting; tapping a cell for a ball set to POT makes it a zone there, because
+  the tap said *where*, which is the whole difference between the two. Its
+  mini-table now plots balls against the playing surface too (checkpoint 100),
+  so the dots and the cells finally agree.
+
+  Verified by rendering both surfaces — the editor in a real WebKit view
+  against a live server, both postures; the failed-pot ring over a corpus frame.
+  Unit-only otherwise: `vision/` is untouched.
+
 - **2026-08-20 (checkpoint 100 — the games wall, corrected on the wall):** two
   faults Steven spotted the first time #46's picture was up on the TV, both of
   them things no unit test could have known to ask.

@@ -911,17 +911,18 @@ class Hub:
         return True
 
     async def edit_shot(self, shot_id: str, body: Mapping[str, object]) -> dict[str, object] | None:
-        """Rename or re-zone one saved shot — the phone's Drills editor.
+        """Rename or re-target one saved shot — the phone's Drills editor.
 
         Positions are never in `body`: the table is the only positional input
         device (#46), so a shot's balls and ghosts come from the capture that
-        made it and from nowhere else.
+        made it and from nowhere else. A *target* is fair game — a zone block or
+        a pot is a rule about the shot, not a measurement of it.
         """
-        zones = body.get("zones")
+        targets = body.get("targets")
         shot = self.games.shots().edit(
             shot_id,
             name=str(body["name"]) if isinstance(body.get("name"), str) else None,
-            zones=zones if isinstance(zones, Mapping) else None,
+            targets=targets if isinstance(targets, Mapping) else None,
         )
         if shot is None:
             return None
