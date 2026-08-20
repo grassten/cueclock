@@ -218,11 +218,16 @@ actually runs — the original plan called them *Table* / *Clock*):
   key); both only exist while a bracket is loaded.
   With none loaded the page says so rather than drawing an empty grid.
 - **Games** (minigames, issue #46): exactly two sources — the play scene's
-  **own** `Syphon Client` input added full-bleed (one input, two scenes, so
-  `bind_syphon` and the colour filters serve both), under a browser source
+  **own** `Syphon Client` input (one input, two scenes, so `bind_syphon` and the
+  colour filters serve both), under a browser source
   `http://localhost:8000/games` filling the canvas. No side panel and no
   side-angle camera: judging is overhead and a panel would only shrink the
-  table to make room for chrome. **Never build this scene by hand** —
+  table to make room for chrome. The feed is fitted into the canvas **above the
+  HUD bar** rather than full-bleed, and pillarboxes itself there: the bar is
+  opaque, and at 1.84:1 in a 1.78:1 canvas a full-bleed feed put a solid plinth
+  across the bottom rail and both foot pockets. The transform belongs to the
+  scene *item*, so the play scene keeps its own full-bleed framing.
+  **Never build this scene by hand** —
   `uv run python scripts/setup_obs_games.py` creates it and re-applies the
   settings, including the bracket page's `restart_when_active: true` for the
   same reason. The page has two postures: an opaque menu of game cards while

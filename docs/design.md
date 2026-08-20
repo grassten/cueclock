@@ -661,8 +661,10 @@ never collide with an expiry alarm.
 ### 11.2 Zones are diamond-grid cells, and pass criteria are a list
 
 Zones are rectangular blocks of **diamond-grid cells** — the standard layout's
-8×4 division of the playing surface — derived entirely from the calibrated
-homography, with no invented geometry constant. Circles were the first design
+8×4 division of the playing surface — derived entirely from the table's own
+geometry, with no invented geometry constant. (Which rectangle *is* the playing
+surface is not the calibrated one, and cost a wall-visible bug: **§11.6**.)
+Circles were the first design
 and lost on one argument: **a grid is aimable from the table.** Sighting
 diamond-to-diamond is how players already carve the table up, so screen and
 cloth share a vocabulary, a miss becomes legible ("one cell short") as well as
@@ -766,3 +768,50 @@ that would disagree with what the camera measured. "Serve this shot" is the one
 live control, and it **refuses rather than switching the mode for you** — the
 same rule the picker POSTs follow, because what is on the wall and under your
 hand is the deck's to say.
+
+### 11.6 The playing surface is not the calibrated rectangle (2026-08-20)
+
+The first live look at the games wall found the diamond grid sitting on the
+cushions: its outer lines ran along the rails rather than the cushion noses,
+and every cell was a rail's width too big. The cause is stated plainly in
+`vision/calibration.py`'s own docstring and had simply never mattered before —
+the calibration fits the **cloth outline**, and cloth runs up the cushion face
+to the rail, so `0..1930 × 0..965` is the rail's inner edge. Nothing had ever
+asked where the *playing* surface was inside it, because every consumer until
+now (velocities, displacements, pocket zones) works in differences or in zones
+whose thresholds were themselves measured against that convention.
+
+**The rail sights are the ruler.** They sit at exact eighths of the playing
+length and quarters of its width, which is precisely the grid being drawn, and
+they are in every frame the camera has ever recorded. Rectify a corpus frame
+with the live calibration, find the sight centres, least-squares fit
+`coord(k) = A + B·k`, and the playing rectangle falls out in calibrated mm as
+`A .. A + 8B` across and `A .. A + 4B` down. No printed target, no table time,
+no new hardware — and it is re-measurable from the corpus after any
+recalibration.
+
+Measured 2026-08-20 over four clips spanning three dates (`rack_place_0801`,
+`stroke_gear_margin_0802`, `ball_in_hand_carry_0811` and its `_b_`): the sights
+fall within **1.2 mm** of a straight line and the spans agree to ~2 mm —
+**1830.3 mm × 872.8 mm**, centred, leaving ~50 mm of cushion at each end and
+~46 mm at each side. Centred rather than per-side, because the cloth-outline fit
+is symmetric by construction; the ~5 mm of side-to-side difference between those
+dates is mount drift, not table geometry.
+
+Three things follow, and one is worth flagging beyond the games layer:
+
+- The grid, and therefore every cell and every zone, is quoted from that
+  rectangle (`server/games.py`, `PLAY_*`). `cell_of` still clamps, and the clamp
+  now does real work: the cushion band is off the grid by construction.
+- Lag measures its gap from the cushion nose, not from the cloth outline a
+  rail's width behind it. It had been reporting every lag ~50 mm long.
+- **The calibrated millimetre is anisotropic, and this measures it.** A physical
+  playing area of 1930 × 965 reading as 1830.3 × 872.8 means the scale is
+  0.948 along the table and 0.904 across it — a 4.9% difference between the two
+  axes, and both are short. That is the "approximate at the few-percent level"
+  the calibration promised, now with a number on it: distances read ~5–10%
+  short, and a diagonal reads differently from the same distance along a rail.
+  §4.2's thresholds have always been measured *in these units*, so nothing is
+  wrong today and nothing should be rescaled — but this is the size of the prize
+  for **#16** (ChArUco intrinsics + a measured homography), and the first
+  concrete measurement of it.

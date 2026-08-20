@@ -116,16 +116,22 @@ class Bracket:
 
 @dataclass(frozen=True)
 class Grid:
-    """The diamond grid over the playing surface — `cols` x `rows` cells.
+    """The diamond grid — `cols` x `rows` cells over an explicit rectangle.
 
-    Carries no coordinates: it always spans the whole calibrated playing area,
-    which is the only thing that makes it the *diamond* grid rather than an
-    invented one (#46 — derived entirely from the homography, no new geometry
-    constants).
+    The rectangle is the **playing surface**: cushion nose to cushion nose, the
+    area the rail sights divide. It is passed in rather than assumed, because
+    it is not the calibrated rectangle — the calibration fits the cloth
+    *outline*, which runs up the cushion face to the rail — and the difference
+    is a rail's width of cloth the balls never play on. `server/games.py` owns
+    that geometry and its measurement; this module only draws what it is given.
     """
 
     cols: int
     rows: int
+    x0_mm: float
+    y0_mm: float
+    x1_mm: float
+    y1_mm: float
 
 
 Mark = Rect | Circle | Line | Bracket | Grid

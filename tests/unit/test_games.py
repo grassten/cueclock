@@ -28,6 +28,12 @@ from cueclock.server.games import (
     GAMES,
     GAMES_ROW_FIRST_KEY,
     LAG_ATTEMPT,
+    PLAY_LENGTH_MM,
+    PLAY_WIDTH_MM,
+    PLAY_X0_MM,
+    PLAY_X1_MM,
+    PLAY_Y0_MM,
+    PLAY_Y1_MM,
     TABLE_LENGTH_MM,
     TABLE_WIDTH_MM,
     Ball,
@@ -68,6 +74,27 @@ def test_first_picker_key_matches_the_deck_row() -> None:
     assert GAMES_ROW_FIRST_KEY == GAMES_FIRST_KEY == (GAMES_ROW - 1) * COLS + 1
 
 
+def test_the_scene_reserves_exactly_the_bar_the_page_draws() -> None:
+    """`setup_obs_games.py` fits the table feed above the bar — this is the height.
+
+    The page is the authority (it draws the bar) and the scene builder is the
+    consumer (it keeps the table out from under it), so the number lives in
+    `deck/games.py` and this holds it to the stylesheet. Drift means a plinth
+    back over the bottom rail, or a black stripe above it.
+    """
+    import re
+
+    from cueclock.deck.games import HUD_BAR_PX, HUD_PAGE_H, HUD_PAGE_W
+    from cueclock.server.app import STATIC_DIR
+
+    page = (STATIC_DIR / "games.html").read_text()
+    bar = re.search(r"#bar\s*\{[^}]*?height:\s*(\d+)px", page, re.S)
+    stage = re.search(r"#stage\s*\{[^}]*?width:\s*(\d+)px;\s*height:\s*(\d+)px", page, re.S)
+    assert bar is not None and stage is not None
+    assert int(bar.group(1)) == HUD_BAR_PX
+    assert (int(stage.group(1)), int(stage.group(2))) == (HUD_PAGE_W, HUD_PAGE_H)
+
+
 # ---------------------------------------------------------------------------
 # Lag
 # ---------------------------------------------------------------------------
@@ -80,26 +107,27 @@ def _lag() -> tuple[LagGame, list[tuple[str, dict[str, object]]]]:
 
 
 def test_lag_measures_the_gap_not_the_centre() -> None:
-    """A ball frozen on the head rail reads ~0, not one ball radius."""
+    """A ball frozen on the head cushion reads ~0, not a radius plus a cushion."""
     game, lines = _lag()
-    game.on_settle(1.0, [Ball(x_mm=BALL_RADIUS_MM, y_mm=480.0, is_cue=True)])
+    frozen = PLAY_X0_MM + BALL_RADIUS_MM
+    game.on_settle(1.0, [Ball(x_mm=frozen, y_mm=480.0, is_cue=True)])
     assert game.last_mm == 0.0
-    game.on_settle(2.0, [Ball(x_mm=BALL_RADIUS_MM + 43.0, y_mm=480.0, is_cue=True)])
-    assert game.last_mm == 43.0
+    game.on_settle(2.0, [Ball(x_mm=frozen + 43.0, y_mm=480.0, is_cue=True)])
+    assert game.last_mm == pytest.approx(43.0)
     assert [kind for kind, _ in lines] == [LAG_ATTEMPT, LAG_ATTEMPT]
     assert lines[-1][1]["distance_mm"] == 43
 
 
 def test_lag_keeps_the_best_and_every_settle_is_an_attempt() -> None:
     game, _ = _lag()
-    for x in (200.0, 60.0, 900.0):
+    for x in (200.0, 120.0, 900.0):
         game.on_settle(1.0, [Ball(x_mm=x, y_mm=480.0, is_cue=True)])
     assert game.attempts == 3
-    assert game.best_mm == 60.0 - BALL_RADIUS_MM
-    assert game.last_mm == 900.0 - BALL_RADIUS_MM
+    assert game.best_mm == pytest.approx(120.0 - BALL_RADIUS_MM - PLAY_X0_MM)
+    assert game.last_mm == pytest.approx(900.0 - BALL_RADIUS_MM - PLAY_X0_MM)
     answer = game.hud().answer
     assert answer is not None and answer.eyebrow == "BEST"
-    assert answer.word == str(round(60.0 - BALL_RADIUS_MM))
+    assert answer.word == str(round(120.0 - BALL_RADIUS_MM - PLAY_X0_MM))
 
 
 def test_lag_identity_falls_back_by_elimination_then_refuses() -> None:
@@ -120,7 +148,7 @@ def test_lag_draws_only_its_bracket() -> None:
     game.on_settle(1.0, [Ball(x_mm=220.0, y_mm=480.0, is_cue=True)])
     (mark,) = game.marks()
     assert isinstance(mark, Bracket)
-    assert mark.x0_mm == 0.0
+    assert mark.x0_mm == PLAY_X0_MM  # it starts at the cushion, not the cloth outline
     assert mark.x1_mm == 220.0 - BALL_RADIUS_MM  # the bracket ends at the ball's edge
 
 
@@ -163,7 +191,7 @@ def test_session_settles_against_the_newest_layout() -> None:
     session.on_settle(1.0)
     game = session.active
     assert isinstance(game, LagGame)
-    assert game.last_mm == pytest.approx(100.0)
+    assert game.last_mm == pytest.approx(100.0 - PLAY_X0_MM)
 
 
 # ---------------------------------------------------------------------------
@@ -332,12 +360,30 @@ def test_shot_records_are_empty_without_drill_attempts(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_cell_is_the_table_divided_by_the_grid() -> None:
-    assert (CELL_LENGTH_MM, CELL_WIDTH_MM) == (TABLE_LENGTH_MM / 8, TABLE_WIDTH_MM / 4)
-    assert cell_of(0.0, 0.0) == (0, 0)
-    assert cell_of(TABLE_LENGTH_MM - 1, TABLE_WIDTH_MM - 1) == (7, 3)
-    # Clamped, not refused: a ball against a cushion can read a hair outside
-    # the corpus-grade calibration rectangle and is still visibly on the table.
+def test_the_playing_surface_sits_inside_the_calibrated_rectangle() -> None:
+    """The calibration fits the cloth outline, so a rail's width of it isn't play.
+
+    Measured off the rail sights (see the constants); asserted here as shape
+    rather than value — inside, centred, and a cushion's width in from each
+    edge — so a re-measurement moves the numbers without rewriting the test.
+    """
+    assert 0.0 < PLAY_X0_MM < 100.0
+    assert 0.0 < PLAY_Y0_MM < 100.0
+    assert (PLAY_X1_MM, PLAY_Y1_MM) == (PLAY_X0_MM + PLAY_LENGTH_MM, PLAY_Y0_MM + PLAY_WIDTH_MM)
+    foot_cushion = TABLE_LENGTH_MM - PLAY_X1_MM
+    far_cushion = TABLE_WIDTH_MM - PLAY_Y1_MM
+    assert foot_cushion == pytest.approx(PLAY_X0_MM)
+    assert far_cushion == pytest.approx(PLAY_Y0_MM)
+
+
+def test_a_cell_is_the_playing_surface_divided_by_the_grid() -> None:
+    assert (CELL_LENGTH_MM, CELL_WIDTH_MM) == (PLAY_LENGTH_MM / 8, PLAY_WIDTH_MM / 4)
+    assert cell_of(PLAY_X0_MM, PLAY_Y0_MM) == (0, 0)
+    assert cell_of(PLAY_X1_MM - 1, PLAY_Y1_MM - 1) == (7, 3)
+    # Clamped, not refused: everything between the cushion nose and the
+    # calibrated rectangle is off the grid by construction, and a ball frozen
+    # on a cushion sits there while being visibly on the table.
+    assert cell_of(0.0, TABLE_WIDTH_MM) == (0, 3)
     assert cell_of(-40.0, TABLE_WIDTH_MM + 40.0) == (0, 3)
 
 
@@ -362,7 +408,10 @@ def test_a_zone_grows_toward_the_middle_of_the_table() -> None:
 
 
 def _centre(col: int, row: int) -> tuple[float, float]:
-    return ((col + 0.5) * CELL_LENGTH_MM, (row + 0.5) * CELL_WIDTH_MM)
+    return (
+        PLAY_X0_MM + (col + 0.5) * CELL_LENGTH_MM,
+        PLAY_Y0_MM + (row + 0.5) * CELL_WIDTH_MM,
+    )
 
 
 def test_zone_round_trips_through_its_typed_envelope() -> None:
@@ -514,6 +563,19 @@ def test_the_ghosts_drop_at_arm_and_the_zone_stays_lit() -> None:
     assert not any(isinstance(m, Circle) for m in armed)
     assert sum(isinstance(m, Rect) for m in armed) == 1
     assert any(isinstance(m, Grid) for m in armed)
+
+
+def test_the_drawn_grid_is_the_judged_grid() -> None:
+    """The lines on the cloth are the cell boundaries, or the picture lies.
+
+    Drawing and judging are separate code — `display/pipeline.py` rasterizes a
+    `Grid`, `Zone.bounds_mm` decides a shot — so the one thing worth pinning is
+    that they read the same rectangle.
+    """
+    (grid,) = [m for m in _served().marks() if isinstance(m, Grid)]
+    assert (grid.cols, grid.rows) == (8, 4)
+    assert (grid.x0_mm, grid.y0_mm) == Zone(col=0, row=0).bounds_mm[:2]
+    assert (grid.x1_mm, grid.y1_mm) == Zone(col=7, row=3).bounds_mm[2:]
 
 
 def test_a_pass_is_every_requirement_in_its_zone() -> None:
@@ -767,7 +829,7 @@ def test_editing_the_served_shot_keeps_it_served(tmp_path: Path) -> None:
     assert game.served is not None and game.served.id == "shot-1"
     assert game.state == ShotsGame.SERVING
     (zone,) = [m for m in game.marks() if isinstance(m, Rect)]
-    assert zone.x_mm == pytest.approx(6 * CELL_LENGTH_MM)
+    assert zone.x_mm == pytest.approx(PLAY_X0_MM + 6 * CELL_LENGTH_MM)
 
 
 def test_deleting_the_served_shot_leaves_nothing_served(tmp_path: Path) -> None:

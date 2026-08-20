@@ -101,22 +101,29 @@ def test_marks_land_where_the_millimetres_say() -> None:
     assert channels.min() > 200 and channels.max() - channels.min() < 8  # white, per role
 
 
-def test_the_grid_spans_the_playing_area_and_nothing_more() -> None:
-    """Derived entirely from the calibration — no invented geometry (#46)."""
+def test_the_grid_spans_the_rectangle_it_is_given_and_nothing_more() -> None:
+    """The playing surface is inset from the calibrated rectangle (#46).
+
+    The calibration fits the cloth *outline*, so the grid is handed the
+    cushion-nose rectangle instead — here a deliberately lopsided one, so a
+    rasterizer that quietly fell back to the calibrated rectangle fails.
+    """
     from cueclock.display.marks import Grid
 
     pipeline = _rectified(out_width=1920)
     scale, margin = 1920.0 / (1930.0 + 180.0), 90.0
+    x0, y0, x1, y1 = 50.0, 46.0, 1870.0, 900.0
     frame = np.zeros((pipeline.out_size[1], pipeline.out_size[0], 3), dtype=np.uint8)
-    pipeline.draw_marks(frame, (Grid(cols=8, rows=4),))
-    # Sampled inside a cell's height, not on the row boundary at y = 482.5 —
-    # that one is itself a grid line and would pass whatever the columns did.
-    mid_y = round((120.0 + margin) * scale)
+    pipeline.draw_marks(frame, (Grid(cols=8, rows=4, x0_mm=x0, y0_mm=y0, x1_mm=x1, y1_mm=y1),))
+    # Sampled inside a cell's height, not on a row boundary — one of those is
+    # itself a grid line and would pass whatever the columns did.
+    mid_y = round((y0 + 40.0 + margin) * scale)
     for i in range(9):  # every cell boundary of the 8x4 grid carries a line
-        assert _lit(frame, round((1930.0 * i / 8 + margin) * scale), mid_y)
+        assert _lit(frame, round((x0 + (x1 - x0) * i / 8 + margin) * scale), mid_y)
     # Between two boundaries, nothing: the grid is lines, not a wash.
-    assert not _lit(frame, round((1930.0 / 16 + margin) * scale), mid_y)
-    # And the surround outside the playing area is untouched — the grid IS the table.
+    assert not _lit(frame, round((x0 + (x1 - x0) / 16 + margin) * scale), mid_y)
+    # The cloth outside it is untouched — that band is cushion, not playing area.
+    assert not _lit(frame, round((x0 / 2 + margin) * scale), mid_y)
     assert not _lit(frame, round(margin * scale / 2), round(margin * scale / 2))
 
 
