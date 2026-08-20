@@ -249,6 +249,28 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-20 (checkpoint 102 — the Drills editor says it is an editor):**
+  "How do I modify the drill? There's nothing clickable" (Steven). The editor
+  was reachable the whole time — tapping a list row opens it — but nothing said
+  so: a drill row was a stat card and a tappable row wearing the same
+  rectangle. It now carries a **disclosure chevron**, which is the one thing a
+  row needs to read as a way in.
+
+  Inside it, the same fault a level down. Tapping a grid cell moves *the
+  selected ball's* target, and the only sign of which ball that was, was the
+  label turning blue — indistinguishable from a heading colour. The role labels
+  are now **pills, with the selected one filled**, so the editor reads as two
+  controls and a grid rather than two captions and a picture.
+
+  And the reason a fix could have been on disk while the phone kept painting
+  the old one: **every UI page is now served `no-cache, must-revalidate`.**
+  These pages ship with the code and change with it, and both of their
+  audiences hold one open for hours — a phone in a pocket, an OBS browser
+  source that only reloads at a scene cut. The ETag makes the revalidation a
+  304, so on a LAN it costs one conditional request per load. (Found the
+  honest way: two re-renders of the "fixed" page showed the unfixed page,
+  because WKWebView had cached it too.)
+
 - **2026-08-20 (checkpoint 101 — a pot is a target):** the first live shots
   session found the judge answering the wrong question. Miss the pot, leave the
   cue dead in the middle of its zone, and the wall said **PASS** — because the
