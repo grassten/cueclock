@@ -5,7 +5,7 @@ A minigame is a **registered event consumer** — the same registry pattern
 config-file game definitions. The vision core is untouched by construction:
 games sit at the Hub seam the clock and ``last_settle_movers`` already use, so
 the corpus stays green without anything in ``vision/`` moving (docs/design.md
-§14).
+§11).
 
 The contract, frozen to exactly what the two launch games need (**rule of
 two** — nothing speculative):
