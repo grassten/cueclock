@@ -265,6 +265,9 @@
             color: var(--slate); white-space: nowrap;
         }
         .drow .pct b { color: var(--text); }
+        /* The row opens the editor, so it has to look like it does. A stat card
+           and a tappable row are the same rectangle without this. */
+        .drow .go { color: var(--dim); font-size: 19px; line-height: 1; margin-left: 2px; }
         .tag {
             font-size: 9px; letter-spacing: 1.2px; font-weight: 700; color: var(--slate);
             border: 1px solid var(--line-strong); border-radius: 4px; padding: 2px 6px;
@@ -292,11 +295,18 @@
             transform: translate(-50%, -50%); pointer-events: none;
         }
         .zonerow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        /* Tapping a cell moves whichever role is selected here, so the label
+           is a control, not a caption — it wears a box and the selected one
+           is filled. Two of these and a grid is the whole editor. */
         .zonerow .zl {
             font-size: 10.5px; letter-spacing: 1.6px; color: var(--slate);
-            font-weight: 700; text-transform: uppercase;
+            font-weight: 700; text-transform: uppercase; cursor: pointer;
+            border: 1px solid var(--line-strong); border-radius: 8px;
+            padding: 9px 11px; touch-action: manipulation; white-space: nowrap;
         }
-        .zonerow .zl.sel { color: var(--accent); }
+        .zonerow .zl.sel {
+            color: #04121F; background: var(--accent); border-color: var(--accent);
+        }
         .zonerow .seg { flex: 1; max-width: 200px; }
 
         .field { display: flex; flex-direction: column; gap: 7px; }
@@ -1445,6 +1455,7 @@
                 </div>
                 <div class="pct">${shot.make_pct === null ? '—'
                     : `<b>${shot.make_pct}%</b> · ${shot.attempts}`}</div>
+                <div class="go">\u203A</div>
             </div>`).join('');
     }
 

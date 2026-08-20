@@ -200,6 +200,16 @@ def test_html_pages_served() -> None:
         assert "Shot Clock Control" in client.get("/control").text
 
 
+def test_ui_pages_are_served_must_revalidate() -> None:
+    """A phone in a pocket and an OBS source that reloads at a scene cut both
+    hold a page for hours, so a deployed fix must not sit behind a cached copy."""
+    with make_client() as client:
+        for route in ("/shotclock", "/control", "/replay", "/games", "/bracket"):
+            headers = client.get(route).headers
+            assert "no-cache" in headers.get("cache-control", ""), route
+            assert headers.get("etag")  # ...so the revalidation costs a 304
+
+
 def test_vision_events_drive_clock() -> None:
     """The `cueclock run` wiring: a shot freezes the clock, its settle restarts it.
 

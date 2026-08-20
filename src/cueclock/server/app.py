@@ -70,6 +70,20 @@ def create_app(
             }
         )
 
+    def _page(name: str) -> FileResponse:
+        """A UI page, served must-revalidate.
+
+        Every one of these ships with the code and changes with it, and both
+        of their audiences hold a page open for hours — a phone in a pocket, an
+        OBS browser source that only reloads at a scene cut. Without this a
+        deployed fix can sit on disk while the surface that needed it keeps
+        painting the version it cached. The ETag makes the revalidation a 304,
+        so the cost is one conditional request per load on a LAN.
+        """
+        return FileResponse(
+            STATIC_DIR / name, headers={"Cache-Control": "no-cache, must-revalidate"}
+        )
+
     @app.get("/shotclock")
     async def shotclock_page() -> FileResponse:
         """Every clock overlay, selected by `?view=` (docs/hardware.md §B3).
@@ -79,16 +93,16 @@ def create_app(
         two OBS sources. It replaced the standalone `/score` page on
         2026-08-03 (issue #23); `?view=full` and the bare square are unchanged.
         """
-        return FileResponse(STATIC_DIR / "shotclock.html")
+        return _page("shotclock.html")
 
     @app.get("/control")
     async def control_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "control.html")
+        return _page("control.html")
 
     @app.get("/replay")
     async def replay_page() -> FileResponse:
         """REPLAY badge for the OBS Replay scene (`?s=<seconds>` drains the bar)."""
-        return FileResponse(STATIC_DIR / "replay.html")
+        return _page("replay.html")
 
     @app.get("/games")
     async def games_page() -> FileResponse:
@@ -100,7 +114,7 @@ def create_app(
         Syphon feed instead (`display/pipeline.py`), so this page never has to
         align itself with the table image.
         """
-        return FileResponse(STATIC_DIR / "games.html")
+        return _page("games.html")
 
     @app.get("/bracket")
     async def bracket_page() -> FileResponse:
@@ -111,7 +125,7 @@ def create_app(
         live match is the highlighted box, so repeating either only costs the
         boxes the space that makes them readable from the couch.
         """
-        return FileResponse(STATIC_DIR / "bracket.html")
+        return _page("bracket.html")
 
     @app.get("/audio/extension_called.wav")
     async def extension_called_audio() -> FileResponse:
