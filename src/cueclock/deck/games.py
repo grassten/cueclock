@@ -23,6 +23,17 @@ from cueclock.deck.bracket import DEFAULT_PLAY_SCENE
 # The scene `scripts/setup_obs_games.py` creates (docs/hardware.md §B3).
 SCENE_NAME = "Games"
 
+# The HUD page is authored at 1920x1080 and its bar is the bottom `HUD_BAR_PX`
+# of that — `#bar { height: 160px }` in `server/static/games.html`, which a unit
+# test holds this to. The setup script needs it because the table feed is fitted
+# into the space **above** the bar rather than full-bleed: the bar is opaque, so
+# full-bleed put a solid plinth across the bottom rail and its two pockets.
+# Sitting them side by side costs ~12% of the table's width on the wall and buys
+# back the whole table, which is the trade for a game judged on where balls stop.
+HUD_PAGE_W = 1920
+HUD_PAGE_H = 1080
+HUD_BAR_PX = 160
+
 
 @dataclass(frozen=True)
 class Showing:

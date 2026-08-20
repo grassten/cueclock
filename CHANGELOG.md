@@ -249,6 +249,51 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-20 (checkpoint 100 — the games wall, corrected on the wall):** two
+  faults Steven spotted the first time #46's picture was up on the TV, both of
+  them things no unit test could have known to ask.
+
+  **The diamond grid was drawn on the cushions.** Its outer lines ran along the
+  rails and every cell was a rail's width too big, because the games layer had
+  taken the calibrated rectangle for the playing area. It is not, and
+  `vision/calibration.py` has always said so in its own docstring: the fit is to
+  the **cloth outline**, and cloth runs up the cushion face to the rail. Nothing
+  had ever cared, because every consumer until now works in differences or in
+  zones whose thresholds were measured against that same convention.
+
+  **The rail sights are the ruler**, and they are in every frame ever recorded:
+  eighths of the playing length, quarters of its width — exactly the grid being
+  drawn. Rectify a corpus frame with the live calibration, find the sight
+  centres, least-squares fit `coord(k) = A + B·k`, and the playing rectangle
+  falls out in calibrated mm. No printed target, no table time, and re-measurable
+  from the corpus after any recalibration. Over four clips across three dates
+  (`rack_place_0801`, `stroke_gear_margin_0802`, `ball_in_hand_carry_0811` +
+  `_b_`) the sights sit within **1.2 mm** of a straight line and the spans agree
+  to ~2 mm: **1830.3 × 872.8 mm**, centred, ~50 mm of cushion at each end and
+  ~46 mm at each side. Grid, cells and zones now quote that rectangle, and lag
+  measures its gap from the cushion nose — it had been reporting every lag
+  ~50 mm long.
+
+  **That measurement also puts a number on the calibration's own error.** A
+  physical 1930 × 965 reading as 1830.3 × 872.8 means the calibrated millimetre
+  is 0.948 along the table and 0.904 across it — both short, and **4.9% apart
+  from each other**. §4.2's thresholds were all measured in these units so
+  nothing is wrong today and nothing should be rescaled, but that is the size of
+  the prize for **#16**, measured for the first time (design.md §11.6).
+
+  **The HUD bar was sitting on the bottom rail.** The feed is 1.84:1 in a 1.78:1
+  canvas, so full-bleed put the opaque plinth across the bottom rail and both
+  foot pockets — on a game judged by where balls stop, the wrong 12% to lose.
+  The Games scene now fits the feed into the strip *above* the bar and lets it
+  pillarbox: ~12% smaller, and all of it visible. The transform belongs to the
+  scene item, so the play scene keeps its own full-bleed framing, and
+  `deck/games.py` owns the bar height with a unit test holding it to the
+  stylesheet.
+
+  Verified by rendering: the grid over real corpus frames (the lines land on the
+  sights) and the scene over the live wall. Unit-only otherwise — `vision/`
+  is untouched, so the corpus has nothing to say about any of it.
+
 - **2026-08-20 (checkpoint 99 — minigames phase 3: the catalog, safeties, and
   a Drills tab):** #46's last of three, and the card closes.
 

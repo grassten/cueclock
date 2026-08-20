@@ -165,7 +165,6 @@ class DisplayPipeline:
         # goes through it, which is the whole reason the games layer draws
         # here rather than in a browser source over the Syphon feed (#46).
         self._mm: tuple[float, float] | None = None
-        self._table_mm: tuple[float, float] | None = None  # (length, width)
         # What the games layer wants on the cloth right now. Rebound from the
         # server's asyncio loop and read on the display thread — a plain
         # attribute holding an immutable tuple, the same contract `Hub.note_frame`
@@ -174,7 +173,7 @@ class DisplayPipeline:
         self.marks: tuple[Mark, ...] = ()
         self._grid_cache: (
             tuple[
-                tuple[int, int, tuple[int, int]],
+                tuple[Grid, tuple[int, int]],
                 tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]],
             ]
             | None
@@ -190,7 +189,6 @@ class DisplayPipeline:
         pipeline.out_size = (width, height)
         span_x = calibration.length_mm + 2 * margin_mm
         pipeline._mm = (out_width / span_x, margin_mm)
-        pipeline._table_mm = (calibration.length_mm, calibration.width_mm)
         return pipeline
 
     @property
@@ -225,7 +223,7 @@ class DisplayPipeline:
         assert where they landed, which is the only way this gets checked
         without the camera.
         """
-        if self._mm is None or self._table_mm is None:
+        if self._mm is None:
             return
         scale, margin = self._mm
         stroke = max(1, round(STROKE_MM * scale))
@@ -381,7 +379,7 @@ class DisplayPipeline:
     def _draw_grid(
         self, bgr: npt.NDArray[np.uint8], grid: Grid, scale: float, margin: float
     ) -> None:
-        """The diamond grid across the whole calibrated playing area.
+        """The diamond grid across the rectangle the mark carries.
 
         Thinner and far fainter than everything else on purpose: it is the
         vocabulary a zone is quoted in, not a thing being aimed at, and at full
@@ -394,43 +392,36 @@ class DisplayPipeline:
         a full-frame blend per grid would be a third of that budget for
         thirteen lines.
         """
-        if self._table_mm is None:
-            return
         index = self._grid_index(grid, scale, margin)
-        if index is None:
-            return
         color = np.array(_bgr("grid"), dtype=np.float32)
         patch = bgr[index].astype(np.float32)
         bgr[index] = (patch * (1.0 - GRID_ALPHA) + color * GRID_ALPHA).astype(np.uint8)
 
     def _grid_index(
         self, grid: Grid, scale: float, margin: float
-    ) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
-        key = (grid.cols, grid.rows, self.out_size)
+    ) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        key = (grid, self.out_size)
         cached = self._grid_cache
         if cached is not None and cached[0] == key:
             return cached[1]
-        if self._table_mm is None:
-            return None
-        length, width = self._table_mm
         out_w, out_h = self.out_size
         canvas = np.zeros((out_h, out_w), dtype=np.uint8)
         stroke = max(1, round(GRID_STROKE_MM * scale))
         for i in range(grid.cols + 1):
-            x = length * i / grid.cols
+            x = grid.x0_mm + (grid.x1_mm - grid.x0_mm) * i / grid.cols
             cv2.line(
                 canvas,
-                self._px(x, 0.0, scale, margin),
-                self._px(x, width, scale, margin),
+                self._px(x, grid.y0_mm, scale, margin),
+                self._px(x, grid.y1_mm, scale, margin),
                 255,
                 stroke,
             )
         for j in range(grid.rows + 1):
-            y = width * j / grid.rows
+            y = grid.y0_mm + (grid.y1_mm - grid.y0_mm) * j / grid.rows
             cv2.line(
                 canvas,
-                self._px(0.0, y, scale, margin),
-                self._px(length, y, scale, margin),
+                self._px(grid.x0_mm, y, scale, margin),
+                self._px(grid.x1_mm, y, scale, margin),
                 255,
                 stroke,
             )

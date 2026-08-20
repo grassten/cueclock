@@ -57,11 +57,48 @@ TABLE_WIDTH_MM = 965.0  # == vision.calibration.TABLE_WIDTH_MM
 BALL_RADIUS_MM = 28.575  # == vision.pipeline.BALL_RADIUS_MM (2 1/4", WPA spec)
 
 # The diamond grid. The standard diamond layout divides the playing surface
-# into 8 x 4 squares, and every coordinate here is derived from the calibrated
-# playing area — there is no invented geometry constant, which is the whole
+# into 8 x 4 squares, and every coordinate here is derived from the table's own
+# rail sights — there is no invented geometry constant, which is the whole
 # reason zones are grid cells rather than free circles (#46).
 GRID_COLS = 8
 GRID_ROWS = 4
+
+# ---------------------------------------------------------------------------
+# The playing surface, inside the calibrated rectangle (measured 2026-08-20)
+# ---------------------------------------------------------------------------
+#
+# The rectangle above is NOT the playing area, despite its name: the calibration
+# fits the **cloth outline**, and cloth runs up the cushion face to the rail, so
+# 0..1930 x 0..965 is the rail's inner edge (`vision/calibration.py`, module
+# docstring — "the cloth outline, not the cushion nose line, stands in for the
+# playing area"). Drawing the grid on it put the outermost lines out on the
+# cushions and stretched every cell by a rail's width, which is exactly what it
+# looked like on the wall.
+#
+# Measured off the rail sights, which is the one ruler the table carries: they
+# sit at exact eighths of the playing length and quarters of its width. Rectify
+# a corpus frame with the live calibration, find the sight centres, and least-
+# squares fit `coord(k) = A + B*k` through them; the playing rectangle is then
+# `A .. A + 8B` and `A .. A + 4B` in calibrated mm. Over four clips spanning
+# three dates (`rack_place_0801`, `stroke_gear_margin_0802`,
+# `ball_in_hand_carry_0811`, `ball_in_hand_carry_b_0811`) the sights fall within
+# 1.2 mm of a straight line and the spans agree to ~2 mm:
+#
+#     length   1829.3 .. 1831.4 mm   (8 fits, 6 sights per long rail)
+#     width     870.8 ..  875.9 mm   (5 fits, 3 sights per side rail)
+#
+# Centred inside the calibrated rectangle, because the cloth-outline fit is
+# symmetric by construction: the ~5 mm of side-to-side drift between those dates
+# is mount noise, not table geometry. That leaves ~50 mm of cushion at each end
+# and ~46 mm at each side — a single physical cushion width (~53 mm), reading
+# differently on the two axes because the calibrated millimetre is itself
+# anisotropic (design.md §11.6).
+PLAY_LENGTH_MM = 1830.3
+PLAY_WIDTH_MM = 872.8
+PLAY_X0_MM = (TABLE_LENGTH_MM - PLAY_LENGTH_MM) / 2.0
+PLAY_Y0_MM = (TABLE_WIDTH_MM - PLAY_WIDTH_MM) / 2.0
+PLAY_X1_MM = PLAY_X0_MM + PLAY_LENGTH_MM
+PLAY_Y1_MM = PLAY_Y0_MM + PLAY_WIDTH_MM
 
 # ---------------------------------------------------------------------------
 # The two constants #46 held back for build time, both anchored on measurements
@@ -134,8 +171,8 @@ class Ball:
 # The diamond grid: cells, zones, and the point-in-rectangle judge
 # ---------------------------------------------------------------------------
 
-CELL_LENGTH_MM = TABLE_LENGTH_MM / GRID_COLS
-CELL_WIDTH_MM = TABLE_WIDTH_MM / GRID_ROWS
+CELL_LENGTH_MM = PLAY_LENGTH_MM / GRID_COLS
+CELL_WIDTH_MM = PLAY_WIDTH_MM / GRID_ROWS
 
 # What the ZONE key cycles through, in order. One cell, then a cell either way,
 # then the square — the sizes a player would actually ask for, and small enough
@@ -161,13 +198,14 @@ def _as_cell(value: object, default: int = 0) -> int:
 def cell_of(x_mm: float, y_mm: float) -> tuple[int, int]:
     """Which diamond cell a point falls in, clamped to the playing surface.
 
-    Clamped rather than refused: a ball resting against a cushion can read a
-    hair outside the calibrated rectangle (the calibration is corpus-grade —
-    the cloth outline stands in for the playing area), and "off the table" is
-    not an answer anybody wants from a ball that is visibly on it.
+    Clamped rather than refused, and the clamp does real work here: everything
+    between the cushion nose and the calibrated rectangle is off the grid by
+    construction — a ball frozen on a cushion sits there, and its own radius
+    puts it there whenever it is anywhere near one. "Off the table" is not an
+    answer anybody wants from a ball that is visibly on it.
     """
-    col = min(GRID_COLS - 1, max(0, int(x_mm // CELL_LENGTH_MM)))
-    row = min(GRID_ROWS - 1, max(0, int(y_mm // CELL_WIDTH_MM)))
+    col = min(GRID_COLS - 1, max(0, int((x_mm - PLAY_X0_MM) // CELL_LENGTH_MM)))
+    row = min(GRID_ROWS - 1, max(0, int((y_mm - PLAY_Y0_MM) // CELL_WIDTH_MM)))
     return col, row
 
 
@@ -188,10 +226,10 @@ class Zone:
     @property
     def bounds_mm(self) -> tuple[float, float, float, float]:
         return (
-            self.col * CELL_LENGTH_MM,
-            self.row * CELL_WIDTH_MM,
-            (self.col + self.w) * CELL_LENGTH_MM,
-            (self.row + self.h) * CELL_WIDTH_MM,
+            PLAY_X0_MM + self.col * CELL_LENGTH_MM,
+            PLAY_Y0_MM + self.row * CELL_WIDTH_MM,
+            PLAY_X0_MM + (self.col + self.w) * CELL_LENGTH_MM,
+            PLAY_Y0_MM + (self.row + self.h) * CELL_WIDTH_MM,
         )
 
     def nearest_mm(self, x_mm: float, y_mm: float) -> tuple[float, float]:
@@ -261,10 +299,13 @@ def cells_out(miss_mm: float) -> str:
     miss line from the ball to the edge it missed. So the caption says how big
     and the picture says which way, and neither one guesses.
     """
-    # Rounded, not floored: on a 2:1 table an 8x4 grid has square cells
-    # (241.25 mm here), and a 214 mm miss is a cell in every way that matters
-    # at the table. Flooring would call it "inside one cell", which reads as
-    # close when it is a whole diamond.
+    # Rounded, not floored: an 8x4 grid on a 2:1 playing surface has square
+    # cells, and a miss a hair under one is a cell in every way that matters at
+    # the table. Flooring would call it "inside one cell", which reads as close
+    # when it is a whole diamond. Measured against the **shorter** cell edge
+    # (218 mm of the 229) — the two differ only because the calibrated
+    # millimetre is anisotropic (design.md §11.6), so the smaller one is the
+    # honest floor for "how many diamonds is that".
     count = round(miss_mm / min(CELL_LENGTH_MM, CELL_WIDTH_MM))
     if count == 0:
         return "INSIDE ONE CELL"
@@ -490,10 +531,11 @@ class LagGame(Game):
     state you have to clear. The readout says which attempt was the best one,
     so nothing is lost in the noise.
 
-    The measurement is the gap between the ball's near edge and the head rail
-    (x = 0 in table coordinates), not its centre: that is the gap a player
+    The measurement is the gap between the ball's near edge and the head
+    cushion (`PLAY_X0_MM`, the cushion nose — not x = 0, which is the cloth
+    outline a rail's width behind it), not its centre: that is the gap a player
     would measure with a piece of chalk, and a ball frozen on the cushion
-    should read ~0 rather than one ball radius.
+    should read ~0 rather than a radius, or a radius plus a cushion.
 
     Which ball: the crown (identity tier 1). A lag is played with the cue ball,
     and the crown is the same evidence scratch adjudication trusts. With no
@@ -520,12 +562,13 @@ class LagGame(Game):
         ball = _lag_ball(balls)
         if ball is None:
             return
-        distance = max(0.0, ball.x_mm - BALL_RADIUS_MM)
+        edge = ball.x_mm - BALL_RADIUS_MM
+        distance = max(0.0, edge - PLAY_X0_MM)
         self.attempts += 1
         self.last_mm = distance
         if self.best_mm is None or distance < self.best_mm:
             self.best_mm = distance
-        self._mark = Bracket(x0_mm=0.0, x1_mm=ball.x_mm - BALL_RADIUS_MM, y_mm=ball.y_mm)
+        self._mark = Bracket(x0_mm=PLAY_X0_MM, x1_mm=max(PLAY_X0_MM, edge), y_mm=ball.y_mm)
         self.ctx.log(
             LAG_ATTEMPT,
             game=self.name,
@@ -1220,7 +1263,16 @@ class ShotsGame(Game):
     # -- the surfaces -----------------------------------------------------
 
     def marks(self) -> tuple[Mark, ...]:
-        grid: tuple[Mark, ...] = (Grid(cols=GRID_COLS, rows=GRID_ROWS),)
+        grid: tuple[Mark, ...] = (
+            Grid(
+                cols=GRID_COLS,
+                rows=GRID_ROWS,
+                x0_mm=PLAY_X0_MM,
+                y0_mm=PLAY_Y0_MM,
+                x1_mm=PLAY_X1_MM,
+                y1_mm=PLAY_Y1_MM,
+            ),
+        )
         if self.state == self.CAPTURING:
             # A snapshot spot is a solid ring while its ball is still on it and
             # a dashed ghost once that ball has been taken away to set a

@@ -7,17 +7,24 @@ Creates (or repairs) the two things the games scene needs, so none of it has to
 be assembled by hand in the OBS UI (issue #46):
 
   * a **Games** scene, sized to the canvas
-  * the **existing** `Syphon Client` source, added to it full-bleed — the same
-    input the play scene uses, not a second one. One input means
-    `obsws.bind_syphon` (the Session key's startup rebind) keeps both scenes
-    live with one call, and the colour grading filters on it apply to both.
+  * the **existing** `Syphon Client` source, added to it and fitted into the
+    space above the HUD bar — the same input the play scene uses, not a second
+    one. One input means `obsws.bind_syphon` (the Session key's startup rebind)
+    keeps both scenes live with one call, and the colour grading filters on it
+    apply to both. The **transform** is per scene item, so fitting it here
+    leaves the play scene's own full-bleed framing alone.
   * **Games Page** — a browser source on `/games`, filling the canvas
 
-The 1920x1080 authored page is an exact 2x fit on the 4K canvas, and so is the
-1920-wide rectified table feed, which is why the scene is these two sources
-stacked and nothing else: no side panel, no side-angle camera. Judging is
-overhead, and a panel would only shrink the table to make room for chrome
-(mockups v1 §7).
+The 1920x1080 authored page is an exact 2x fit on the 4K canvas, which is why
+the scene is these two sources stacked and nothing else: no side panel, no
+side-angle camera. Judging is overhead, and a panel would only shrink the table
+to make room for chrome (mockups v1 §7).
+
+The feed is fitted **above the bar** rather than full-bleed. The bar is opaque,
+and the rectified feed is 1.84:1 against a 1.78:1 canvas, so full-bleed left the
+bottom rail and its two pockets under the plinth — on a game judged on where
+balls stop, exactly the wrong 12% to lose. Fitted, the table is pillarboxed
+instead: smaller, and all of it visible.
 
 Two settings are load-bearing:
 
@@ -43,11 +50,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cueclock.deck import obsws
-from cueclock.deck.games import SCENE_NAME
+from cueclock.deck.games import HUD_BAR_PX, HUD_PAGE_H, SCENE_NAME
 
 PAGE_INPUT = "Games Page"
 CANVAS_W = 3840
 CANVAS_H = 2160
+# The canvas height left over above the HUD bar, in canvas pixels.
+FEED_H = CANVAS_H - round(CANVAS_H * HUD_BAR_PX / HUD_PAGE_H)
 
 
 def _names(request: str, key: str, field: str) -> list[str] | None:
@@ -83,10 +92,10 @@ def scene_item(source: str) -> int | None:
 
 
 def ensure_feed() -> bool:
-    """Put the play scene's own Syphon source into this scene, full-bleed."""
+    """Put the play scene's own Syphon source into this scene, above the bar."""
     if scene_item(obsws.SYPHON_SOURCE) is not None:
         print(f"item {obsws.SYPHON_SOURCE!r}: already in {SCENE_NAME!r}")
-        return fill_canvas(obsws.SYPHON_SOURCE)
+        return fit(obsws.SYPHON_SOURCE, CANVAS_W, FEED_H)
     inputs = _names("GetInputList", "inputs", "inputName")
     if inputs is None:
         return False
@@ -104,7 +113,7 @@ def ensure_feed() -> bool:
     if created is None:
         return False
     print(f"item {obsws.SYPHON_SOURCE!r}: added to {SCENE_NAME!r}")
-    return fill_canvas(obsws.SYPHON_SOURCE)
+    return fit(obsws.SYPHON_SOURCE, CANVAS_W, FEED_H)
 
 
 def ensure_page(url: str) -> bool:
@@ -124,7 +133,7 @@ def ensure_page(url: str) -> bool:
         if not obsws.set_input_settings(PAGE_INPUT, settings):
             return False
         print(f"input {PAGE_INPUT!r}: settings re-applied")
-        return fill_canvas(PAGE_INPUT)
+        return fit(PAGE_INPUT, CANVAS_W, CANVAS_H)
     created = obsws.request(
         "CreateInput",
         {
@@ -138,10 +147,16 @@ def ensure_page(url: str) -> bool:
     if created is None:
         return False
     print(f"input {PAGE_INPUT!r}: created (browser_source -> {url})")
-    return fill_canvas(PAGE_INPUT)
+    return fit(PAGE_INPUT, CANVAS_W, CANVAS_H)
 
 
-def fill_canvas(source: str) -> bool:
+def fit(source: str, width: int, height: int) -> bool:
+    """Scale `source` to fit `width` x `height` from the canvas' top-left.
+
+    SCALE_INNER with a centred bounds alignment: the source keeps its aspect
+    and centres in whatever it does not fill, which is what pillarboxes the
+    1.84:1 table feed inside the 2.09:1 strip above the HUD bar.
+    """
     item = scene_item(source)
     if item is None:
         return False
@@ -155,15 +170,15 @@ def fill_canvas(source: str) -> bool:
                 "positionY": 0.0,
                 "alignment": 5,  # top-left
                 "boundsType": "OBS_BOUNDS_SCALE_INNER",
-                "boundsAlignment": 0,
-                "boundsWidth": float(CANVAS_W),
-                "boundsHeight": float(CANVAS_H),
+                "boundsAlignment": 0,  # centred inside the bounds
+                "boundsWidth": float(width),
+                "boundsHeight": float(height),
             },
         },
     )
     if ok is None:
         return False
-    print(f"item {source!r}: filling {CANVAS_W}x{CANVAS_H}")
+    print(f"item {source!r}: fitted to {width}x{height}")
     return True
 
 
