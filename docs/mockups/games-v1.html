@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8" />
+<title>cueclock — minigames mockups v1 (#46)</title>
+<style>
+  :root {
+    --ink:#0B0E13; --accent:#2E86C8; --slate:#9FB3C4; --alarm:#FF4D4D; --panel:#111721;
+    --line:rgba(159,179,196,0.18); --hair:rgba(159,179,196,0.11); --dim:#6C7A87;
+    --cloth:#155a9e; --cloth-hi:#1a6ab8;
+    --sans:-apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  body { background:#05070a; color:#fff; font-family:var(--sans); margin:0; padding:28px 20px 60px; }
+  h2 { font-size:15px; letter-spacing:2.5px; text-transform:uppercase; color:var(--slate);
+       font-weight:700; margin:44px 0 6px; border-bottom:1px solid var(--hair); padding-bottom:8px; }
+  .note { font-size:12.5px; color:var(--dim); margin:0 0 20px; max-width:998px; line-height:1.55; }
+  .note b { color:var(--slate); font-weight:600; }
+  .hint { font-size:11.5px; color:var(--dim); margin:9px 0 4px; max-width:998px; line-height:1.55; }
+  .hint b { color:var(--slate); font-weight:600; }
+  .label { font-size:12px; letter-spacing:1.6px; text-transform:uppercase; color:var(--slate);
+           font-weight:700; margin:24px 0 8px; }
+  code { color:var(--slate); font-size:11px; }
+
+  /* ---- TV frame: authored 1920x1080, scaled ---- */
+  .tvwrap { width:998px; height:562px; overflow:hidden; border:1px solid var(--line); border-radius:4px; }
+  .tv { width:1920px; height:1080px; transform:scale(0.5198); transform-origin:top left;
+        background:var(--ink); position:relative; overflow:hidden; font-family:var(--sans); }
+  .tvwrap.sm { width:672px; height:378px; }
+  .tvwrap.sm .tv { transform:scale(0.35); }
+
+  /* ---- the overhead feed (everything on cloth = display pipeline, not the HUD) ---- */
+  .feed { position:absolute; inset:0; background:#06080b; }
+  .rails { position:absolute; left:110px; top:30px; width:1700px; height:900px; border-radius:26px;
+           background:#10141b; border:1px solid #232b37; }
+  .cloth { position:absolute; left:160px; top:80px; width:1600px; height:800px;
+           background:radial-gradient(ellipse at 50% 45%, var(--cloth-hi), var(--cloth) 75%); }
+  /* the diamond grid: 8x4 cells of 200px, from the homography */
+  .grid { position:absolute; left:160px; top:80px; width:1600px; height:800px;
+          background-image:
+            repeating-linear-gradient(to right, rgba(255,255,255,0.13) 0 2px, transparent 2px 200px),
+            repeating-linear-gradient(to bottom, rgba(255,255,255,0.13) 0 2px, transparent 2px 200px);
+          border-right:2px solid rgba(255,255,255,0.13); border-bottom:2px solid rgba(255,255,255,0.13); }
+  .pocket { position:absolute; width:64px; height:64px; border-radius:50%; background:#04060a;
+            box-shadow:inset 0 0 0 5px #0c1017; }
+  .diam { position:absolute; width:10px; height:10px; border-radius:50%; background:#c9d4de;
+          transform:translate(-50%,-50%); opacity:0.9; }
+  .ball { position:absolute; width:44px; height:44px; border-radius:50%; transform:translate(-50%,-50%);
+          box-shadow:inset -6px -8px 12px rgba(0,0,0,0.45), 0 4px 8px rgba(0,0,0,0.5); }
+  .ball.cue { background:#f2f0e8; }
+  .ball.red { background:#c0392b; }
+  .ball.yellow { background:#d9a520; }
+  .ball.eight { background:#15181c; box-shadow:inset -6px -8px 12px rgba(0,0,0,0.7),
+                inset 4px 6px 8px rgba(255,255,255,0.09), 0 4px 8px rgba(0,0,0,0.5); }
+  .ghost { position:absolute; width:52px; height:52px; border-radius:50%; transform:translate(-50%,-50%);
+           border:3px dashed rgba(255,255,255,0.75); box-sizing:border-box; }
+  .ghost.obj { border-color:rgba(159,179,196,0.75); }
+  .ring { position:absolute; width:60px; height:60px; border-radius:50%; transform:translate(-50%,-50%);
+          border:3px solid rgba(255,255,255,0.85); box-sizing:border-box; }
+  .zone { position:absolute; border:4px solid rgba(255,255,255,0.9); background:rgba(255,255,255,0.10);
+          box-sizing:border-box; }
+  .zone.obj { border-color:rgba(159,179,196,0.85); border-style:dashed; background:rgba(159,179,196,0.08); }
+  .missline { position:absolute; height:0; border-top:4px dashed var(--alarm); transform-origin:left center; }
+
+  /* ---- the games bar: same plinth language as the live scene ---- */
+  .gbar { position:absolute; left:0; right:0; bottom:0; height:160px; background:var(--ink);
+          font-variant-numeric:tabular-nums; }
+  .gbar::before { content:''; position:absolute; left:0; right:0; bottom:100%; height:30px;
+          background:linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,0.41)); }
+  .gbar .who { position:absolute; left:40px; top:52px; }
+  .gbar .who .nm { font-size:28px; font-weight:700; letter-spacing:2px; text-transform:uppercase; }
+  .gbar .who .ctx { font-size:14px; font-weight:700; letter-spacing:2.5px; color:var(--slate);
+                    text-transform:uppercase; margin-top:10px; }
+  .gstat { position:absolute; top:0; bottom:0; }
+  .gstat .l { position:absolute; left:0; top:47px; transform:translate(-50%,-50%); font-size:15px;
+              font-weight:700; letter-spacing:4px; color:var(--slate); white-space:nowrap; }
+  .gstat .v { position:absolute; left:0; top:92px; transform:translate(-50%,-50%); font-size:46px;
+              font-weight:700; line-height:1; white-space:nowrap; }
+  .gstat .v .unit { font-size:24px; color:var(--slate); margin-left:4px; }
+  .gstat .v.ok { color:var(--slate); }
+  .gstat .s { position:absolute; left:0; top:128px; transform:translate(-50%,-50%); font-size:13px;
+              font-weight:700; letter-spacing:2.5px; color:var(--dim); white-space:nowrap; }
+  .gdiv { position:absolute; right:290px; top:34px; width:1px; height:92px; background:rgba(255,255,255,0.2); }
+  .vcell { position:absolute; right:0; top:0; bottom:0; width:290px; }
+  .vcell .word { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); font-size:56px;
+                 font-weight:700; letter-spacing:3px; }
+  .vcell .word.small { font-size:40px; color:var(--slate); }
+  .vcell.pass { background:rgba(46,134,200,0.96); }
+  .vcell.fail { background:rgba(255,77,77,0.96); }
+  .vcell .eyebrow { position:absolute; left:50%; top:32px; transform:translate(-50%,-50%); font-size:14px;
+                 font-weight:700; letter-spacing:3px; color:var(--slate); }
+  .vcell.pass .eyebrow, .vcell.fail .eyebrow { color:rgba(255,255,255,0.75); }
+
+  /* ---- the menu (opaque posture of the same /games source) ---- */
+  .ghdr { position:absolute; top:0; left:0; right:0; height:76px; display:flex; align-items:center;
+          padding:0 40px; box-sizing:border-box; gap:28px; border-bottom:1px solid var(--hair); }
+  .ghdr .title { font-size:26px; font-weight:700; letter-spacing:2.5px; text-transform:uppercase; }
+  .ghdr .right { margin-left:auto; font-size:15px; letter-spacing:2px; color:var(--slate); font-weight:700;
+                 text-transform:uppercase; }
+  .cards { position:absolute; top:76px; left:0; right:0; bottom:0; display:flex; align-items:center;
+           justify-content:center; gap:60px; }
+  .gcard { width:560px; height:400px; background:var(--panel); border:1px solid var(--line);
+           border-radius:10px; box-sizing:border-box; padding:36px 40px; position:relative; }
+  .gcard .keytag { position:absolute; top:36px; right:40px; font-size:13px; letter-spacing:2px;
+           color:var(--dim); font-weight:700; border:1px solid var(--hair); border-radius:5px;
+           padding:5px 10px; text-transform:uppercase; }
+  .gcard h3 { margin:0 0 14px; font-size:34px; font-weight:700; letter-spacing:2px; text-transform:uppercase; }
+  .gcard .desc { font-size:19px; color:var(--slate); line-height:1.5; min-height:88px; }
+  .gcard .stats { display:flex; gap:52px; margin-top:34px; }
+  .gcard .st .l { font-size:13px; letter-spacing:2.5px; color:var(--dim); font-weight:700; }
+  .gcard .st .v { font-size:38px; font-weight:700; margin-top:8px; font-variant-numeric:tabular-nums; }
+  .gcard .st .v .unit { font-size:20px; color:var(--slate); }
+  .gcard .last { position:absolute; left:40px; bottom:30px; font-size:14px; letter-spacing:2px;
+           color:var(--dim); font-weight:700; text-transform:uppercase; }
+
+  /* ---- deck keys: stripe at the BOTTOM, as faces.py actually draws it ---- */
+  .deck { display:flex; gap:9px; }
+  .key { width:92px; height:92px; border-radius:11px; background:#161d27; border:1px solid var(--line);
+         display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+         position:relative; overflow:hidden; text-align:center; padding:6px 6px 10px; box-sizing:border-box; }
+  .key .stripe { position:absolute; bottom:0; left:0; right:0; height:5px; }
+  .key .stripe.sys { background:#66727E; } .key .stripe.match { background:#3D86D8; }
+  .key .stripe.ev { background:#9B5FC7; } .key .stripe.clock { background:#E0A020; }
+  .key .t { font-size:11px; font-weight:700; letter-spacing:1.2px; color:#fff; line-height:1.3; }
+  .key .s { font-size:8.5px; font-weight:700; letter-spacing:1.2px; color:var(--slate); }
+  .key .b { font-size:26px; font-weight:700; line-height:1; }
+  .key .dot { position:absolute; top:8px; right:8px; width:9px; height:9px; border-radius:50%;
+              background:#35c46a; }
+  .key.off { background:#0d1219; border-color:var(--hair); }
+  .key.off .t { color:#39424e; }
+  .key.armed { background:#184A76; border-color:#2E86C8; }
+  .key.armed .s { color:rgba(255,255,255,0.85); }
+  .deckmap { display:flex; flex-direction:column; gap:9px; }
+  .step { font-size:11px; letter-spacing:1.8px; color:var(--accent); font-weight:700;
+          text-transform:uppercase; margin-bottom:9px; }
+  .stepbox { border:1px solid var(--hair); border-radius:8px; padding:16px; width:486px; box-sizing:border-box; }
+  .row { display:flex; gap:26px; flex-wrap:wrap; align-items:flex-start; }
+
+  /* ---- phone ---- */
+  .phone { width:344px; background:var(--ink); border-radius:26px; overflow:hidden; border:1px solid var(--line); }
+  .pnav { height:44px; display:flex; align-items:center; justify-content:center; border-bottom:1px solid var(--hair);
+          font-size:11.5px; font-weight:700; letter-spacing:1.8px; text-transform:uppercase; color:var(--slate); }
+  .pbody { padding:16px; }
+  .drow { border:1px solid var(--line); background:var(--panel); border-radius:12px; padding:13px 14px;
+          margin-bottom:10px; display:flex; align-items:center; gap:12px; }
+  .drow .dn { flex:1; min-width:0; }
+  .drow .dn .nm { font-size:14px; font-weight:650; }
+  .drow .dn .meta { font-size:10.5px; letter-spacing:1.2px; color:var(--dim); font-weight:700;
+          margin-top:4px; text-transform:uppercase; }
+  .drow .pct { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; color:var(--slate); }
+  .drow .pct b { color:#fff; }
+  .tag { font-size:9px; letter-spacing:1.2px; font-weight:700; color:var(--slate);
+         border:1px solid var(--line); border-radius:4px; padding:2px 6px; text-transform:uppercase; }
+  .btn { border-radius:10px; padding:13px; text-align:center; font-size:12.5px; font-weight:700;
+         letter-spacing:1.6px; text-transform:uppercase; border:1px solid var(--line); color:var(--slate); }
+  .btn.pri { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .btn.danger { color:var(--alarm); border-color:rgba(255,77,77,0.4); }
+  .ptabs { height:52px; display:flex; border-top:1px solid var(--hair); }
+  .ptabs div { flex:1; display:flex; align-items:center; justify-content:center; font-size:10.5px;
+          font-weight:700; letter-spacing:1.6px; text-transform:uppercase; color:var(--dim); }
+  .ptabs div.on { color:var(--accent); }
+  /* phone mini-table: 8x4 grid editor, 264x132 */
+  .mini { position:relative; width:264px; height:132px; background:var(--cloth); border-radius:4px;
+          margin:0 auto; border:6px solid #10141b;
+          background-image:
+            repeating-linear-gradient(to right, rgba(255,255,255,0.16) 0 1px, transparent 1px 33px),
+            repeating-linear-gradient(to bottom, rgba(255,255,255,0.16) 0 1px, transparent 1px 33px); }
+  .mini .z { position:absolute; border:2px solid rgba(255,255,255,0.9); background:rgba(255,255,255,0.12);
+          box-sizing:border-box; }
+  .mini .z.obj { border-color:rgba(159,179,196,0.9); border-style:dashed; background:rgba(159,179,196,0.1); }
+  .mini .bb { position:absolute; width:9px; height:9px; border-radius:50%; transform:translate(-50%,-50%); }
+  .seg { display:flex; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+  .seg div { flex:1; text-align:center; padding:9px 0; font-size:11px; font-weight:700; letter-spacing:1px;
+          color:var(--dim); }
+  .seg div.on { background:var(--accent); color:#fff; }
+  .frow { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+  .frow .fl { font-size:10.5px; letter-spacing:1.6px; color:var(--dim); font-weight:700; text-transform:uppercase; }
+  .fin { border:1px solid var(--line); background:var(--field,#080B10); border-radius:8px; padding:9px 12px;
+          font-size:13.5px; flex:1; }
+</style>
+</head><body>
+
+<p class="note" style="border:1px solid var(--line); border-radius:6px; padding:14px 16px; max-width:998px">
+<b>Agreed 2026-08-20, no amendments.</b> This file is the design of record for #46's surfaces —
+iterate here, ship in the live pages (the bracket-v3 rule: where a shipped page and this file come
+to differ, the shipped page is right). Implementation handoff: <code>games-handoff.md</code> beside
+this file. Everything sketched here sits on the decisions the issue already settled: grid zones, deck-keys-as-picker, one full-canvas <code>/games</code> source,
+ghosts drawn server-side. Four calls this file makes that the issue left open, each argued where it
+appears: <b>(1)</b> the Games scene is the overhead feed full-bleed with the live scene's own bottom-bar
+language — no side panel; <b>(2)</b> on-cloth markings are <b>white</b> (cue) and <b>slate dashed</b>
+(object) because accent blue vanishes into blue cloth — accent and alarm live only in the HUD bar;
+<b>(3)</b> the picker takes <b>row 3</b>, the row that is the mode's own block in every other mode;
+<b>(4)</b> <b>PLAY and NEXT are one key with two faces</b> (the Replay-key precedent) — a deliberate
+deviation from the issue's key list, flagged in §5.</p>
+
+<h2>1 · The menu — deck picks, TV describes</h2>
+<p class="note">One <code>/games</code> browser source fills the canvas and has two postures: <b>opaque</b>
+while the picker is up (below), <b>chrome-only</b> once a game owns the table (§2 on). Entering games
+mode on the Mode key flips OBS to the Games scene and shows this. Cards sit in deck order and each
+names its key — the screen is the brochure, the deck is the picker, and there is nothing to point at
+or navigate.</p>
+
+<div class="tvwrap"><div class="tv">
+  <div class="ghdr">
+    <div class="title">Games</div>
+    <div class="right">Pick on the deck</div>
+  </div>
+  <div class="cards">
+    <div class="gcard">
+      <div class="keytag">Key 11</div>
+      <h3>Shots</h3>
+      <div class="desc">Your saved shots, served back at you. Place the balls on the ghosts, shoot,
+        and the table judges where everything finishes.</div>
+      <div class="stats">
+        <div class="st"><div class="l">SHOTS</div><div class="v">14</div></div>
+        <div class="st"><div class="l">MAKE</div><div class="v">52<span class="unit">%</span></div></div>
+        <div class="st"><div class="l">BEST RUN</div><div class="v">5</div></div>
+      </div>
+      <div class="last">Last played · Aug 18</div>
+    </div>
+    <div class="gcard">
+      <div class="keytag">Key 12</div>
+      <h3>Lag</h3>
+      <div class="desc">Down the table and back. Every settle scores itself — distance off the head
+        rail in millimeters, best of the session on the wall.</div>
+      <div class="stats">
+        <div class="st"><div class="l">BEST EVER</div><div class="v">9<span class="unit">MM</span></div></div>
+        <div class="st"><div class="l">ATTEMPTS</div><div class="v">41</div></div>
+      </div>
+      <div class="last">Last played · Aug 12</div>
+    </div>
+  </div>
+</div></div>
+<p class="hint"><b>The never-painted rule holds by construction:</b> the menu is the source's resting
+state, so a Games scene cut to cold shows this page, correct, with live numbers from the WS state.
+The card stats come from the journal (<code>drill_attempt</code> / <code>lag_attempt</code>), same
+derivation <code>cueclock report</code> uses.</p>
+
+<h2>2 · Playing a shot — the drill loop on the wall</h2>
+<p class="note">The overhead feed fills the screen; the bar along the bottom is the only HUD. The split
+of labor matters for the build: <b>everything on the cloth</b> (grid, ghosts, zones, miss line) <b>is
+drawn server-side in the display pipeline</b>; <b>everything in the bar</b> is the <code>/games</code>
+source. The bar is the live scene's plinth wearing games content, so the wall keeps one voice: eyebrow
++ name left, stat lockups center, and the answer cell on the right where the clock lives during a match.</p>
+
+<div class="label">2a · Serving — ghosts up, offsets counting down</div>
+<div class="tvwrap"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="diam" style="left:360px; top:55px"></div><div class="diam" style="left:560px; top:55px"></div>
+    <div class="diam" style="left:760px; top:55px"></div><div class="diam" style="left:1160px; top:55px"></div>
+    <div class="diam" style="left:1360px; top:55px"></div><div class="diam" style="left:1560px; top:55px"></div>
+    <div class="diam" style="left:360px; top:905px"></div><div class="diam" style="left:560px; top:905px"></div>
+    <div class="diam" style="left:760px; top:905px"></div><div class="diam" style="left:1160px; top:905px"></div>
+    <div class="diam" style="left:1360px; top:905px"></div><div class="diam" style="left:1560px; top:905px"></div>
+    <div class="diam" style="left:135px; top:280px"></div><div class="diam" style="left:135px; top:480px"></div>
+    <div class="diam" style="left:135px; top:680px"></div><div class="diam" style="left:1785px; top:280px"></div>
+    <div class="diam" style="left:1785px; top:480px"></div><div class="diam" style="left:1785px; top:680px"></div>
+    <div class="zone" style="left:760px; top:280px; width:400px; height:200px"></div>
+    <div class="ghost" style="left:560px; top:620px"></div>
+    <div class="ghost obj" style="left:1310px; top:260px"></div>
+    <div class="ghost obj" style="left:1360px; top:660px"></div>
+    <div class="ball cue" style="left:634px; top:596px"></div>
+    <div class="ball red" style="left:1310px; top:260px"></div>
+    <div class="ball eight" style="left:1360px; top:660px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">Shot 12</div><div class="ctx">Attempt 6 · Make 50%</div></div>
+    <div class="gstat" style="left:820px"><div class="l">CUE</div><div class="v">88<span class="unit">MM</span></div></div>
+    <div class="gstat" style="left:1090px"><div class="l">RED</div><div class="v ok">✓</div></div>
+    <div class="gstat" style="left:1360px"><div class="l">BLACK</div><div class="v ok">✓</div></div>
+    <div class="gdiv"></div>
+    <div class="vcell"><div class="word small">PLACE</div></div>
+  </div>
+</div></div>
+<p class="hint"><b>Dashed rings are the ghosts</b> — where each ball starts. The lit block is the cue's
+target zone, up from the moment the shot is served so the player can start reading the leave off the
+diamonds while still racking up. Each ball's lockup counts its distance to its ghost and collapses to a
+quiet ✓ inside tolerance; when every ball is ✓ and settled the shot <b>arms itself</b> — no press.</p>
+
+<div class="label">2b · Armed — ghosts drop, zone stays</div>
+<div class="tvwrap"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="diam" style="left:360px; top:55px"></div><div class="diam" style="left:560px; top:55px"></div>
+    <div class="diam" style="left:760px; top:55px"></div><div class="diam" style="left:1160px; top:55px"></div>
+    <div class="diam" style="left:1360px; top:55px"></div><div class="diam" style="left:1560px; top:55px"></div>
+    <div class="diam" style="left:360px; top:905px"></div><div class="diam" style="left:560px; top:905px"></div>
+    <div class="diam" style="left:760px; top:905px"></div><div class="diam" style="left:1160px; top:905px"></div>
+    <div class="diam" style="left:1360px; top:905px"></div><div class="diam" style="left:1560px; top:905px"></div>
+    <div class="diam" style="left:135px; top:280px"></div><div class="diam" style="left:135px; top:480px"></div>
+    <div class="diam" style="left:135px; top:680px"></div><div class="diam" style="left:1785px; top:280px"></div>
+    <div class="diam" style="left:1785px; top:480px"></div><div class="diam" style="left:1785px; top:680px"></div>
+    <div class="zone" style="left:760px; top:280px; width:400px; height:200px"></div>
+    <div class="ball cue" style="left:560px; top:620px"></div>
+    <div class="ball red" style="left:1310px; top:260px"></div>
+    <div class="ball eight" style="left:1360px; top:660px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">Shot 12</div><div class="ctx">Attempt 6 · Make 50%</div></div>
+    <div class="gstat" style="left:1090px"><div class="l">REQUIRE</div>
+      <div class="v" style="font-size:30px">CUE IN ZONE</div></div>
+    <div class="gdiv"></div>
+    <div class="vcell"><div class="word">ARMED</div></div>
+  </div>
+</div></div>
+<p class="hint"><b>The ghosts disappear at arm</b> — the balls are standing on them, so from here they
+would only be noise under the shot. The zone stays lit the whole way: it is the thing being aimed at.
+Existing strike/settle events drive judging from here; the bar goes quiet so the wall is not talking
+while the player is down on the shot.</p>
+
+<div class="label">2c · Fail — the miss, in millimeters and in cells</div>
+<div class="tvwrap"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="diam" style="left:360px; top:55px"></div><div class="diam" style="left:560px; top:55px"></div>
+    <div class="diam" style="left:760px; top:55px"></div><div class="diam" style="left:1160px; top:55px"></div>
+    <div class="diam" style="left:1360px; top:55px"></div><div class="diam" style="left:1560px; top:55px"></div>
+    <div class="diam" style="left:360px; top:905px"></div><div class="diam" style="left:560px; top:905px"></div>
+    <div class="diam" style="left:760px; top:905px"></div><div class="diam" style="left:1160px; top:905px"></div>
+    <div class="diam" style="left:1360px; top:905px"></div><div class="diam" style="left:1560px; top:905px"></div>
+    <div class="diam" style="left:135px; top:280px"></div><div class="diam" style="left:135px; top:480px"></div>
+    <div class="diam" style="left:135px; top:680px"></div><div class="diam" style="left:1785px; top:280px"></div>
+    <div class="diam" style="left:1785px; top:480px"></div><div class="diam" style="left:1785px; top:680px"></div>
+    <div class="zone" style="left:760px; top:280px; width:400px; height:200px"></div>
+    <div class="missline" style="left:595px; top:380px; width:165px"></div>
+    <div class="ball cue" style="left:573px; top:380px"></div>
+    <div class="ball eight" style="left:1360px; top:660px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">Shot 12</div><div class="ctx">Attempt 6 · Make 43%</div></div>
+    <div class="gstat" style="left:1090px"><div class="l">CUE</div>
+      <div class="v">214<span class="unit">MM</span></div><div class="s">ONE CELL SHORT</div></div>
+    <div class="gdiv"></div>
+    <div class="vcell fail"><div class="word">FAIL</div></div>
+  </div>
+</div></div>
+<p class="hint">The red on this attempt went down — and the judge says nothing about it, because a
+position shot's criteria list has exactly one entry: the cue. The miss is quantitative
+(<b>214&nbsp;mm</b>) and legible (<b>one cell short</b> — the grid gives the number a name you can
+aim with next attempt). The dashed line from ball to zone edge is server-side, same layer as the zone.
+<b>RETRY</b> re-shows the ghosts and the loop restarts at 2a; <b>NEXT</b> serves another shot.</p>
+
+<div class="label">2d · Pass — a safety, both requirements judged</div>
+<div class="tvwrap"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="diam" style="left:360px; top:55px"></div><div class="diam" style="left:560px; top:55px"></div>
+    <div class="diam" style="left:760px; top:55px"></div><div class="diam" style="left:1160px; top:55px"></div>
+    <div class="diam" style="left:1360px; top:55px"></div><div class="diam" style="left:1560px; top:55px"></div>
+    <div class="diam" style="left:360px; top:905px"></div><div class="diam" style="left:560px; top:905px"></div>
+    <div class="diam" style="left:760px; top:905px"></div><div class="diam" style="left:1160px; top:905px"></div>
+    <div class="diam" style="left:1360px; top:905px"></div><div class="diam" style="left:1560px; top:905px"></div>
+    <div class="diam" style="left:135px; top:280px"></div><div class="diam" style="left:135px; top:480px"></div>
+    <div class="diam" style="left:135px; top:680px"></div><div class="diam" style="left:1785px; top:280px"></div>
+    <div class="diam" style="left:1785px; top:480px"></div><div class="diam" style="left:1785px; top:680px"></div>
+    <div class="zone" style="left:360px; top:680px; width:200px; height:200px"></div>
+    <div class="zone obj" style="left:1560px; top:80px; width:200px; height:200px"></div>
+    <div class="ball cue" style="left:460px; top:780px"></div>
+    <div class="ball eight" style="left:620px; top:690px"></div>
+    <div class="ball red" style="left:1650px; top:190px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">Shot 7 · Safety</div><div class="ctx">Attempt 3 · Make 67%</div></div>
+    <div class="gstat" style="left:1000px"><div class="l">CUE</div><div class="v ok">✓</div><div class="s">IN ZONE</div></div>
+    <div class="gstat" style="left:1280px"><div class="l">RED</div><div class="v ok">✓</div><div class="s">IN ZONE</div></div>
+    <div class="gdiv"></div>
+    <div class="vcell pass"><div class="word">PASS</div></div>
+  </div>
+</div></div>
+<p class="hint">A safety carries two requirements, so the bar carries two verdict lockups — the same
+per-role list the journal's <code>misses</code> field records. The object ball's zone is <b>slate,
+dashed</b>, everywhere it appears (TV, capture, phone): one visual per role, learned once. The verdict
+cell fills by <i>area</i>, the escalation rule every overlay already obeys — accent for PASS, the one
+red for FAIL, and since games mode has no clock there is no alarm state for FAIL to collide with.</p>
+
+<h2>3 · Capture — the table is the editor</h2>
+<p class="note">Nothing is drawn on a phone. Set the shot up, then tell the system where it should
+finish by <b>placing balls</b>, attributed by which ghost was vacated. The four steps below are one
+continuous flow on the deck's row 3 (a transient overlay, same mechanism as Flag's reason page);
+the bar prompts each step. Frames at reduced scale — chrome is identical to §2.</p>
+
+<div class="row">
+<div>
+<div class="label">3a · CAPTURE — layout snapshotted</div>
+<div class="tvwrap sm"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="ring" style="left:660px; top:560px"></div>
+    <div class="ring" style="left:1240px; top:330px"></div>
+    <div class="ball cue" style="left:660px; top:560px"></div>
+    <div class="ball red" style="left:1240px; top:330px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">New shot</div><div class="ctx">2 balls saved</div></div>
+    <div class="gstat" style="left:1000px"><div class="l">NEXT</div>
+      <div class="v" style="font-size:28px">PLACE THE CUE BALL<br>AT ITS TARGET</div></div>
+    <div class="gdiv"></div>
+    <div class="vcell"><div class="word small">CAPTURE</div></div>
+  </div>
+</div></div>
+</div>
+<div>
+<div class="label">3b · Cue placed — its cell becomes the zone</div>
+<div class="tvwrap sm"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="zone" style="left:360px; top:680px; width:200px; height:200px"></div>
+    <div class="ghost" style="left:660px; top:560px"></div>
+    <div class="ring" style="left:1240px; top:330px"></div>
+    <div class="ball cue" style="left:460px; top:760px"></div>
+    <div class="ball red" style="left:1240px; top:330px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">New shot</div><div class="ctx">Cue target set</div></div>
+    <div class="gstat" style="left:1000px"><div class="l">ZONE</div>
+      <div class="v" style="font-size:34px">1×1</div><div class="s">ZONE KEY RESIZES</div></div>
+    <div class="gdiv"></div>
+    <div class="vcell"><div class="word small">CAPTURE</div></div>
+  </div>
+</div></div>
+</div>
+<div>
+<div class="label">3c · Safety — object ball placed the same way</div>
+<div class="tvwrap sm"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="zone" style="left:360px; top:680px; width:200px; height:200px"></div>
+    <div class="zone obj" style="left:1560px; top:80px; width:200px; height:200px"></div>
+    <div class="ghost" style="left:660px; top:560px"></div>
+    <div class="ghost obj" style="left:1240px; top:330px"></div>
+    <div class="ball cue" style="left:460px; top:760px"></div>
+    <div class="ball red" style="left:1650px; top:190px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">New shot</div><div class="ctx">Red target set</div></div>
+    <div class="gstat" style="left:1000px"><div class="l">ZONE</div>
+      <div class="v" style="font-size:34px">1×1</div><div class="s">ZONE KEY RESIZES</div></div>
+    <div class="gdiv"></div>
+    <div class="vcell"><div class="word small">CAPTURE</div></div>
+  </div>
+</div></div>
+</div>
+<div>
+<div class="label">3d · Restore to the ghosts — SAVE arms</div>
+<div class="tvwrap sm"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div><div class="grid"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="zone" style="left:360px; top:680px; width:200px; height:200px"></div>
+    <div class="zone obj" style="left:1560px; top:80px; width:200px; height:200px"></div>
+    <div class="ghost" style="left:660px; top:560px"></div>
+    <div class="ghost obj" style="left:1240px; top:330px"></div>
+    <div class="ball cue" style="left:672px; top:574px"></div>
+    <div class="ball red" style="left:1281px; top:352px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">New shot</div><div class="ctx">Put the balls back</div></div>
+    <div class="gstat" style="left:940px"><div class="l">CUE</div><div class="v">21<span class="unit">MM</span></div></div>
+    <div class="gstat" style="left:1180px"><div class="l">RED</div><div class="v">53<span class="unit">MM</span></div></div>
+    <div class="gdiv"></div>
+    <div class="vcell"><div class="word small">SAVE SET</div></div>
+  </div>
+</div></div>
+</div>
+</div>
+
+<div class="label">The deck through the same four steps — row 3, transient overlay</div>
+<div class="row">
+  <div class="stepbox"><div class="step">3a · In the game, shot set up</div>
+    <div class="deck">
+      <div class="key"><div class="stripe match"></div><div class="t">BACK</div><div class="s">TO GAMES</div></div>
+      <div class="key"><div class="stripe match"></div><div class="t">CAPTURE</div></div>
+      <div class="key"><div class="stripe match"></div><div class="t">PLAY</div></div>
+      <div class="key off"><div class="t">RETRY</div></div>
+      <div class="key off"><div class="t">—</div></div>
+    </div>
+    <p class="hint" style="margin-top:12px">The game's verbs. RETRY is dark until a shot has been
+    served. Press CAPTURE and the row swaps to the capture overlay.</p></div>
+  <div class="stepbox"><div class="step">3b/3c · Capturing — placing targets</div>
+    <div class="deck">
+      <div class="key"><div class="stripe match"></div><div class="t">CANCEL</div></div>
+      <div class="key"><div class="stripe match"></div><div class="t">1×1</div><div class="s">2×1</div></div>
+      <div class="key off"><div class="t">—</div></div>
+      <div class="key off"><div class="t">—</div></div>
+      <div class="key off"><div class="t">SAVE</div></div>
+    </div>
+    <p class="hint" style="margin-top:12px">ZONE is a cycle key — current size bright over next dim,
+    the deck's own grammar — and it sizes the <b>most recently placed</b> target. SAVE stays dark
+    until the cue's target exists.</p></div>
+  <div class="stepbox"><div class="step">3d · Balls restored — save it</div>
+    <div class="deck">
+      <div class="key"><div class="stripe match"></div><div class="t">CANCEL</div></div>
+      <div class="key"><div class="stripe match"></div><div class="t">1×1</div><div class="s">2×1</div></div>
+      <div class="key off"><div class="t">—</div></div>
+      <div class="key off"><div class="t">—</div></div>
+      <div class="key armed"><div class="t">SAVE</div><div class="s">SHOT 15</div></div>
+    </div>
+    <p class="hint" style="margin-top:12px">SAVE arms once every requirement is set, and its second
+    line names what a press writes. Auto-named — rename later on the phone. Saving drops the row
+    back to the game's verbs with the new shot loaded.</p></div>
+</div>
+
+<h2>4 · Lag — the contract's minimal proof</h2>
+<div class="tvwrap"><div class="tv">
+  <div class="feed">
+    <div class="rails"></div><div class="cloth"></div>
+    <div class="pocket" style="left:128px; top:48px"></div><div class="pocket" style="left:1728px; top:48px"></div>
+    <div class="pocket" style="left:128px; top:848px"></div><div class="pocket" style="left:1728px; top:848px"></div>
+    <div class="pocket" style="left:928px; top:36px"></div><div class="pocket" style="left:928px; top:860px"></div>
+    <div class="diam" style="left:360px; top:55px"></div><div class="diam" style="left:560px; top:55px"></div>
+    <div class="diam" style="left:760px; top:55px"></div><div class="diam" style="left:1160px; top:55px"></div>
+    <div class="diam" style="left:1360px; top:55px"></div><div class="diam" style="left:1560px; top:55px"></div>
+    <div class="diam" style="left:360px; top:905px"></div><div class="diam" style="left:560px; top:905px"></div>
+    <div class="diam" style="left:760px; top:905px"></div><div class="diam" style="left:1160px; top:905px"></div>
+    <div class="diam" style="left:1360px; top:905px"></div><div class="diam" style="left:1560px; top:905px"></div>
+    <div style="position:absolute; left:160px; top:400px; width:38px; height:160px;
+         border-top:3px solid rgba(255,255,255,0.85); border-bottom:3px solid rgba(255,255,255,0.85);
+         border-right:3px solid rgba(255,255,255,0.85); box-sizing:border-box"></div>
+    <div class="ball cue" style="left:220px; top:480px"></div>
+  </div>
+  <div class="gbar">
+    <div class="who"><div class="nm">Lag</div><div class="ctx">Attempt 7</div></div>
+    <div class="gstat" style="left:960px"><div class="l">LAST</div><div class="v" style="font-size:64px">43<span class="unit">MM</span></div></div>
+    <div class="gdiv"></div>
+    <div class="vcell"><div class="eyebrow">BEST</div><div class="word">12<span style="font-size:28px; color:rgba(255,255,255,0.7)">MM</span></div></div>
+  </div>
+</div></div>
+<p class="hint"><b>No grid</b> — lag has no zones, so the cloth carries only the measurement bracket
+(server-side) from the head rail to the ball. Every strike→settle in the game is an attempt; a
+retrieval push you didn't mean is a bad number you ignore, because only the best matters and the
+readout says which one that is. The best-of sits in the answer cell, where a verdict would be.</p>
+
+<h2>5 · The deck in games mode — full maps</h2>
+<p class="note">The spine never moves; the clock and match keys are gone because games mode is neither
+clocked nor racked, so their cells are dark exactly as layout v2's rules demand. Row 3 — the mode's
+own block in match mode too — is where games live. All games keys wear the <b>MATCH blue stripe</b>:
+the stripe channel answers "how much time do I have," and every games press is a between-shots press.
+No new colour, nothing new to learn.</p>
+
+<div class="row">
+<div>
+<div class="label">Games mode · picker up</div>
+<div class="deckmap">
+  <div class="deck">
+    <div class="key"><div class="stripe sys"></div><div class="dot"></div><div class="t">ON</div><div class="s">HOLD 1S</div></div>
+    <div class="key"><div class="stripe sys"></div><div class="t">GAMES</div><div class="s">MATCH</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+  </div>
+  <div class="deck">
+    <div class="key"><div class="stripe sys"></div><div class="t">REPLAY</div><div class="s">HOLD RACK</div></div>
+    <div class="key"><div class="stripe ev"></div><div class="t">FLAG</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+  </div>
+  <div class="deck">
+    <div class="key"><div class="stripe match"></div><div class="t">SHOTS</div></div>
+    <div class="key"><div class="stripe match"></div><div class="t">LAG</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+  </div>
+</div>
+<p class="hint" style="width:486px">The Mode key cycles <code>match → run_out → no_clock → games</code>.
+Entering games flips OBS to the Games scene (the Session key's automation learns it once) and lights
+the picker. One game per key, growing rightward; the TV cards sit in the same order.</p>
+</div>
+<div>
+<div class="label">SHOTS selected · playing</div>
+<div class="deckmap">
+  <div class="deck">
+    <div class="key"><div class="stripe sys"></div><div class="dot"></div><div class="t">ON</div><div class="s">HOLD 1S</div></div>
+    <div class="key"><div class="stripe sys"></div><div class="t">GAMES</div><div class="s">MATCH</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+  </div>
+  <div class="deck">
+    <div class="key"><div class="stripe sys"></div><div class="t">REPLAY</div><div class="s">HOLD RACK</div></div>
+    <div class="key"><div class="stripe ev"></div><div class="t">FLAG</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+    <div class="key off"><div class="t">—</div></div>
+  </div>
+  <div class="deck">
+    <div class="key"><div class="stripe match"></div><div class="t">BACK</div><div class="s">TO GAMES</div></div>
+    <div class="key"><div class="stripe match"></div><div class="t">CAPTURE</div></div>
+    <div class="key"><div class="stripe match"></div><div class="t">NEXT</div></div>
+    <div class="key"><div class="stripe match"></div><div class="t">RETRY</div></div>
+    <div class="key off"><div class="t">—</div></div>
+  </div>
+</div>
+<p class="hint" style="width:486px"><b>PLAY and NEXT are one key</b> (deviation from the issue's list,
+same consolidation Start/Reset went through): with uniform-random serving they are the same act, and
+the face says which press this is — <b>PLAY</b> with nothing served, <b>NEXT</b> after a verdict.
+Replay works here as everywhere: watch the attempt back. Choosing a <i>specific</i> shot is the
+phone's job (§6).</p>
+</div>
+</div>
+
+<h2>6 · The phone — a Drills tab</h2>
+<p class="note">Third tab, same pattern as Match: the table captures, the phone curates. The list is
+where make % lives per shot (from the journal); the editor is rename / re-zone / delete plus "serve
+this one." Zones are edited on the same 8×4 grid the TV and the table speak — tap a cell to move the
+block, size it with a segmented control. Layout and ghosts are <b>not</b> editable here: positions
+come from the table, always.</p>
+
+<div class="row">
+  <div>
+    <div class="phone">
+      <div class="pnav">Drills</div>
+      <div class="pbody">
+        <div class="drow"><div class="dn"><div class="nm">Thin cut, top-right</div>
+          <div class="meta">3 balls · Aug 18</div></div>
+          <div class="pct"><b>58%</b> · 12</div></div>
+        <div class="drow"><div class="dn"><div class="nm">Shot 12</div>
+          <div class="meta">3 balls · Aug 18</div></div>
+          <div class="pct"><b>50%</b> · 6</div></div>
+        <div class="drow"><div class="dn"><div class="nm">Safety off the black <span class="tag">Safety</span></div>
+          <div class="meta">3 balls · Aug 15</div></div>
+          <div class="pct"><b>67%</b> · 3</div></div>
+        <div class="drow"><div class="dn"><div class="nm">Long blue to baulk</div>
+          <div class="meta">2 balls · Aug 12</div></div>
+          <div class="pct"><b>25%</b> · 8</div></div>
+      </div>
+      <div class="ptabs"><div>Play</div><div class="on">Drills</div><div>Setup</div></div>
+    </div>
+    <p class="hint" style="width:344px"><b>The list is the weakness report.</b> Name, ball count, last
+    played, make % over attempts. Auto-names ("Shot 12") sit beside renamed ones until you bother.
+    Tap a row to edit.</p>
+  </div>
+  <div>
+    <div class="phone">
+      <div class="pnav">Drills · Edit</div>
+      <div class="pbody">
+        <div class="frow"><div class="fin">Safety off the black</div></div>
+        <div class="mini">
+          <div class="z" style="left:33px; top:99px; width:33px; height:33px"></div>
+          <div class="z obj" style="left:231px; top:0; width:33px; height:33px"></div>
+          <div class="bb" style="left:109px; top:92px; background:#f2f0e8"></div>
+          <div class="bb" style="left:204px; top:54px; background:#c0392b"></div>
+          <div class="bb" style="left:102px; top:113px; background:#15181c"></div>
+        </div>
+        <p class="hint" style="margin:10px 0 12px; width:auto">Tap a cell to move the selected zone.
+        Balls shown are the saved layout — placed on the table, read-only here.</p>
+        <div class="frow"><div class="fl">Cue zone</div>
+          <div class="seg" style="flex:1; max-width:190px"><div class="on">1×1</div><div>2×1</div><div>1×2</div><div>2×2</div></div></div>
+        <div class="frow"><div class="fl">Red zone</div>
+          <div class="seg" style="flex:1; max-width:190px"><div class="on">1×1</div><div>2×1</div><div>1×2</div><div>2×2</div></div></div>
+        <div class="btn pri" style="margin-bottom:10px">Serve this shot</div>
+        <div class="btn danger">Delete shot</div>
+      </div>
+      <div class="ptabs"><div>Play</div><div class="on">Drills</div><div>Setup</div></div>
+    </div>
+    <p class="hint" style="width:344px"><b>Serve this shot</b> is the one live control: it does what
+    the deck's PLAY does but with this shot instead of a random one — the TV and deck take over from
+    there. Everything else is bookkeeping and safe to do from the couch.</p>
+  </div>
+</div>
+
+<h2>7 · Decisions this file takes — iterate here</h2>
+<p class="note" style="max-width:998px">
+<b>Taken in v1, arguable:</b>
+<b>(1)</b> Full-bleed feed + bottom bar, no side panel — the table is the instrument and the live
+scene already taught this bar's grammar. A side panel was considered and dropped: it shrinks the
+table to make room for chrome.
+<b>(2)</b> On-cloth colour code: white = cue's markings, slate dashed = object ball's, alarm red =
+miss line only. Accent never touches the cloth (blue on blue).
+<b>(3)</b> Picker on row 3; games verbs wear MATCH blue; capture is a row-3 transient overlay.
+<b>(4)</b> PLAY/NEXT merged into one two-faced key; RETRY separate because re-serving the <i>same</i>
+shot and serving <i>another</i> must never be one mispress apart.
+<b>(5)</b> Ghosts drop at arm; the zone stays lit through the shot.
+<b>(6)</b> Lag scores every settle, no arming — only the best matters, so noise is free.
+<b>(7)</b> Phone edits zones on a grid picker but never moves balls or ghosts — the table stays the
+only positional input device.
+<b>Not drawn, deliberately:</b> pagination of the picker (two games don't need it), weighted-random
+serving, party games, any Games-scene appearance of the side-angle camera (judging is overhead;
+Camo adds nothing here).</p>
+
+</body></html>

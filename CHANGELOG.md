@@ -230,6 +230,23 @@ survive unchanged in `design.md`.
     filed: the v1-scope-exclusions entry (a decision record, already `design.md` §5)
     and the completed VIDAA/Google-TV item (history lives here).
 
+- **2026-08-20** **#46 minigames design agreed — the mockups are the record**
+  (`docs/mockups/games-v1.html`; implementation handoff in `games-handoff.md`
+  beside it). Reviewed same-day with no amendments. The calls the issue left
+  open, now settled: Games scene = overhead feed full-bleed + the live bar's
+  own plinth grammar, no side panel and no side-angle camera; one full-canvas
+  `/games` source with two postures (opaque menu / transparent chrome);
+  on-cloth markings are white (cue) / slate dashed (object) / red miss line
+  only — accent never touches blue cloth, so verdict colour lives in the bar's
+  answer cell (PASS fills accent, FAIL fills alarm, escalation by area);
+  picker and game verbs on deck row 3 with capture as a transient overlay
+  (Flag's mechanism), all wearing the MATCH stripe; PLAY and NEXT merged into
+  one two-faced key (the Replay precedent — the one deviation from the issue's
+  key list), RETRY separate and dark until served because same-shot and
+  next-shot must never be one mispress apart; ghosts drop at arm and the zone
+  stays lit; lag scores every settle unarmed; the phone gains a Drills tab
+  that edits zones on the 8×4 grid but never moves balls.
+
 ## Checkpoint log (append-only, newest first)
 
 - **2026-08-13 (checkpoint 96 — the UX pass: two tabs, freestyle, unlimited
