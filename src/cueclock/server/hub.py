@@ -24,20 +24,16 @@ from cueclock.clock import (
     get_mode,
     get_ruleset,
 )
-from cueclock.display.marks import Mark
 from cueclock.server import bracket as bracket_mod
 from cueclock.server.bracket import Bracket, BracketError, Match, Player
-from cueclock.server.games import Ball, GameSession, GameStats
 from cueclock.server.journal import SessionJournal
 from cueclock.server.score import MatchScore
 
 if TYPE_CHECKING:
     # Type-only: importing the vision stack at runtime would drag cv2/numpy
     # into the bare server. The hub reads the summary as plain evidence.
-    from cueclock.vision.events import BallState, SettleMover
+    from cueclock.vision.events import SettleMover
     from cueclock.vision.pipeline import RearrangeSummary
-
-GAMES_MODE = "games"  # the mode the games layer owns (#46)
 
 BROADCAST_INTERVAL_SECONDS = 0.1  # 10 Hz, per docs/design.md §2.1
 
@@ -424,24 +420,6 @@ class Hub:
         # announcement and calls the next extension itself (docs/hardware.md
         # Part D). Set by whoever owns both halves; None when nothing listens.
         self.on_extension_granted: Callable[[], None] | None = None
-        # Minigames (#46): the registry and the one active game. Layered on the
-        # mode axis exactly as the bracket is layered on the score — outside
-        # `games` mode the payload carries `null` and every page behaves as it
-        # did before the feature existed.
-        self.games = GameSession(
-            log=self._log,
-            stats=self._game_stats,
-            # Definitions beside the score and the bracket; attempts stay in
-            # the journal, which `history` reads back.
-            store_dir=None if score_path is None else score_path.parent / "games",
-            history=self._shot_history,
-        )
-        # Where the games layer's on-cloth marks go: `cueclock run` points this
-        # at the display pipeline, which owns the mm→display mapping (#46). The
-        # tick loop calls it only when the marks change, so a still table costs
-        # one tuple comparison per tick and nothing else.
-        self.on_cloth_marks: Callable[[tuple[Mark, ...]], None] | None = None
-        self._cloth_marks: tuple[Mark, ...] = ()
 
     def _log(self, kind: str, **detail: object) -> None:
         state = self.clock.state.value
@@ -502,7 +480,7 @@ class Hub:
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
         """The composed broadcast/state payload: clock + `vision` + `score` +
-        `solo` + `bracket` + `games`."""
+        `solo` + `bracket`."""
         snap = snapshot if snapshot is not None else self.clock.snapshot()
         return {
             **snap.as_dict(),
@@ -510,40 +488,7 @@ class Hub:
             "score": self.score.as_dict(),
             "solo": self._solo(),
             "bracket": self._bracket_summary(),
-            "games": self.games.payload() if self.in_games else None,
         }
-
-    @property
-    def in_games(self) -> bool:
-        """Is the session in games mode? (#46 — the games layer's whole gate.)"""
-        return self.clock.mode.name == GAMES_MODE
-
-    def _game_stats(self) -> dict[str, GameStats]:
-        """Per-game history for the menu cards, derived from the journals.
-
-        The same derivation `cueclock report` uses, over the same directory the
-        brackets archive into — so a card's numbers and a report's agree by
-        construction rather than by two implementations staying in step. With
-        no directory (a bare in-memory server) every card reads em-dash, which
-        is the honest answer for a machine that has no history.
-        """
-        if self.archive_dir is None:
-            return {}
-        from cueclock.server.report import game_stats
-
-        return game_stats(self.archive_dir)
-
-    def _shot_history(self) -> dict[str, tuple[int, int, str | None]]:
-        """Per-shot (attempts, made, last played), off the journals.
-
-        Same reasoning as `_game_stats`: nothing in the games layer keeps a
-        score, so the phone's make % and `cueclock report` cannot disagree.
-        """
-        if self.archive_dir is None:
-            return {}
-        from cueclock.server.report import shot_records
-
-        return shot_records(self.archive_dir)
 
     def live_scores(self) -> tuple[int, int]:
         """What the loaded match's two players are on right now.
@@ -626,24 +571,8 @@ class Hub:
                 self._log("tick_transition")
             self._watch_frozen_clock(now)
             self._maybe_heartbeat(now)
-            self._tick_games()
             await self.broadcast(snapshot)
             await asyncio.sleep(BROADCAST_INTERVAL_SECONDS)
-
-    def _tick_games(self) -> None:
-        """Advance the active game and push its cloth marks to the display.
-
-        The 10 Hz tick is where a game's between-event work happens — the
-        placement countdown, the auto-arm — so it runs on the same beat the
-        wall is redrawn on and never needs a clock of its own.
-        """
-        if self.in_games:
-            self.games.tick()
-        marks = self.games.marks() if self.in_games else ()
-        if marks != self._cloth_marks:
-            self._cloth_marks = marks
-            if self.on_cloth_marks is not None:
-                self.on_cloth_marks(marks)
 
     # ---------- detect-loop telemetry (journal heartbeat) ----------
 
@@ -658,32 +587,6 @@ class Hub:
         self._table_motion = moving
         if moving:
             self._motion_high_mono = time.monotonic()
-
-    def note_balls(self, balls: "list[BallState]") -> None:
-        """Camera-thread stamp: the current resting/rolling layout, for games.
-
-        Same threading contract as :meth:`note_frame` and :meth:`note_motion` —
-        attribute rebinding only, and the value rebound is an immutable tuple so
-        a reader on the asyncio loop can never see a half-built layout.
-
-        Gated on games mode because outside it nothing consumes this and the
-        conversion, however small, would run at detect rate for nobody. Only
-        *present* balls ride: a ball whose very existence is an extrapolation
-        must not be judged as standing somewhere (§5.1(b)), and a ghost is a
-        claim about where a real ball is.
-        """
-        if not self.in_games:
-            if self.games.balls:
-                self.games.note_balls((), False)
-            return
-        self.games.note_balls(
-            tuple(
-                Ball(x_mm=b.x_mm, y_mm=b.y_mm, is_cue=b.is_cue, ball_id=b.ball_id)
-                for b in balls
-                if b.present
-            ),
-            self._table_motion,
-        )
 
     def _watch_frozen_clock(self, now: float) -> None:
         """E9: synthesize the settle a frozen MOTION clock is waiting for.
@@ -875,85 +778,7 @@ class Hub:
         self._reset_pace()
         self._drill_reps = 0
         self._mode_entered_mono = time.monotonic()
-        # Leaving games ends the game (#46 — no parking; its record is already
-        # in the journal). Entering shows the picker, which is what an active
-        # game of None means.
-        if not self.in_games:
-            self.games.back()
-            self.games.note_balls((), False)
         self._log("cmd_mode", mode=self.clock.mode.name)
-        await self.broadcast(self.clock.snapshot())
-        return True
-
-    # ---------- minigames (#46) ----------
-    #
-    # The same division the bracket uses: `games.py` decides what a game *is*,
-    # and the hub decides what happens to the session around it. Every call
-    # here refuses politely outside games mode rather than switching the mode
-    # for the caller — the Mode key is the one thing that says what you are
-    # doing at the table, and a deck key that silently changed it would be a
-    # second answer to that question.
-
-    async def select_game(self, name: str) -> bool:
-        """Pick a game from the picker. False = not in games mode, or no such game."""
-        if not self.in_games:
-            return False
-        if not self.games.select(name, players=[self.score.p1_name]):
-            return False
-        await self.broadcast(self.clock.snapshot())
-        return True
-
-    async def press_game(self, verb: str) -> bool:
-        """A press on the games row. False = no such verb right now."""
-        if not self.in_games or not self.games.press(verb):
-            return False
-        await self.broadcast(self.clock.snapshot())
-        return True
-
-    async def edit_shot(self, shot_id: str, body: Mapping[str, object]) -> dict[str, object] | None:
-        """Rename or re-target one saved shot — the phone's Drills editor.
-
-        Positions are never in `body`: the table is the only positional input
-        device (#46), so a shot's balls and ghosts come from the capture that
-        made it and from nowhere else. A *target* is fair game — a zone block or
-        a pot is a rule about the shot, not a measurement of it.
-        """
-        targets = body.get("targets")
-        shot = self.games.shots().edit(
-            shot_id,
-            name=str(body["name"]) if isinstance(body.get("name"), str) else None,
-            targets=targets if isinstance(targets, Mapping) else None,
-        )
-        if shot is None:
-            return None
-        self.games.reload_active()
-        self._log("drill_edited", shot_id=shot.id, name=shot.name)
-        await self.broadcast(self.clock.snapshot())
-        return shot.as_dict()
-
-    async def delete_shot(self, shot_id: str) -> bool:
-        if not self.games.shots().remove(shot_id):
-            return False
-        self.games.reload_active()
-        self._log("drill_deleted", shot_id=shot_id)
-        await self.broadcast(self.clock.snapshot())
-        return True
-
-    async def serve_shot(self, shot_id: str) -> bool:
-        """Serve one named shot. Needs the Shots game to be the one on the table.
-
-        It refuses rather than starting the game for you, on the same rule the
-        picker POSTs follow: what is on the wall and under your hand is the
-        deck's to say, and a phone tap that silently changed the mode would be
-        a second answer to that question.
-        """
-        from cueclock.server.games import ShotsGame
-
-        active = self.games.active
-        if not self.in_games or not isinstance(active, ShotsGame):
-            return False
-        if not active.serve_id(shot_id):
-            return False
         await self.broadcast(self.clock.snapshot())
         return True
 
@@ -1337,11 +1162,6 @@ class Hub:
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return  # kill switch: misbehaving vision must not move the clock
-        # #46: games consume the event stream the clock declines — fed here,
-        # after the kill switch (a vision the operator has disowned must not
-        # drive a game either) and before the mode gate, which exists to keep
-        # this event off the *clock*.
-        self.games.on_shot(t or 0.0, speed_mms)
         if not self.clock_live:
             if not self.clock.mode.clock_live:
                 self._drill_reps += 1  # the solo panel's REPS — approximate by design
@@ -1428,7 +1248,6 @@ class Hub:
         if not self.vision_enabled:
             self._log("vision_balls_settled_killed", **detail)
             return  # kill switch, as above
-        self.games.on_settle(t or 0.0)  # #46, as in shot_taken above
         if not self.clock_live:
             self._log("vision_balls_settled_no_clock", **detail)
             return  # journaled, not clocked — as above
@@ -1706,7 +1525,6 @@ class Hub:
         # census could not refute; journals without candidate records predate
         # the split and stay what they always were — an upper bound.
         self._scratch_candidate_open = False
-        self.games.on_scratch(t or 0.0)  # #46 — a scratch fails the cue's zone
         self._log("vision_scratch", t=t, frame_t=t)
 
     async def scratch_candidate(

@@ -52,15 +52,12 @@ def test_state_snapshot_shape() -> None:
             # The bracket (#43): null in casual play, which is every session
             # that doesn't build one.
             "bracket",
-            # Minigames (#46): null in every mode but `games`.
-            "games",
         }
         assert snap["mode"] == "match"
         assert snap["base"] == 30
         assert snap["vision"] is True
         assert snap["solo"] is None
         assert snap["bracket"] is None
-        assert snap["games"] is None
         assert snap["score"] == {
             "p1": {"name": "PLAYER 1", "score": 0, "fargo": None, "target": None},
             "p2": {"name": "PLAYER 2", "score": 0, "fargo": None, "target": None},
@@ -198,16 +195,6 @@ def test_html_pages_served() -> None:
         assert "bar-p1-goal" in page and "bar-p2-goal" in page
         assert client.get("/score").status_code == 404
         assert "Shot Clock Control" in client.get("/control").text
-
-
-def test_ui_pages_are_served_must_revalidate() -> None:
-    """A phone in a pocket and an OBS source that reloads at a scene cut both
-    hold a page for hours, so a deployed fix must not sit behind a cached copy."""
-    with make_client() as client:
-        for route in ("/shotclock", "/control", "/replay", "/games", "/bracket"):
-            headers = client.get(route).headers
-            assert "no-cache" in headers.get("cache-control", ""), route
-            assert headers.get("etag")  # ...so the revalidation costs a 304
 
 
 def test_vision_events_drive_clock() -> None:
@@ -778,7 +765,7 @@ def test_mode_listing_and_switch_and_unknown() -> None:
     with make_client() as client:
         listing = client.get("/api/modes").json()
         assert listing["active"] == "match"
-        assert listing["available"] == ["match", "run_out", "no_clock", "games"]
+        assert listing["available"] == ["match", "run_out", "no_clock"]
         assert client.post("/api/mode/run_out").json() == {"ok": True}
         assert client.get("/api/state").json()["mode"] == "run_out"
         assert client.post("/api/mode/no_such_mode").status_code == 404

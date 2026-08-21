@@ -249,6 +249,36 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-21 (checkpoint 103 — the minigames come out):** #46 is reverted in
+  full. Checkpoints 97–102 built a platform, a lag trainer, a drill core, a shot
+  catalog and a phone-side editor; Steven played it and did not want any of it.
+  No defect drove this — the feature worked as specified and the specification
+  was the thing that turned out to be wrong, which is the cheapest kind of wrong
+  to find and the only kind you find by playing.
+
+  **The tree returns to exactly what it was after checkpoint 96.** Out: the
+  server's games layer and its hub wiring, the deck's games row and picker,
+  `display/marks.py` and the pipeline hook that drew target zones onto the cloth,
+  the `/games` page and its OBS scene (plus `scripts/setup_obs_games.py`), the
+  Drills tab on `/control`, `report.py`'s `game_stats`, the games clock mode, and
+  the mockups. The series was almost purely additive — 6,371 lines in against 24
+  lines of pre-existing code touched — so the revert is a tree restore rather
+  than a surgical extraction, and the diff against checkpoint 96 is empty.
+
+  **Nothing in `vision/` was ever part of #46**, so no detection constant, no
+  threshold and no corpus expectation moves here. The unit battery is the whole
+  gate; the cold corpus run has nothing to say about this commit.
+
+  Two things deliberately survive. `design.md` **§11 stays as a tombstone** —
+  this log's 97–102 entries cite `§11.x` subsections, and the rule that § numbers
+  are never renumbered or recycled outranks the tidiness of deleting a heading;
+  the next section appends as §12. And **97–102 stay in this log**, because an
+  append-only history that quietly loses the six checkpoints it spent a day on is
+  no longer a history. What was built is in git; what happened is here.
+
+  Left on disk: `config/games/shots/*.json`, the two shots captured on the rig.
+  Gitignored, unread by anything now, harmless — deleted whenever Steven says so.
+
 - **2026-08-20 (checkpoint 102 — the Drills editor says it is an editor):**
   "How do I modify the drill? There's nothing clickable" (Steven). The editor
   was reachable the whole time — tapping a list row opens it — but nothing said

@@ -17,7 +17,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from cueclock.clock import ALIASES, MODES, RULESETS
 from cueclock.server import fargo, lan
 from cueclock.server.bracket import BracketError
-from cueclock.server.games import GAMES
 from cueclock.server.hub import Hub
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -57,31 +56,7 @@ def create_app(
     @app.get("/")
     async def index() -> JSONResponse:
         return JSONResponse(
-            {
-                "endpoints": [
-                    "/shotclock",
-                    "/replay",
-                    "/control",
-                    "/bracket",
-                    "/games",
-                    "/ws",
-                    "/api/*",
-                ]
-            }
-        )
-
-    def _page(name: str) -> FileResponse:
-        """A UI page, served must-revalidate.
-
-        Every one of these ships with the code and changes with it, and both
-        of their audiences hold a page open for hours — a phone in a pocket, an
-        OBS browser source that only reloads at a scene cut. Without this a
-        deployed fix can sit on disk while the surface that needed it keeps
-        painting the version it cached. The ETag makes the revalidation a 304,
-        so the cost is one conditional request per load on a LAN.
-        """
-        return FileResponse(
-            STATIC_DIR / name, headers={"Cache-Control": "no-cache, must-revalidate"}
+            {"endpoints": ["/shotclock", "/replay", "/control", "/bracket", "/ws", "/api/*"]}
         )
 
     @app.get("/shotclock")
@@ -93,28 +68,16 @@ def create_app(
         two OBS sources. It replaced the standalone `/score` page on
         2026-08-03 (issue #23); `?view=full` and the bare square are unchanged.
         """
-        return _page("shotclock.html")
+        return FileResponse(STATIC_DIR / "shotclock.html")
 
     @app.get("/control")
     async def control_page() -> FileResponse:
-        return _page("control.html")
+        return FileResponse(STATIC_DIR / "control.html")
 
     @app.get("/replay")
     async def replay_page() -> FileResponse:
         """REPLAY badge for the OBS Replay scene (`?s=<seconds>` drains the bar)."""
-        return _page("replay.html")
-
-    @app.get("/games")
-    async def games_page() -> FileResponse:
-        """The minigames HUD, 1920x1080, filling its own Games scene (#46).
-
-        One source with two postures: an opaque menu while the picker is up,
-        and chrome-only — a bottom bar over a transparent canvas — once a game
-        owns the table. Everything on the cloth is drawn server-side into the
-        Syphon feed instead (`display/pipeline.py`), so this page never has to
-        align itself with the table image.
-        """
-        return _page("games.html")
+        return FileResponse(STATIC_DIR / "replay.html")
 
     @app.get("/bracket")
     async def bracket_page() -> FileResponse:
@@ -125,7 +88,7 @@ def create_app(
         live match is the highlighted box, so repeating either only costs the
         boxes the space that makes them readable from the couch.
         """
-        return _page("bracket.html")
+        return FileResponse(STATIC_DIR / "bracket.html")
 
     @app.get("/audio/extension_called.wav")
     async def extension_called_audio() -> FileResponse:
@@ -464,89 +427,6 @@ def create_app(
         except BracketError as exc:
             return _bracket_error(exc)
         return JSONResponse({"ok": True})
-
-    # ---------- minigames (#46) ----------
-    #
-    # Layered on the mode axis the way the bracket is layered on the score:
-    # outside games mode every one of these 409s and `/api/state` carries
-    # `games: null`, so nothing on any other page changes. The deck talks HTTP
-    # like every other key (docs/design.md §2.1) — there is no second protocol.
-
-    @app.get("/api/games")
-    async def api_games() -> dict[str, object]:
-        """The registry and the active game — the picker cards with their stats.
-
-        Answers whatever the mode is, unlike the POSTs below: this is a
-        *listing*, and the phone's Drills tab has to be able to read the
-        catalog from the couch with a match on the wall.
-        """
-        return {
-            "mode": hub.clock.mode.name,
-            "in_games": hub.in_games,
-            "available": list(GAMES),
-            **hub.games.payload(),
-        }
-
-    @app.post("/api/games/select/{name}")
-    async def api_games_select(name: str) -> JSONResponse:
-        """Pick a game — the picker's one press."""
-        if not hub.in_games:
-            return JSONResponse({"ok": False, "error": "not in games mode"}, status_code=409)
-        if not await hub.select_game(name):
-            return JSONResponse({"ok": False, "error": f"unknown game: {name}"}, status_code=404)
-        return JSONResponse({"ok": True, "active": name})
-
-    @app.post("/api/games/back")
-    async def api_games_back() -> JSONResponse:
-        """End the active game and show the picker. Nothing is parked."""
-        if not await hub.press_game("back"):
-            return JSONResponse({"ok": False, "error": "not in games mode"}, status_code=409)
-        return JSONResponse({"ok": True})
-
-    @app.post("/api/games/press/{verb}")
-    async def api_games_press(verb: str) -> JSONResponse:
-        """One press on the active game's own verb row."""
-        if not await hub.press_game(verb):
-            return JSONResponse(
-                {"ok": False, "error": f"no such verb right now: {verb}"}, status_code=409
-            )
-        return JSONResponse({"ok": True})
-
-    # The shot catalog — the phone's Drills tab. Readable in any mode, because
-    # curating the catalog is couch work; only *serving* one needs the game to
-    # be on the table.
-
-    @app.get("/api/games/shots")
-    async def api_shots() -> dict[str, object]:
-        """Every saved shot, with the journal's verdict on each."""
-        return {"ok": True, "shots": [s.as_dict() for s in hub.games.shots().shots]}
-
-    @app.patch("/api/games/shots/{shot_id}")
-    async def api_shot_edit(shot_id: str, body: dict[str, object]) -> JSONResponse:
-        """`{name, targets: {role: {"type":"cells"|"potted", …}}}` — never positions."""
-        try:
-            shot = await hub.edit_shot(shot_id, body)
-        except ValueError as exc:  # an unknown target type
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-        if shot is None:
-            return JSONResponse({"ok": False, "error": f"no such shot: {shot_id}"}, status_code=404)
-        return JSONResponse({"ok": True, "shot": shot})
-
-    @app.delete("/api/games/shots/{shot_id}")
-    async def api_shot_delete(shot_id: str) -> JSONResponse:
-        if not await hub.delete_shot(shot_id):
-            return JSONResponse({"ok": False, "error": f"no such shot: {shot_id}"}, status_code=404)
-        return JSONResponse({"ok": True})
-
-    @app.post("/api/games/shots/{shot_id}/serve")
-    async def api_shot_serve(shot_id: str) -> JSONResponse:
-        """What the deck's PLAY does, but with this shot instead of a random one."""
-        if not await hub.serve_shot(shot_id):
-            return JSONResponse(
-                {"ok": False, "error": "start the Shots game on the deck first"},
-                status_code=409,
-            )
-        return JSONResponse({"ok": True, "served": shot_id})
 
     @app.get("/api/lan")
     async def api_lan(request: Request) -> JSONResponse:
