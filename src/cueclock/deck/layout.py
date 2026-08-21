@@ -34,7 +34,7 @@ the whole grammar rests on.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 
 from cueclock.clock import MODES, RULESETS
@@ -77,22 +77,6 @@ TIMED = frozenset(name for name, ruleset in RULESETS.items() if ruleset.timed)
 
 
 @dataclass(frozen=True)
-class GameVerb:
-    """One key on the active game's row, exactly as the server describes it.
-
-    A mirror of `server.games.Verb` on this side of the HTTP boundary, so the
-    deck package stays free of the server import and this module stays pure.
-    `enabled=False` is a **dark** cell, not a dim one (layout rule A).
-    """
-
-    name: str
-    text: str
-    sub: str | None = None
-    enabled: bool = True
-    armed: bool = False
-
-
-@dataclass(frozen=True)
 class DeckState:
     """Everything the faces need, polled from `GET /api/state` in one request.
 
@@ -122,13 +106,6 @@ class DeckState:
     bracket_side: str | None = None  # "A SIDE"
     bracket_armed: tuple[str, int, int] | None = None  # (name, their score, other)
     on_bracket: bool = False  # the bracket scene is on the TV, not the table
-    # Minigames (#46). The whole games row is *dynamic* — the picker while no
-    # game is chosen, the active game's own verbs after — so unlike every other
-    # key it is described by the server rather than declared below. Outside
-    # games mode all three fields are empty and row 3 is exactly what it was.
-    games_active: str | None = None
-    games_picker: tuple[tuple[str, str], ...] = ()  # (game name, key face)
-    games_verbs: tuple[GameVerb, ...] = ()
 
 
 # ---------- actions ----------
@@ -260,21 +237,6 @@ class SceneToggle:
     """
 
 
-@dataclass(frozen=True)
-class GamePress:
-    """A press on the games row (#46) — the picker's pick, or a game's verb.
-
-    Its own action rather than a plain `ApiPost` because the row it sits on is
-    *rewritten* by the press: picking a game swaps the picker for that game's
-    verbs, and a verb can arm or darken its neighbours. So the daemon re-polls
-    and repaints immediately instead of leaving the wrong row under a finger
-    for up to one poll interval.
-    """
-
-    path: str
-    ok_face: str = "OK"
-
-
 Action = (
     ApiPost
     | Cycle
@@ -285,7 +247,6 @@ Action = (
     | ReplayShow
     | BracketConfirm
     | SceneToggle
-    | GamePress
 )
 
 
@@ -295,7 +256,6 @@ MODE_FACES: dict[str, str] = {
     "match": "MATCH",
     "run_out": "RUN OUT",
     "no_clock": "NO CLOCK",
-    "games": "GAMES",
 }
 
 RULESET_FACES: dict[str, str] = {
@@ -368,11 +328,6 @@ class Key:
     needs_bracket: bool = False  # dark unless a bracket is loaded (#43)
     offline: bool = False  # survives a server-down deck (Session only)
     text: str = ""  # static face text, where the face isn't state-derived
-    # The remaining two are for keys built at runtime rather than declared
-    # below — the games row (#46), whose faces come from the server. A
-    # declared key derives its face from state instead, in `face()`.
-    sub: str | None = None  # second line: where a press goes, or a gesture
-    bg: Rgb | None = None  # armed background, as the bracket confirm uses
     meta: Mapping[str, str] = field(default_factory=dict)
 
     @property
@@ -463,8 +418,7 @@ class Key:
             left = max(0, state.extensions_allowed - state.extensions_used)
             pips = (left, state.extensions_allowed) if state.extensions_allowed else None
             return Face(text="EXT", pips=pips, stripe=stripe)
-        face = Face(text=self.text, sub=self.sub, stripe=stripe)
-        return face if self.bg is None else replace(face, bg=self.bg)
+        return Face(text=self.text, stripe=stripe)
 
 
 LAYOUT: tuple[Key, ...] = (
@@ -545,59 +499,6 @@ LAYOUT: tuple[Key, ...] = (
     # `_visible_key`, and a flag press is seconds long.
     Key(2, 3, "scene", Group.SYSTEM, SceneToggle(), needs_bracket=True),
 )
-
-# ---------- the games row (#46) ----------
-#
-# Row 3 — the row that is the mode's own block in every other mode — becomes
-# the game picker in games mode, and the selected game's verbs replace the
-# picker on the same row. Two levels, maximum: picker → game.
-#
-# All of it wears the **MATCH stripe**: the stripe channel answers "how much
-# time do I have", and every games press is a between-shots press. No new
-# colour, nothing new to learn.
-#
-# The row is dynamic — described by the server, not declared above — because
-# what is on it depends on which games are registered and which one is active.
-# Everything that is declared above and lives on row 3 (`ruleset`, `new_rack`,
-# the score keys, the bracket confirm) is gated to CLOCKED or RACKED, so in
-# games mode those cells are already dark and this overlay collides with
-# nothing.
-GAMES_MODE = "games"
-GAMES_ROW = 3
-# What the first picker card's key tag reads on the TV: 1-based, row-major.
-# Mirrored by `server.games.GAMES_ROW_FIRST_KEY`; a unit test pins them.
-GAMES_FIRST_KEY = (GAMES_ROW - 1) * COLS + 1
-
-
-def games_keys(state: DeckState) -> tuple[Key, ...]:
-    """The games row for this state — empty outside games mode.
-
-    Disabled verbs are simply absent: a key that cannot be pressed goes dark,
-    and a dark cell is exactly what the daemon paints where no key lives.
-    """
-    if state.mode != GAMES_MODE:
-        return ()
-    if state.games_active is None:
-        entries = tuple(GameVerb(name=name, text=text) for name, text in state.games_picker)
-        path = "/api/games/select/{}"
-    else:
-        entries = state.games_verbs
-        path = "/api/games/press/{}"
-    return tuple(
-        Key(
-            GAMES_ROW,
-            col,
-            f"game_{verb.name}",
-            Group.MATCH,
-            GamePress(path.format(verb.name), ok_face=verb.text),
-            text=verb.text,
-            sub=verb.sub,
-            bg=BG_ARMED if verb.armed else None,
-        )
-        for col, verb in enumerate(entries[:COLS], start=1)
-        if verb.enabled
-    )
-
 
 # The transient reason page: shown only while a Flag press is waiting for a
 # reason, overlaid on the cells to Flag's right (which are otherwise dark).

@@ -8,10 +8,9 @@
         /* The phone surface. Same palette as the wall overlay (issue #23), so
            the thing in your hand and the thing on the TV read as one product.
 
-           Three tabs for the page's three jobs: Play is everything touched
+           Two tabs for the page's two jobs: Play is everything touched
            mid-game (clock keys, score bumps) laid out for a thumb — big
-           targets, nothing to scroll past; Drills curates the shot catalog the
-           table captures (#46); Setup is everything decided before
+           targets, nothing to scroll past; Setup is everything decided before
            play (players, race, ruleset — or the whole tournament). Setup and
            Bracket were separate tabs until 2026-08-13; with a handicapped
            tournament live, the old Setup's single "Race to" had nothing true
@@ -228,86 +227,6 @@
         .race { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .race .stepper { flex: 1; min-width: 210px; }
         .hint { font-size: 12.5px; color: var(--slate); margin: 0; }
-
-        /* ---- Drills tab (issue #46) ----
-           The list is the weakness report: name, ball count, last played, and
-           make % over attempts — all of it derived from the journal, so it can
-           never disagree with `cueclock report`. The editor renames, and sets
-           each ball's TARGET: a block on the same 8x4 diamond grid the TV and
-           the table speak, or — for an object ball — the pocket. It does NOT
-           move balls: positions come from the table, always. */
-        .drills { display: flex; flex-direction: column; gap: 10px; }
-        .drillhdr {
-            display: flex; align-items: center; justify-content: space-between; gap: 12px;
-        }
-        .drillhdr h2 {
-            flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
-        .drillhdr button { padding: 8px 14px; font-size: 13px; }
-        .drow {
-            display: flex; align-items: center; gap: 12px; text-align: left;
-            background: #1A1F29; border: 1px solid var(--line-strong);
-            border-radius: 12px; padding: 13px 14px; font-family: inherit;
-            color: var(--text); cursor: pointer; touch-action: manipulation;
-        }
-        .drow:active { background: #2A3140; }
-        .drow .dn { flex: 1; min-width: 0; }
-        .drow .dn .nm {
-            font-size: 15px; font-weight: 650; overflow: hidden;
-            text-overflow: ellipsis; white-space: nowrap;
-        }
-        .drow .dn .meta {
-            font-size: 10.5px; letter-spacing: 1.2px; color: var(--slate);
-            font-weight: 700; margin-top: 4px; text-transform: uppercase;
-        }
-        .drow .pct {
-            font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
-            color: var(--slate); white-space: nowrap;
-        }
-        .drow .pct b { color: var(--text); }
-        /* The row opens the editor, so it has to look like it does. A stat card
-           and a tappable row are the same rectangle without this. */
-        .drow .go { color: var(--dim); font-size: 19px; line-height: 1; margin-left: 2px; }
-        .tag {
-            font-size: 9px; letter-spacing: 1.2px; font-weight: 700; color: var(--slate);
-            border: 1px solid var(--line-strong); border-radius: 4px; padding: 2px 6px;
-            text-transform: uppercase; margin-left: 6px; vertical-align: 1px;
-        }
-        /* The mini table: the same 8x4 grid, cells tappable to move a zone.
-           Sized off the table's own 2:1 aspect so what you tap here is the
-           block you will see on the wall. */
-        .dtable {
-            position: relative; width: 100%; aspect-ratio: 2 / 1;
-            background: #155a9e; border: 6px solid #10141b; border-radius: 5px;
-        }
-        .dtable .dcell { position: absolute; border-right: 1px solid rgba(255,255,255,.16);
-            border-bottom: 1px solid rgba(255,255,255,.16); }
-        .dtable .dzone {
-            position: absolute; border: 2px solid rgba(255,255,255,.9);
-            background: rgba(255,255,255,.12); pointer-events: none;
-        }
-        .dtable .dzone.obj {
-            border-color: rgba(159,179,196,.9); border-style: dashed;
-            background: rgba(159,179,196,.1);
-        }
-        .dtable .dball {
-            position: absolute; width: 3.5%; aspect-ratio: 1; border-radius: 50%;
-            transform: translate(-50%, -50%); pointer-events: none;
-        }
-        .zonerow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-        /* Tapping a cell moves whichever role is selected here, so the label
-           is a control, not a caption — it wears a box and the selected one
-           is filled. Two of these and a grid is the whole editor. */
-        .zonerow .zl {
-            font-size: 10.5px; letter-spacing: 1.6px; color: var(--slate);
-            font-weight: 700; text-transform: uppercase; cursor: pointer;
-            border: 1px solid var(--line-strong); border-radius: 8px;
-            padding: 9px 11px; touch-action: manipulation; white-space: nowrap;
-        }
-        .zonerow .zl.sel {
-            color: #04121F; background: var(--accent); border-color: var(--accent);
-        }
-        .zonerow .seg { flex: 1; max-width: 200px; }
 
         .field { display: flex; flex-direction: column; gap: 7px; }
         select {
@@ -632,51 +551,11 @@
             </section>
     </main>
 
-
-    <!-- Drills: the shot catalog (#46). The table captures, the phone curates —
-         name, re-target each ball (a zone block, or the pocket), serve one,
-         delete. Ball and ghost positions are NOT editable here and never will
-         be: the table is the
-         only positional input device, and a map you can drag balls around on
-         is a second, worse one that would disagree with the millimetres the
-         camera measured. -->
-    <main id="view-drills" hidden>
-        <section id="drills-list-section">
-            <h2>Drills</h2>
-            <div class="drills" id="drills-list"></div>
-            <p class="hint" id="drills-empty" hidden>
-                No saved shots yet. Set one up at the table and press CAPTURE on
-                the deck's games row.
-            </p>
-        </section>
-
-        <section id="drills-edit-section" hidden>
-            <div class="drillhdr">
-                <h2 id="drill-title">Edit</h2>
-                <button class="ghost" onclick="closeDrill()">Back</button>
-            </div>
-            <div class="field">
-                <input type="text" id="drill-name" maxlength="60" placeholder="Shot name">
-            </div>
-            <div class="dtable" id="drill-table"></div>
-            <p class="hint">
-                Tap a cell to put the selected ball's target there. Balls are the saved layout,
-                placed on the table — read-only here.
-            </p>
-            <div id="drill-zones" class="stack"></div>
-            <button class="primary lg" id="drill-serve" onclick="serveDrill()">Serve this shot</button>
-            <button class="danger" onclick="deleteDrill()">Delete shot</button>
-            <p class="hint" id="drill-note"></p>
-        </section>
-    </main>
 </div>
 
 <nav class="tabbar">
     <button class="active" id="tab-play" onclick="showTab('play')" aria-label="Play tab">
         <span class="glyph">&#9201;</span>Play
-    </button>
-    <button id="tab-drills" onclick="showTab('drills')" aria-label="Drills tab">
-        <span class="glyph">&#9678;</span>Drills
     </button>
     <button id="tab-setup" onclick="showTab('setup')" aria-label="Setup tab">
         <span class="glyph">&#9881;</span>Setup
@@ -685,24 +564,14 @@
 
 <script>
     // ---- Tabs ----
-    const TABS = ['play', 'drills', 'setup'];
+    const TABS = ['play', 'setup'];
     function showTab(which) {
         for (const t of TABS) {
             document.getElementById('view-' + t).hidden = t !== which;
             document.getElementById('tab-' + t).classList.toggle('active', t === which);
         }
         if (which === 'setup') refreshBracket();
-        // The catalog gains a shot when somebody presses SAVE at the table, and
-        // nothing on the WebSocket says so — so this tab refetches while it is
-        // the one on screen, and only then. One small request every few seconds
-        // for the one surface that would otherwise show a stale list.
-        clearInterval(drillPoll);
-        if (which === 'drills') {
-            refreshDrills();
-            drillPoll = setInterval(refreshDrills, 5000);
-        }
     }
-    let drillPoll = 0;
 
     // ---- The Setup tab's segmented control ----
     // Which workflow owns the page. It follows the bracket by default (built
@@ -1407,227 +1276,6 @@
         if (s.score) renderScore(s.score);
         renderBracketLive(s.bracket);
     }
-
-    // ---- Drills: the shot catalog (issue #46) ----
-    // Fetched, not broadcast: the catalog is a handful of small definitions
-    // that change when somebody captures or edits a shot, not ten times a
-    // second, so it rides HTTP and re-fetches after every edit.
-    const GRID_COLS = 8, GRID_ROWS = 4;
-    // The mini-table IS the playing surface, so the diagram is the grid and a
-    // ball's dot is placed against the same rectangle the cells are cut from.
-    // Mirrors `server/games.py` PLAY_* — measured off the rail sights, and the
-    // reason it is not 1930x965 is that the calibration fits the cloth outline
-    // (design.md §11.6). A ball resting on a cushion clamps to the edge.
-    const PLAY_X0_MM = 49.85, PLAY_LENGTH_MM = 1830.3;
-    const PLAY_Y0_MM = 46.1, PLAY_WIDTH_MM = 872.8;
-    const ZONE_SIZES = [[1, 1], [2, 1], [1, 2], [2, 2]];
-    let drills = [];
-    let editing = null;      // the shot open in the editor
-    let selectedRole = null; // which requirement a cell tap moves
-
-    function esc(text) {
-        return String(text == null ? '' : text).replace(/[&<>"]/g, (c) => (
-            { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
-        ));
-    }
-
-    async function refreshDrills() {
-        try {
-            const data = await (await fetch('/api/games/shots')).json();
-            drills = data.shots || [];
-        } catch (e) { return; }
-        renderDrills();
-        if (editing) {
-            const fresh = drills.find((s) => s.id === editing.id);
-            if (fresh) { editing = fresh; renderDrillEditor(); } else { closeDrill(); }
-        }
-    }
-
-    function renderDrills() {
-        document.getElementById('drills-empty').hidden = drills.length > 0;
-        document.getElementById('drills-list').innerHTML = drills.map((shot) => `
-            <div class="drow" onclick="openDrill('${esc(shot.id)}')">
-                <div class="dn">
-                    <div class="nm">${esc(shot.name)}${
-                        shot.safety ? '<span class="tag">Safety</span>' : ''}</div>
-                    <div class="meta">${shot.balls} ball${shot.balls === 1 ? '' : 's'}${
-                        shot.last_played ? ' · ' + esc(shot.last_played) : ' · never played'}</div>
-                </div>
-                <div class="pct">${shot.make_pct === null ? '—'
-                    : `<b>${shot.make_pct}%</b> · ${shot.attempts}`}</div>
-                <div class="go">\u203A</div>
-            </div>`).join('');
-    }
-
-    function openDrill(id) {
-        editing = drills.find((s) => s.id === id) || null;
-        if (!editing) return;
-        selectedRole = editing.requirements.length ? editing.requirements[0].role : null;
-        renderDrillEditor();
-        document.getElementById('drills-list-section').hidden = true;
-        document.getElementById('drills-edit-section').hidden = false;
-    }
-
-    function closeDrill() {
-        editing = null;
-        document.getElementById('drills-list-section').hidden = false;
-        document.getElementById('drills-edit-section').hidden = true;
-    }
-
-    // Role faces are CUE / OBJECT / BALL n, never a colour: a colour name is
-    // an identity claim the vision layer deliberately cannot make (#46).
-    function roleLabel(role, objectCount) {
-        if (role === 'cue') return 'Cue';
-        if (objectCount <= 1) return 'Object';
-        return 'Ball ' + role.replace('obj', '');
-    }
-
-    function renderDrillEditor() {
-        const shot = editing;
-        if (!shot) return;
-        document.getElementById('drill-title').innerText = shot.name;
-        document.getElementById('drill-name').value = shot.name;
-        const objects = shot.balls - shot.layout.filter((b) => b.role === 'cue').length;
-
-        // The table: a tappable 8x4 grid, the zones over it, the saved layout
-        // drawn read-only on top.
-        const cells = [];
-        for (let row = 0; row < GRID_ROWS; row++) {
-            for (let col = 0; col < GRID_COLS; col++) {
-                cells.push(`<div class="dcell" style="left:${col / GRID_COLS * 100}%;`
-                    + `top:${row / GRID_ROWS * 100}%;width:${100 / GRID_COLS}%;`
-                    + `height:${100 / GRID_ROWS}%" onclick="moveZone(${col},${row})"></div>`);
-            }
-        }
-        // Only a zone has a rectangle. A pot is a requirement about all six
-        // pockets, so there is nothing on the diagram to draw for it — the row
-        // below says it in words instead.
-        const zones = shot.requirements.filter((req) => req.target.type === 'cells').map((req) => {
-            const z = req.target;
-            return `<div class="dzone${req.role === 'cue' ? '' : ' obj'}"
-                style="left:${z.col / GRID_COLS * 100}%;top:${z.row / GRID_ROWS * 100}%;
-                width:${z.w / GRID_COLS * 100}%;height:${z.h / GRID_ROWS * 100}%"></div>`;
-        });
-        const balls = shot.layout.map((b) => `<div class="dball" style="left:${
-            pct(b.x_mm, PLAY_X0_MM, PLAY_LENGTH_MM)}%;top:${
-            pct(b.y_mm, PLAY_Y0_MM, PLAY_WIDTH_MM)}%;
-            background:${b.role === 'cue' ? '#F2F0E8' : '#C0392B'}"></div>`);
-        document.getElementById('drill-table').innerHTML =
-            cells.join('') + zones.join('') + balls.join('');
-
-        // One control per requirement, and its lit button IS the setting:
-        // POT, or a zone of that size. The cue never gets POT — a potted cue
-        // is a scratch, which is a way to fail a shot and never a way to set one.
-        document.getElementById('drill-zones').innerHTML = shot.requirements.map((req) => {
-            const t = req.target, pot = t.type === 'potted', on = req.role === selectedRole;
-            const potBtn = req.role === 'cue' ? '' :
-                `<button class="${pot ? 'on' : ''}"
-                    onclick="setPot('${esc(req.role)}')">Pot</button>`;
-            return `<div class="zonerow">
-                <div class="zl${on ? ' sel' : ''}" onclick="selectRole('${esc(req.role)}')">
-                    ${esc(roleLabel(req.role, objects))} target</div>
-                <div class="seg">${potBtn}${ZONE_SIZES.map(([w, h]) => `
-                    <button class="${!pot && t.w === w && t.h === h ? 'on' : ''}"
-                        onclick="sizeZone('${esc(req.role)}',${w},${h})">${w}×${h}</button>`
-                ).join('')}</div>
-            </div>`;
-        }).join('');
-        document.getElementById('drill-note').innerText = '';
-    }
-
-    // A ball's position as a percentage across the playing surface, clamped:
-    // a ball frozen on a cushion reads a hair outside it (design.md §11.6).
-    function pct(mm, origin, span) {
-        return Math.max(0, Math.min(100, (mm - origin) / span * 100));
-    }
-
-    // Which cell a ghost sits in — the default block when a pot becomes a zone.
-    function cellOf(x_mm, y_mm) {
-        return [
-            Math.max(0, Math.min(GRID_COLS - 1,
-                Math.floor((x_mm - PLAY_X0_MM) / (PLAY_LENGTH_MM / GRID_COLS)))),
-            Math.max(0, Math.min(GRID_ROWS - 1,
-                Math.floor((y_mm - PLAY_Y0_MM) / (PLAY_WIDTH_MM / GRID_ROWS)))),
-        ];
-    }
-
-    // Where a role's block sits today, or — for a pot being turned into a zone
-    // — the cell its ghost is in, which is "finish where you started".
-    function zoneOrGhost(shot, req) {
-        if (req.target.type === 'cells') return req.target;
-        const ball = shot.layout.find((b) => b.role === req.role);
-        const [col, row] = ball ? cellOf(ball.x_mm, ball.y_mm) : [0, 0];
-        return { type: 'cells', col, row, w: 1, h: 1 };
-    }
-
-    function selectRole(role) { selectedRole = role; renderDrillEditor(); }
-
-    async function moveZone(col, row) {
-        if (!editing || !selectedRole) return;
-        const req = editing.requirements.find((r) => r.role === selectedRole);
-        if (!req) return;
-        // Keep the block on the table: a tap picks its top-left cell, clamped.
-        // Tapping a cell for a ball set to POT makes it a zone there — the tap
-        // said where, which is the whole difference between the two.
-        const base = zoneOrGhost(editing, req);
-        await patchDrill({ targets: { [selectedRole]: {
-            type: 'cells',
-            col: Math.min(GRID_COLS - base.w, col),
-            row: Math.min(GRID_ROWS - base.h, row),
-            w: base.w, h: base.h,
-        } } });
-    }
-
-    async function sizeZone(role, w, h) {
-        if (!editing) return;
-        const req = editing.requirements.find((r) => r.role === role);
-        if (!req) return;
-        selectedRole = role;
-        const base = zoneOrGhost(editing, req);
-        await patchDrill({ targets: { [role]: {
-            type: 'cells',
-            col: Math.min(GRID_COLS - w, base.col),
-            row: Math.min(GRID_ROWS - h, base.row),
-            w, h,
-        } } });
-    }
-
-    async function setPot(role) {
-        if (!editing) return;
-        selectedRole = role;
-        await patchDrill({ targets: { [role]: { type: 'potted' } } });
-    }
-
-    async function patchDrill(body) {
-        if (!editing) return;
-        const res = await postJson('/api/games/shots/' + encodeURIComponent(editing.id),
-            body, 'PATCH');
-        if (!res.ok) { document.getElementById('drill-note').innerText = res.error; return; }
-        await refreshDrills();
-    }
-
-    async function deleteDrill() {
-        if (!editing) return;
-        const res = await postJson('/api/games/shots/' + encodeURIComponent(editing.id),
-            null, 'DELETE');
-        if (!res.ok) { document.getElementById('drill-note').innerText = res.error; return; }
-        closeDrill();
-        await refreshDrills();
-    }
-
-    async function serveDrill() {
-        if (!editing) return;
-        const res = await postJson(
-            '/api/games/shots/' + encodeURIComponent(editing.id) + '/serve');
-        // The one live control on this tab. It refuses rather than switching
-        // the mode for you, so the note says what to do at the deck.
-        document.getElementById('drill-note').innerText = res.ok
-            ? 'Served — the TV and the deck take it from here.' : res.error;
-    }
-
-    document.getElementById('drill-name').addEventListener('change', (ev) => {
-        patchDrill({ name: ev.target.value });
-    });
 
     function setConnected(live) {
         document.getElementById('conn').classList.toggle('live', live);

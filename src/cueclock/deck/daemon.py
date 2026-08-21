@@ -22,12 +22,11 @@ from typing import Any
 
 from PIL import Image
 
-from cueclock.deck import bracket, client, faces, games, replay
+from cueclock.deck import bracket, client, faces, replay
 from cueclock.deck.layout import (
     CONFIRM_PENDING_FACE,
     DUMP_PENDING_FACE,
     FLAG_PENDING_FACE,
-    GAMES_MODE,
     LAYOUT,
     RACK_PENDING_FACE,
     REASON_KEYS,
@@ -38,8 +37,6 @@ from cueclock.deck.layout import (
     DeckState,
     FlagReason,
     FlagStart,
-    GamePress,
-    GameVerb,
     Key,
     ReplayShow,
     SceneToggle,
@@ -48,7 +45,6 @@ from cueclock.deck.layout import (
     cycle_listing,
     cycle_next,
     cycle_path,
-    games_keys,
 )
 from cueclock.deck.session import SessionManager, SessionState
 
@@ -107,38 +103,6 @@ def _bracket_fields(payload: object) -> dict[str, object]:
     return fields
 
 
-def _games_fields(payload: object) -> dict[str, object]:
-    """The games half of a `GET /api/state` body, flattened for `DeckState`.
-
-    `null` (every mode but games) leaves every field at its default, which is
-    what makes the games row empty and row 3 exactly the row it was before #46.
-    """
-    if not isinstance(payload, dict):
-        return {}
-    picker = payload.get("picker")
-    verbs = payload.get("verbs")
-    active = payload.get("active")
-    return {
-        "games_active": active if isinstance(active, str) else None,
-        "games_picker": tuple(
-            (str(card["name"]), str(card["title"]))
-            for card in (picker if isinstance(picker, list) else [])
-            if isinstance(card, dict) and "name" in card and "title" in card
-        ),
-        "games_verbs": tuple(
-            GameVerb(
-                name=str(verb.get("name", "")),
-                text=str(verb.get("text", "")),
-                sub=str(verb["sub"]) if verb.get("sub") else None,
-                enabled=bool(verb.get("enabled", True)),
-                armed=bool(verb.get("armed", False)),
-            )
-            for verb in (verbs if isinstance(verbs, list) else [])
-            if isinstance(verb, dict)
-        ),
-    }
-
-
 def build_state(
     data: dict[str, object] | None,
     session: SessionState,
@@ -189,7 +153,6 @@ def build_state(
         # is answering, absent otherwise (there is nothing to be healthy).
         session_dot=faces.DOT_OK,
         **_bracket_fields(data.get("bracket")),  # type: ignore[arg-type]
-        **_games_fields(data.get("games")),  # type: ignore[arg-type]
     )
 
 
@@ -280,20 +243,6 @@ def _score_post(action: ScoreAdjust, name: str, base: str, *, decrement: bool) -
     return faces.flash_ok("-1" if decrement else "+1") if result.ok else faces.flash_err("ERROR")
 
 
-def _overlays(state: DeckState, reasons: bool) -> dict[int, Key]:
-    """The cells a transient page or the games row is claiming right now.
-
-    Two overlays, and they cannot collide: Flag's reason page unfolds rightward
-    across row 2, the games row is row 3. The reason page still wins if that
-    ever changes, because a flag press is seconds long and its cells have to be
-    findable by feel.
-    """
-    overlay: dict[int, Key] = {key.index: key for key in games_keys(state)}
-    if reasons:
-        overlay.update(_REASONS_BY_INDEX)
-    return overlay
-
-
 def _draw_all(
     deck: Any,
     state: DeckState,
@@ -302,7 +251,7 @@ def _draw_all(
     skip: frozenset[int] = frozenset(),
 ) -> None:
     """Repaint every cell: the visible keys, dark everywhere else."""
-    overlay = _overlays(state, reasons)
+    overlay = _REASONS_BY_INDEX if reasons else {}
     for i in range(deck.key_count()):
         if i in skip:
             continue
@@ -324,9 +273,8 @@ def _set_key(deck: Any, index: int, face: faces.Face | Image.Image) -> None:
 
 def _visible_key(index: int, state: DeckState, reasons: bool) -> Key | None:
     """The key at `index` if it is pressable right now, else None."""
-    overlay = _overlays(state, reasons)
-    if index in overlay:
-        return overlay[index]
+    if reasons and index in _REASONS_BY_INDEX:
+        return _REASONS_BY_INDEX[index]
     key = _BY_INDEX.get(index)
     if key is None or not key.visible(state):
         return None
@@ -340,7 +288,6 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
 
     playing: replay.Playing | None = None  # a replay currently on the TV
     showing: bracket.Showing | None = None  # the bracket is on the TV
-    on_games: games.Showing | None = None  # the games scene is on the TV (#46)
     # The clock's own state, kept beside the poll rather than in `DeckState`:
     # no face draws it, and adding it there would repaint all fifteen keys on
     # every RUNNING/IDLE transition — several times a rack, for nothing.
@@ -412,22 +359,6 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                     # showing somebody *chose* keeps having no deadline.
                     showing = replace(showing, until=now + bracket.DWELL_S)
             shown_decided = decided
-            # #46: the Games scene follows the Mode key, with no dwell and no
-            # key of its own — games mode is a thing you are *in*. Held off
-            # while a replay or the bracket owns the TV: those are somebody's
-            # explicit "show me this", and the mode poll must not cut out from
-            # under one. Whichever of them ends puts the wall back where it was
-            # and the next poll takes the games scene up.
-            free = playing is None and showing is None
-            if state.mode == GAMES_MODE:
-                if on_games is None and free:
-                    on_games = games.show()
-            elif on_games is not None and free:
-                # A failed cut back still clears the handle — a wall stuck on
-                # the games scene is worse than one press that does nothing,
-                # the same rule the replay and bracket returns follow.
-                games.hide(on_games)
-                on_games = None
         if playing is not None and now >= playing.until:
             # The file ran out — cut back to whatever was live when it started.
             # A failed cut still clears the handle: leaving the key saying BACK
@@ -584,25 +515,6 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 shown_decided = decided
                 _draw_all(deck, state, skip=frozenset(flashes) | {index})
             outcome = faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")
-            _set_key(deck, index, outcome)
-            flashes[index] = time.monotonic() + FLASH_S
-            continue
-
-        if isinstance(key.action, GamePress):
-            result = client.post(base, key.action.path)
-            print(f"{key.name}: POST {key.action.path} -> {result.status}", flush=True)
-            if result.ok:
-                # The press rewrote the row it was on — picking a game swaps
-                # the picker for its verbs — so repaint now rather than leaving
-                # the old row under the finger until the next poll.
-                state = poll()
-                _draw_all(
-                    deck,
-                    state,
-                    reasons=reason_deadline is not None,
-                    skip=frozenset(flashes) | {index},
-                )
-            outcome = faces.flash_ok(key.action.ok_face) if result.ok else faces.flash_err("ERROR")
             _set_key(deck, index, outcome)
             flashes[index] = time.monotonic() + FLASH_S
             continue

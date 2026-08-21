@@ -659,17 +659,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # keyword in its own announcement (docs/hardware.md Part D).
             hub.on_extension_granted = listener.mute
 
-    # #46: the games layer's on-cloth marks (grid, ghosts, zones, miss line,
-    # lag bracket) are drawn into the display frame by the pipeline that owns
-    # the mm→display mapping. Only a *rectified* pipeline has one — without
-    # `--rectify` the table sits wherever the mount put it in the frame and
-    # there is nowhere honest to draw a zone — so say so at startup rather than
-    # drawing something approximately right at the table.
-    if display.draws_marks:
-        hub.on_cloth_marks = lambda marks: setattr(display, "marks", marks)
-    else:
-        print("games mode: no on-cloth markings without --rectify (the HUD bar still works)")
-
     def _surface(future: "Future[None]") -> None:
         exc = future.exception()
         if exc is not None:
@@ -805,11 +794,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                 hub.note_frame(t)
                                 # E9 motion bit — same attribute-only contract.
                                 hub.note_motion(vision.last_motion)
-                                # #46: the live layout, for the games layer's
-                                # placement countdown and auto-arm. Same
-                                # contract again, and a no-op outside games
-                                # mode — the Hub gates it there, not here.
-                                hub.note_balls(vision.last_balls)
                                 if ring_capacity > 0 and t >= next_snap_t:
                                     # Warm-replay snapshot (~1 Hz in camera
                                     # time — see STATE_SNAPSHOT_PERIOD_S).
