@@ -254,6 +254,22 @@ EXPECTED: dict[
     # same wrong-flag configuration explains it and the same path covers
     # it). Cold truth: two clean shot -> settle pairs.
     "parked_vote_strike_0801": (2, 0, 2, 2),
+    # 2026-08-23 live flag, promoted in checkpoint 104. Steven's ground truth:
+    # one real shot at ~15.1 s, and **he never touched a ball by hand** all
+    # clip. It pots the object ball, so that ball vanishes and never arrives
+    # and the cue is the settle's ONLY arrival — and he is still leaning over
+    # the table where the cue stopped, so that one arrival reads
+    # hand-delivered. Live, #41 refused it on `arrivals 1 / hand 1`: the
+    # countdown ran on from 16.14 s into GRACE and EXPIRED and he restarted by
+    # hand.
+    #
+    # This is the negative control the corpus was missing, and its absence is
+    # why a ball-in-hand refusal shipped twice. `CARRY_CLIPS` grades the
+    # carries; nothing graded *a pot whose only arrival is hand-covered*, which
+    # is the population both #38 and #41 selected wrongly. Any third attempt
+    # has to keep this green as well as the carries — and measurement says it
+    # cannot, which is the point.
+    "pot_single_arrival_0823": (1, 0, 1, 1),
     # 2026-08-01 evening drill flags (checkpoint 33) — eight ring dumps
     # from two sessions on the checkpoint-32 build, frame-verified against
     # the session journal. All reference empty_table_0801.
@@ -643,6 +659,7 @@ REFERENCES: dict[str, str] = {
     "pickup_newborn_0801": "empty_table_0729",
     "jaw_strike_0801": "empty_table_0729",
     "parked_vote_strike_0801": "empty_table_0801",
+    "pot_single_arrival_0823": "empty_table_0801",
     "cue_grab_0801": "empty_table_0801",
     "break_underread_0801": "empty_table_0801",
     "lone_roller_0801": "empty_table_0801",
@@ -1395,26 +1412,30 @@ def test_phantom_still_down_is_rejected_at_the_settle() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(CARRY_CLIPS))
-def test_0811_carries_do_not_reset_the_clock(name: str) -> None:
-    """#41: adjusting the cue ball by hand must not count as a shot.
+def test_0811_carries_still_count_the_real_stroke(name: str) -> None:
+    """The labelled carry clips, pinned on what survives #41's removal.
 
-    The done-when, stated as the clock rather than as an event count. Each of
-    these three clips holds one real stroke and one or two hand carries
+    Each clip holds one real stroke and one or two ball-in-hand carries
     (`CARRY_CLIPS` maps the strokes, with the journal timestamps they came
-    from). Before the intrusion channel every settle here counted: the
-    countdown reset to 30 s and the rack count advanced, three times inside
-    3.6 s on `ball_in_hand_triple_0811`.
+    from). Until checkpoint 104 this test asserted the carries did *not*
+    count — the #41 done-when, stated as the clock. That verdict is gone
+    (`hub`'s removal note has the live measurement), so the carries reset the
+    countdown again and asserting otherwise would be asserting a rule the
+    product no longer has.
 
-    Fails on the pre-fix engine — it counts 2, 2 and 3 — and the fix is
-    upstream, not a threshold: `detect_balls` was already computing the arm
-    and then throwing it away, so nothing downstream could see the one thing
-    that separates a carry from a stroke (`vision/detect.py`'s `Intrusion`,
-    `pipeline._hand_delivered`, `hub._settle_is_hand_placement`).
+    What is still true, and is what this now defends: **the real stroke is
+    counted, and counted at its own settle.** Every regression that ever
+    threatened these clips took that away — the pre-#41 engine counted the
+    carries *instead of* landing on the stroke — so the clips keep their
+    grading value without pinning the retired verdict.
 
-    The freeze is asserted alongside the count on purpose. Suppression must
-    leave the countdown *frozen and then resumed at the remaining it froze
-    with* — a fix that stopped the carry counting by making the table
+    The freeze assertion is kept for the same reason it was written: the
+    countdown must stop before the stroke and resume at the remaining it
+    froze with. A change that stopped a carry counting by making the table
     invisible would pass a count assertion and be a worse product.
+
+    These clips are the labelled ground truth any future ball-in-hand attempt
+    starts from. Keeping them graded is why they are still here.
     """
     if not (CLIPS / name).exists():
         pytest.skip(f"clip {name} not recorded")
@@ -1432,18 +1453,13 @@ def test_0811_carries_do_not_reset_the_clock(name: str) -> None:
         indices,
     )
     strokes = CARRY_CLIPS[name]
-    assert len(timeline.counts) == len(strokes), (
-        f"{name}: the clock counted {len(timeline.counts)} shots at "
-        f"{[round(c, 3) for c in timeline.counts]}; ground truth is "
-        f"{len(strokes)} at {strokes} and the rest are ball-in-hand carries. "
-        "Extra counts are the countdown resetting and the rack advancing on a "
-        "ball moved by hand — the failure #41 exists to kill."
-    )
-    for stroke, counted in zip(strokes, timeline.counts, strict=True):
-        assert abs(counted - stroke) <= FREEZE_LATE_S, (
-            f"{name}: the surviving count landed at {counted:.3f}s, not on the "
-            f"real stroke's settle at {stroke:.3f}s — the right number of "
-            "shots for the wrong reason"
+    for stroke in strokes:
+        assert any(abs(c - stroke) <= FREEZE_LATE_S for c in timeline.counts), (
+            f"{name}: no count landed on the real stroke's settle at "
+            f"{stroke:.3f}s — counts are {[round(c, 3) for c in timeline.counts]}. "
+            "The carries counting too is expected since #41's removal; the "
+            "stroke itself going uncounted is a miss, and the thing this "
+            "clip is here to catch."
         )
     for stroke in strokes:
         assert any(f <= stroke for f in timeline.freezes), (

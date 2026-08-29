@@ -97,6 +97,8 @@ Key architectural choices, each the researched consensus for this setting:
 - **Undistort points, not pixels.** Detection runs on distorted frames; only detected coordinates go through `undistortPoints` + homography (~200× cheaper than full-frame remap, and the detector sees unresampled pixels). Full remap runs only on the display path. Straight-line logic (if we ever detect the cue stick again) must account for curvature in distorted space — undistort line endpoints too.
 - **The rejects are evidence too — export them (2026-08-11, #41).** The geometry gates above are already a *classifier*: an arm fails the area ceiling, a cue stick fails the minimum extent, anything reaching in from off-table fails the mask-border rule. Throwing those verdicts away left the rest of the system unable to see a hand at all — which is why four separate passes (checkpoint 50, checkpoint 66, #38) found the `merged` flag reading ~0 on hand events. A hand that *engulfs* a ball produces one over-size blob that is discarded outright, so there is no detection left to mark; the arm was never absent from the image, only from the exported evidence. `detect_frame` therefore returns a second list, `Intrusion`, describing the hand-scale rejects. Strictly additive — which blobs become balls is untouched, and §2.3 lesson 2 stands: balls are never shape-filtered, because fast balls streak. The one shape number it carries is the radius of the largest inscribed disc, which is where a hand and a cue actually differ: a hand carrying a ball measures 23–62 px against 8–20 px for a bridge hand with the shaft running through its fingers. What consumes it is settle-time *policy*, in the hub — see §4.2's ball-in-hand note.
 
+  **Nothing consumes it today (2026-08-29, checkpoint 104).** The one consumer, #41's `_hand_delivered`, was deleted with the verdict it fed. The channel stays because it is honest evidence cheaply produced, and because the export itself was never what failed — but note what was measured before reaching for it again: suppressing a ball-shaped blob because it sits *inside* an intrusion box fires on **3.09%** of detections in `occluded_address_0731`, a legitimate address, against **0.62%** on `flag_phantom`, where a white tank top really did mint a track at 1220 mm/s. Used that way it would trade a phantom for blindness at the address, which is the #1 upstream cause of misses. An intrusion says a person is reaching in; it does not say which blob is not a ball.
+
 ### 4.2 Event logic (the actual product)
 
 - **`shot_taken` — a conjunction, not a single signal** (patent US10226685 + US8992315 + launch-monitor pattern):
@@ -285,6 +287,35 @@ cueclock/
   pixels and both still reset, exactly as the 2026-08-02 decision says. Both
   arrive without a hand covering the spot, so neither is refused here. The
   keyless call stands and no ball-in-hand key is added.
+
+- **2026-08-29 — REVERSED (checkpoint 104). Moving the cue ball by hand resets
+  the clock again; the 2026-08-02 "eat the rare wrong reset" decision above
+  stands unnarrowed.** The premise the entry above rests on — *"a real stroke
+  always leaves at least one ball resting where no hand is"* — is false, and
+  live play falsified it. When a shot **pots** the object ball, that ball
+  vanishes and never arrives, so the cue is the *only* arrival; if the player
+  is still leaning over where it stopped, every arrival is hand-covered. The
+  conjunction that was supposed to keep the direction fail-safe has nothing
+  left to conjoin. That is not a corner case, it is the shape of a pot:
+  **9 of the 10 fires this predicate ever produced read `arrivals == 1`**, and
+  `flag_missed_2` (2026-08-23) is one of them with ground truth — a real shot,
+  no hand contact at all, the countdown run into EXPIRED and restarted by hand.
+
+  Every discriminator available was measured before reversing, and the two
+  populations are identical in all of them: arrivals (1/1 both), hand-coverage
+  (by construction), and episode mover travel — the labelled 2026-08-11
+  carries read **30, 140, 159 and 238 mm** against that real pot's **252 mm**.
+  Two independent removals (#38, and now this) have reached the same wall from
+  opposite directions. **The next attempt must bring a new measurement, not a
+  third arrangement of this one** — the acoustic strike-click of §4.4 is the
+  standing candidate, and it is the reason this stays open rather than closed.
+
+  Steven's 2026-08-11 requirement is not withdrawn, it is unmet: ball-in-hand
+  still *should* not reset the clock. Refusing a real shot is simply the worse
+  error — the countdown then runs through the stroke, the failure #33 exists to
+  kill — so with no separating evidence the system fails toward counting the
+  shot. The `ball_in_hand_*` corpus clips stay graded (on the stroke they must
+  still count) as the labelled ground truth for whoever tries next.
 
 ## 9. Test-corpus recording checklist
 

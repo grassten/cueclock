@@ -423,10 +423,15 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
                     f"(moved {s.moved} / appeared {s.appeared} / vanished {s.vanished}) "
                     f"{s.moved_mm:.0f} mm]"
                 )
-                # #41: how many balls came to rest somewhere new, and how many
-                # of those a hand put there. `hand N/N` is the ball-in-hand
-                # verdict the hub suppresses on.
-                extra += f"  [arrivals {s.arrivals}, hand {s.hand_arrivals}]"
+                # #37's consistency clause: the episode's per-mover travel is
+                # what vetoes an `involved 0` refusal, so triage needs to see
+                # it beside the diff rather than replaying to find it.
+                movers = pipeline.last_settle_movers
+                if movers:
+                    extra += (
+                        f"  [movers {len(movers)}, "
+                        f"max travel {max(m.travel_mm for m in movers):.0f} mm]"
+                    )
                 if pipeline.last_settle_backstop:
                     extra += "  [BACKSTOP — the engine slept through this episode]"
             print(f"{t:7.3f}s  {type(event).__name__}{extra}")

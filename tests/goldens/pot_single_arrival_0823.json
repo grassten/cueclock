@@ -1,0 +1,17 @@
+{
+  "scenario": "pot_single_arrival_0823",
+  "reference": "empty_table_0801",
+  "events": [
+    {
+      "type": "ShotTaken",
+      "t": 15.4189,
+      "ball_id": 1,
+      "speed_mms": 815.4845,
+      "newborn": false
+    },
+    {
+      "type": "BallsSettled",
+      "t": 18.8432
+    }
+  ]
+}

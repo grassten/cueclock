@@ -249,6 +249,119 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-08-29 (checkpoint 104 — one refusal deleted, one attempted fix
+  withdrawn):** three flagged clips triaged with ground truth from Steven.
+  `hand_placement` (#41) is **deleted** for the second time, on live evidence.
+  A repair to `phantom_settle` (#37) was written, measured against the corpus,
+  **falsified, and reverted** — the entry below records the attempt because
+  the negative result is the most useful thing in this checkpoint. Net: −90
+  lines of `src/`, `events.py` untouched, and **no new constant anywhere**.
+
+  **The aggregate came first.** Across all 43 sessions (1991 shots, 3.16% miss,
+  1.96% phantom), the two settle-time refusals have fired **16 times ever** —
+  `phantom_settle` 6, `hand_placement` 10 — so between them they can account
+  for up to a quarter of the standing miss rate.
+
+  **`flag_missed_2` (2026-08-23) — #41 deleted.** Steven took a real shot and
+  **never touched a ball**; it read `arrivals 1 / hand 1` because the object
+  ball was potted (vanished, never arrived) and he was still leaning over the
+  cue where it stopped. That is not an edge case, it is the shape of *a pot* —
+  and **9 of the 10 fires this predicate ever produced read `arrivals == 1`**,
+  the shape in which its safety argument ("**every** arrival, not any") has no
+  conjunction left to make. Every discriminator was measured before deciding,
+  and the populations are identical in all of them: arrivals, hand-coverage,
+  and episode mover travel — the labelled 2026-08-11 carries read **30, 140,
+  159 and 238 mm** against this real pot's **252 mm**. Out with the verdict go
+  `_hand_delivered`, `SettleFrame`, the retained settle window,
+  `ARRIVAL_CLEAR_MM`, `ARRIVAL_HAND_WINDOW_S`, `SETTLE_WINDOW_MAX_S`,
+  `_intrusion_boxes_mm` and the `arrivals`/`hand_arrivals` fields.
+  **Ball-in-hand resets the clock again** — Steven's call this session with the
+  trade-off measured in front of him. Two removals (#38, this) now agree the
+  verdict needs evidence the rig does not produce; the next attempt must bring
+  a new *measurement*, not a third arrangement of this one.
+  `test_0811_carries_do_not_reset_the_clock` becomes
+  `test_0811_carries_still_count_the_real_stroke`, so the clips stay graded on
+  what remains true and stay available as labelled ground truth.
+
+  **`flag_missed` (2026-08-20) — diagnosed, and left unfixed on purpose.**
+  Steven potted a ball with a cue the tracker had never held before the strike,
+  so the cue was not in the quiet baseline; the potted ball's track died, and
+  the cue rolled to rest **23.1 mm** from where that ball had stood. With
+  `moving_enter_mm` at 30 mm the identity-blind greedy match paired the *cue*
+  with the *potted ball's* position and called it unmoved: 7 baseline balls,
+  7 settled balls, `involved 0`, real shot revoked, countdown run from 14.25 s
+  into GRACE. The hub journaled `mover_max_mm: 489` in that same record.
+
+  **The attempt, and why it failed — read this before trying it again.** The
+  fix looked clean: a mover that travelled past the diff's own movement floor
+  refutes "the table is unchanged", reusing `moving_enter_mm` rather than
+  inventing a constant. It fixed the clip, passed 657 corpus tests, and was
+  **wrong**. `parked_vote_strike_0801` — the graded phantom this predicate was
+  built for — carries a mover that travelled **122 mm**. Measured together the
+  populations interleave: real shot 489 mm (`flag_missed`), phantom 364 mm
+  (`flag_phantom`), phantom 122 mm (`parked_vote_strike_0801`), phantom 26 mm
+  (the live 2026-08-11 one). Any line separating 489 from 122 is fitted to one
+  clip. Reverted whole, and the reasoning left in the docstring so the next
+  reader does not re-derive it. Two things this cost nothing to learn: the
+  earlier read that "5 of 6 `phantom_settle` fires were wrong because their
+  mover travelled" **does not survive** — mover travel is not evidence of a
+  shot, so those five are unjudged, and only `flag_missed` is confirmed wrong.
+
+  **`flag_phantom` (2026-08-25) — mechanism recorded, no fix.** Steven leaned
+  over the table in a white tank top. At 17.698 s a track is born mid-table at
+  **1220 mm/s** — the garment — while his torso occludes ball #4, whose track
+  dies at 17.544 s. The settle then reads `involved 1` purely from that
+  occlusion-vanish, so #37 (which needs `involved == 0`) cannot reach it, and
+  #33's compensation counts a shot and resets 25.3 → 30 s. Both candidate
+  fixes were measured and both fail: *"a ball-shaped blob inside a hand-scale
+  intrusion is not a ball"* fires on **3.09%** of detections in
+  `occluded_address_0731`, a legitimate address, against **0.62%** here — it
+  would trade a phantom for blindness at the address, the #1 upstream cause of
+  misses; and *"a vanish away from a pocket is not a pot"* dies because a track
+  ends where the tracker loses it, not at the pocket — `flag_missed`'s
+  **genuinely potted** ball vanished 490 mm from the nearest pocket against
+  this occlusion's 469 mm.
+
+  **The cause under two of these three, stated plainly because it will be
+  back:** `_match_rearrange` is identity-blind by construction — `present`
+  drops `ball_id`, so a ball coming to rest within `moving_enter_mm` of where a
+  *different* ball stood is indistinguishable from nothing having happened. An
+  identity-aware match is the real repair. It reaches break adjudication and
+  the settle backstop, and every cheap approximation of it tried here inflates
+  `involved` exactly when a person is leaning over the table — which is when
+  phantoms happen. It wants its own measured pass, not a clause bolted to a
+  predicate.
+
+  **On frame rate** (Steven asked): the camera already free-runs at 156.25 fps
+  and `run --stride 2` samples it at 78 Hz. None of these three failures is
+  temporal — a matcher coincidence, a body over an arrival, and a garment
+  segmented as a ball all reproduce identically at any rate. Raising it is a
+  real lever for the *identity* problem (a 3000 mm/s ball steps 38 mm per frame
+  at 78 Hz against 19 mm at 156 Hz, on a 57 mm ball), but not for detection:
+  the 6 ms exposure streaks that ball 18 mm regardless. It is also not free —
+  the live loop already sags to 62–67 Hz under load in these very sessions, so
+  stride 1 needs the CPU budget solved first. Worth its own pass, alongside the
+  identity-aware match it would serve.
+
+  **Clip dispositions.** Staging drained, all three on the T7. One promoted:
+  `pot_single_arrival_0823` (1 shot / 0 scratches / 1 settle, clock-graded) —
+  the negative control the corpus never had. `CARRY_CLIPS` grades hand carries;
+  nothing graded *a pot whose only arrival is hand-covered*, and that is the
+  population both #38 and #41 selected wrongly, which is precisely why the
+  verdict shipped twice. Two kept as evidence, deliberately ungraded (no
+  `EXPECTED` entry, so they cost no battery time): `cue_substitutes_potted_0820`
+  and `tank_top_phantom_0825`. Neither is promotable — pinning either would be
+  pinning a known failure, which is a holding pen, not a test — and both are
+  the labelled inputs the identity-aware-match pass will need.
+
+  **Prediction, to be checked next session (§10 discipline).** Baseline
+  `report --all` 3.16% miss / 1.96% phantom over 1991 shots; `--since 7d`
+  2.45% over 571. Only #41 was removed, so the miss rate should fall by roughly
+  **0.5 points** — toward ~2.6–2.7% — and it takes ~600 shots (≈5 sessions) to
+  see that against the noise at this volume. The phantom rate should **not**
+  move; if it does, something else did. Ball-in-hand carries will now reset the
+  clock — expected, not a regression. Report the number back either way.
+
 - **2026-08-21 (checkpoint 103 — the minigames come out):** #46 is reverted in
   full. Checkpoints 97–102 built a platform, a lag trainer, a drill core, a shot
   catalog and a phone-side editor; Steven played it and did not want any of it.
