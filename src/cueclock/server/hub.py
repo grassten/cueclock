@@ -204,40 +204,44 @@ QUIET_BASELINE_MIN_BALLS = 3
 # is right. `ShotClock.balls_settled(suppress=...)` is deliberately KEPT: the
 # clock-side mechanism was never what failed, only the hub's evidence test.
 #
-# RE-SUPPLIED 2026-08-11 (#41), on evidence rather than shape — see
-# `_settle_is_hand_placement` below. The lesson from the removal is encoded
-# in what the new test does NOT do: it never reads the *shape* of the
-# rearrangement, so there is no population it can select wrongly. It reads
-# whether each ball that came to rest somewhere new was put there by a hand.
-
-
-def _settle_is_hand_placement(rearrange: "RearrangeSummary | None") -> bool:
-    """#41: did a hand put every ball that moved where it now stands?
-
-    Policy (§13.1): the vision layer measures, per settle, how many balls
-    *arrived* somewhere new and how many of those were under a hand-scale
-    intrusion at the moment they arrived (`pipeline._hand_delivered`). This
-    is the one line that says what that means.
-
-    **Every** arrival, not any — that conjunction is what keeps the fail-safe
-    direction from flipping. A real stroke always leaves at least one ball
-    resting on open cloth: the struck ball itself, or the object ball it
-    sent away. Measured across the labelled 2026-08-11 carries plus every
-    corpus clip that puts a hand near a ball, the two populations do not
-    touch — the four carries read 1/1 arrivals hand-delivered, and all
-    twelve strike/pickup/retrieval settles have at least one arrival with no
-    covering intrusion whatsoever (`scratch_replace`'s shot has the player
-    leaning fully across the table and still reads 1 of 3, because the
-    potted-and-replaced ball is not the only thing that moved).
-
-    A settle with no arrivals at all — a pickup, a post-scratch retrieval,
-    the #37 phantom shape — is never refused here. That class was measured
-    unresolvable in #38 (a retrieval and a no-contact kick are
-    byte-identical), and absence of evidence must never refuse a shot.
-    """
-    if rearrange is None:
-        return False
-    return rearrange.arrivals > 0 and rearrange.hand_arrivals == rearrange.arrivals
+# RE-SUPPLIED 2026-08-11 (#41), on evidence rather than shape: a settle was
+# refused when every ball that arrived somewhere new was under a hand-scale
+# intrusion as it arrived (`pipeline._hand_delivered`). The safety argument
+# was the conjunction — "**every** arrival, not any" — resting on the claim
+# that a real stroke always leaves at least one ball on open cloth: the
+# struck ball itself, or the object ball it sent away.
+#
+# REMOVED AGAIN 2026-08-29 (checkpoint 104), because live play falsified that
+# claim and the conjunction turned out to be vacuous in the shape it almost
+# always fires in. Measured over all 43 sessions on record:
+#
+#   * It fired **10 times ever**, and **9 of the 10 read `arrivals == 1`**.
+#     With one arrival there is no conjunction left — "every arrival" and
+#     "any arrival" are the same test, and the redundancy the docstring
+#     leaned on is simply absent. The shape is not rare: it is what a
+#     *pot* looks like. The object ball is potted, so it vanishes and never
+#     arrives; the cue rolls a short distance and is the only arrival.
+#   * `flag_missed_2` (2026-08-23 20:41:03) is that case with ground truth
+#     attached: Steven took a real shot at ~15.1 s and **never touched a
+#     ball by hand**. It read `arrivals 1 / hand 1` — the cue's arrival was
+#     covered because he was still leaning over the table where it stopped.
+#     The clock ran on from 16.14 s into GRACE, EXPIRED, and he restarted by
+#     hand and flagged it.
+#   * A genuine ball-in-hand carry reads `arrivals 1 / hand 1` too — the
+#     four labelled 2026-08-11 carries all did. So the refused population
+#     and the protected population are **byte-identical in the evidence this
+#     predicate consults**. That is the same wall #38 hit, reached from the
+#     other side.
+#
+# Ball-in-hand still must not reset the clock (Steven, 2026-08-11) and that
+# problem is open again — but a test that cannot tell a carry from a pot is
+# not a partial answer to it, and refusing a real shot is the worse error by
+# the policy `_settle_is_phantom` states. Two removals now agree that this
+# verdict needs evidence the rig does not yet produce; the next attempt
+# should bring a new *measurement*, not a third arrangement of this one.
+#
+# `ShotClock.balls_settled(suppress=...)` is KEPT once more: the clock-side
+# mechanism was never what failed, only the hub's evidence test.
 
 
 # `detect_heartbeat` journal cadence: often enough to bracket a starvation
@@ -1237,11 +1241,6 @@ class Hub:
             # `involved=0` is unreadable after the fact — the 2026-08-11
             # `flag_phantom` record had to be settled by replaying the dump.
             detail["baseline"] = rearrange.baseline_balls
-            # #41: how many balls came to rest somewhere new, and how many of
-            # those a hand put there. Journaled on every settle so the next
-            # flagged carry is readable without a replay, same reasoning.
-            detail["arrivals"] = rearrange.arrivals
-            detail["hand_arrivals"] = rearrange.hand_arrivals
         if movers:
             detail["movers_alive"] = sum(m.alive for m in movers)
             detail["mover_max_mm"] = round(max(m.travel_mm for m in movers))
@@ -1261,9 +1260,6 @@ class Hub:
         #
         # #37 — was this episode a phantom? The table is provably unchanged.
         phantom = self._settle_is_phantom(rearrange, backstop)
-        # #41 — was this a hand putting balls down? An IDLE settle is the
-        # clock's no-op (racking) and E8's business, so it is never refused.
-        hand = self.clock.state is not State.IDLE and _settle_is_hand_placement(rearrange)
         if self._adjudicate_break(now, rearrange):
             # E8: an armed rack's settle with break-scale rearrangement IS
             # the break (WNT §5 starts the 60 s window at the rest, so
@@ -1273,7 +1269,7 @@ class Hub:
             if self._rack_pending or self._rack_break_mono is None:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
-        moved_clock = self.clock.balls_settled(now, suppress=phantom or hand)
+        moved_clock = self.clock.balls_settled(now, suppress=phantom)
         if phantom:
             # The provisional freeze is undone: no shot counted, the countdown
             # resumes with exactly the remaining it froze at, and the pace
@@ -1292,27 +1288,6 @@ class Hub:
                 baseline=rearrange.baseline_balls if rearrange is not None else None,
                 movers_alive=detail.get("movers_alive"),
                 mover_max_mm=detail.get("mover_max_mm"),
-            )
-        elif hand:
-            # #41: same resolution, different evidence. With a provisional
-            # open this is the revert (the countdown resumes at the exact
-            # remaining it froze with); without one it refused the
-            # compensation on a countdown that never stopped — two journal
-            # kinds so `report` can tell them apart without parsing evidence.
-            # No early return: the settle still journals, and #39's
-            # unconditional scratch hold below still runs. A verdict about
-            # what this settle *was* must never swallow the cue ball's hold.
-            reverted = self._provisional_open_mono is not None
-            self._revert_pace()
-            self._provisional_open_mono = None
-            detail["rejected"] = "hand_placement"
-            self._log(
-                "shot_provisional_reverted" if reverted else "compensation_suppressed",
-                t=t,
-                frame_t=t,
-                reason="hand_placement",
-                arrivals=detail.get("arrivals"),
-                hand_arrivals=detail.get("hand_arrivals"),
             )
         if moved_clock:
             # The settle counted this episode's one shot (fired or
@@ -1372,16 +1347,49 @@ class Hub:
           all — and by construction cannot read zero anyway (it needs
           `SETTLE_BACKSTOP_MIN_INVOLVED`). Stated rather than implied, because
           the implication is the kind that quietly stops being true.
+        **The known false refusal, unfixed on purpose — `flag_missed`
+        (2026-08-20 19:17:53).** This predicate's `involved == 0` comes from a
+        greedy *position* match that never consults ball identity, and that is
+        where it can be fooled. Steven potted a ball with a cue the tracker had
+        never held before the strike, so the cue was not in the quiet baseline;
+        the potted ball's track died, and the cue rolled to rest **23.1 mm**
+        from where that ball had stood. Seven baseline balls, seven settled
+        balls, every pair inside the 30 mm `moving_enter_mm` calls "moved" —
+        `involved 0`, a real shot revoked, the countdown run from 14.25 s into
+        GRACE. The hub journaled `mover_max_mm: 489` in that same record.
 
-        Two evidence axes the issue proposed are deliberately NOT here, both
-        because measuring them said no (2026-08-11 corpus probe):
+        **Mover travel was tried as the veto for exactly this, on 2026-08-29,
+        and the corpus killed it — do not try it again without new evidence.**
+        The idea was that a mover travelling past the diff's own movement floor
+        refutes "the table is unchanged", using no new constant. It fixes
+        `flag_missed` and it is wrong: `parked_vote_strike_0801`'s phantom —
+        graded, reproducible, and the very clip this predicate was built for —
+        carries a mover that travelled **122 mm**. Measured together the
+        populations interleave completely:
 
-        * **Mover travel.** `SettleMover` carries per-mover episode travel and
-          survival, and it does not separate: real shots read 0 mm of
-          surviving-mover travel on 8 corpus clips (every mover died in the
-          scatter — `hanger_pot_0801`, `no_cue_strike_0801`, `soft_shot`…),
-          while the live phantom's surviving mover read 26 mm. Any floor that
-          rejects the phantom refuses real shots.
+            real shot   489 mm (flag_missed)
+            phantom     364 mm (flag_phantom, a white tank top)
+            phantom     122 mm (parked_vote_strike_0801)
+            phantom      26 mm (the live 2026-08-11 phantom)
+
+        Any floor separating 489 from 122 is fitted to one clip, and the
+        2026-08-11 probe had already said the same thing from the other
+        direction: real shots read 0 mm of *surviving*-mover travel on 8 corpus
+        clips because every mover dies in the scatter. Mover travel does not
+        carry this verdict in either polarity.
+
+        So `flag_missed` stands as an understood, currently unseparable false
+        refusal. The real defect under it is that the rearrangement diff is
+        identity-blind — a ball coming to rest near where a *different* ball
+        stood is invisible to it — and the honest repair is an identity-aware
+        match, which reaches break adjudication and the settle backstop and
+        wants its own measured pass. Making this predicate *more* sensitive is
+        not that repair: every candidate tried so far inflates `involved`
+        exactly when a person is leaning over the table, which is when phantoms
+        happen.
+
+        One further evidence axis the issue proposed is also NOT here:
+
         * **Roll-out length.** `report.PHANTOM_SETTLE_S` flags a sub-1 s
           fire→settle as a phantom *candidate*, and promoting it to a verdict
           would be a false refusal: `pot_scratch_nohold_0811` is a real pot

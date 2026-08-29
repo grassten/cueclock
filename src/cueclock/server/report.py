@@ -250,6 +250,10 @@ class Shot:
 # is exactly the one worth seeing.
 REJECTION_BLURBS = {
     "phantom": "phantom (table unchanged)",
+    # No longer emitted — #41 was removed in checkpoint 104 (see
+    # `hub._settle_is_hand_placement`'s removal note). Kept because journals
+    # from 2026-08-13 to 2026-08-25 carry 10 of these and the report reads
+    # history as readily as today.
     "hand_placement": "ball-in-hand (every arrival hand-delivered)",
 }
 
@@ -302,11 +306,12 @@ class SessionReport:
     # refusing real shots they come back as misses and frozen clocks, not as
     # a quieter phantom count.
     #
-    # Two reasons today, and they must be read separately because they make
-    # different predictions (handoff §6): `phantom` (#37) is the table
-    # provably unchanged against a real quiet baseline; `hand_placement`
-    # (#41) is every ball that arrived somewhere new having been put there
-    # by a hand.
+    # One reason emitted today: `phantom` (#37), the table provably unchanged
+    # against a real quiet baseline *and* no tracked mover having travelled.
+    # `hand_placement` (#41) was removed in checkpoint 104 and survives only
+    # in journals recorded before it; both are still tallied separately here,
+    # because the whole point of the breakdown is to catch a predicate that
+    # has started refusing real shots.
     settles_rejected: int = 0
     settles_rejected_by_reason: dict[str, int] = field(default_factory=dict)
     # Freezes an operator key had to rescue, because no settle ever released
