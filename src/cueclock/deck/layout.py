@@ -39,6 +39,7 @@ from enum import Enum
 
 from cueclock.clock import MODES, RULESETS
 from cueclock.deck.faces import (
+    BG,
     BG_ARMED,
     STRIPE_CLOCK,
     STRIPE_EVIDENCE,
@@ -96,6 +97,10 @@ class DeckState:
     session_face: str = "START"
     session_sub: str | None = None
     session_dot: Rgb | None = None
+    # Red for a start that failed. The face text already names it, but a key
+    # that only changes its *words* is a key you have to be looking at — the
+    # tile colour is what carries across the room.
+    session_bg: Rgb = BG
     # The bracket (#43). `bracket_loaded` gates both new keys — with no bracket
     # their cells are dark and the deck is exactly the deck it was. `armed` is
     # the server's own derivation of "somebody has reached their race", so the
@@ -359,6 +364,7 @@ class Key:
                 sub=state.session_sub,
                 dot=state.session_dot,
                 stripe=stripe,
+                bg=state.session_bg,
             )
         if isinstance(action, Cycle):
             active = state.mode if action.kind == "mode" else state.ruleset

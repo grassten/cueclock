@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import socket
-from collections.abc import Coroutine
-from dataclasses import dataclass
+import subprocess  # nosec B404: fixed argv, no shell, no user input
+from collections.abc import Coroutine, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -140,6 +142,59 @@ def port_open(host: str, port: int = PORT, timeout: float = 1.0) -> bool:
         return False
 
 
+def _normalise_mac(mac: str) -> str:
+    """Lowercase, zero-padded — `arp` prints `4:6b:...`, configs write `04:6B`."""
+    try:
+        return ":".join(f"{int(part, 16):02x}" for part in mac.split(":"))
+    except ValueError:
+        return mac.lower()
+
+
+def arp_host(macs: Sequence[str]) -> str | None:
+    """Which address does the ARP cache say owns one of these MACs?"""
+    try:
+        out = subprocess.run(  # nosec B603: fixed argv, shell=False
+            ["/usr/sbin/arp", "-an"], capture_output=True, text=True, timeout=2.0, check=False
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"tv: could not read the ARP cache ({exc})", flush=True)
+        return None
+    wanted = {_normalise_mac(mac) for mac in macs}
+    for line in out.splitlines():
+        # "? (192.168.4.29) at 64:6b:e7:fe:46:98 on en1 ifscope [ethernet]"
+        found = re.search(r"\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-fA-F:]+)", line)
+        if found and _normalise_mac(found.group(2)) in wanted:
+            return found.group(1)
+    return None
+
+
+def resolve(config: TvConfig) -> tuple[TvConfig, bool]:
+    """(the TV at the address it is on *now*, whether it is answering).
+
+    `tv.json` pins an IP, and DHCP does not respect that. A power cycle moved
+    the TV from .27 to .29 (2026-09-01) and every call for the rest of the
+    session failed against the stale address: `ensure_on` fired nineteen magic
+    packets at a TV that was already awake and never confirmed, then the stop's
+    `power_off` timed out and left the wall lit. Nothing said why — a TV that
+    has moved and a TV that is in standby look identical from a closed port.
+
+    The MAC does not move, so that is what gets asked. Same three candidates
+    `wol_targets` already covers, because the TV answers the remote protocol on
+    one NIC and shows up in ARP on the other.
+
+    ARP only knows hosts seen recently, so this is a repair for a TV that is
+    awake at the wrong address — not discovery for one in standby. That case is
+    already handled: the magic packet is a broadcast and needs no address.
+    """
+    if port_open(config.host):
+        return config, True
+    found = arp_host(wol_targets(config.mac))
+    if found is None or found == config.host or not port_open(found):
+        return config, False
+    print(f"tv: {config.host} stopped answering — the TV is at {found} now (ARP)", flush=True)
+    return replace(config, host=found), True
+
+
 def _run[T](coro: Coroutine[Any, Any, T], what: str) -> T | None:
     """Run one short conversation with the TV; None on any failure."""
     try:
@@ -203,7 +258,11 @@ def ensure_on(config: TvConfig | None = None) -> bool:
     cfg = config or load_config()
     if cfg is None:
         return False
-    if not port_open(cfg.host):
+    # Resolve first: an unanswered port means "asleep" only once we know we
+    # asked the right address. `resolve` reports reachability so the port is
+    # probed once, not twice — this runs on the deck's 2 s poll.
+    cfg, reachable = resolve(cfg)
+    if not reachable:
         send_wol(cfg)
         return False
     state = is_on(cfg)
@@ -230,6 +289,7 @@ def power_off(config: TvConfig | None = None) -> bool:
     cfg = config or load_config()
     if cfg is None:
         return False
+    cfg, _ = resolve(cfg)  # the stop is the call that most needs to land
     if _run(_async_press_power(cfg, hold_s=HOLD_S), "power off") is None:
         return False
     print("tv: POWER long-press sent", flush=True)

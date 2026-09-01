@@ -82,7 +82,8 @@ UserSetDefault = "UserSet1"` so settings survive power cycles.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| No camera found | Cable not fully seated; try the other USB-A port; never a hub |
+| No camera found | Cable not fully seated; try the other USB-A port; never a hub. `ioreg -p IOUSB -w0` lists the bus — if no Basler is on it, no software can help |
+| Session key flashes `STARTING…` then returns to `START` | Pre-2026-09-01 behaviour, now impossible: the key holds `NO CAMERA` / `START FAILED` instead. On an old build, read `~/Library/Logs/cueclock-run.log` |
 | Frame rate far below 156 | Exposure > frame period; `AcquisitionFrameRateEnable` unset; USB 2.0 negotiation — check `DeviceLinkSpeed`, reseat cable |
 | Sporadic dropped frames | Raise `MaxNumBuffer`; close USB-heavy apps; keep the Mac awake |
 | Image black | Lens cap; iris closed; µs-vs-ms exposure mix-up |
@@ -348,6 +349,17 @@ flash stops reading.
 - **OBS control via obs-websocket** (built into OBS 28+); music via
   `osascript`. **TV power over the Android TV Remote protocol** (`deck/tv.py`,
   §E1) — the CanvasTV runs Google TV, not VIDAA as this line used to claim.
+- **A start is preflighted, and a failed one leaves nothing behind**
+  (2026-09-01). Before spawning anything the key asks pylon whether a camera is
+  attached (0.6 s in a subprocess, so the always-on daemon never holds the
+  pylon runtime), because "no device" is how a power cycle fails and the old
+  key answered it by flashing `STARTING…` and dropping silently back to
+  `START` — the reason only ever reaching `~/Library/Logs/cueclock-run.log`,
+  behind the TV. And if a start dies *after* OBS was launched, OBS is quit with
+  it: an orphaned OBS outlived the TV's HDMI renegotiation that day and every
+  projector it opened afterwards came up with no renderer behind it
+  (`obs_display_init: Failed to create swap chain`) — a grey wall that only a
+  manual OBS restart cleared.
 - **Session toggle owns `run` AND OBS** (2026-07-31): the replay buffer keeps
   OBS continuously encoding, and active outputs hold macOS power assertions
   that block sleep — so OBS dies with the session and relaunches into
@@ -378,7 +390,7 @@ three.
 
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
-| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. Green dot = server answering | **always**, incl. server down |
+| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Green dot = server answering | **always**, incl. server down |
 | 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → match | current over next: `MATCH`/`RUN OUT` | always |
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; timed rulesets |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
@@ -1152,6 +1164,19 @@ Pairing is one-time: `uv run python scripts/pair_tv.py`. The TV shows a
 cert + key land in gitignored `config/tv_cert.pem` / `tv_key.pem` beside
 `config/tv.json`, which holds the host and MAC. Losing them just means pairing
 again.
+
+**The host in `tv.json` is a hint, not an address.** DHCP moved the TV from
+`192.168.4.27` to `.29` across a power cycle (2026-09-01), and from a closed
+port that is indistinguishable from standby — so `ensure_on` fired nineteen
+magic packets at a TV that was already awake and never confirmed, and the held
+stop's `power_off` timed out with the wall left lit. Neither said why. The MAC
+does not move, so `tv.resolve()` now asks the ARP cache who owns it (the same
+three candidates `wol_targets` covers — the TV answers the remote protocol on
+one NIC and appears in ARP on the other) and repairs the address in place. It
+is a repair, not discovery: a TV in standby is off the network entirely and has
+no ARP entry, which is fine, because the magic packet is a broadcast and needs
+no address. A DHCP reservation on the router would remove the drift at source
+and is still worth doing.
 
 Four things were measured on the real set, and none are guessable:
 

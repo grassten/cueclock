@@ -249,6 +249,49 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-09-01 (checkpoint 105 — the rig comes back from a power cycle):** a
+  power cycle broke four things at once and every one of them failed *quietly*.
+  Nothing here is a detection change; the corpus was not run (unit tests are
+  the gate for deck/TV work).
+  - **The camera was not on the USB bus.** `run` died at `open_camera()` in
+    under a second, and the Session key flashed `STARTING…` and dropped back to
+    `START` — the reason only ever reaching `~/Library/Logs/cueclock-run.log`,
+    behind the TV. Pressed again, same. The cable was reseated; no software
+    fixes an absent device. What *is* fixed is the silence: the key now
+    **preflights** the bus with pylon (0.6 s, in a subprocess so the always-on
+    daemon never holds the pylon runtime) and refuses to spawn a `run` that
+    cannot work, and any unrequested exit lands on a **named, sticky, red**
+    face — `NO CAMERA` / `CHECK USB` or `START FAILED` / `SEE LOG` — that
+    survives until a press retries it. The failure yields to a server that is
+    actually answering, so the key can never lie about a terminal `run`.
+  - **A failed start orphaned OBS.** The first attempt got far enough to launch
+    OBS, then `run` died; OBS was left running and sat through the TV's HDMI
+    renegotiation. Half an hour later the real session inherited it, and every
+    projector it opened had no renderer behind it — thirteen
+    `obs_display_init: Failed to create swap chain` in the OBS log, a grey wall
+    that only a manual OBS restart cleared. A start that dies now takes OBS
+    down with it.
+  - **The TV had moved.** DHCP put it at `192.168.4.29`, `config/tv.json` still
+    said `.27`, and from a closed port that is indistinguishable from standby:
+    `ensure_on` fired nineteen magic packets at an awake TV and never
+    confirmed (`setup incomplete — TV`), then the held stop's `power_off` timed
+    out and left the wall lit. The MAC does not move, so `tv.resolve()` asks
+    the ARP cache who owns it — the same three candidates `wol_targets`
+    already covers, because the TV answers the remote protocol on one NIC and
+    appears in ARP on the other — and repairs the address in place. A repair,
+    not discovery: a TV in standby has no ARP entry, which is fine, because the
+    magic packet is a broadcast. A DHCP reservation would fix it at source and
+    is still worth doing.
+  - **iCloud had evicted `config/` and `models/`.** All 22 files were
+    *dataless*, and a launchd daemon cannot materialise those — it gets
+    `EDEADLK`, "Resource deadlock avoided", which is what the deck log's
+    `no usable tv.json` / `no usable obs_websocket.json` actually were. That
+    alone took out TV control, the Syphon rebind, the TV projector and the Vosk
+    model. Everything was downloaded back (405 MB), then both directories moved
+    to `config.nosync/` / `models.nosync/` with symlinks — the same escape
+    hatch `.venv` has used since checkpoint 13 — and both names added to
+    `.gitignore`.
+
 - **2026-08-29 (checkpoint 104 — one refusal deleted, one attempted fix
   withdrawn):** three flagged clips triaged with ground truth from Steven.
   `hand_placement` (#41) is **deleted** for the second time, on live evidence.

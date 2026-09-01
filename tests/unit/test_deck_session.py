@@ -15,6 +15,7 @@ from tempfile import mkdtemp
 
 from cueclock.deck.session import (
     CAFFEINATE,
+    CAMERA_PROBE,
     OBS_ALIVE,
     OBS_DISMISS,
     OBS_OPEN,
@@ -66,6 +67,7 @@ class Harness:
         syphon_binds: bool = True,
         projector_opens: bool = True,
         tv_wakes: bool = True,
+        camera: bool = True,
         pidfile: Path | None = None,
     ) -> None:
         self.spawned: list[tuple[str, ...]] = []
@@ -77,6 +79,8 @@ class Harness:
         self.syphon_binds = syphon_binds
         self.projector_opens = projector_opens
         self.tv_wakes = tv_wakes
+        self.camera = camera
+        self.camera_probes = 0
         self.adoptable: dict[int, FakeProcess] = {}
         self.manager = SessionManager(
             pidfile=pidfile or Path(mkdtemp()) / "session.json",
@@ -126,6 +130,11 @@ class Harness:
         return proc
 
     def _call(self, cmd: Sequence[str]) -> int:
+        if tuple(cmd) == CAMERA_PROBE:
+            # A question, not an action — counted, but kept out of `called`,
+            # which is the transcript of what the session actually did.
+            self.camera_probes += 1
+            return 0 if self.camera else 1
         self.called.append(tuple(cmd))
         if tuple(cmd) == OBS_ALIVE:  # pgrep: 0 = still running
             return 0 if self.obs_survives_quit else 1
@@ -258,7 +267,9 @@ def test_start_that_never_serves_gives_up_and_cleans_up() -> None:
     h = Harness()
     h.manager.start()
     h.clock = START_TIMEOUT_S + 1.0
-    assert h.manager.tick(server_up=False) is SessionState.OFF
+    # The camera is attached, so the timeout is not a cabling problem: FAILED
+    # points at the log rather than sending anyone to check a good cable.
+    assert h.manager.tick(server_up=False) is SessionState.FAILED
     assert h.run_proc.signals == [signal.SIGINT]
     assert h.caffeinate_proc.terminated
     assert not h.manager.owns_session
@@ -377,8 +388,10 @@ def test_a_crashed_run_falls_back_to_off_and_releases_the_assertion() -> None:
 
     h.run_proc.exit_code = 1
     # Server may still look up for a poll or two while the socket closes; the
-    # dead child decides, not the probe.
-    assert h.manager.tick(server_up=True) is SessionState.OFF
+    # dead child decides, not the probe. (`server_up=True` here is that stale
+    # socket, not a live session — the failure is set from the dead child on
+    # the same tick, so it is what the key reports.)
+    assert h.manager.tick(server_up=True) is SessionState.FAILED
     assert h.caffeinate_proc.terminated
     assert not h.manager.owns_session
 
@@ -435,9 +448,18 @@ def test_the_key_reads_as_the_action_not_the_state() -> None:
         "ON",
         "STOPPING…",
         "DEV",
+        "NO\nCAMERA",
+        "START\nFAILED",
     ]
-    # Only the running state needs one — the rest already say what a tap does.
-    assert [s.name for s in SessionState if s.sub is not None] == ["ON"]
+    # The running state names its gesture; the two failures name the next move
+    # instead, because "what do I do about this" is the table-side question.
+    assert [s.name for s in SessionState if s.sub is not None] == [
+        "ON",
+        "NO_CAMERA",
+        "FAILED",
+    ]
+    # Only the failures are painted red (daemon.build_state reads this).
+    assert [s.name for s in SessionState if s.failed] == ["NO_CAMERA", "FAILED"]
 
 
 def test_stop_turns_the_tv_off_last_of_all() -> None:
@@ -467,7 +489,7 @@ def test_a_crashed_run_leaves_the_tv_on() -> None:
     h.called.clear()
 
     h.run_proc.exit_code = 1
-    assert h.manager.tick(server_up=True) is SessionState.OFF
+    assert h.manager.tick(server_up=True) is SessionState.FAILED
     assert TV_OFF not in h.called
 
 
@@ -483,3 +505,109 @@ def test_a_tv_that_never_wakes_gives_up_instead_of_packeting_forever() -> None:
     # on the first ask — but bounded, and the session runs on regardless.
     assert h.called.count(TV_ON) == PREP_ATTEMPTS
     assert h.called.count(BIND) == 1
+
+
+# --- a start that fails says so (2026-09-01) -------------------------------
+#
+# The bug these cover: after a power cycle the camera did not come back on the
+# USB bus, `run` died at `open_camera()` within a second, and the Session key
+# flashed STARTING… and dropped straight back to START. Pressed again, it did
+# the same thing. Nothing on the deck, the wall or the TV said "no camera" —
+# the reason was only in ~/Library/Logs/cueclock-run.log, behind the TV.
+
+
+def test_a_start_with_no_camera_refuses_to_spawn_and_names_the_reason() -> None:
+    h = Harness(camera=False)
+    h.manager.start()
+    # Nothing was spawned: no `run` to die, no caffeinate to leak, and — the
+    # point — no 60 s of STARTING… before a failure that was knowable at 0 s.
+    assert h.spawned == []
+    assert not h.manager.owns_session
+    assert h.camera_probes == 1
+    # And it stays on the key. This is the half that was missing: the old
+    # machine went back to OFF, so the key said START and invited the same
+    # press again.
+    assert h.manager.tick(server_up=False) is SessionState.NO_CAMERA
+    assert h.manager.tick(server_up=False) is SessionState.NO_CAMERA
+
+
+def test_a_run_that_dies_on_a_missing_camera_reads_no_camera() -> None:
+    # The camera goes away between the probe and the grab — the power-cycle
+    # case where pylon enumerates something half-attached.
+    h = Harness()
+    h.manager.start()
+    assert h.spawned == [WAKE_DISPLAY, run_command(), CAFFEINATE]
+
+    h.camera = False
+    h.run_proc.exit_code = 1
+    assert h.manager.tick(server_up=False) is SessionState.NO_CAMERA
+    assert h.caffeinate_proc.terminated
+    assert not h.manager.owns_session
+
+
+def test_pressing_a_failed_key_retries_and_starts_once_the_cable_is_back() -> None:
+    h = Harness(camera=False)
+    h.manager.start()
+    assert h.manager.tick(server_up=False) is SessionState.NO_CAMERA
+
+    # Steven reseats the cable and presses the key again. `start()` is the
+    # retry — it clears the reason and asks the bus again, so the press after
+    # the fix just works with nothing else to reset.
+    h.camera = True
+    h.manager.start()
+    assert h.spawned == [WAKE_DISPLAY, run_command(), CAFFEINATE]
+    assert h.manager.tick(server_up=False) is SessionState.STARTING
+    assert h.manager.tick(server_up=True) is SessionState.ON
+
+
+def test_a_held_failure_yields_to_a_session_that_is_actually_up() -> None:
+    # Sticky, but never against the evidence: if a `run` is answering (started
+    # from a terminal, say), a key still reading NO CAMERA would be a lie.
+    h = Harness(camera=False)
+    h.manager.start()
+    assert h.manager.tick(server_up=False) is SessionState.NO_CAMERA
+    assert h.manager.tick(server_up=True) is SessionState.DEV
+    assert h.manager.tick(server_up=False) is SessionState.OFF
+
+
+def test_a_deliberate_stop_is_never_a_failure() -> None:
+    # Only *unrequested* exits are diagnosed. A held stop ends on OFF, and the
+    # camera is never probed on the way down — the key must go back to START.
+    h = Harness()
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    probes = h.camera_probes
+
+    h.manager.stop()
+    h.run_proc.exit_code = 0
+    assert h.manager.tick(server_up=False) is SessionState.OFF
+    assert h.camera_probes == probes
+
+
+def test_a_failed_start_takes_obs_down_with_it() -> None:
+    # The 2026-09-01 grey wall: this start launched OBS, then `run` died. OBS
+    # used to be left running, and the session that finally came up half an
+    # hour later inherited it — with a GL context older than the TV's current
+    # HDMI mode, so every projector it opened had no renderer behind it.
+    h = Harness()
+    h.manager.start()
+    assert h.manager.tick(server_up=True) is SessionState.ON
+    assert OBS_OPEN in h.called
+    h.called.clear()
+
+    h.run_proc.exit_code = 1
+    assert h.manager.tick(server_up=False) is SessionState.FAILED
+    assert h.called == [("obsws", "StopOutputs"), OBS_QUIT]
+
+
+def test_a_start_that_died_before_obs_has_nothing_to_quit() -> None:
+    # The common case — no camera, so `run` never served and OBS never
+    # launched. Quitting an OBS this daemon did not start would be reaching
+    # into someone else's window.
+    h = Harness()
+    h.manager.start()
+    h.called.clear()
+
+    h.run_proc.exit_code = 1
+    assert h.manager.tick(server_up=False) is SessionState.FAILED
+    assert OBS_QUIT not in h.called
