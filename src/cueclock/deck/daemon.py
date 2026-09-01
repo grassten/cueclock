@@ -126,6 +126,7 @@ def build_state(
             on_bracket=on_bracket,
             session_face=session.face,
             session_sub=session.sub,
+            session_bg=faces.BG_ERR if session.failed else faces.BG,
         )
 
     def _int(field: str, default: int) -> int:
@@ -149,6 +150,7 @@ def build_state(
         on_bracket=on_bracket,
         session_face=session.face,
         session_sub=session.sub,
+        session_bg=faces.BG_ERR if session.failed else faces.BG,
         # The session is what the health dot reports on: green once the server
         # is answering, absent otherwise (there is nothing to be healthy).
         session_dot=faces.DOT_OK,
@@ -428,7 +430,10 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
             elif sess_state is SessionState.ON:
                 holds[index] = (time.monotonic() + key.action.hold_s, "session")
                 _set_key(deck, index, faces.Face(HOLD_FACE))
-            elif sess_state is SessionState.OFF:
+            elif sess_state is SessionState.OFF or sess_state.failed:
+                # A failed start is retried by pressing it again — `start()`
+                # clears the reason and re-runs the camera probe, so the press
+                # after the cable goes back in just works.
                 session.start()
                 state = poll()
                 _set_key(deck, index, key.face(state))

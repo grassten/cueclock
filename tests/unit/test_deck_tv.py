@@ -38,6 +38,13 @@ def record(log: list[str]) -> Callable[[Coroutine[Any, Any, Any], str], bool]:
     return fake
 
 
+class _Completed:
+    """Just the `stdout` of a `subprocess.run` result — all `arp_host` reads."""
+
+    def __init__(self, stdout: str) -> None:
+        self.stdout = stdout
+
+
 def test_magic_packet_is_six_ff_bytes_then_the_mac_sixteen_times() -> None:
     packet = tv.magic_packet("64:6B:E7:FE:46:97")
     mac = bytes.fromhex("646BE7FE4697")
@@ -98,6 +105,7 @@ def test_a_sleeping_tv_gets_a_packet_and_is_not_waited_for(
 ) -> None:
     sent: list[str] = []
     monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: False)
+    monkeypatch.setattr(tv, "arp_host", lambda _macs: None)  # keeps this offline
     monkeypatch.setattr(tv, "send_wol", lambda config: bool(sent.append(config.mac)) or True)
 
     # False, not True: in standby the TV is off the network entirely, so there
@@ -156,6 +164,7 @@ def test_power_off_holds_the_key_because_a_tap_only_reaches_art_mode(
         return True
 
     monkeypatch.setattr(tv, "_async_press_power", fake_press)
+    monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: True)  # no resolve detour
 
     assert tv.power_off(CONFIG) is True
     # A short press would land in art mode: panel lit, TV still on the network,
@@ -168,6 +177,7 @@ def test_a_failed_press_is_reported_rather_than_assumed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(tv, "_run", lambda coro, _what: coro.close())
+    monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: True)  # no resolve detour
     assert tv.power_off(CONFIG) is False
 
 
@@ -175,6 +185,80 @@ def test_nothing_is_attempted_without_a_config(monkeypatch: pytest.MonkeyPatch) 
     # No `config/tv.json` (a fresh clone) must degrade to a session that simply
     # never touches the TV — never to an exception inside the deck loop.
     monkeypatch.setattr(tv, "load_config", lambda _path=tv.CONFIG_PATH: None)
+    monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: False)
     assert tv.ensure_on() is False
     assert tv.power_off() is False
     assert tv.is_on() is None
+
+
+# --- the TV moves (2026-09-01) --------------------------------------------
+#
+# `tv.json` pins an IP and DHCP does not care. A power cycle moved the TV from
+# .27 to .29, and from a closed port that is indistinguishable from standby:
+# `ensure_on` fired nineteen magic packets at an awake TV and never confirmed,
+# then the held stop timed out and left the wall lit. The MAC is what doesn't
+# move, so that is what gets asked.
+
+ARP_OUTPUT = """\
+? (192.168.4.1) at ac:84:c6:1a:2b:3c on en1 ifscope [ethernet]
+? (192.168.4.29) at 64:6b:e7:fe:46:98 on en1 ifscope [ethernet]
+? (192.168.4.115) at 0:11:22:33:44:5 on en1 ifscope [ethernet]
+"""
+
+
+def test_arp_lookup_matches_the_tvs_other_nic_however_it_is_written(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tv.subprocess, "run", lambda *_a, **_k: _Completed(ARP_OUTPUT))
+    # Config writes 64:6B:E7:FE:46:97, ARP prints 64:6b:e7:fe:46:98 — different
+    # case *and* the neighbouring NIC, which is the one that carries traffic.
+    assert tv.arp_host(tv.wol_targets(CONFIG.mac)) == "192.168.4.29"
+    # Unpadded bytes are how `arp` prints them; a naive compare misses this.
+    assert tv.arp_host(["00:11:22:33:44:05"]) == "192.168.4.115"
+    assert tv.arp_host(["aa:bb:cc:dd:ee:ff"]) is None
+
+
+def test_a_tv_that_moved_is_found_at_its_new_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(tv, "port_open", lambda host, *_a, **_k: host == "192.168.4.29")
+    monkeypatch.setattr(tv, "arp_host", lambda _macs: "192.168.4.29")
+
+    found, reachable = tv.resolve(CONFIG)
+    assert (found.host, reachable) == ("192.168.4.29", True)
+    # Only the address moves — the pairing certificate is still the one thing
+    # that lets this Mac talk to the TV at all.
+    assert (found.mac, found.certfile) == (CONFIG.mac, CONFIG.certfile)
+
+
+def test_a_moved_tv_is_woken_and_powered_off_at_the_new_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log: list[str] = []
+    seen: list[str] = []
+    monkeypatch.setattr(tv, "port_open", lambda host, *_a, **_k: host == "192.168.4.29")
+    monkeypatch.setattr(tv, "arp_host", lambda _macs: "192.168.4.29")
+    monkeypatch.setattr(tv, "is_on", lambda config=None: bool(seen.append(config.host)) or True)
+    monkeypatch.setattr(tv, "_run", record(log))
+
+    # Both halves of the session key: the start confirms instead of packeting
+    # forever, and the held stop actually reaches the TV.
+    assert tv.ensure_on(CONFIG) is True
+    assert seen == ["192.168.4.29"]
+    assert tv.power_off(CONFIG) is True
+    assert log == ["power off"]
+
+
+def test_a_tv_that_is_simply_asleep_is_not_chased_around_the_subnet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Standby is not an address problem: the TV leaves the network entirely and
+    # ARP has nothing. The magic packet is a broadcast, so it needs no address
+    # and the old behaviour is exactly right.
+    sent: list[str] = []
+    monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: False)
+    monkeypatch.setattr(tv, "arp_host", lambda _macs: None)
+    monkeypatch.setattr(tv, "send_wol", lambda config: bool(sent.append(config.host)) or True)
+
+    assert tv.ensure_on(CONFIG) is False
+    assert sent == [CONFIG.host]  # the configured address, unchanged

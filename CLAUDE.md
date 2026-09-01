@@ -50,6 +50,16 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
 
 ## Dev workflow
 
+- **iCloud evicts anything it thinks is idle, and launchd daemons cannot get it
+  back.** `config/` and `models/` are symlinks to `config.nosync/` /
+  `models.nosync/` for the same reason `.venv` points at `.venv.nosync`. After a
+  power cycle on 2026-09-01 every file in both was *dataless*, and a background
+  process reading one gets `OSError` **EDEADLK — "Resource deadlock avoided"**
+  (materialisation is off for launchd jobs), which silently killed TV control,
+  the Syphon rebind, the TV projector and the Vosk model while the logs said
+  only "no usable tv.json". Check with `find config models -type f -flags
+  +dataless`; anything listed means a symlink was replaced by a real directory.
+  Never recreate either as a real directory inside `~/Desktop`.
 - **uv only.** `uv sync`, `uv run <cmd>`, `uv add <pkg>` (`--group dev` for tooling).
   Never bare `pip install`. (The old project's pipenv rule is dead.) The venv really
   lives at `.venv.nosync/` with `.venv` as a local symlink — iCloud syncs Desktop and
@@ -104,7 +114,7 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
 
 ## Hardware / environment facts
 
-- Mac mini M2 (Mac14,3, 24 GB), macOS 26.x, is both dev and production. OBS 32.1.1
+- Mac mini M2 (Mac14,3, 24 GB), macOS 26.x, is both dev and production. OBS **32.2.1**
   installed (includes the Syphon Client fix — the 32.0.x regression is past).
 - pylon Viewer GUI doesn't exist on Apple Silicon; camera verification goes through
   `scripts/live_view.py` (`docs/hardware.md` §A3). The pypylon wheel streams the camera

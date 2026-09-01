@@ -71,6 +71,13 @@ class SessionState(Enum):
     ON = "on"
     STOPPING = "stopping"
     DEV = "dev"  # a session is up that this daemon didn't spawn — hands off
+    # Two ways a start can fail, and both used to look identical from the
+    # table: the key flashed STARTING… and dropped straight back to START
+    # with the reason buried in a log file behind the TV (2026-09-01, after a
+    # power cycle left the camera off the USB bus). A failed start now *stays*
+    # on the key, named, until the next press retries it.
+    NO_CAMERA = "no_camera"  # nothing on the USB bus for pylon to open
+    FAILED = "failed"  # `run` died for some other reason — the log has it
 
     @property
     def face(self) -> str:
@@ -89,6 +96,11 @@ class SessionState(Enum):
         """The dimmed second line, where the state alone wouldn't say enough."""
         return _SUBS.get(self)
 
+    @property
+    def failed(self) -> bool:
+        """Did the last start fail? The deck paints these keys red."""
+        return self in (SessionState.NO_CAMERA, SessionState.FAILED)
+
 
 _FACES = {
     SessionState.OFF: "START",
@@ -96,11 +108,19 @@ _FACES = {
     SessionState.ON: "ON",
     SessionState.STOPPING: "STOPPING…",
     SessionState.DEV: "DEV",
+    SessionState.NO_CAMERA: "NO\nCAMERA",
+    SessionState.FAILED: "START\nFAILED",
 }
 
 # Only the running state needs one: it is the one face that states where you
 # are rather than what a tap does, so it has to name the way out.
-_SUBS = {SessionState.ON: "HOLD 1s"}
+_SUBS = {
+    SessionState.ON: "HOLD 1s",
+    # The failures name the next move instead of the gesture: with no keyboard
+    # at the table, "which cable" is the only question worth answering there.
+    SessionState.NO_CAMERA: "CHECK USB",
+    SessionState.FAILED: "SEE LOG",
+}
 
 
 class Process(Protocol):
@@ -191,6 +211,18 @@ OBS_DISMISS = (
     "-e",
     'tell application "System Events" to tell process "OBS" to click button "OK" of window 1',
 )
+# Is the camera on the USB bus? Asked before every start, because "no device"
+# is how a power cycle fails (2026-09-01) and it costs 0.6 s to find out here
+# instead of watching `run` die 12 s later with nothing on the key to say so.
+# pylon's own enumeration, not `ioreg`: it answers the exact question
+# `open_camera()` will ask. A subprocess, so the always-on deck daemon never
+# carries the pylon runtime in memory.
+CAMERA_PROBE = (
+    sys.executable,
+    "-c",
+    "import sys; from pypylon import pylon; "
+    "sys.exit(0 if pylon.TlFactory.GetInstance().EnumerateDevices() else 1)",
+)
 # -d: display sleep is what kills a session mid-rack (the TV is the output).
 CAFFEINATE = ("/usr/bin/caffeinate", "-d")
 # Between sessions the display sleeps (pmset displaysleep = 10 min) and the Mac
@@ -266,6 +298,8 @@ class SessionManager:
     _projector_open: bool = False
     _tv_ready: bool = False
     _prep_tries: int = 0
+    # A start that failed, held on the key until the next press retries it.
+    _failure: SessionState | None = None
 
     @property
     def owns_session(self) -> bool:
@@ -281,6 +315,14 @@ class SessionManager:
         confirms itself on the poll. OBS still waits for the server (tick).
         """
         if self._run is not None:
+            return
+        # A press is a retry: whatever the last attempt failed on, ask again.
+        self._failure = None
+        if not self._camera_present():
+            self._failure = SessionState.NO_CAMERA
+            print(
+                "session: no camera on the USB bus — reseat the cable (hardware.md §A5)", flush=True
+            )
             return
         self.spawn(WAKE_DISPLAY)  # self-terminating; nothing to hold on to
         self.tv_on()  # fires the magic packet; standby has nothing to talk to
@@ -327,6 +369,13 @@ class SessionManager:
 
     def tick(self, server_up: bool) -> SessionState:
         """Advance the machine one step and report what the key should show."""
+        if self._failure is not None:
+            # Sticky, so the reason survives on the key until it is read and
+            # retried — but never against the evidence: a server answering
+            # means somebody got a session up, and the key says so.
+            if not server_up:
+                return self._failure
+            self._failure = None
         if self._stopping_since is not None:
             return self._tick_stopping(self._stopping_since)
         if self._run is None:
@@ -336,8 +385,7 @@ class SessionManager:
             return SessionState.DEV if server_up else SessionState.OFF
         if self._run.poll() is not None:
             print("session: `run` exited on its own", flush=True)
-            self._release()
-            return SessionState.OFF
+            return self._fail()
         if self._obs_launched:
             self._prepare_once()
             return SessionState.ON
@@ -349,9 +397,45 @@ class SessionManager:
         if self.now() - self._started_at > START_TIMEOUT_S:
             print(f"session: no server after {START_TIMEOUT_S:.0f} s — see {RUN_LOG}", flush=True)
             self._signal_run(signal.SIGINT)
-            self._release()
-            return SessionState.OFF
+            return self._fail()
         return SessionState.STARTING
+
+    def _fail(self) -> SessionState:
+        """Tear a dead start all the way down, then name it for the key.
+
+        OBS goes with it. A start that got far enough to launch OBS and *then*
+        died used to leave it running, and the next start inherited it —
+        which on 2026-09-01 meant an OBS that had been up since before the TV
+        renegotiated HDMI: its projector windows opened with no renderer
+        behind them (`obs_display_init: Failed to create swap chain`, thirteen
+        times) and the wall stayed grey until OBS was restarted by hand. A
+        session that could not come up leaves nothing of itself behind.
+        """
+        if self._obs_launched:
+            # Outputs first, same as `stop()`: the replay buffer is armed at
+            # launch (`--startreplaybuffer`), and quitting over a live output
+            # raises the modal dialog nobody is at the table to click.
+            self.stop_outputs()
+            self.call(OBS_QUIT)
+            print("session: start failed — OBS quit so the next one comes up clean", flush=True)
+        self._release()
+        return self._diagnose()
+
+    def _camera_present(self) -> bool:
+        """Is there a camera for `run` to open? Goes through `call`, so the
+        probe is a fake in tests like every other command this module runs."""
+        return self.call(CAMERA_PROBE) == 0
+
+    def _diagnose(self) -> SessionState:
+        """Name a start that died, so the key reports it instead of resetting.
+
+        Only one question is worth asking from here, and it is the one that
+        was wrong on 2026-09-01: is the camera even attached? Everything else
+        is `FAILED` pointing at the log — guessing further from a state
+        machine would just be a second place to be wrong about the same crash.
+        """
+        self._failure = SessionState.FAILED if self._camera_present() else SessionState.NO_CAMERA
+        return self._failure
 
     def _write_pidfile(self) -> None:
         """Record what we own, so a restarted daemon can pick it back up."""
