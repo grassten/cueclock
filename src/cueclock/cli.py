@@ -32,7 +32,7 @@ import numpy as np
 import numpy.typing as npt
 
 from cueclock.audio.listener import DEFAULT_DEVICE as DEFAULT_MIC_DEVICE  # no vosk import
-from cueclock.capture.clip import ClipReader, ClipWriter
+from cueclock.capture.clip import CAMERA_FPS, ClipReader, ClipWriter
 from cueclock.deck.session import DEFAULT_REFERENCE  # pure stdlib; no HID import
 from cueclock.display.pipeline import (
     DEFAULT_UNDISTORT_PATH,
@@ -42,7 +42,7 @@ from cueclock.display.pipeline import (
 )
 
 BYTES_PER_FRAME = 1920 * 1200
-NOMINAL_FPS = 156.25
+NOMINAL_FPS = CAMERA_FPS
 DISK_HEADROOM = 5 * 1024**3  # never eat the last 5 GiB of the disk
 
 # Flag dumps stage on the internal SSD, NOT on the T7 (`tests/clips`), and not
@@ -72,6 +72,8 @@ DEFAULT_DUMP_DIR = "~/cueclock-dumps"
 # ~0.9 ms and ~2.3 MB (dominated by the debayered prev-gray frame) against
 # the 12.8 ms detect budget — negligible at 1 Hz.
 STATE_SNAPSHOT_PERIOD_S = 1.0
+DETECT_WORKERS = 3  # the M2 has 4 performance cores; the 4th runs the loop itself
+DETECT_INFLIGHT = 2 * DETECT_WORKERS  # ~38 ms of queue at 156 Hz before the grab waits
 STATE_SCHEMA = 1
 STATE_PKL_NAME = "state.pkl"
 STATE_META_NAME = "state.json"
@@ -127,6 +129,7 @@ def _cmd_record(args: argparse.Namespace) -> int:
             exposure_us=EXPOSURE_US,
             gain=GAIN,
             recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            cadence_hz=NOMINAL_FPS,
         )
         first_ns: int | None = None
         try:
@@ -359,9 +362,12 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 
     ref_reader = ClipReader(Path(args.reference))
     ref_indices = np.linspace(0, len(ref_reader) - 1, num=min(15, len(ref_reader)), dtype=int)
-    pipeline = VisionPipeline(calibration, [ref_reader.frame(int(i)) for i in ref_indices])
-
     reader = ClipReader(Path(args.clip))
+    pipeline = VisionPipeline(
+        calibration,
+        [ref_reader.frame(int(i)) for i in ref_indices],
+        cadence_hz=reader.cadence_hz / args.stride,
+    )
 
     # Warm replay: restore the live session's state snapshot (written into
     # flag dumps by `run` — see STATE_SNAPSHOT_PERIOD_S), skip the frames it
@@ -489,7 +495,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     """
     import asyncio
     import threading
-    from concurrent.futures import Future
+    from concurrent.futures import Future, ThreadPoolExecutor
 
     import uvicorn
     from pypylon import pylon
@@ -504,7 +510,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.server.hub import Hub
     from cueclock.vision.calibration import TableCalibration
     from cueclock.vision.events import BallsSettled, ScratchCandidate, ScratchRefuted, ShotTaken
-    from cueclock.vision.pipeline import VisionPipeline
+    from cueclock.vision.pipeline import DetectedBlobs, VisionPipeline
 
     cal_path = Path(args.calibration)
     if not cal_path.exists():
@@ -518,14 +524,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
     ref_reader = ClipReader(ref_path)
     ref_indices = np.linspace(0, len(ref_reader) - 1, num=min(15, len(ref_reader)), dtype=int)
     ref_frames = [ref_reader.frame(int(i)) for i in ref_indices]
-    vision = VisionPipeline(calibration, ref_frames)
+    cadence_hz = NOMINAL_FPS / args.stride
+    vision = VisionPipeline(calibration, ref_frames, cadence_hz=cadence_hz)
     ref_gray = np.median(
         np.stack([cv2.cvtColor(f, cv2.COLOR_BayerBG2GRAY) for f in ref_frames]), axis=0
     ).astype(np.uint8)
     display = _build_display_pipeline(args)
 
-    ring: FrameRing | None = None
-    ring_capacity = int(args.ring_seconds * NOMINAL_FPS / args.stride)
+    ring_capacity = int(args.ring_seconds * cadence_hz)
+    ring = FrameRing(ring_capacity) if ring_capacity > 0 else None
     # Made at startup, not at flag time: a bad --dump-dir must fail here, not
     # when Steven presses Flag at the table with the evidence expiring.
     dump_root = Path(args.dump_dir).expanduser()
@@ -559,6 +566,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             exposure_us=EXPOSURE_US,
             gain=GAIN,
             recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            cadence_hz=cadence_hz,
         )
         frames = ring.snapshot()
         for ts_ns, ring_frame in frames:
@@ -714,11 +722,77 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     print(
         f"run -> overlay http://{args.host}:{args.port}/shotclock?view=bar | control /control | "
-        f"detect ~{NOMINAL_FPS / args.stride:.0f} Hz | display ~{args.fps:.0f} fps "
+        f"detect ~{cadence_hz:.0f} Hz | display ~{args.fps:.0f} fps "
         f"Syphon {args.name!r}\n"
         "clock starts when your first shot settles — Ctrl-C to stop"
     )
     display_period = 1.0 / args.fps
+    # Detection runs on worker threads (OpenCV drops the GIL; measured on the
+    # M2 2026-10-17: 152 frames/s on one thread, 400-570 on three — a
+    # break's busiest frames cost 15-40 ms against a 6.4 ms budget at 156 Hz).
+    # Everything stateful — churn, tracker, events, hub — stays on this thread
+    # in frame order, so the vision core sees exactly the sequence it would
+    # see single-threaded. DETECT_INFLIGHT bounds the queue: when the pool
+    # falls behind, the grab loop waits, LatestImageOnly drops frames at the
+    # camera, and the grabs/s deficit shows it, as before.
+    pool = ThreadPoolExecutor(DETECT_WORKERS, thread_name_prefix="cueclock-detect")
+    find_blobs = vision.find_blobs
+    vision.reference.table_edge  # noqa: B018 — build the memo before workers race to it
+    inflight: deque[tuple[float, int, float, Future[DetectedBlobs]]] = deque()
+    detects = 0
+    detect_s = 0.0
+    detect_max_s = 0.0
+    episode_prev = False  # #33: the latch's last exported state
+    next_snap_t = 0.0
+    first_snap = True
+
+    def finish(t: float, ts_ns: int, t_submit: float, blobs: "Future[DetectedBlobs]") -> None:
+        """One frame's stateful half, in frame order."""
+        nonlocal detects, detect_s, detect_max_s, episode_prev, next_snap_t, first_snap
+        events = vision.advance(t, *vision.churn(*blobs.result()))
+        dt_proc = time.perf_counter() - t_submit  # grab-to-events latency
+        detects += 1
+        detect_s += dt_proc
+        if dt_proc > detect_max_s:
+            detect_max_s = dt_proc
+        for event in events:
+            dispatch(event, t)
+        # #33 Part B: the motion-episode latch edges, posted to the loop AFTER
+        # this frame's events so a same-frame ShotTaken opens the provisional
+        # itself and a same-frame settle resolves it (a falling edge with a
+        # settle is the settle; without one it is the engine's pickup discard).
+        episode = vision.episode_active
+        if episode != episode_prev:
+            episode_prev = episode
+            if episode:
+                asyncio.run_coroutine_threadsafe(hub.episode_started(t), loop).add_done_callback(
+                    _surface
+                )
+            elif not any(isinstance(e, BallsSettled) for e in events):
+                asyncio.run_coroutine_threadsafe(hub.episode_discarded(t), loop).add_done_callback(
+                    _surface
+                )
+        # Detect-loop heartbeat stamp (attribute-only; the Hub's tick loop
+        # journals it every ~5 s).
+        hub.note_frame(t)
+        # E9 motion bit — same attribute-only contract.
+        hub.note_motion(vision.last_motion)
+        if ring is not None and t >= next_snap_t:
+            # Warm-replay snapshot (~1 Hz in camera time — see
+            # STATE_SNAPSHOT_PERIOD_S).
+            next_snap_t = t + STATE_SNAPSHOT_PERIOD_S
+            t_snap = time.perf_counter()
+            blob = vision.dump_state()
+            with state_lock:
+                state_snaps.append((t, ts_ns, blob))
+            if first_snap:
+                first_snap = False
+                print(
+                    f"state snapshots on: {len(blob) / 1e6:.1f} MB, "
+                    f"{(time.perf_counter() - t_snap) * 1e3:.1f} ms "
+                    "each at 1 Hz (warm replay — analyze --warm)"
+                )
+
     try:
         with open_camera() as cam:
             camera_serial = cam.GetDeviceInfo().GetSerialNumber()
@@ -735,18 +809,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     frame_i = 0
                     next_display = 0.0
                     next_status = 5.0
-                    episode_prev = False  # #33: the latch's last exported state
                     # Detect-loop telemetry: with LatestImageOnly, retrieve rate
                     # == processing rate, so grabs/s below the camera's 156.25
                     # means frames are being skipped — the deficit is the only
                     # visible sign of the loop falling behind (checkpoint 21).
                     grabs = 0
-                    detects = 0
-                    detect_s = 0.0
-                    detect_max_s = 0.0
                     last_status_t = 0.0
-                    next_snap_t = 0.0
-                    first_snap = True
                     while True:
                         grab = cam.RetrieveResult(5000, pylon.TimeoutHandling_ThrowException)
                         try:
@@ -761,59 +829,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             if frame_i == 0:
                                 _warn_if_reference_stale(ref_gray, frame, calibration)
                             if frame_i % args.stride == 0:
-                                if ring_capacity > 0:
-                                    if ring is None:
-                                        ring = FrameRing(
-                                            ring_capacity, frame.shape[0], frame.shape[1]
-                                        )
+                                if ring is not None:
                                     ring.push(ts_ns, frame)
-                                t_proc = time.perf_counter()
-                                events = vision.process(t, frame)
-                                dt_proc = time.perf_counter() - t_proc
-                                detects += 1
-                                detect_s += dt_proc
-                                if dt_proc > detect_max_s:
-                                    detect_max_s = dt_proc
-                                for event in events:
-                                    dispatch(event, t)
-                                # #33 Part B: the motion-episode latch edges,
-                                # posted to the loop AFTER this frame's events
-                                # so a same-frame ShotTaken opens the
-                                # provisional itself and a same-frame settle
-                                # resolves it (a falling edge with a settle is
-                                # the settle; without one it is the engine's
-                                # pickup discard).
-                                episode = vision.episode_active
-                                if episode != episode_prev:
-                                    episode_prev = episode
-                                    if episode:
-                                        asyncio.run_coroutine_threadsafe(
-                                            hub.episode_started(t), loop
-                                        ).add_done_callback(_surface)
-                                    elif not any(isinstance(e, BallsSettled) for e in events):
-                                        asyncio.run_coroutine_threadsafe(
-                                            hub.episode_discarded(t), loop
-                                        ).add_done_callback(_surface)
-                                # Detect-loop heartbeat stamp (attribute-only;
-                                # the Hub's tick loop journals it every ~5 s).
-                                hub.note_frame(t)
-                                # E9 motion bit — same attribute-only contract.
-                                hub.note_motion(vision.last_motion)
-                                if ring_capacity > 0 and t >= next_snap_t:
-                                    # Warm-replay snapshot (~1 Hz in camera
-                                    # time — see STATE_SNAPSHOT_PERIOD_S).
-                                    next_snap_t = t + STATE_SNAPSHOT_PERIOD_S
-                                    t_snap = time.perf_counter()
-                                    blob = vision.dump_state()
-                                    with state_lock:
-                                        state_snaps.append((t, ts_ns, blob))
-                                    if first_snap:
-                                        first_snap = False
-                                        print(
-                                            f"state snapshots on: {len(blob) / 1e6:.1f} MB, "
-                                            f"{(time.perf_counter() - t_snap) * 1e3:.1f} ms "
-                                            "each at 1 Hz (warm replay — analyze --warm)"
-                                        )
+                                if len(inflight) >= DETECT_INFLIGHT:
+                                    finish(*inflight.popleft())  # the pool is behind: wait
+                                inflight.append(
+                                    (t, ts_ns, time.perf_counter(), pool.submit(find_blobs, frame))
+                                )
+                                while inflight and inflight[0][3].done():
+                                    finish(*inflight.popleft())
                             frame_i += 1
                             if t >= next_display:
                                 next_display = t + display_period
@@ -848,6 +872,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        pool.shutdown(wait=False, cancel_futures=True)
         if listener is not None:
             listener.stop()
         server.should_exit = True
@@ -1070,10 +1095,10 @@ def main(argv: list[str] | None = None) -> int:
     p_an.add_argument(
         "--stride",
         type=int,
-        default=None,
-        help="detect every Nth frame (default: adapt to the clip's stored rate "
-        "so replay runs at the live ~78 Hz cadence — record clips store "
-        "156 fps, ring dumps store the detect stride already)",
+        default=1,
+        help="detect every Nth stored frame (default 1: the clip's own cadence — "
+        "record clips and dumps since checkpoint 106 store 156 fps, older dumps "
+        "the 78 Hz stream they were detected at)",
     )
     p_an.add_argument(
         "--warm",
@@ -1100,7 +1125,11 @@ def main(argv: list[str] | None = None) -> int:
         help="table calibration JSON (default config/table_calibration.json)",
     )
     p_run.add_argument(
-        "--stride", type=int, default=2, help="detect every Nth frame (default 2 ≈ 78 Hz)"
+        "--stride",
+        type=int,
+        default=1,
+        help="detect every Nth camera frame (default 1 = 156 Hz; 2 = the 78 Hz "
+        "cadence every constant was tuned at, before checkpoint 106)",
     )
     p_run.add_argument(
         "--ring-seconds",

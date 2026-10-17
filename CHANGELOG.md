@@ -249,6 +249,77 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-10-17 (checkpoint 106 — detection runs at the camera's full 156 Hz):**
+  Steven has asked for this repeatedly; the honest record is that "more frames
+  won't help" was never measured, only argued. 53 of the 73 corpus clips are
+  ring dumps, which stored only the stride-2 frames, so every live-failure clip
+  was 78 fps and the corpus could not answer the question. Checkpoint 104's own
+  note already named frame rate as a lever for identity, the dominant miss
+  class. Shipped live for Steven to judge by feel over sessions, per his
+  standing preference.
+  - **Dose-response first.** The same corpus replayed at 39 Hz (stride 2 over
+    the dumps, 4 over the full-rate clips): 91/91 → 79/91 passing, strokes
+    fired 53/54 → 45/54 (47/54 with frame counts converted to time). The clock
+    ran through real shots (`no_cue_strike_0801`, `tip_bump`), a phantom count
+    appeared (`soft_shot`), a scratch never reached the adjudicator
+    (`pot_scratch_nohold_0811`), and break speed under-read (1731 vs ≥2500
+    mm/s). Part of that is constants tuned at 78 Hz, but the break-speed
+    under-read is sampling, not tuning. Halving the rate costs accuracy, so
+    there was no measured reason to assume doubling it is free of gains.
+  - **Constants convert, not retune.** `events.TUNED_HZ` (78.125) names the
+    cadence every frame-denominated constant was measured at.
+    `EventConfig.at_cadence` / `TrackConfig.at_cadence` re-express
+    `birth_frames` (3 → 6), `cue_id_debounce_frames` (2 → 4) and the
+    per-frame gains (alpha, beta, whiteness/churn EMA) as the same span of
+    time; `VisionPipeline(cadence_hz=)` applies them. At `TUNED_HZ` both
+    return the config unchanged.
+  - **The impulse signals keep their tuned step.** A one-frame raw speed at
+    156 Hz divides the same centroid jitter by half the dt: on
+    `static_spread`, still balls' p50 went 18 → 36 and p99 581 → 1156 mm/s,
+    across `strike_impulse_mms` (110) and `parked_fast_confirm_mms` (1200). A
+    naive stride flip would have added phantom strikes and been judged as
+    "full rate is worse". Raw speed now spans the newest observation at least
+    `raw_baseline_s` (0.75 tuned intervals) old, which is exactly the previous
+    one at 78 Hz and two back at 156. Churn differences against the gray one
+    tuned interval back (`churn_lag`), so `spin_churn_max` reads the same
+    rotation.
+  - **Throughput: 3 detect workers.** One thread measured 152 frames/s on a
+    quiet table, and a break's busy frames cost 15–40 ms; the live loop
+    already sagged to a median of 75 Hz (p10 54–68) at stride 2.
+    `VisionPipeline.find_blobs` is stateless and runs on a `ThreadPoolExecutor`
+    (OpenCV drops the GIL): ~420 frames/s sustained on `power_shot`,
+    `break_shot` and `rack_balls` replayed through the live loop's own shape.
+    Churn, tracker, events and hub stay on the loop thread in frame order;
+    `DETECT_INFLIGHT` (6) bounds the queue. Two free savings came with it:
+    the gray was converted twice per frame, and the table-edge erode (a
+    constant) was recomputed every frame.
+  - **Ring holds references.** pypylon's `grab.Array` is already a copy, so
+    `FrameRing` stores the arrays it is given, and `snapshot` is a list copy
+    rather than a pixel copy. At 156 Hz a 20 s ring is 7.2 GB, and the old
+    copy-under-lock would have frozen the grab loop for seconds on every Flag.
+    Dumps record `cadence_hz` in meta.json. `ClipReader.cadence_hz` infers it
+    for older clips (>120 fps measured ⇒ full rate).
+  - **Corpus replays at each clip's own cadence** (`detect_indices()` now
+    returns every stored frame), so the 20 full-rate clips are graded at 156 Hz
+    for the first time. `analyze --stride` defaults to 1, and `run --stride`
+    to 1 (`2` reproduces the old cadence). The detect-cache key carries
+    `churn_lag`.
+  - **Gate:** cold battery **675 passed** in 5:26, 0 failed; the single strike
+    miss is the pre-existing `stroke_tug_strike_0801`. Goldens regenerated
+    for the 7 full-rate clips whose timelines moved: `medium_shot` /
+    `slow_creep` / `walk_around_settle` break speed read 1–8% higher (peak
+    sampled better); `tip_bump` fires 70 ms earlier; `shaft_adjust`'s
+    reverted pseudo-shot fires 90 ms later; `scratch_replace` **loses** a
+    spurious pre-shot settle at 2.10 s. `soft_shot`'s settle lands 1.0 s
+    later (5.95 → 6.95 s) — **changed, not judged**: nobody has watched the
+    clip, and 78 Hz settling a second early is as plausible as 156 settling
+    late (Steven's call: footage decides, not assertion). `stroke_tug_strike_0801` and `parked_vote_strike_0801`
+    drifted before this change and were left untouched. 584 unit tests (7 new).
+  - **Measuring it:** no shadow run. Compare `session-stats` from the next
+    sessions against the last 5 at 78 Hz: 96.06% strike detection, 98.69%
+    clock accuracy incl. self-healing, 97.38% hands-off, 5 false fouls in 381
+    shots (that last one was already a regression worth chasing).
+
 - **2026-09-01 (checkpoint 105 — the rig comes back from a power cycle):** a
   power cycle broke four things at once and every one of them failed *quietly*.
   Nothing here is a detection change; the corpus was not run (unit tests are

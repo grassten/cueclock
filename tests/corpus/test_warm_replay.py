@@ -40,10 +40,10 @@ def test_pipeline_warm_resume_matches_uninterrupted_replay() -> None:
 
     reader = ClipReader(CLIPS / CLIP)
     timestamps = reader.timestamps
-    indices = reader.detect_indices()  # live detect cadence, as analyze/corpus do
+    indices = reader.detect_indices()  # every stored frame, as analyze/corpus do
     cut = len(indices) // 2
 
-    live = VisionPipeline(calibration, refs)
+    live = VisionPipeline(calibration, refs, cadence_hz=reader.cadence_hz)
     blob: bytes | None = None
     per_frame = []
     for k, i in enumerate(indices):
@@ -55,7 +55,9 @@ def test_pipeline_warm_resume_matches_uninterrupted_replay() -> None:
     assert baseline, "scenario must produce events for the comparison to mean anything"
     assert blob is not None
 
-    warm = VisionPipeline(calibration, refs)  # fresh build, as `analyze --warm` does
+    warm = VisionPipeline(
+        calibration, refs, cadence_hz=reader.cadence_hz
+    )  # fresh build, as `analyze --warm` does
     warm.load_state(blob)
     resumed: list = []
     for i in indices[cut:]:

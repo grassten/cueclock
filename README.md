@@ -43,7 +43,7 @@ corpus: 54 scenarios, all green.
 ```
 grab thread (BayerRG8 @ 156 fps)
  ├─► ring buffer (last ~20 s, POST /api/dump saves it as a corpus clip)
- ├─► detection @ 78 Hz: |frame − empty-table reference| → blobs → tracker
+ ├─► detection @ 156 Hz (3 worker threads): |frame − empty-table reference| → blobs → tracker
  │      → undistortPoints + homography → table mm → event engine
  │      → ShotTaken / BallsSettled / Scratch → clock state machine
  │      → FastAPI + WebSocket → OBS browser-source overlay + Stream Deck

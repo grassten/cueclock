@@ -101,7 +101,7 @@ locally via **Syphon** — a GPU texture handoff, not streaming.
 
 ```
 grab thread (BayerRG8 @ 156 fps)
-  ├─ detection path (every 2nd frame ≈ 78 Hz, distorted pixels)
+  ├─ detection path (every frame, 156 Hz since checkpoint 106 — distorted pixels)
   └─ display branch @ ~60 fps (own thread — DisplayWorker):
        debayer (COLOR_BayerBG2BGR_EA, 0.22 ms)
        → cv2.remap undistort (rails-fit map, ~2 ms)

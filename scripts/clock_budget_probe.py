@@ -90,7 +90,7 @@ def _detections(reader, clip_dir, pipeline, indices):
     from cueclock.capture.detect_cache import DetectionCache, cache_key
 
     store = DetectionCache(Path(cache_dir))
-    key = cache_key(clip_dir, pipeline.reference, pipeline.detect_config)
+    key = cache_key(clip_dir, pipeline.reference, pipeline.detect_config, pipeline.churn_lag)
     hit = store.load(clip_dir, key, indices)
     if hit is not None:
         return hit
@@ -127,8 +127,10 @@ def main() -> int:
         reference = REFERENCES.get(name, "empty_table")
         if not (CLIPS / reference).exists():
             continue
-        pipeline = VisionPipeline(calibration, _reference(reference, calibration))
         reader = ClipReader(CLIPS / name)
+        pipeline = VisionPipeline(
+            calibration, _reference(reference, calibration), cadence_hz=reader.cadence_hz
+        )
         indices = reader.detect_indices()
         frames = _detections(reader, CLIPS / name, pipeline, indices)
         timeline = replay_clock(

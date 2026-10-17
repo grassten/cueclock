@@ -3,33 +3,33 @@
   "reference": "empty_table",
   "events": [
     {
-      "type": "BallsSettled",
-      "t": 2.0994
-    },
-    {
       "type": "ShotTaken",
-      "t": 3.2771,
+      "t": 3.2643,
       "ball_id": 10,
-      "speed_mms": 2077.3942,
+      "speed_mms": 2388.7532,
       "newborn": false
     },
     {
       "type": "ScratchCandidate",
-      "t": 5.0308,
-      "x_mm": 1875.5021,
-      "y_mm": 860.7997,
+      "t": 5.018,
+      "x_mm": 1876.7072,
+      "y_mm": 859.9804,
       "pocket_x_mm": 1930.0,
       "pocket_y_mm": 965.0,
-      "whiteness": 0.9372,
-      "color_age_s": 0.5248
+      "whiteness": 0.933,
+      "color_age_s": 0.5184
     },
     {
       "type": "BallsSettled",
-      "t": 8.4615
+      "t": 8.4487
     },
     {
       "type": "Scratch",
-      "t": 8.4615
+      "t": 8.4487
+    },
+    {
+      "type": "BallsSettled",
+      "t": 9.9977
     }
   ]
 }
