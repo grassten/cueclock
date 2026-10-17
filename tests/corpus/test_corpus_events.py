@@ -723,8 +723,8 @@ def _run_clip(name: str, reference: "ReferenceModel") -> list[Event]:
     from cueclock.capture.clip import ClipReader
     from cueclock.vision.pipeline import VisionPipeline
 
-    pipeline = VisionPipeline(_calibration(), reference)
     reader = ClipReader(CLIPS / name)
+    pipeline = VisionPipeline(_calibration(), reference, cadence_hz=reader.cadence_hz)
     indices = reader.detect_indices()
     frames = _detections(reader, CLIPS / name, pipeline, indices)
     events: list[Event] = []
@@ -749,7 +749,7 @@ def _detections(
     from cueclock.capture.detect_cache import DetectionCache, cache_key
 
     store = DetectionCache(Path(cache_dir))
-    key = cache_key(clip_dir, pipeline.reference, pipeline.detect_config)
+    key = cache_key(clip_dir, pipeline.reference, pipeline.detect_config, pipeline.churn_lag)
     hit = store.load(clip_dir, key, indices)
     if hit is not None:
         return hit
@@ -782,8 +782,10 @@ def test_corpus_clip(name: str) -> None:
     from cueclock.capture.clip import ClipReader
     from cueclock.vision.pipeline import VisionPipeline
 
-    pipeline = VisionPipeline(_calibration(), _reference_model(ref_name))
     reader = ClipReader(CLIPS / name)
+    pipeline = VisionPipeline(
+        _calibration(), _reference_model(ref_name), cadence_hz=reader.cadence_hz
+    )
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,
@@ -1225,8 +1227,10 @@ def test_break_dark_total_settles_at_the_rest() -> None:
     from cueclock.capture.clip import ClipReader
     from cueclock.vision.pipeline import VisionPipeline
 
-    pipeline = VisionPipeline(_calibration(), _reference_model("empty_table_0801"))
     reader = ClipReader(CLIPS / name)
+    pipeline = VisionPipeline(
+        _calibration(), _reference_model("empty_table_0801"), cadence_hz=reader.cadence_hz
+    )
     indices = reader.detect_indices()
     frames = _detections(reader, CLIPS / name, pipeline, indices)
     settles: list[tuple[float, bool, int, int]] = []
@@ -1286,8 +1290,10 @@ def test_latch_blind_shot_stops_the_clock() -> None:
     from cueclock.vision.pipeline import VisionPipeline
 
     stroke = 8.756
-    pipeline = VisionPipeline(_calibration(), _reference_model("empty_table_0801"))
     reader = ClipReader(CLIPS / name)
+    pipeline = VisionPipeline(
+        _calibration(), _reference_model("empty_table_0801"), cadence_hz=reader.cadence_hz
+    )
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,
@@ -1372,8 +1378,10 @@ def test_phantom_still_down_is_rejected_at_the_settle() -> None:
     from cueclock.capture.clip import ClipReader
     from cueclock.vision.pipeline import VisionPipeline
 
-    pipeline = VisionPipeline(_calibration(), _reference_model("empty_table_0801"))
     reader = ClipReader(CLIPS / name)
+    pipeline = VisionPipeline(
+        _calibration(), _reference_model("empty_table_0801"), cadence_hz=reader.cadence_hz
+    )
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,
@@ -1442,8 +1450,10 @@ def test_0811_carries_still_count_the_real_stroke(name: str) -> None:
     from cueclock.capture.clip import ClipReader
     from cueclock.vision.pipeline import VisionPipeline
 
-    pipeline = VisionPipeline(_calibration(), _reference_model(REFERENCES[name]))
     reader = ClipReader(CLIPS / name)
+    pipeline = VisionPipeline(
+        _calibration(), _reference_model(REFERENCES[name]), cadence_hz=reader.cadence_hz
+    )
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,

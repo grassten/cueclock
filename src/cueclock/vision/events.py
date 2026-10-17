@@ -6,8 +6,10 @@ noise ~ 7-22 mm/s raw, so the 40 mm/s settle floor is >= 3 sigma clean).
 
 Pure module: no I/O, no clocks, no threads. The caller (tracker) feeds
 ``EventEngine.update()`` one batch of :class:`BallState` per detection frame
-with its timestamp; cadence is whatever the caller runs at (nominally 80 Hz)
-— everything here works from timestamps, not frame counts.
+with its timestamp; cadence is whatever the caller runs at (78 or 156 Hz)
+— everything here works from timestamps, not frame counts, except the few
+constants :data:`TUNED_HZ` names, which :meth:`EventConfig.at_cadence` and
+``TrackConfig.at_cadence`` convert to the same span of time.
 
 Input contract (firmed up with the tracker, `vision/track.py`): the tracker
 reports every live track each frame (coasting through occlusions per §2.3
@@ -25,9 +27,15 @@ may omit ``raw_speed_mms``; it falls back to ``speed_mms``.
 """
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import hypot
 from typing import Literal
+
+# The detect cadence every frame-denominated constant in this module and in
+# `track.py` was measured at: stride 2 of the camera's 156.25 fps, which is
+# where all of them were tuned (checkpoints 1-105). A pipeline at any other
+# cadence gets a copy converted to the same span of *time* — never a retune.
+TUNED_HZ = 156.25 / 2
 
 
 @dataclass(frozen=True)
@@ -308,6 +316,7 @@ class EventConfig:
     # impulse-floor steps at the 78 Hz detect cadence.
     strike_dir_seed_min_mm: float = 12.0
     cue_id_debounce_frames: int = 2  # ignore 1-frame cue-flag excursions in strike logic
+    # (frames at TUNED_HZ — see at_cadence)
     # Carom guard: an impulse into a dwelled cue is only a strike if no *other*
     # ball was both genuinely moving this recently AND within kiss range of
     # the cue's rest spot. A carom's cause is another ball arriving to kiss
@@ -610,6 +619,14 @@ class EventConfig:
     scratch_verdict_horizon_s: float = 30.0
     table_length_mm: float = 1930.0
     table_width_mm: float = 965.0
+
+    def at_cadence(self, hz: float) -> "EventConfig":
+        """This config at another detect cadence: frame counts re-expressed
+        as the same span of time they cover at :data:`TUNED_HZ`."""
+        if hz == TUNED_HZ:
+            return self
+        frames = max(1, round(self.cue_id_debounce_frames * hz / TUNED_HZ))
+        return replace(self, cue_id_debounce_frames=frames)
 
     def pocket_centers(self) -> tuple[tuple[float, float], ...]:
         length, width = self.table_length_mm, self.table_width_mm

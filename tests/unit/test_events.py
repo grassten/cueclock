@@ -1332,3 +1332,12 @@ def test_parked_vote_newborn_rejects_a_short_traveller() -> None:
     sim.run(0.15)  # ~300 mm — the false class's whole budget
     sim.velocity(REBORN, 0.0, 0.0)
     assert ShotTaken not in types(sim.run(0.6))
+
+
+def test_event_config_at_cadence_keeps_debounce_time() -> None:
+    from cueclock.vision.events import TUNED_HZ, EventConfig
+
+    cfg = EventConfig()
+    assert cfg.at_cadence(TUNED_HZ) is cfg
+    full = cfg.at_cadence(2 * TUNED_HZ)
+    assert full.cue_id_debounce_frames == 2 * cfg.cue_id_debounce_frames

@@ -334,6 +334,12 @@ def detect_balls(
     return detect_frame(bayer, reference_gray, config, table_mask, reference_bayer, radius_map)[0]
 
 
+def table_edge_of(table_mask: npt.NDArray[np.uint8]) -> npt.NDArray[np.bool_]:
+    """The mask's inner border band: blobs touching it reach in from outside."""
+    ring = cv2.subtract(table_mask, cv2.erode(table_mask, np.ones((7, 7), np.uint8)))
+    return ring.astype(bool)
+
+
 def detect_frame(
     bayer: npt.NDArray[np.uint8],
     reference_gray: npt.NDArray[np.uint8],
@@ -341,6 +347,9 @@ def detect_frame(
     table_mask: npt.NDArray[np.uint8] | None = None,
     reference_bayer: npt.NDArray[np.uint8] | None = None,
     radius_map: npt.NDArray[np.float32] | None = None,
+    *,
+    gray: npt.NDArray[np.uint8] | None = None,
+    table_edge: npt.NDArray[np.bool_] | None = None,
 ) -> tuple[list[Detection], list[Intrusion]]:
     """Find ball-like blobs in one frame. See module docstring for the gates.
 
@@ -360,9 +369,15 @@ def detect_frame(
     Returns the balls and, beside them, the hand-scale blobs these gates threw
     away (:class:`Intrusion`). The second list is additive evidence: it never
     feeds back into the first, and which blobs become balls is unchanged.
+
+    ``gray`` and ``table_edge`` are precomputed :func:`bayer_to_gray` of this
+    frame and :func:`table_edge_of` the mask — pure savings for a caller that
+    has them (the pipeline needs the gray for churn anyway, and the edge never
+    changes): ~1.6 ms/frame, a quarter of the 6.4 ms budget at 156 Hz.
     """
     cfg = config or DetectConfig()
-    gray = bayer_to_gray(bayer)
+    if gray is None:
+        gray = bayer_to_gray(bayer)
     diff = cv2.absdiff(gray, reference_gray)
     _, binary = cv2.threshold(diff, cfg.diff_threshold, 255, cv2.THRESH_BINARY)
     border_ids: set[int] = set()
@@ -373,8 +388,8 @@ def detect_frame(
 
     n, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
     if table_mask is not None:
-        ring = cv2.subtract(table_mask, cv2.erode(table_mask, np.ones((7, 7), np.uint8)))
-        border_ids = set(np.unique(labels[ring.astype(bool)]).tolist())
+        edge = table_edge_of(table_mask) if table_edge is None else table_edge
+        border_ids = set(np.unique(labels[edge]).tolist())
     detections: list[Detection] = []
     intrusions: list[Intrusion] = []
     for i in range(1, n):

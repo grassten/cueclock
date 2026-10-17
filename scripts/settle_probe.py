@@ -70,7 +70,7 @@ def _detections(reader, clip_dir, pipeline, indices):
     from cueclock.capture.detect_cache import DetectionCache, cache_key
 
     store = DetectionCache(Path(cache_dir))
-    key = cache_key(clip_dir, pipeline.reference, pipeline.detect_config)
+    key = cache_key(clip_dir, pipeline.reference, pipeline.detect_config, pipeline.churn_lag)
     hit = store.load(clip_dir, key, indices)
     if hit is not None:
         return hit
@@ -225,7 +225,9 @@ def main() -> int:
         dump = Path(args.dump).expanduser()
         reader = ClipReader(dump)
         pipeline = VisionPipeline(
-            TableCalibration.load(CALIBRATION), _reference_model(DEFAULT_REFERENCE, ref_cache)
+            TableCalibration.load(CALIBRATION),
+            _reference_model(DEFAULT_REFERENCE, ref_cache),
+            cadence_hz=reader.cadence_hz,
         )
         start, t_offset = 0, 0.0
         meta_path = dump / STATE_META_NAME
@@ -251,10 +253,12 @@ def main() -> int:
             print(f"skip {name}: not recorded", file=sys.stderr)
             continue
         ref = REFERENCES.get(name, "empty_table")
-        pipeline = VisionPipeline(
-            TableCalibration.load(CALIBRATION), _reference_model(ref, ref_cache)
-        )
         reader = ClipReader(CLIPS / name)
+        pipeline = VisionPipeline(
+            TableCalibration.load(CALIBRATION),
+            _reference_model(ref, ref_cache),
+            cadence_hz=reader.cadence_hz,
+        )
         all_results += probe(name, reader, pipeline, reader.detect_indices(), CLIPS / name)
 
     if args.json:

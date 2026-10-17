@@ -64,3 +64,30 @@ def test_empty_clip(tmp_path: Path) -> None:
     r = ClipReader(tmp_path / "clip")
     assert len(r) == 0
     assert list(r) == []
+
+
+def _clip_at(clip_dir: Path, period_ns: int, cadence_hz: float | None = None) -> ClipReader:
+    with ClipWriter(
+        clip_dir,
+        label="test",
+        camera_serial="0000",
+        exposure_us=6000.0,
+        gain=12.0,
+        recorded_at="2026-10-17T00:00:00+00:00",
+        cadence_hz=cadence_hz,
+    ) as w:
+        for i in range(5):
+            w.write(np.zeros((4, 6), np.uint8), 1_000_000_000 + i * period_ns)
+    return ClipReader(clip_dir)
+
+
+def test_cadence_is_recorded_when_written(tmp_path: Path) -> None:
+    r = _clip_at(tmp_path / "c", 6_400_000, cadence_hz=156.25)
+    assert r.cadence_hz == 156.25
+    assert r.detect_indices() == [0, 1, 2, 3, 4]
+
+
+def test_cadence_is_inferred_for_pre_106_clips(tmp_path: Path) -> None:
+    # full-rate `record` clip vs. a stride-2 ring dump whose live loop sagged
+    assert _clip_at(tmp_path / "full", 6_400_000).cadence_hz == 156.25
+    assert _clip_at(tmp_path / "dump", 20_000_000).cadence_hz == 156.25 / 2

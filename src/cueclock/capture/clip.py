@@ -23,6 +23,7 @@ import numpy.typing as npt
 META_NAME = "meta.json"
 FRAMES_NAME = "frames.raw"
 TIMESTAMPS_NAME = "timestamps.npy"
+CAMERA_FPS = 156.25  # the camera free-runs here at the locked 6 ms exposure
 
 
 @dataclass
@@ -37,6 +38,9 @@ class ClipMeta:
     gain: float
     first_timestamp_ns: int
     recorded_at: str  # ISO 8601, host clock
+    # The detect cadence the frames were stored at (checkpoint 106). Absent on
+    # older clips; ClipReader.cadence_hz infers it for those.
+    cadence_hz: float | None = None
 
 
 class ClipWriter:
@@ -55,6 +59,7 @@ class ClipWriter:
         gain: float,
         recorded_at: str,
         pixel_format: str = "BayerRG8",
+        cadence_hz: float | None = None,
     ) -> None:
         clip_dir.mkdir(parents=True, exist_ok=False)
         self._dir = clip_dir
@@ -64,6 +69,7 @@ class ClipWriter:
         self._gain = gain
         self._recorded_at = recorded_at
         self._pixel_format = pixel_format
+        self._cadence_hz = cadence_hz
         self._file: BinaryIO | None = open(clip_dir / FRAMES_NAME, "wb")  # noqa: SIM115 — lifetime spans write() calls; closed in close()
         self._timestamps_ns: list[int] = []
         self._shape: tuple[int, int] | None = None
@@ -106,6 +112,7 @@ class ClipWriter:
             gain=self._gain,
             first_timestamp_ns=first_ns,
             recorded_at=self._recorded_at,
+            cadence_hz=self._cadence_hz,
         )
         (self._dir / META_NAME).write_text(json.dumps(asdict(meta), indent=2) + "\n")
         return meta
@@ -152,26 +159,28 @@ class ClipReader:
     def __len__(self) -> int:
         return self.meta.frame_count
 
-    def detect_indices(
-        self, hz: float = 78.0, start: int = 0, stride: int | None = None
-    ) -> list[int]:
-        """Frame indices to replay at the live detect cadence (~78 Hz).
+    @property
+    def cadence_hz(self) -> float:
+        """The detect cadence these frames were stored at — what a pipeline
+        replaying every one of them must be built for (`VisionPipeline`'s
+        ``cadence_hz``). Recorded in meta.json from checkpoint 106; older
+        clips are either `record`-made at the camera's full rate or ring
+        dumps of the stride-2 stream, told apart by their measured rate (a
+        dump whose live loop sagged is still a stride-2 dump: 37-78 fps in
+        the corpus, against 144-156 for the full-rate clips)."""
+        if self.meta.cadence_hz is not None:
+            return self.meta.cadence_hz
+        span = float(self.timestamps[-1] - self.timestamps[0]) if len(self.timestamps) > 1 else 0.0
+        fps = (self.meta.frame_count - 1) / span if span > 0 else 0.0
+        return CAMERA_FPS if fps > 120 else CAMERA_FPS / 2
 
-        The stride has to adapt to the clip's stored rate: record-made clips
-        hold the full 156 fps camera stream (stride 2 reaches live cadence),
-        while ring dumps hold only the detect-stride frames already. A fixed
-        stride 2 silently replayed dumps at HALF the live cadence and produced
-        different events than the session under triage (checkpoint 33).
-
-        Pass ``stride`` to override the adaptive choice (`analyze --stride`),
-        ``start`` to skip a warm-replay prefix.
+    def detect_indices(self, start: int = 0, stride: int = 1) -> list[int]:
+        """Frame indices to replay: every stored frame by default, at
+        :attr:`cadence_hz` (live keeps every frame it detects on since
+        checkpoint 106, so a dump replays exactly what the session saw).
+        ``stride`` thins it for experiments — the pipeline is then built for
+        ``cadence_hz / stride``. ``start`` skips a warm-replay prefix.
         """
-        if stride is None:
-            span = (
-                float(self.timestamps[-1] - self.timestamps[0]) if len(self.timestamps) > 1 else 0.0
-            )
-            fps = (self.meta.frame_count - 1) / span if span > 0 else hz
-            stride = max(1, round(fps / hz))
         return list(range(start, self.meta.frame_count, stride))
 
     def frame(self, index: int) -> npt.NDArray[np.uint8]:

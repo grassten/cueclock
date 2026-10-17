@@ -201,3 +201,46 @@ def test_merged_blob_on_moving_ball_still_tracks() -> None:
     assert last is not None
     assert last.observed
     assert last.speed_mms > 1000.0
+
+
+# ---- cadence (checkpoint 106): 156 Hz must read like the tuned 78 Hz ----
+
+FULL_DT = 1.0 / 156.25  # every camera frame
+
+
+def test_at_tuned_cadence_is_identity() -> None:
+    cfg = TrackConfig()
+    assert cfg.at_cadence(156.25 / 2) is cfg
+
+
+def test_at_full_rate_spans_the_same_time() -> None:
+    tuned = TrackConfig()
+    full = tuned.at_cadence(156.25)
+    assert full.birth_frames == 2 * tuned.birth_frames
+    # two full-rate EMA steps decay exactly as far as one tuned step
+    assert np.isclose((1 - full.alpha) ** 2, 1 - tuned.alpha)
+    assert np.isclose((1 - full.churn_ema) ** 2, 1 - tuned.churn_ema)
+    assert np.isclose(full.beta, tuned.beta / 2)
+
+
+def test_raw_speed_spans_a_tuned_interval_at_full_rate() -> None:
+    """Jitter must not double the impulse-grade speed: at 156 Hz raw speed is
+    measured across two frames (12.8 ms), exactly the tuned single step."""
+    tracker = BallTracker(TrackConfig().at_cadence(156.25))
+    jitter = [0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5]
+    states = []
+    for i, dx in enumerate(jitter):
+        states = tracker.update(i * FULL_DT, [_obs(500 + dx, 500)])
+    assert states
+    # one-frame step would read 0.5 mm / 6.4 ms = 78 mm/s; the two-frame
+    # baseline spans a back-and-forth and reads ~0
+    assert states[0].raw_speed_mms is not None and states[0].raw_speed_mms < 1.0
+
+
+def test_raw_speed_at_tuned_cadence_is_the_one_step_speed() -> None:
+    tracker = BallTracker()
+    states = []
+    for i in range(6):
+        states = tracker.update(i * DT, [_obs(500 + 0.5 * (i % 2), 500)])
+    assert states and states[0].raw_speed_mms is not None
+    assert np.isclose(states[0].raw_speed_mms, 0.5 / DT)

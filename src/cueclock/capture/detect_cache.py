@@ -29,6 +29,8 @@ remember to extend:
   with the same frame count).
 - OpenCV and NumPy versions, since connected components and median are
   theirs.
+- The churn lag (`VisionPipeline.churn_lag`): churn differences against the
+  gray one tuned interval back, which is two frames at 156 Hz.
 
 Deliberately *not* in the key: `events.py` and `track.py` (the whole point —
 they must be free to change), `pipeline.py` (keying it would make every edit
@@ -87,7 +89,9 @@ def _clip_identity(clip_dir: Path) -> str:
     )
 
 
-def cache_key(clip_dir: Path, reference: ReferenceModel, config: DetectConfig) -> str:
+def cache_key(
+    clip_dir: Path, reference: ReferenceModel, config: DetectConfig, churn_lag: int = 1
+) -> str:
     """Everything that can change what `VisionPipeline.detect` returns."""
     from cueclock.vision import detect as detect_module
 
@@ -96,6 +100,8 @@ def cache_key(clip_dir: Path, reference: ReferenceModel, config: DetectConfig) -
     digest.update(Path(str(detect_module.__file__)).read_bytes())
     digest.update(repr(sorted(asdict(config).items())).encode())
     digest.update(reference.digest().encode())
+    if churn_lag != 1:  # lag 1 keys exactly as before checkpoint 106
+        digest.update(f"churn_lag={churn_lag}".encode())
     digest.update(_clip_identity(clip_dir).encode())
     digest.update(f"cv2={cv2.__version__} np={np.__version__}".encode())
     return digest.hexdigest()[:32]

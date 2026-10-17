@@ -15,10 +15,14 @@ Two speeds per ball, because one cannot serve both §4.2 consumers:
   velocity noise at 78 Hz (~40 mm/s with 0.3 px centroid jitter) sits *at*
   the settle floor; smoothing over ~20 frames brings it to ~10 mm/s so the
   40 mm/s floor is >=3 sigma clean again (§4.3 arithmetic).
-- ``raw_speed_mms`` — one-step displacement over dt, for strike detection.
-  A strike is a step from rest to >=250 mm/s within 1-2 frames; the smoothed
-  estimate lags far too much to show that step, the raw one shows it
-  immediately and its noise is far below the impulse threshold.
+- ``raw_speed_mms`` — displacement over one step *at the tuned cadence*,
+  for strike detection. A strike is a step from rest to >=250 mm/s within
+  1-2 frames; the smoothed estimate lags far too much to show that step, the
+  raw one shows it immediately and its noise is far below the impulse
+  threshold. The step is a fixed span of time (``raw_baseline_s``), not one
+  frame: centroid jitter divided by half the dt is twice the speed noise, and
+  at 156 Hz a one-frame step put still balls' p99 at 1156 mm/s against
+  581 at 78 (static_spread) — straight across the impulse thresholds.
 
 Cue-ball identity is resolved globally (§4.1, POOL-AID lesson): the single
 whitest confirmed track wins, with an absolute whiteness floor (so a pocketed
@@ -28,10 +32,11 @@ hysteresis (so two near-white readings cannot flip-flop the flag).
 Pure module: no I/O, no clocks, no threads.
 """
 
-from dataclasses import dataclass, field
+from collections import deque
+from dataclasses import dataclass, field, replace
 from math import hypot
 
-from cueclock.vision.events import BallState
+from cueclock.vision.events import TUNED_HZ, BallState
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,8 @@ class Observation:
 class TrackConfig:
     gate_mm: float = 100.0  # association gate vs. prediction (break impulse fits)
     birth_frames: int = 3  # consecutive hits before a track is reported
+    # (this field and the four gains below are per frame at TUNED_HZ — see
+    # at_cadence)
     coast_s: float = 0.25  # occlusion survival while moving (§2.3 lesson 4: ~200 ms)
     still_coast_s: float = 3.0  # while stationary: a ball being addressed is
     # occluded/merged with the cue stick for seconds and cannot move unseen
@@ -82,6 +89,30 @@ class TrackConfig:
     cue_regrab_s: float = 1.0  # after the flagged track dies, report no cue this long
     # instead of crowning the next-whitest ball — scratch detection keys on the
     # cue being *absent*, and the palest yellow reads deceptively white
+    raw_baseline_s: float = 0.75 / TUNED_HZ  # raw speed spans the newest prior
+    # observation at least this old: exactly the previous one at TUNED_HZ
+    # (12.8 ms apart), two back at 156 Hz — the step every impulse threshold
+    # was measured on. 0.75 of a tuned interval so camera timestamp jitter
+    # can never push the previous frame out of reach at TUNED_HZ.
+
+    def at_cadence(self, hz: float) -> "TrackConfig":
+        """This config at another detect cadence: per-frame counts and gains
+        re-expressed as the same span of time they cover at TUNED_HZ."""
+        if hz == TUNED_HZ:
+            return self
+        k = TUNED_HZ / hz  # tuned frames per frame at hz
+
+        def ema(gain: float) -> float:
+            return 1.0 - float((1.0 - gain) ** k)
+
+        return replace(
+            self,
+            birth_frames=max(1, round(self.birth_frames / k)),
+            alpha=ema(self.alpha),
+            beta=self.beta * k,
+            whiteness_ema=ema(self.whiteness_ema),
+            churn_ema=ema(self.churn_ema),
+        )
 
 
 @dataclass
@@ -100,6 +131,9 @@ class _Track:
     raw_speed: float = 0.0
     churn: float | None = None  # EMA of observed appearance churn
     last_obs: tuple[float, float, float] = field(default=(0.0, 0.0, 0.0))  # t, x, y
+    recent_obs: deque[tuple[float, float, float]] = field(
+        default_factory=lambda: deque(maxlen=4)
+    )  # last few last_obs values, newest last — the raw-speed baseline's pool
     last_obs_merged: bool = False  # the observation that last updated this
     # track was an oversized (merged) blob — a moving track fed exclusively
     # by these is inseparable from a hand/stick (the carried-ball signature)
@@ -202,6 +236,7 @@ class BallTracker:
                         whiteness=obs.whiteness,
                         color_t=t,
                         last_obs=(t, obs.x_mm, obs.y_mm),
+                        recent_obs=deque([(t, obs.x_mm, obs.y_mm)], maxlen=4),
                         last_obs_merged=obs.merged,
                         last_present=t,
                     )
@@ -230,7 +265,10 @@ class BallTracker:
 
     def _update_track(self, track: _Track, t: float, obs: Observation) -> None:
         cfg = self._cfg
-        last_t, last_x, last_y = track.last_obs
+        last_t, last_x, last_y = next(
+            (o for o in reversed(track.recent_obs) if t - o[0] >= cfg.raw_baseline_s),
+            track.recent_obs[0],
+        )
         obs_dt = t - last_t
         if obs_dt > 0:
             track.raw_speed = hypot(obs.x_mm - last_x, obs.y_mm - last_y) / obs_dt
@@ -260,6 +298,7 @@ class BallTracker:
             else:
                 track.churn += cfg.churn_ema * (obs.churn - track.churn)
         track.last_obs = (t, obs.x_mm, obs.y_mm)
+        track.recent_obs.append(track.last_obs)
         track.last_obs_merged = obs.merged
 
     def _resolve_cue(self, t: float, confirmed: list[_Track]) -> None:

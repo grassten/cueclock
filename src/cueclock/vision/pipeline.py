@@ -19,6 +19,7 @@ cold. Still pure: bytes in/out, no file I/O.
 
 import hashlib
 import pickle  # nosec B403 — state snapshots only; loaded blobs are our own dumps
+from collections import deque
 from dataclasses import dataclass
 from math import hypot
 from typing import cast
@@ -37,8 +38,10 @@ from cueclock.vision.detect import (
     bayer_to_gray,
     build_reference,
     detect_frame,
+    table_edge_of,
 )
 from cueclock.vision.events import (
+    TUNED_HZ,
     BallsSettled,
     BallState,
     Event,
@@ -228,6 +231,10 @@ def build_radius_map(
     )
 
 
+# `VisionPipeline.find_blobs` output: balls, intrusions, and the frame's gray.
+DetectedBlobs = tuple[list[Detection], list[Intrusion], npt.NDArray[np.uint8]]
+
+
 @dataclass(eq=False)
 class ReferenceModel:
     """The static arrays `detect_balls` consumes, built once per camera position.
@@ -271,7 +278,15 @@ class ReferenceModel:
             self._digest = h.hexdigest()
         return self._digest
 
+    @property
+    def table_edge(self) -> npt.NDArray[np.bool_]:
+        """`detect.table_edge_of` the mask (memoized — it never changes)."""
+        if self._table_edge is None:
+            self._table_edge = table_edge_of(self.mask)
+        return self._table_edge
+
     _digest: str | None = None
+    _table_edge: npt.NDArray[np.bool_] | None = None
 
 
 class VisionPipeline:
@@ -284,18 +299,29 @@ class VisionPipeline:
         detect_config: DetectConfig | None = None,
         track_config: TrackConfig | None = None,
         event_config: EventConfig | None = None,
+        cadence_hz: float = TUNED_HZ,
     ) -> None:
+        """``cadence_hz`` is the rate frames will arrive at: 156.25 for every
+        camera frame, TUNED_HZ for stride 2. Configs are given as tuned and
+        converted here (`EventConfig.at_cadence`, `TrackConfig.at_cadence`),
+        so every caller passes the same constants whatever its cadence."""
         self._calibration = calibration
+        self.cadence_hz = cadence_hz
         self.reference = (
             reference
             if isinstance(reference, ReferenceModel)
             else ReferenceModel.build(reference, calibration)
         )
         self.detect_config = detect_config or DetectConfig()
-        self.event_config = event_config or EventConfig()
-        self._tracker = BallTracker(track_config)
+        self.event_config = (event_config or EventConfig()).at_cadence(cadence_hz)
+        self._tracker = BallTracker((track_config or TrackConfig()).at_cadence(cadence_hz))
         self._engine = EventEngine(self.event_config)
-        self._prev_gray: npt.NDArray[np.uint8] | None = None
+        # Churn differences against the gray one *tuned* interval back — the
+        # previous frame at TUNED_HZ, two back at 156 Hz — so spin_churn_max
+        # reads the same amount of rotation at any cadence.
+        self._grays: deque[npt.NDArray[np.uint8]] = deque(
+            maxlen=max(1, round(cadence_hz / TUNED_HZ))
+        )
         self._advanced = 0
         self.last_balls: list[BallState] = []  # diagnostics for analyze/scoreboard
         # E9's identity-free table-motion bit (accuracy plan §13.3): some
@@ -338,17 +364,28 @@ class VisionPipeline:
         detections, churn, intrusions = self.detect(bayer)
         return self.advance(t, detections, churn, intrusions)
 
+    @property
+    def churn_lag(self) -> int:
+        """Frames between the two grays churn differences (1 at TUNED_HZ)."""
+        return self._grays.maxlen or 1
+
     def detect(
         self, bayer: npt.NDArray[np.uint8]
     ) -> tuple[list[Detection], list[float | None], list[Intrusion]]:
+        return self.churn(*self.find_blobs(bayer))
+
+    def find_blobs(self, bayer: npt.NDArray[np.uint8]) -> DetectedBlobs:
         """Frame-bound half: ball-like blobs plus each one's appearance churn.
 
         The expensive half (~5.9 ms/frame on the M2 against 0.08 ms for
         :meth:`advance`) and the half that does *not* change while event logic
         is being tuned — which is why it is separable and cacheable offline
-        (`capture.detect_cache`). Stateful only through the previous frame's
-        gray, which churn differences against.
+        (`capture.detect_cache`).
+
+        Stateless, so the live loop runs it on worker threads (OpenCV drops
+        the GIL); :meth:`churn` is the stateful remainder, run in frame order.
         """
+        gray = bayer_to_gray(bayer)
         detections, intrusions = detect_frame(
             bayer,
             self.reference.gray,
@@ -356,15 +393,26 @@ class VisionPipeline:
             self.reference.mask,
             self.reference.bayer,
             self.reference.radius_px,
+            gray=gray,
+            table_edge=self.reference.table_edge,
         )
-        gray = bayer_to_gray(bayer)
+        return detections, intrusions, gray
+
+    def churn(
+        self,
+        detections: list[Detection],
+        intrusions: list[Intrusion],
+        gray: npt.NDArray[np.uint8],
+    ) -> tuple[list[Detection], list[float | None], list[Intrusion]]:
+        """Each detection's appearance churn; call once per frame, in order."""
+        prev = self._grays[0] if len(self._grays) == self._grays.maxlen else None
         churn = [
             None
-            if self._prev_gray is None
-            else ball_churn(gray, self._prev_gray, d.cx, d.cy, self.detect_config.churn_radius_px)
+            if prev is None
+            else ball_churn(gray, prev, d.cx, d.cy, self.detect_config.churn_radius_px)
             for d in detections
         ]
-        self._prev_gray = gray
+        self._grays.append(gray)
         return detections, churn, intrusions
 
     def advance(
@@ -505,11 +553,11 @@ class VisionPipeline:
         Refuses to snapshot a cache-fed pipeline: churn differences each frame
         against the previous one's gray, and frames replayed from
         `capture.detect_cache` never produce one. Such a snapshot would restore
-        with ``prev_gray=None`` and silently mis-compute churn on the first
+        with no previous grays and silently mis-compute churn on the first
         frame after the resume — a wrong answer, not an error. Warm work
         replays real frames.
         """
-        if self._advanced and self._prev_gray is None:
+        if self._advanced and not self._grays:
             raise RuntimeError(
                 "dump_state() on a pipeline fed from a detection cache: prev_gray was never "
                 "computed, so a warm resume would mis-compute churn on its first frame. "
@@ -519,7 +567,7 @@ class VisionPipeline:
             {
                 "tracker": self._tracker,
                 "engine": self._engine,
-                "prev_gray": self._prev_gray,
+                "prev_gray": list(self._grays),
                 "last_balls": self.last_balls,
                 "supra": self._supra,
                 "settled_baseline": self._settled_baseline,
@@ -536,7 +584,9 @@ class VisionPipeline:
         state = pickle.loads(blob)  # nosec B301 — our own dump_state output
         self._tracker = state["tracker"]
         self._engine = state["engine"]
-        self._prev_gray = state["prev_gray"]
+        grays = state["prev_gray"]  # a bare array (or None) before checkpoint 106
+        self._grays.clear()
+        self._grays.extend(grays if isinstance(grays, list) else [] if grays is None else [grays])
         self.last_balls = state["last_balls"]
         self._supra = state.get("supra", {})
         self._settled_baseline = state.get("settled_baseline")

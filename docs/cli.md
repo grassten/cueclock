@@ -165,9 +165,9 @@ The model comes from `scripts/fetch_vosk_model.sh`. Full plan:
 | `--port` | `8000` | |
 | `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
 | `--calibration` | `config/table_calibration.json` | |
-| `--stride` | `2` | detect every Nth frame (2 ≈ 78 Hz) |
-| `--ring-seconds` | `20.0` | in-RAM rolling buffer that `POST /api/dump` saves as a labeled clip (~3.6 GB at 20 s; `0` disables). 20 s because a measured live Flag press came 12.7 s after the phantom it reacted to |
-| `--dump-dir` | `~/cueclock-dumps` | where `POST /api/dump` stages flag clips. **Internal SSD on purpose, not the T7:** the T7 is USB, and a 3.6 GB dump saturates the bus it shares with every peer — one measured press (2026-08-01) dropped the detect loop 75 → 45 Hz and froze the Camo side-angle source in OBS for ~1 s, still blipping 20 s later. Flagging a failure was degrading the session being flagged. In-repo staging is out too: the Desktop is iCloud-synced. Refuses to eat the last 5 GiB |
+| `--stride` | `1` | detect every Nth camera frame. `1` = every frame (156 Hz, checkpoint 106); `2` = the 78 Hz cadence every constant was tuned at — the vision core converts its frame-count constants to the same span of time either way (`TUNED_HZ`) |
+| `--ring-seconds` | `20.0` | in-RAM rolling buffer that `POST /api/dump` saves as a labeled clip (~7.2 GB at 20 s and stride 1, ~3.6 GB at stride 2; `0` disables). 20 s because a measured live Flag press came 12.7 s after the phantom it reacted to |
+| `--dump-dir` | `~/cueclock-dumps` | where `POST /api/dump` stages flag clips. **Internal SSD on purpose, not the T7:** the T7 is USB, and a multi-GB dump saturates the bus it shares with every peer — one measured press (2026-08-01) dropped the detect loop 75 → 45 Hz and froze the Camo side-angle source in OBS for ~1 s, still blipping 20 s later. Flagging a failure was degrading the session being flagged. In-repo staging is out too: the Desktop is iCloud-synced. Refuses to eat the last 5 GiB |
 | `--verbose` | off | per-second track status lines |
 | `--no-mic` | off | disable the voice-"extension" mic |
 
@@ -231,7 +231,7 @@ Shared display args only.
 | `--clip` | required | clip directory to analyze |
 | `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
 | `--calibration` | `config/table_calibration.json` | |
-| `--stride` | adaptive | detect every Nth frame. Default adapts to the clip's stored rate so replay always runs at the live ~78 Hz cadence: record clips store 156 fps (→ 2), **ring dumps store detect-stride frames already (→ 1)** — a fixed 2 used to replay dumps at half cadence and produce different events than the live session under triage (checkpoint 33) |
+| `--stride` | `1` | detect every Nth *stored* frame. The default replays every frame at the clip's own cadence (`ClipReader.cadence_hz`): record clips and dumps from checkpoint 106 on store 156 fps, older ring dumps the 78 Hz stream they were detected at — so a dump always replays at the cadence its live session ran (the checkpoint 33 lesson). Larger strides are for experiments; the pipeline is built for `cadence / stride` |
 | `--warm` | off | restore the flag dump's live-state snapshot (`state.pkl`) and replay from it — reproduces what the live session computed, accumulated state included. Without a snapshot: cold replay + a note. See the triage recipe above |
 | `--verbose` | off | per-second track status lines |
 
