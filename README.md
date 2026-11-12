@@ -102,9 +102,8 @@ uv run python -m cueclock.cli deck
 - Voice "extension": say the word and the clock grants one — and the overlay
   announces "Extension called" back, for that call and for the deck key alike.
   Needs the Vosk model (`scripts/fetch_vosk_model.sh`, once) and a microphone —
-  the Mac mini has none built in, so it defaults to the iPhone's own mic over
-  the USB cable the side-angle camera already uses (`Camo Microphone`, which
-  needs audio switched on in Camo Studio). Any other is named with
+  the Mac mini has none built in, so it defaults to the side-angle camera's
+  own mic (`Insta360 Link 2C Pro`). Any other is named with
   `--mic-device`. `cueclock listen` is the bring-up/soak tool
   (`docs/hardware.md` Part D).
 - Other subcommands: `record`, `replay`, `analyze`, `calibrate`,

@@ -152,15 +152,20 @@ grab thread (BayerRG8 @ 156 fps)
 
 **Sources:**
 - Syphon Client — the overhead table feed.
-- Video Capture Device → **Camo Camera** — the iPhone side angle over USB,
+- Video Capture Device → **Insta360 Link 2C Pro** (since 2026-11-12, Part F)
+  — the side angle, 1920×1080 NV12 at **60000240/1000000** fps. That odd frame
+  rate is deliberate: the camera reports its 60 fps mode as 60.00024 fps, so
+  OBS's plain "60" fails the plugin's exact range match and it silently falls
+  back to **50** (log: `Frame rate is not supported: 60 FPS … falling back …
+  50 FPS`), then saves 50 over the setting. Check the log for that line after
+  touching the source. Before it, **Camo Camera** — the iPhone side angle over USB,
   owned by OBS directly (Camo Studio on the mini + the Camo app on the phone,
   manual focus/exposure/WB locks; 1080p60 in Camo Studio since 2026-08-07 —
   the 60 fps ceiling, Camo's 4K formats are 30 fps). It replaced the wireless **iPhone
   Continuity Camera** source on 2026-08-01: Continuity looked washed out with
   blotching (iPhone auto tone-mapping/AF, no manual controls) and it died
   mid-session once without reconnecting, which cost two triage passes chasing
-  a vision bug that wasn't one (CHANGELOG 2026-08-01). **Being replaced** by
-  an Insta360 Link 2C Pro (Part F, #47); Camo stays live until §F3 passes.
+  a vision bug that wasn't one (CHANGELOG 2026-08-01).
 - Browser source `http://localhost:8000/shotclock?view=bar` — **the bar**: one
   transparent **2668×2160** source at (0, 0) carrying the clock *and* the
   scoreboard, drawn as a plinth (160 px in the page's 1334-wide reference
@@ -999,7 +1004,7 @@ always the safe state for a key pressed mid-session.
    having fired at all. The spotter's 2 s cooldown is **not** a substitute:
    Vosk finalizes at end-of-utterance, so the announcement's own final can
    land after the cooldown expires.
-5. Nothing else. OBS owns the Camo side-angle *camera*; its **audio** is a
+5. Nothing else. OBS owns the side-angle *camera*; its **audio** is a
    separate device that cueclock may open (§ below) — CoreAudio inputs are
    shareable, unlike the deck's exclusive HID claim.
 
@@ -1020,9 +1025,17 @@ out, and virtual devices — Apple's spec sheet agrees; mic arrays are an
 iMac/MacBook feature), so the input is always something plugged in or
 virtual.
 
-**The rig's mic is the iPhone's own, via Camo** (Part F plans its
-replacement by the Link 2C Pro's own mic, #47; settled 2026-08-03,
-`--mic-device` default `Camo Microphone`). The phone is already on the USB
+**The rig's mic is the side-angle camera's own** since 2026-11-12:
+`--mic-device` default `Insta360 Link 2C Pro`, the Link 2C Pro's built-in mic
+(Part F). ⚠️ A camera that has never met **Insta360 Link Controller** streams
+digital silence (OBS take: `-91.0 dB`) with no error anywhere; after the app has
+run once, the mic carries real audio with the app closed (measured 2026-11-12:
+`-62 dB` mean, `-50 dB` peak, Link Controller quit). If the voice call goes dead
+after a camera swap or factory reset, that is the first thing to try.
+
+*Until 2026-11-12 the mic was the iPhone's own, via Camo* (settled 2026-08-03,
+`--mic-device` default `Camo Microphone`); the rest of this block is that
+history, kept because the silent-but-healthy lesson is general. The phone is already on the USB
 cable for the side-angle camera and Camo Studio already owns it, so Camo's
 audio driver (`/Library/Audio/Plug-Ins/HAL/ReincubateCamoAudio.driver`) is the
 input that costs nothing extra. 48 kHz stereo natively; the listener opens it
@@ -1049,16 +1062,19 @@ suspecting the spotter, the model, or the wiring:
 ```bash
 uv run python -c "
 import sounddevice as sd, numpy as np
-d = sd.rec(int(4*16000), samplerate=16000, channels=1, dtype='int16', device='Camo Microphone')
+d = sd.rec(int(4*16000), samplerate=16000, channels=1, dtype='int16', device='Insta360 Link 2C Pro')
 sd.wait(); a = np.asarray(d)
 print('peak', abs(a).max(), 'rms', round(float((a.astype(float)**2).mean()**0.5), 1))
-"   # speak during the 4 s. peak 0 = Camo's audio toggle is off, not a bad mic
+"   # speak during the 4 s. peak 0 = the device isn't feeding audio, not a quiet room
 ```
 
 **OBS's Mic/Aux source is what puts the *room* in a recording** — cue strikes,
 the break, the player talking. It is `coreaudio_input_capture`, pinned to
-`CamoAudioDevice_UID` rather than the `"default"` it shipped as: Camo's driver
-happens to be the system default input today, but a headset or Jump Desktop's
+`AppleUSBAudioEngine:Insta360:Insta360 Link 2C Pro:1100000:3` (until
+2026-11-12, `CamoAudioDevice_UID`) rather than the `"default"` it shipped as.
+That UID embeds the USB location (`1100000`), so **moving the camera to another
+port breaks it** — re-pick the device in OBS. The camera happens to be the
+system default input today, but a headset or Jump Desktop's
 virtual mic would silently become the recording's audio, which is the same
 never-trust-the-default rule the listener follows above.
 
@@ -1119,8 +1135,8 @@ silence.
 
 Bring-up (at the table, before trusting it live):
 
-- [ ] `uv run python -m cueclock.cli listen --devices` — confirm `Camo
-      Microphone` is listed (Camo Studio running, phone on USB, audio enabled);
+- [ ] `uv run python -m cueclock.cli listen --devices` — confirm `Insta360
+      Link 2C Pro` is listed;
       any other mic gets named with `--mic-device`.
 - [ ] `uv run python -m cueclock.cli listen` — say "extension" 10× at playing
       distance, head down over a shot: every call prints `ACCEPTED`
@@ -1237,8 +1253,9 @@ and it will move again someday:
 
 ## Part F — Side-angle camera: Insta360 Link 2C Pro (ordered 2026-11-11, not yet installed)
 
-**Status: ordered, arriving 2026-11-12. Camo + the iPhone (§B3, Part D) stay
-the live side angle *and* the live mic until every §F3 check passes.** Work
+**Status: live since 2026-11-12 as the side angle (§B3) and the mic (Part D);
+Camo is retired.** §F3 results so far are in F5; the §F2 apply step is
+not built yet. Work
 item: [#47](https://github.com/grassten/cueclock/issues/47). Nothing in the code
 knows about this camera yet; §F2's apply step is a design, not a build.
 
@@ -1428,3 +1445,21 @@ in Insta360-Developer_Docs. It lists the Link 2C Pro.
 - **Keep the phone and Camo Studio** as a fallback for a few sessions, then take
   Camo Studio out of the login items.
 - **A CHANGELOG checkpoint entry** with `Closes #47`.
+
+### F5. Arrival results (2026-11-12)
+
+- **Identity:** USB `2e1a:4c05`, AVFoundation id `0x11000002e1a4c05`, camera
+  firmware `v0.2.5.8_build1` (Link Controller 2.2.5 offers `0.3.5.8_build3`).
+- **USB:** on a Thunderbolt/USB-C controller of its own (locationID
+  `0x01100000`). The rear USB-A pair is one ASMedia controller and the Basler is
+  on it, so the Stream Deck moved there (HID, negligible) to free the USB-C
+  port. The camera enumerates as USB 2 high-speed.
+- **Formats:** 1280×720, 1280×960, 1920×1080 and 1920×1440 at up to 60 fps;
+  3840×2160 at up to 30 fps; NV12 (`420v`) and UYVY each. 60 fps is really
+  60.00024 fps (see §B3 for why that matters to OBS).
+- **1080p60 is full width:** OBS frames at 1080p60 and 4K30 match.
+- **Mic:** silent until Link Controller had run once, then live with the app
+  closed (Part D). Vosk at the rails and "Original" mode are still open.
+- **Coexistence:** OBS captured the camera with Link Controller both running and
+  quit. Link Controller installs its own virtual camera system extension; OBS
+  doesn't use it.

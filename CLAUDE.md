@@ -59,6 +59,14 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   the Syphon rebind, the TV projector and the Vosk model while the logs said
   only "no usable tv.json". Check with `find config models -type f -flags
   +dataless`; anything listed means a symlink was replaced by a real directory.
+  The rest of the repo lives in iCloud too: on 2026-11-01 `src/`, `tests/`,
+  `scripts/`, `logs/` and most of `.git/` came back dataless after a reboot, so the
+  deck daemon and its `run` child died on `import` (a terminal could still read
+  them, which is why it looked intermittent). The repo root now carries Finder's
+  "Keep Downloaded" flag (`xattr -w 'com.apple.fileprovider.pinned#PX' 1 .`), which
+  new files inherit. If EDEADLK returns, check `find . -type f -flags +dataless`
+  and read the files from a terminal to bring them back; a fresh clone in iCloud
+  needs the flag set again.
   Never recreate either as a real directory inside `~/Desktop`.
 - **uv only.** `uv sync`, `uv run <cmd>`, `uv add <pkg>` (`--group dev` for tooling).
   Never bare `pip install`. (The old project's pipenv rule is dead.) The venv really
@@ -122,9 +130,11 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
 - Camera's 8-bit Bayer format is **BayerRG8**; the OpenCV↔GenICam naming mismatch is
   **resolved**: decode with `cv2.COLOR_BayerBG2BGR` (verified against the blue cloth
   2026-07-27 — see `docs/hardware.md` §A3).
-- The iPhone side angle runs through **Camo** over USB (Camo Studio + the phone app,
-  manual focus/exposure/WB), owned by OBS directly. It replaced Continuity Camera on
-  2026-08-01 — wireless, no manual controls, and it died mid-session once.
+- The side angle is an **Insta360 Link 2C Pro** on its own USB-C port, owned by OBS
+  directly, and its built-in mic is the voice listener's input (since 2026-11-12,
+  `docs/hardware.md` Part F). It replaced the iPhone-over-Camo setup (2026-08-01 to
+  2026-11-12), which had replaced Continuity Camera. OBS must use frame rate
+  `60000240/1000000`: a plain 60 silently falls back to 50 fps (§B3).
 - Stream Deck hits the HTTP API; keep the `/api/*` contract from `docs/design.md` §2.1.
   **Never install the Elgato Stream Deck app** — it would claim exclusive HID access
   and starve the `cueclock deck` daemon.
