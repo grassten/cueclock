@@ -92,7 +92,7 @@ def match_input_device(name: str, inputs: Sequence[tuple[int, str]]) -> int | No
     """Pick an input device by CoreAudio name: exact, then case-insensitive substring.
 
     Returns None when nothing matches — never the system default
-    (docs/hardware.md Part D rule: pin by name so a Bluetooth headset or Camo's
+    (docs/hardware.md Part D rule: pin by name so a Bluetooth headset or a
     virtual audio device can't silently become the listener).
     """
     for index, device_name in inputs:

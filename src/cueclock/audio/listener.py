@@ -37,27 +37,19 @@ BLOCKSIZE_FRAMES = 4000  # 250 ms per chunk at 16 kHz (v1 value)
 # finalizes at end-of-utterance, so the announcement's own final can land
 # after the cooldown expires (docs/hardware.md Part D).
 ANNOUNCE_MUTE_SECONDS = 2.5
-# The iPhone's microphone, over the USB cable the phone is already on for the
-# side-angle camera. The Mac mini has no built-in mic, so this is the rig's
-# only real input; a name, not an index, and never "system default" — see
-# match_input_device in spotter.py for why.
+# The side-angle camera's own microphone (Insta360 Link 2C Pro, since
+# 2026-11-12; docs/hardware.md Part F). The Mac mini has no built-in mic, so
+# this is the rig's only real input; a name, not an index, and never "system
+# default" — see match_input_device in spotter.py for why.
 #
-# Camo's device, not macOS's Continuity one. Both carry the same physical
-# microphone, and the reason to prefer Camo's is that the phone is already
-# Camo's: opening `<owner>'s iPhone Microphone` makes macOS claim the phone as
-# a Continuity device alongside Camo's USB session, and the side-angle feed is
-# what pays for it.
+# Run it in "Original" audio mode (noise suppression off): suppression is built
+# to remove clicks, and Vosk copes with room noise on its own.
 #
-# `Camo Microphone` streaming digital silence — measured 2026-08-03, peak 0 /
-# rms 0.0 / zero non-zero samples over 4 s with speech in the room, at 48 kHz
-# stereo, 48 kHz mono and 16 kHz mono alike — is **not** a property of the
-# device, which is what an earlier note here concluded. It is Camo Studio's own
-# audio toggle being off (`audioSettings.enabled: false` in its preferences):
-# the CoreAudio driver loads and opens without error whether or not Camo is
-# feeding it, so "off" and "nobody said anything" look identical from here.
-# Turning audio on in Camo Studio is the fix; docs/hardware.md Part D has the
-# check that tells the two apart in one command.
-DEFAULT_DEVICE = "Camo Microphone"
+# A fresh camera streamed digital silence (OBS: -91 dB, peak 0) until Insta360
+# Link Controller had run once; after that it carries real audio with the app
+# closed (measured 2026-11-12). Silence here therefore means "camera never
+# initialised", not "nobody spoke" — Part D's peak/rms snippet tells them apart.
+DEFAULT_DEVICE = "Insta360 Link 2C Pro"
 DEFAULT_MODEL = Path("models/vosk-model-small-en-us-0.15")  # scripts/fetch_vosk_model.sh
 
 

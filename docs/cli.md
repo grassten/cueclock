@@ -345,7 +345,7 @@ access and starve this daemon.
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--mic-device` | `Camo Microphone` (substring match) | CoreAudio name, exact then substring match (`listen --devices` lists them). Camo's device, not macOS's Continuity `iPhone Microphone`: same physical mic, but opening the Continuity one makes macOS claim the phone that Camo is already streaming the side angle from. Needs audio switched **on** in Camo Studio — off, it opens fine and streams digital silence (hardware.md Part D). Defaulted so deck-started sessions get voice — their argv is fixed and takes no flags. Still name-matched, never "system default": if the device is absent the listener prints why and stays off |
+| `--mic-device` | `Insta360 Link 2C Pro` (substring match) | CoreAudio name, exact then substring match (`listen --devices` lists them). The side-angle camera's own mic (hardware.md Part F). A camera that has never run Insta360 Link Controller opens fine and streams digital silence (hardware.md Part D). Defaulted so deck-started sessions get voice — their argv is fixed and takes no flags. Still name-matched, never "system default": if the device is absent the listener prints why and stays off |
 | `--mic-model` | `models/vosk-model-small-en-us-0.15` | fetch via `scripts/fetch_vosk_model.sh` |
 
 ## Not in this CLI, but nearby

@@ -247,7 +247,66 @@ survive unchanged in `design.md`.
   stays lit; lag scores every settle unarmed; the phone gains a Drills tab
   that edits zones on the 8×4 grid but never moves balls.
 
+- **2026-11-11** **The side angle gets a permanent camera: an Insta360 Link 2C
+  Pro, ordered, arriving 2026-11-12. Not live yet; Camo and the iPhone stay the
+  side angle and the mic until `hardware.md` §F3 passes** (#47). The full record
+  is `hardware.md` Part F.
+  - **Mount.** Short-end wall, ~5 ft from the near rail. From there a 71° lens
+    fits the whole table and a far-end shooter with width to spare. A ~1.5× crop
+    of the 4K sensor still keeps more than 1080p of real detail.
+  - **Compared against.** The MX Brio and OBSBOT Meet 2. It won on three counts:
+    - Its noise suppression can be turned off, and the camera keeps that setting.
+      The Brio's can't be changed at all, which risks the cue strikes that Mic/Aux
+      records.
+    - It has the biggest sensor (1/1.3").
+    - It has an official macOS SDK that reaches every setting, audio included.
+  - **The Meet 2's extra flaw.** Its mic reportedly passes audio only while a
+    video stream is open. That is Part D's silent-but-healthy mic trap again.
+  - **Not the Link 2 Pro.** Its gimbal is a liability on a fixed mount, and it
+    was out of stock. Not a GoPro either: 1080p30 webcam mode, plus a helper
+    app.
+  - **Decided with Steven.** Every camera setting is applied by code at session
+    start, as a fourth retried item in `SessionManager._prepare_once()`, with a
+    read-back of what was set. A failure warns and never blocks the clock, so
+    whatever the camera remembers on its own doesn't matter.
+  - **Mic plan.** The camera runs in "Original" (suppression off). Vosk gets the
+    raw signal, and OBS filters handle the stream's audio.
+  - **Vendor claims still to check on arrival.** Uncropped 1080p60, and whether
+    "Original" really turns suppression off: Insta360's own page says both that
+    it does and that it isn't supported.
+
 ## Checkpoint log (append-only, newest first)
+
+- **2026-11-12 (checkpoint 107 — the Insta360 is the side angle and the mic;
+  Camo retired):** The Link 2C Pro arrived and went live the same day (#47 stays
+  open for §F2's apply step and the at-table §F3 checks). Results are in
+  `hardware.md` §F5.
+  - **USB.** It first went into the second rear USB-A port. That port is on the
+    Basler's ASMedia controller, so it swapped places with the Stream Deck, whose
+    HID traffic is negligible. It now has a USB-C controller to itself.
+  - **OBS: the 60 fps trap.** The camera reports its 60 fps mode as 60.00024 fps
+    (`1000000/60000240` s). OBS's mac-avcapture checks the requested rate against
+    that range exactly, so a plain 60/1 fails and falls back to the closest rate
+    at or below the 60 fps canvas, which is **50**. The only sign is a log line;
+    the source looks fine. It also saves 50 over the setting, so the next launch
+    keeps it. The source now stores `60000240/1000000`. 4K30 has the same quirk
+    (`30000030/1000000`). Frames at true 60 and true 4K30 match, so 60 fps isn't
+    cropped.
+  - **Mic: silent until Link Controller ran once.** OBS recorded `-91.0 dB` from
+    a working, unmuted Mic/Aux. After Insta360 Link Controller had run once:
+    `-59 dB` mean, `-30 dB` peak. With the app quit: `-62 dB` / `-50 dB`. It's
+    the same silent-but-healthy trap as Camo's audio toggle, so Part D now leads
+    with it. `listener.DEFAULT_DEVICE` is `Insta360 Link 2C Pro`. Mic/Aux is
+    pinned to its UID, which embeds the USB location, so changing ports means
+    re-picking the device in OBS.
+  - **Camo uninstalled** by Steven (app and HAL driver removed; the camera
+    extension goes at the next reboot). That's sooner than Part F's
+    keep-it-for-a-few-sessions plan, at Steven's call.
+  - **Still open on #47.** Firmware `v0.2.5.8` → `0.3.5.8`. Exposure, white
+    balance and focus are still on auto. "Original" mode and Vosk at both rails.
+    Detection Hz with both cameras streaming. The §F2 apply step and its SDK.
+  - **Verification.** Unit tests (`test_audio`, `test_server`, 128 passed), ruff
+    and mypy on `audio/`. No detection code changed, so no corpus battery.
 
 - **2026-10-17 (checkpoint 106 — detection runs at the camera's full 156 Hz):**
   Steven has asked for this repeatedly; the honest record is that "more frames
