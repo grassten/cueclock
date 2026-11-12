@@ -3,8 +3,9 @@
 Everything physical and everything between the sensor and the TV: camera
 bring-up and locked settings (Part A), the video path into OBS (Part B), the
 Stream Deck control surface (Part C — a living doc: keep it in sync with
-`deck/layout.py`), the microphone plan (Part D), and the TV + post-move
-recalibration recipes (Part E). References use the form
+`deck/layout.py`), the microphone plan (Part D), the TV + post-move
+recalibration recipes (Part E), and the side-angle camera replacing the
+iPhone (Part F — ordered 2026-11-11, not yet live). References use the form
 "`hardware.md` camera §5" — part name + section number.
 
 Machine: Mac mini M2 (Mac14,3, 24 GB, macOS 26.x) — dev and production, runs
@@ -158,7 +159,8 @@ grab thread (BayerRG8 @ 156 fps)
   Continuity Camera** source on 2026-08-01: Continuity looked washed out with
   blotching (iPhone auto tone-mapping/AF, no manual controls) and it died
   mid-session once without reconnecting, which cost two triage passes chasing
-  a vision bug that wasn't one (CHANGELOG 2026-08-01).
+  a vision bug that wasn't one (CHANGELOG 2026-08-01). **Being replaced** by
+  an Insta360 Link 2C Pro (Part F, #47); Camo stays live until §F3 passes.
 - Browser source `http://localhost:8000/shotclock?view=bar` — **the bar**: one
   transparent **2668×2160** source at (0, 0) carrying the clock *and* the
   scoreboard, drawn as a plinth (160 px in the page's 1334-wide reference
@@ -1018,7 +1020,8 @@ out, and virtual devices — Apple's spec sheet agrees; mic arrays are an
 iMac/MacBook feature), so the input is always something plugged in or
 virtual.
 
-**The rig's mic is the iPhone's own, via Camo** (settled 2026-08-03,
+**The rig's mic is the iPhone's own, via Camo** (Part F plans its
+replacement by the Link 2C Pro's own mic, #47; settled 2026-08-03,
 `--mic-device` default `Camo Microphone`). The phone is already on the USB
 cable for the side-angle camera and Camo Studio already owns it, so Camo's
 audio driver (`/Library/Audio/Plug-Ins/HAL/ReincubateCamoAudio.driver`) is the
@@ -1229,3 +1232,199 @@ and it will move again someday:
 6. Re-set the OBS crop; re-judge the LUT/grade on the actual TV.
 7. ChArUco intrinsics (`design.md` §4.3) only after a *final* install — void
    the moment the camera moves or refocuses.
+
+---
+
+## Part F — Side-angle camera: Insta360 Link 2C Pro (ordered 2026-11-11, not yet installed)
+
+**Status: ordered, arriving 2026-11-12. Camo + the iPhone (§B3, Part D) stay
+the live side angle *and* the live mic until every §F3 check passes.** Work
+item: [#47](https://github.com/grassten/cueclock/issues/47). Nothing in the code
+knows about this camera yet; §F2's apply step is a design, not a build.
+
+### F1. Why this camera (decision record, 2026-11-11)
+
+**What it has to do.** It has to be permanent, so no phone, no Camo Studio, and
+no audio toggle that streams digital silence when it's off (Part D). It has to
+match today's side angle at 1080p60 with manual exposure, white balance and
+focus. Its built-in mic has to be good enough for the voice extension, so a
+lapel mic is not wanted. And every setting has to be **set by code at session
+start**, not clicked into a vendor app.
+
+**Geometry.** The camera goes on the **short-end wall, ~5 ft (1.52 m) from the
+near rail**, looking down the table's length.
+- **Table size.** It's a 7-ft table: 1930 × 965 mm playing surface
+  (`vision/calibration.py`), roughly 2.15 × 1.18 m outside. The outside figure is
+  a bar-box estimate, so measure it.
+- **Width.** From the end the table is only ~34° wide.
+- **Length.** Near rail to far rail spans ~15–23° of the picture top to bottom,
+  for a mount 5–8 ft high.
+- **Against the Link's lens.** It covers 71.4° horizontally and ~44° vertically
+  (83.9° diagonally), so the whole table and a far-end shooter fit with width to
+  spare.
+- **Zoom.** The 4K sensor allows a ~1.5× crop that still keeps more than 1080p of
+  real detail.
+- **The long-side case** (not chosen, kept for the record). From a long-side
+  wall, a 71° lens clips a shooter at the end rail when mounted below ~7 ft;
+  only the MX Brio's 82° (its 90° diagonal mode) covers them.
+
+**Compared** (vendor specs and reviews, none tested on this rig):
+
+| | Link 2C Pro | Logitech MX Brio | OBSBOT Meet 2 |
+|---|---|---|---|
+| Sensor | **1/1.3"**, dual native ISO 100–3200 | 1/2.8" (IMX415) | 1/2" |
+| Horizontal FOV | 71.4° | 82° / 70° / 58° (digital crop) | 67.2° |
+| Mic noise suppression | **can be turned off** ("Original" mode, kept after restart) | **can't be changed**: an undocumented block that `brioctl` deliberately doesn't write | off / weak / strong, auto gain, Near/Far setting |
+| Rated pickup | ~3 m (Focus mode: 1 m) | 1.2–1.5 m | not published |
+| Mic reviews | about as good as a MacBook mic; standard suppression clips soft syllables | "aggressively average" | weakest: "hollow", "a bit quiet" |
+| Control path | **official** Insta360 Link SDK, macOS (§F2) | community `brioctl` (MIT, 1 star, one firmware tested) | official OBSBOT SDK; its remote-control interface (OSC) needs OBSBOT Center running |
+
+**Why the others lost:**
+- **MX Brio.** Its always-on noise suppression is the problem. Mic/Aux is what
+  puts cue strikes in a recording or stream (Part D), and suppression is built to
+  remove exactly that kind of click. Its wider lens only mattered for a long-side
+  mount.
+- **OBSBOT Meet 2.** It has the narrowest lens and the weakest mic reviews. Also,
+  per [qaid/obsbot-control](https://github.com/qaid/obsbot-control), "the OBSBOT
+  mic only passes audio while a video stream is open". That is Part D's silent
+  but healthy mic trap again: a listener that starts before OBS hears nothing and
+  reports no error.
+- **Link 2 Pro.** It's the same sensor and mics on a 2-axis motorized gimbal. A
+  fixed mount gains nothing from aim that can drift, park itself face-down for
+  privacy, or be re-aimed by AI tracking. It was also out of stock.
+- **GoPro.** Webcam mode is 1080p30 and needs a helper utility running on the
+  Mac, the same kind of dependency as Camo.
+
+⚠️ **The plain "Link 2C" (no "Pro") is a different camera.** It has the older 1/2"
+sensor and different audio modes, and listings often show the two side by side.
+
+**Mic plan.** Run the camera in **"Original"** mode, with noise suppression off,
+and do all audio processing in software we control:
+- **Vosk** opens the CoreAudio device directly, so it gets the raw signal.
+  Keyword spotting copes with room noise.
+- **OBS** puts its own **Noise Gate** filter (open/close threshold, attack, hold,
+  release) and/or **Noise Suppression** filter on Mic/Aux if they're wanted.
+  These affect only what's recorded or streamed, never the listener.
+- **Avoid Focus mode**, which is rated for 1 m.
+- **The weak spot is the far rail**, ~3.7–4.2 m from the camera and past the
+  ~3 m rating. A shooter there is facing the camera, which helps. The iPhone mic
+  sits in the same spot today, so the §F3 A/B is a fair comparison.
+
+**Not yet verified.** Vendor sources disagree or say nothing on these, so §F3
+settles them:
+- **1080p60 without a crop.** The spec lists 1080p60. Whether that uses the full
+  sensor width is not stated.
+- **Turning noise suppression off.** Insta360's Link 2C Pro noise-cancellation
+  page says to pick "Original" to disable it, and the *same page* also says
+  "disabling noise cancellation is not supported".
+- **HDR and manual exposure.** A reviewer reports that turning HDR on disables
+  manual exposure. That's fine, because manual exposure is what we want.
+- **Persistence.** The audio mode is documented as kept after a restart. Nothing
+  says whether image settings are.
+- **The SDK.** It publishes no license, and nothing says whether its own settings
+  need an active video stream. The community crate
+  [sglre6355/insta360-link](https://github.com/sglre6355/insta360-link) says they
+  do: "Vendor settings require an active video stream."
+
+### F2. Control path, and the session-start apply step (planned)
+
+**Standard UVC controls** need no vendor code. Exposure, white balance, focus,
+zoom and gain are reachable from macOS over IOKit while OBS is streaming.
+
+**Vendor features** go through the **official Insta360 Link SDK**:
+[Insta360Develop/Link-SDK](https://github.com/Insta360Develop/Link-SDK),
+folder `UVCCamera_mac`, C++. The guide is
+[`docs/en/sdk/link/uvc/guide.md`](https://github.com/Insta360Develop/Insta360-Developer_Docs/blob/main/docs/en/sdk/link/uvc/guide.md)
+in Insta360-Developer_Docs. It lists the Link 2C Pro.
+- **Calls that matter here:**
+  - `EnableAutoExposure`, `SetShutterSpeed` (one value from `GetShutterSpeedList`),
+    `SetISOValue` (100–3200), `SetExposureCompensation` (±3)
+  - `SetWhitebalanceTemperatureMode` / `Value`
+  - `EnableAutoFocus` / `SetFocusAbsolute`
+  - `SetZoomAbsolute`, and `SetHostPTZ` (crop-based framing on fixed-lens models)
+  - `EnableExtendFuncWork(HDR, …)`
+  - `SetVideoMode(Normal)`, with tracking and gestures off
+  - `EnableAudioNoiseReduction(bool)` and `SetAudioDirectionMode`
+    (Standard / Wide / Focus / Music)
+  - `UVCCameraDeviceWatcher`, a macOS-only hot-plug watcher
+- **It is not vendored.** There's no published license, so Steven downloads it,
+  and it lives outside the repo or under a gitignored path.
+- **Fallback:**
+  [lucasoskorep/open-360-link](https://github.com/lucasoskorep/open-360-link)
+  (Rust, MIT/Apache-2.0, macOS over IOKit, audio modes included). It's reverse
+  engineered and doesn't name the 2C Pro.
+
+**The apply step.** A fourth retried item in `SessionManager._prepare_once()`
+(`deck/session.py`), alongside the TV, the table feed and the projector:
+1. **Run after OBS has the camera open.** `_prepare_once` only runs once OBS is
+   up. Vendor settings may need an active stream, and starting a stream can reset
+   settings on some webcams. Retry on the poll until OBS's capture is live.
+2. **Set, then read back.** A mismatch is a failure. That's what catches firmware
+   quietly ignoring "Original".
+3. **Re-apply on reconnect** through the SDK's hot-plug watcher. A USB blip
+   brings the camera back on its stored settings.
+4. **Warn, never block.** The side angle doesn't feed detection, so this failing
+   must not cost the shot clock. Log it in the same way ("setup incomplete — side
+   camera"). It is never a red key like `NO CAMERA`.
+5. **Keep the values in `config/`** (the `config.nosync` symlink; see CLAUDE.md on
+   iCloud), with the exact values §F3 settles on.
+
+### F3. Arrival checks (do these inside the return window)
+
+1. **Identify it.**
+   - Confirm it's the Link 2C Pro. `system_profiler SPUSBDataType` should show
+     USB ID `2e1a:4c05`, per sglre6355's table.
+   - Note the firmware version. Update the firmware once through Insta360 Link
+     Controller before testing anything else.
+2. **USB.** Use a USB-C/Thunderbolt port. Never share the Basler's bus or a hub
+   (§A1; the dump saturation, §C5). If the cable can't reach the mount, use a
+   powered extension.
+3. **1080p60 at full width.** Set OBS Video Capture Device to 1920×1080 at 60 fps,
+   then compare the field of view against 30 fps and 4K30. Any crop shows up as a
+   narrower picture.
+4. **Framing.** Check the whole table and a far-end shooter are in frame. Pick the
+   zoom/crop and the physical aim. Record the values.
+5. **Exposure.**
+   - HDR off, manual shutter ≥ 1/250 s at 60 fps (freezes ball motion).
+   - Step the shutter speed until there's no LED flicker banding, and set
+     anti-flicker to 60 Hz.
+   - Set ISO, white balance in Kelvin, and manual focus on the table centre.
+6. **"Original" really turns suppression off.** Record a cue strike plus room tone
+   in OBS through Mic/Aux in Standard and then in Original. Original should keep
+   the click and the room hiss.
+7. **Mic A/B against Camo.**
+   - Get its CoreAudio name with
+     `uv run python -m cueclock.cli listen --devices`.
+   - Run the Part D peak/rms snippet on both devices.
+   - Call "extension" from the near rail **and the far rail**, on the new device
+     (`run --mic-device NAME`).
+8. **Cue strikes in an OBS recording.** They're the thing suppression would have
+   removed.
+9. **Persistence (for information only).** Unplug, reboot, and note what survives.
+   The apply step sets everything anyway, so this only shapes how much
+   reconnecting matters.
+10. **Coexistence.** Find out whether Link Controller has to be closed for OBS (or
+    the SDK) to own the camera. The goal is that no vendor app runs during a
+    session.
+11. **Detection rate during a session.** Check `run`'s detect Hz with the new
+    camera streaming. A second USB video device must not cost the 156 Hz loop
+    anything.
+
+### F4. Switchover (after §F3 passes)
+
+- **OBS.** In *Stream Detail*, replace the **Camo Camera** source. Point Mic/Aux
+  at the new device's UID, not `"default"` (Part D explains why). Add Noise Gate /
+  Noise Suppression filters only if a recording shows they're needed.
+- **`audio/listener.py`.** Change `DEFAULT_DEVICE` to the new CoreAudio name, and
+  rewrite the comment block above it (it's all about Camo).
+- **The apply step.** Build it as §F2 describes, with tests in the existing
+  `SessionManager` fake style.
+- **Docs, in the same commit:**
+  - §B3 sources and Part D's "the rig's mic" section
+  - this Part's status line
+  - README (lines ~106–107, `Camo Microphone`)
+  - `docs/cli.md` (`--mic-device` default)
+  - CLAUDE.md "Hardware / environment facts", the Camo bullet
+- **Keep the phone and Camo Studio** as a fallback for a few sessions, then take
+  Camo Studio out of the login items.
+- **A CHANGELOG checkpoint entry** with `Closes #47`.

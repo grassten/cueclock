@@ -247,6 +247,34 @@ survive unchanged in `design.md`.
   stays lit; lag scores every settle unarmed; the phone gains a Drills tab
   that edits zones on the 8×4 grid but never moves balls.
 
+- **2026-11-11** **The side angle gets a permanent camera: an Insta360 Link 2C
+  Pro, ordered, arriving 2026-11-12. Not live yet; Camo and the iPhone stay the
+  side angle and the mic until `hardware.md` §F3 passes** (#47). The full record
+  is `hardware.md` Part F.
+  - **Mount.** Short-end wall, ~5 ft from the near rail. From there a 71° lens
+    fits the whole table and a far-end shooter with width to spare. A ~1.5× crop
+    of the 4K sensor still keeps more than 1080p of real detail.
+  - **Compared against.** The MX Brio and OBSBOT Meet 2. It won on three counts:
+    - Its noise suppression can be turned off, and the camera keeps that setting.
+      The Brio's can't be changed at all, which risks the cue strikes that Mic/Aux
+      records.
+    - It has the biggest sensor (1/1.3").
+    - It has an official macOS SDK that reaches every setting, audio included.
+  - **The Meet 2's extra flaw.** Its mic reportedly passes audio only while a
+    video stream is open. That is Part D's silent-but-healthy mic trap again.
+  - **Not the Link 2 Pro.** Its gimbal is a liability on a fixed mount, and it
+    was out of stock. Not a GoPro either: 1080p30 webcam mode, plus a helper
+    app.
+  - **Decided with Steven.** Every camera setting is applied by code at session
+    start, as a fourth retried item in `SessionManager._prepare_once()`, with a
+    read-back of what was set. A failure warns and never blocks the clock, so
+    whatever the camera remembers on its own doesn't matter.
+  - **Mic plan.** The camera runs in "Original" (suppression off). Vosk gets the
+    raw signal, and OBS filters handle the stream's audio.
+  - **Vendor claims still to check on arrival.** Uncropped 1080p60, and whether
+    "Original" really turns suppression off: Insta360's own page says both that
+    it does and that it isn't supported.
+
 ## Checkpoint log (append-only, newest first)
 
 - **2026-10-17 (checkpoint 106 — detection runs at the camera's full 156 Hz):**
