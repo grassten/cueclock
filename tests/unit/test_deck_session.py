@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from tempfile import mkdtemp
 
+import pytest
+
 from cueclock.deck.session import (
     CAFFEINATE,
     CAMERA_PROBE,
@@ -34,6 +36,7 @@ TV_ON = ("tv", "EnsureOn")
 TV_OFF = ("tv", "PowerOff")
 BIND = ("obsws", "BindSyphon")
 PROJECTOR = ("obsws", "OpenProjector")
+SIDECAM = ("sidecam", "Ensure")
 
 
 class FakeProcess:
@@ -67,6 +70,7 @@ class Harness:
         syphon_binds: bool = True,
         projector_opens: bool = True,
         tv_wakes: bool = True,
+        sidecam_settles: bool = True,
         camera: bool = True,
         pidfile: Path | None = None,
     ) -> None:
@@ -79,6 +83,7 @@ class Harness:
         self.syphon_binds = syphon_binds
         self.projector_opens = projector_opens
         self.tv_wakes = tv_wakes
+        self.sidecam_settles = sidecam_settles
         self.camera = camera
         self.camera_probes = 0
         self.adoptable: dict[int, FakeProcess] = {}
@@ -93,6 +98,7 @@ class Harness:
             open_projector=self._open_projector,
             tv_on=self._tv_on,
             tv_off=self._tv_off,
+            sidecam_ready=self._sidecam_ready,
             clear_match=self._clear_match,
         )
 
@@ -115,6 +121,10 @@ class Harness:
     def _tv_on(self) -> bool:
         self.called.append(("tv", "EnsureOn"))
         return self.tv_wakes
+
+    def _sidecam_ready(self) -> bool:
+        self.called.append(SIDECAM)
+        return self.sidecam_settles
 
     def _tv_off(self) -> bool:
         self.called.append(("tv", "PowerOff"))
@@ -181,7 +191,7 @@ def test_start_spawns_run_and_caffeinate_then_launches_obs_when_the_server_answe
     # after it point OBS's Syphon source at this session's server and confirm
     # the TV actually came up.
     assert h.manager.tick(server_up=True) is SessionState.ON
-    assert h.called == [TV_ON, OBS_OPEN, TV_ON, BIND, PROJECTOR]
+    assert h.called == [TV_ON, OBS_OPEN, TV_ON, BIND, PROJECTOR, SIDECAM]
 
 
 def test_the_syphon_source_is_rebound_once_per_session() -> None:
@@ -195,11 +205,44 @@ def test_the_syphon_source_is_rebound_once_per_session() -> None:
     h.called.clear()
 
     h.manager.tick(server_up=True)
-    assert h.called == [TV_ON, BIND, PROJECTOR]
+    assert h.called == [TV_ON, BIND, PROJECTOR, SIDECAM]
 
-    for _ in range(5):  # all three done: stop asking
+    for _ in range(5):  # all four done: stop asking
         h.manager.tick(server_up=True)
-    assert h.called == [TV_ON, BIND, PROJECTOR]
+    assert h.called == [TV_ON, BIND, PROJECTOR, SIDECAM]
+
+
+def test_side_camera_settings_retry_until_they_take_then_stop() -> None:
+    # The settings wait for OBS to open the camera's stream, so the first few
+    # asks fail by design; once they take, the session stops asking.
+    h = Harness(sidecam_settles=False)
+    h.manager.start()
+    h.manager.tick(server_up=True)  # launches OBS
+    h.called.clear()
+
+    for _ in range(3):
+        h.manager.tick(server_up=True)
+    assert h.called.count(SIDECAM) == 3
+
+    h.sidecam_settles = True
+    for _ in range(5):
+        h.manager.tick(server_up=True)
+    assert h.called.count(SIDECAM) == 4
+
+
+def test_a_side_camera_that_never_settles_warns_and_never_blocks(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The side angle only feeds OBS. A camera that refuses its settings costs a
+    # warning in the log, never the session: it stays ON, and the ask stops.
+    h = Harness(sidecam_settles=False)
+    h.manager.start()
+    h.manager.tick(server_up=True)
+
+    for _ in range(PREP_ATTEMPTS + 10):
+        assert h.manager.tick(server_up=True) is SessionState.ON
+    assert h.called.count(SIDECAM) == PREP_ATTEMPTS
+    assert "setup incomplete — side camera" in capsys.readouterr().out
 
 
 def test_a_syphon_rebind_that_never_takes_gives_up() -> None:

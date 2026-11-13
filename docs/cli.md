@@ -56,6 +56,7 @@ Ground rules that apply to every command:
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
 | `report` | Accuracy report: missed strikes per session, read back from the journals | no |
 | `deck` | Stream Deck control-surface daemon | no |
+| `sidecam` | Side-angle camera settings: show, save the current ones, apply the saved ones | side camera only |
 
 ## Recipes
 
@@ -330,6 +331,29 @@ goes to `~/Library/Logs/cueclock-run.log`; the daemon's own log stays at
 
 Never install the Elgato Stream Deck app — it would claim exclusive HID
 access and starve this daemon.
+
+### `sidecam`
+
+**The side-angle camera's settings, without Insta360 Link Controller open.**
+Link Controller's live preview costs the session real frames (2026-11-12:
+detection ~125 → ~80 Hz, 3.6% of OBS frames lost while it was open), so the
+settings are captured once and enforced from cueclock instead (`hardware.md` §F2).
+
+| Action | What |
+|---|---|
+| `show` *(default)* | every setting the camera reports, with the saved value beside any that differ |
+| `save` | write the camera's current settings to `config/sidecam.json`, minus values an auto mode owns (shutter/ISO under auto exposure, Kelvin under auto white balance, focus under autofocus) |
+| `apply` | write the saved settings now and read them back; exit 1 names any the camera refused |
+
+```bash
+# Set the camera up in Link Controller, QUIT Link Controller, then:
+uv run python -m cueclock.cli sidecam save
+uv run python -m cueclock.cli sidecam          # check it, any time
+```
+
+Every deck session start re-applies whatever drifted, once OBS has the camera
+open. Needs `scripts/fetch_insta360_sdk.sh` run once: it downloads Insta360's
+SDK into gitignored `vendor.nosync/` and builds the `link-settings` helper.
 
 ### Shared display args (`run`, `replay`, `live`)
 

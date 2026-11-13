@@ -24,6 +24,11 @@ dist/
 # projector and the Vosk model. `.nosync` is the same escape hatch `.venv`
 # already uses; see CLAUDE.md "Dev workflow".
 
+# Insta360's Link SDK (no published license, so never committed) and the
+# helper built against it — scripts/fetch_insta360_sdk.sh. `.nosync`, same
+# reason as config/models.
+vendor.nosync/
+
 # Local-only assets. The clip corpus lives on an external drive (Steven's:
 # /Volumes/T7/pool_room_clips); tests/clips is a local symlink to it so every
 # code/doc path keeps working — see tests/README.md. No trailing slash: the

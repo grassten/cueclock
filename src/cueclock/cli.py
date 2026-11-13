@@ -1038,6 +1038,49 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sidecam(args: argparse.Namespace) -> int:
+    """Side-angle camera settings: show them, save them, or put them back."""
+    from cueclock.deck import sidecam
+
+    report = sidecam.read()
+    if report is None:
+        return 2
+    camera, current = report.get("camera", {}), report.get("settings", {})
+    saved = sidecam.load_config()
+
+    if args.action == "save":
+        wanted = sidecam.wanted_from(current)
+        sidecam.save_config(wanted)
+        print(f"saved {len(wanted)} settings to {sidecam.CONFIG_PATH}")
+        for key, value in wanted.items():
+            print(f"  {key} = {value}")
+        return 0
+    if args.action == "apply":
+        if not saved:
+            print("nothing saved — `cueclock sidecam save` first", file=sys.stderr)
+            return 2
+        refused = sidecam.apply(saved)
+        if refused is None:
+            return 2
+        for line in refused:
+            print(f"refused: {line}", file=sys.stderr)
+        print(f"applied {len(saved) - len(refused)}/{len(saved)} saved settings")
+        return 1 if refused else 0
+
+    print(
+        f"{camera.get('name')}  firmware {camera.get('firmware')}  "
+        f"stream {'open' if camera.get('stream_open') else 'closed'}"
+    )
+    for key, value in current.items():
+        note = ""
+        if saved is not None and key in saved and saved[key] != value:
+            note = f"   (saved: {saved[key]})"
+        print(f"  {key:16} {value}{note}")
+    if saved is None:
+        print("nothing saved — `cueclock sidecam save` captures the above")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # `kill <pid>` unwinds like Ctrl-C: clips close cleanly, Syphon servers
     # post their retire notification instead of leaving a stale entry.
@@ -1180,6 +1223,12 @@ def main(argv: list[str] | None = None) -> int:
         "--all", action="store_true", help="roll up every session journal on disk"
     )
 
+    p_sidecam = sub.add_parser(
+        "sidecam",
+        help="side-angle camera settings: show, save the current ones, or apply the saved ones",
+    )
+    p_sidecam.add_argument("action", choices=["show", "save", "apply"], nargs="?", default="show")
+
     p_deck = sub.add_parser(
         "deck", help="Stream Deck control-surface daemon (docs/hardware.md Part C)"
     )
@@ -1217,6 +1266,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_report(args)
     if args.command == "deck":
         return _cmd_deck(args)
+    if args.command == "sidecam":
+        return _cmd_sidecam(args)
     return _cmd_run(args)
 
 

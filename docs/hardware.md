@@ -1343,7 +1343,7 @@ settles them:
   [sglre6355/insta360-link](https://github.com/sglre6355/insta360-link) says they
   do: "Vendor settings require an active video stream."
 
-### F2. Control path, and the session-start apply step (planned)
+### F2. Control path, and the session-start apply step (built 2026-11-12)
 
 **Standard UVC controls** need no vendor code. Exposure, white balance, focus,
 zoom and gain are reachable from macOS over IOKit while OBS is streaming.
@@ -1371,6 +1371,30 @@ in Insta360-Developer_Docs. It lists the Link 2C Pro.
   (Rust, MIT/Apache-2.0, macOS over IOKit, audio modes included). It's reverse
   engineered and doesn't name the 2C Pro.
 
+**As built (checkpoint 108).** Insta360's SDK is a C++ class API, which Python
+can't call, so the bridge is a small helper of our own,
+`tools/insta360/link_settings.cc`: `link-settings get` prints the camera's
+settings as JSON, and `link-settings set key=value …` writes them in a fixed
+order (modes before the values they gate) and prints the read-back.
+`scripts/fetch_insta360_sdk.sh` downloads the SDK (pinned to commit `2dd2c78`,
+each file checked against its SHA-256) into gitignored `vendor.nosync/` and
+builds the helper there. `deck/sidecam.py` runs the helper, and
+`cueclock sidecam show|save|apply` is the CLI (`docs/cli.md`).
+- **Measured working while OBS streams** (2026-11-12): `noise_reduction` turned
+  off with OBS capturing, and a fresh read confirmed it. The same goes for drift
+  repair: `brightness` and `noise_reduction` were knocked off and put back.
+- **The SDK logs to stdout** ahead of the JSON, so the parser takes the last `{`
+  line.
+- **No "Original" in the SDK.** The mic's noise suppression is a plain on/off
+  (`EnableAudioNoiseReduction`), and that is what `noise_reduction: false`
+  means. The pickup pattern (`SetAudioDirectionMode`: Standard/Wide/Focus/Music)
+  has no getter, so it can't be read back and isn't enforced. Link Controller
+  set it to 3 (Music) on 2026-11-12.
+- **Auto exposure under the standard UVC call reads null.** The helper uses the
+  extended controller's version.
+- **Not built:** the hot-plug re-apply (item 3 below). A USB blip mid-session
+  leaves the camera on whatever it stored until the next session start.
+
 **The apply step.** A fourth retried item in `SessionManager._prepare_once()`
 (`deck/session.py`), alongside the TV, the table feed and the projector:
 1. **Run after OBS has the camera open.** `_prepare_once` only runs once OBS is
@@ -1384,7 +1408,11 @@ in Insta360-Developer_Docs. It lists the Link 2C Pro.
    must not cost the shot clock. Log it in the same way ("setup incomplete — side
    camera"). It is never a red key like `NO CAMERA`.
 5. **Keep the values in `config/`** (the `config.nosync` symlink; see CLAUDE.md on
-   iCloud), with the exact values §F3 settles on.
+   iCloud), with the exact values §F3 settles on. As built: `config/sidecam.json`,
+   written by `cueclock sidecam save` from whatever the camera is doing. It leaves
+   out values an auto mode owns (shutter and ISO under auto exposure, Kelvin under
+   auto white balance, focus under autofocus), because enforcing those would
+   fight the camera.
 
 ### F3. Arrival checks (do these inside the return window)
 
@@ -1463,3 +1491,15 @@ in Insta360-Developer_Docs. It lists the Link 2C Pro.
 - **Coexistence:** OBS captured the camera with Link Controller both running and
   quit. Link Controller installs its own virtual camera system extension; OBS
   doesn't use it.
+- **Link Controller must be closed during play** (measured 2026-11-12). Each of
+  its two open windows mid-session lined up to the minute with detection
+  dropping from ~125 Hz to ~80 Hz (min 26). OBS lost 3.6% of its frames to
+  rendering lag that session, against 0.0% in every earlier one. Its log shows
+  a live preview and an "AI recording subsystem" starting on open. That is why
+  the §F2 apply step exists: set the camera up in the app between sessions,
+  quit it, and run `cueclock sidecam save`.
+- **Baseline saved 2026-11-12** (`config/sidecam.json`): auto exposure at
+  **-0.9 EV**, auto white balance, manual focus 85, brightness 45, HDR off, anti-flicker
+  auto, mic noise suppression **off**. Under auto exposure in the evening light
+  the camera chose a 1/60 s shutter at ISO 7184, which means motion blur and
+  grain. A manual shutter (≥ 1/250 s, §F3.5) is the next thing to set.
