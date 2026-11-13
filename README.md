@@ -106,6 +106,10 @@ uv run python -m cueclock.cli deck
   own mic (`Insta360 Link 2C Pro`). Any other is named with
   `--mic-device`. `cueclock listen` is the bring-up/soak tool
   (`docs/hardware.md` Part D).
+- Side-angle camera settings (`cueclock sidecam`): exposure, white balance,
+  focus and the mic's noise suppression are saved once and re-applied at every
+  session start, so Insta360 Link Controller never has to be open during play.
+  Needs `scripts/fetch_insta360_sdk.sh` once (`docs/hardware.md` §F2).
 - Other subcommands: `record`, `replay`, `analyze`, `calibrate`,
   `fit-undistort`, `live` — see `--help`.
 

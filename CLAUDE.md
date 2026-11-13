@@ -134,7 +134,10 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   directly, and its built-in mic is the voice listener's input (since 2026-11-12,
   `docs/hardware.md` Part F). It replaced the iPhone-over-Camo setup (2026-08-01 to
   2026-11-12), which had replaced Continuity Camera. OBS must use frame rate
-  `60000240/1000000`: a plain 60 silently falls back to 50 fps (§B3).
+  `60000240/1000000`: a plain 60 silently falls back to 50 fps (§B3). Its settings
+  live in `config/sidecam.json` and the deck re-applies them at session start
+  (`cueclock sidecam`). **Never leave Insta360 Link Controller open during play**:
+  its live preview cost detection ~45 Hz and OBS 3.6% of its frames (checkpoint 108).
 - Stream Deck hits the HTTP API; keep the `/api/*` contract from `docs/design.md` §2.1.
   **Never install the Elgato Stream Deck app** — it would claim exclusive HID access
   and starve the `cueclock deck` daemon.

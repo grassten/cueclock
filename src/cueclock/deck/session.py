@@ -30,7 +30,7 @@ from enum import Enum
 from pathlib import Path
 from typing import IO, Protocol
 
-from cueclock.deck import client, obsws, tv
+from cueclock.deck import client, obsws, sidecam, tv
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RUN_LOG = Path.home() / "Library" / "Logs" / "cueclock-run.log"
@@ -58,8 +58,8 @@ STOP_ESCALATE_S = 20.0
 OBS_QUIT_GRACE_S = 5.0
 # Nothing the session needs is ready the instant it is asked for: the TV is
 # waking out of standby, and OBS's WebSocket answers ~10 s after launch. So the
-# setup (TV on, Syphon rebind, TV projector) is retried on the poll rather than
-# assumed. 20 ticks ~= 40 s.
+# setup (TV on, Syphon rebind, TV projector, side-camera settings) is retried
+# on the poll rather than assumed. 20 ticks ~= 40 s.
 PREP_ATTEMPTS = 20
 
 
@@ -282,6 +282,7 @@ class SessionManager:
     bind_syphon: Callable[[], bool] = obsws.bind_syphon
     open_projector: Callable[[], bool] = obsws.open_projector
     tv_on: Callable[[], bool] = tv.ensure_on
+    sidecam_ready: Callable[[], bool] = sidecam.ensure
     tv_off: Callable[[], bool] = tv.power_off
     clear_match: Callable[[], bool] = _clear_match
     pidfile: Path = PIDFILE
@@ -297,6 +298,7 @@ class SessionManager:
     _syphon_bound: bool = False
     _projector_open: bool = False
     _tv_ready: bool = False
+    _sidecam_set: bool = False
     _prep_tries: int = 0
     # A start that failed, held on the key until the next press retries it.
     _failure: SessionState | None = None
@@ -336,6 +338,7 @@ class SessionManager:
         self._syphon_bound = False
         self._projector_open = False
         self._tv_ready = False
+        self._sidecam_set = False
         self._prep_tries = 0
         self._write_pidfile()
         print(f"session: starting (log: {RUN_LOG})", flush=True)
@@ -483,19 +486,23 @@ class SessionManager:
         self._syphon_bound = False  # cheap to redo, and it may have been missed
         self._projector_open = False
         self._tv_ready = False
+        self._sidecam_set = False
         self._prep_tries = 0
         print(f"session: adopted the running session (run pid {run_pid})", flush=True)
         return True
 
     def _prepare_once(self) -> None:
-        """Make the wall show this session: TV awake, feed bound, program on it.
+        """Make the wall show this session: TV awake, feed bound, program on it,
+        and the side camera on its saved settings.
 
-        None of the three is ready when it is first asked for — the TV is
-        climbing out of standby, and OBS's WebSocket answers ~10 s after launch
-        — so each retries on the poll and then gives up loudly rather than
-        silently leaving a dark wall, a black table, or a blank TV.
+        None of the four is ready when it is first asked for — the TV is
+        climbing out of standby, OBS's WebSocket answers ~10 s after launch,
+        and the side camera's settings wait for OBS to open its stream — so
+        each retries on the poll and then gives up loudly rather than silently
+        leaving a dark wall, a black table, a blank TV or an auto-exposed side
+        angle. The side camera never blocks anything: it only feeds OBS.
         """
-        done = self._tv_ready and self._syphon_bound and self._projector_open
+        done = self._tv_ready and self._syphon_bound and self._projector_open and self._sidecam_set
         if done or self._prep_tries >= PREP_ATTEMPTS:
             return
         self._prep_tries += 1
@@ -508,6 +515,8 @@ class SessionManager:
             self._syphon_bound = True
         if not self._projector_open and self.open_projector():
             self._projector_open = True
+        if not self._sidecam_set and self.sidecam_ready():
+            self._sidecam_set = True
         if self._prep_tries == PREP_ATTEMPTS:
             missing = [
                 name
@@ -515,6 +524,7 @@ class SessionManager:
                     ("TV", self._tv_ready),
                     ("table feed", self._syphon_bound),
                     ("TV projector", self._projector_open),
+                    ("side camera", self._sidecam_set),
                 )
                 if not ok
             ]
@@ -571,4 +581,5 @@ class SessionManager:
         self._syphon_bound = False
         self._projector_open = False
         self._tv_ready = False
+        self._sidecam_set = False
         self._prep_tries = 0

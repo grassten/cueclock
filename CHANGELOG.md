@@ -277,6 +277,44 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-12 (checkpoint 108 — the side camera's settings are enforced from
+  cueclock; Link Controller stays closed):** Steven saw the overhead stutter on
+  the TV and asked why. The session's own records answered it before any fix:
+  - **Cause, measured.** OBS logged **2613 frames (3.6%) lagged from rendering**
+    that session, against 2 and 11 frames (0.0%) in the two before it. Detection
+    fell from a ~125 Hz median to 79–89 Hz in two windows (17:10–17:12,
+    17:17–17:18). Insta360 Link Controller's own logs open at 17:09:46 and
+    17:16:48 and close at 17:12 and 17:18, a match to the minute; on open it
+    starts a live preview and an "AI recording subsystem". Ruled out: memory
+    (80% free), flag dumps (none in the journal), the OBS colour tuning (it ran
+    17:14–17:16 at 116–131 Hz), and a frame-rate mismatch (unchanged from the
+    clean sessions).
+  - **So the app can't be how the camera is set.** Part F's planned apply step
+    was built rather than deferred. Insta360's SDK is a public prebuilt dylib
+    with no license, so `scripts/fetch_insta360_sdk.sh` downloads it pinned
+    (commit `2dd2c78`, SHA-256 per file) into gitignored `vendor.nosync/` and
+    builds `tools/insta360/link_settings.cc`. That's a small helper of our own
+    that prints and writes the camera's settings as JSON, because Python can't
+    call the SDK's C++ classes. `deck/sidecam.py` drives it.
+  - **Session start** has a fourth retried item: once OBS has the camera open,
+    read it back, re-send only what drifted, read back again. Twenty tries, then
+    "setup incomplete — side camera" in the log, never a red key. Nothing saved
+    means nothing enforced.
+  - **`cueclock sidecam show|save|apply`.** `save` leaves out values an auto mode
+    owns (shutter/ISO, Kelvin, focus), since enforcing those would fight the
+    camera.
+  - **Verified on the camera, with OBS streaming.** Noise suppression on → off,
+    confirmed by a fresh read. Brightness and noise suppression knocked off, then
+    restored by `ensure()` ("re-applied brightness, noise_reduction").
+  - **Baseline saved:** -0.9 EV auto exposure, auto WB, focus 85, brightness 45,
+    HDR off, noise suppression off. Under evening light auto exposure chose 1/60 s
+    at ISO 7184, so a manual shutter is the next setting to choose.
+  - **Not built:** hot-plug re-apply mid-session (a USB blip waits for the next
+    session start).
+  - **Verification.** `test_sidecam.py` (8) and two new `test_deck_session.py`
+    cases (31 total), ruff, mypy --strict on `deck/` and `cli.py`. No detection
+    code changed, so no corpus battery.
+
 - **2026-11-12 (checkpoint 107 — the Insta360 is the side angle and the mic;
   Camo retired):** The Link 2C Pro arrived and went live the same day (#47 stays
   open for §F2's apply step and the at-table §F3 checks). Results are in
