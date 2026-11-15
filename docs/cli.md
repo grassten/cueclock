@@ -37,10 +37,12 @@ Ground rules that apply to every command:
   first whenever detection seems blind.
 - Ctrl-C and `kill <pid>` (SIGTERM) both unwind cleanly: clips close,
   Syphon servers retire.
-- **Footgun:** `--reference` on `run` and `analyze` defaults to
-  `tests/clips/empty_table` — the *original undated* clip, long stale.
-  Always pass the current dated reference (the README launch command names
-  it — keeping that current is part of the §E2 refresh recipe).
+- `run` takes its empty-table reference from `config/reference.json`, the
+  pointer `recalibrate` writes (#49), unless `--reference` is passed. It
+  refuses to start with no pointer and no flag.
+- **Footgun:** `--reference` on `analyze` defaults to `tests/clips/empty_table`,
+  the *original undated* clip, long stale. Pass the reference the clip was
+  recorded against.
 
 ## Commands at a glance
 
@@ -53,6 +55,7 @@ Ground rules that apply to every command:
 | `analyze` | Run the detection pipeline over a clip offline; print events | no |
 | `fit-undistort` | Fit display undistort params from the table's rails | no |
 | `calibrate` | Fit the px→mm table homography from the rails | no |
+| `recalibrate` | Record a fresh empty-table reference, refit both, swap them in only if good (the deck's RECAL key) | owns it |
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
 | `report` | Accuracy report: missed strikes per session, read back from the journals | no |
 | `deck` | Stream Deck control-surface daemon | no |
@@ -65,34 +68,41 @@ Ground rules that apply to every command:
 The canonical launch command lives in README ("Running it") — currently:
 
 ```bash
-uv run python -m cueclock.cli run --rectify \
-    --reference tests/clips/empty_table_0801 --host 0.0.0.0
+uv run python -m cueclock.cli run --rectify --host 0.0.0.0
 ```
 
 At startup watch for `reference check ok (boundary drift X.X, noise ~2)`.
 A `WARNING … drift > 8` means the reference has gone stale — detection may
 be silently blind (no events, clock never starts). Refresh it (next recipe)
-before trusting the clock.
+before trusting the clock. The reading is also journaled
+(`reference_drift`) and shown on the control page's health line, and it
+turns the deck's Session dot amber.
 
-### Refresh the empty-table reference (~10 min)
+### Refresh the empty-table reference (~1 min)
 
-Condensed from `hardware.md` §E2 steps 4–5 (the full §E2 covers a bumped or
-moved camera). Stage the room in playing state — bare brushed cloth, match
-lighting, TV on — stop the session, step clear of the table, then:
+Stage the room in playing state (bare brushed cloth, match lighting, TV on),
+stop the session, step clear of the table, then hold the deck's **RECAL** key
+2 s, or:
 
 ```bash
-uv run python -m cueclock.cli record --label empty_table_MMDD --seconds 3
-uv run python -m cueclock.cli fit-undistort tests/clips/empty_table_MMDD
-uv run python -m cueclock.cli calibrate tests/clips/empty_table_MMDD
+uv run python -m cueclock.cli recalibrate
 ```
 
-`calibrate` prints the rails-fit residual — healthy is ≈ 0.76 px. If it
-moves meaningfully, the camera itself shifted: do the full §E2 (level,
-focus, WB) before continuing. Both fits write into `config/` where `run`
-picks them up by default. Relaunch with the new `--reference`, confirm the
-drift check is green, update the README launch command, and keep the old
-reference clip — an end-of-session re-record compared against it is how
-reference drift gets measured.
+It records 3 s into a staging directory, and refuses without changing
+anything if a ball is still on the cloth, no table is found, or either fit
+residual is over 2 px (healthy is ≈ 0.76 px). On success it replaces
+`config/display_undistort.json`, `config/table_calibration.json` and the
+`config/reference.json` pointer together, keeping the previous three in
+`config/backup/`. The reference lives in `~/cueclock-reference/` (internal
+disk, so a session start doesn't need the T7) and is copied into
+`tests/clips/` when the T7 is mounted. It keeps the new reference and the
+previous one there and deletes older ones (~1 GB each). It prints the
+residual and the drift before → after. The next session start picks it up;
+nothing to edit. To undo, copy the three files back from `config/backup/`.
+
+The command refuses while a session answers on `--server` (that session owns
+the camera). A residual that moves meaningfully from ≈ 0.76 px means the
+camera itself shifted: do the full `hardware.md` §E2 (level, focus, WB) first.
 
 ### Record a corpus clip
 
@@ -164,7 +174,7 @@ The model comes from `scripts/fetch_vosk_model.sh`. Full plan:
 |---|---|---|
 | `--host` | `127.0.0.1` | `0.0.0.0` to reach the API from other devices |
 | `--port` | `8000` | |
-| `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
+| `--reference` | the clip `config/reference.json` names | override the pointer `recalibrate` writes |
 | `--calibration` | `config/table_calibration.json` | |
 | `--stride` | `1` | detect every Nth camera frame. `1` = every frame (156 Hz, checkpoint 106); `2` = the 78 Hz cadence every constant was tuned at — the vision core converts its frame-count constants to the same span of time either way (`TUNED_HZ`) |
 | `--ring-seconds` | `20.0` | in-RAM rolling buffer that `POST /api/dump` saves as a labeled clip (~7.2 GB at 20 s and stride 1, ~3.6 GB at stride 2; `0` disables). 20 s because a measured live Flag press came 12.7 s after the phantom it reacted to |
@@ -182,8 +192,12 @@ inside the ring window; measured cost 2.3 MB / ~1 ms per snapshot —
 negligible at the detect cadence). The session journal additionally stamps
 vision events with `frame_t` (the confirming frame's capture timestamp,
 vs. the record's emit-time `mono`) and writes a `detect_heartbeat` line
-every ~5 s (effective detect Hz + age of the newest processed frame), so
-detect-loop starvation is measurable from the journal alone. That is what
+every ~5 s (effective detect Hz + age of the newest processed frame, and
+since #52 the mean ms per frame in each stage: `queue_ms` waiting for a
+worker, `blobs_ms` inside `find_blobs`, `loop_ms` for churn + advance +
+dispatch), so detect-loop starvation is measurable from the journal alone,
+and so is where the time went. A `reference_drift` record at launch carries
+the drift reading and whether it crossed the warn level. That is what
 convicted the T7 as the dump target: the heartbeat around a flag press read
 75 → 45 Hz, and the same seconds froze the Camo source in OBS. Dumps stage
 locally now (`--dump-dir`), so a flag press no longer costs the session.
@@ -224,6 +238,24 @@ Shared display args only.
 | `frame` (positional) | required | empty-table clip directory (middle frame) or `.npy` frame |
 | `--undistort` | `config/display_undistort.json` | run `fit-undistort` first |
 | `--out` | `config/table_calibration.json` | |
+
+### `recalibrate`
+
+`record` + `fit-undistort` + `calibrate` + the pointer, in one step with the
+checks a person used to make by eye (recipe above; code in
+`src/cueclock/recalibrate.py`). Exit status 0 = swapped in, 1 = refused
+(nothing changed).
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--server` | `http://127.0.0.1:8000` | refuse (`SESSION ON`) while a session answers here: it owns the camera |
+| `--reference-root` | `~/cueclock-reference` | where the live reference is kept. Internal disk and outside iCloud, on purpose |
+| `--json` | off | print the result as one JSON object on the last line (what the deck's RECAL key reads) |
+
+Refusal reasons, as the key shows them: `SESSION ON`, `CAMERA BUSY`,
+`NO CAMERA`, `DISK FULL`, `BALLS ON CLOTH` (a ball-sized hole in the cloth
+mask: ≥ 450 px, where the empty references' spots measure ≤ 291 px and
+balls 500+), `NO TABLE`, `BAD FIT n.npx` (either residual over 2 px).
 
 ### `analyze`
 
@@ -320,7 +352,7 @@ and covers every session ever recorded, including the two that carry presses.
 |---|---|---|
 | `--server` | `http://127.0.0.1:8000` | cueclock server base URL |
 | `--brightness` | `60` | key backlight 0–100 |
-| `--reference` | `tests/clips/empty_table_0801` | empty-table reference the **Session** key launches `run` with. Refresh it after a camera bump, same as the README command (`hardware.md` §E2) |
+| `--reference` | none | pin the empty-table reference the **Session** key launches `run` with. Normally left unset, so `run` reads `config/reference.json` and a RECAL hold takes effect on the next start |
 
 The Session key (1,1) owns a whole session: tap to spawn `run` + a
 `caffeinate -d` assertion and launch OBS once the server answers, hold 1 s to

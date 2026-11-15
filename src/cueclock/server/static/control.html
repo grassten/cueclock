@@ -227,6 +227,10 @@
         .race { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .race .stepper { flex: 1; min-width: 210px; }
         .hint { font-size: 12.5px; color: var(--slate); margin: 0; }
+        /* The rig's health line (#52). Quiet when healthy; the one warm colour
+           on the page that is not the clock, so a stale reference is seen. */
+        .health { text-align: center; font-variant-numeric: tabular-nums; }
+        .health .warn { color: var(--alarm); }
 
         .field { display: flex; flex-direction: column; gap: 7px; }
         select {
@@ -549,6 +553,10 @@
                 <select id="ruleset" onchange="setRuleset(this.value)"></select>
                 <p class="hint" id="ruleset-detail"></p>
             </section>
+            <!-- Rig health (#52): reference drift at launch, detect rate, balls
+                 tracked. Three months of drift warnings went unread in a log
+                 behind the TV; this is where somebody looks. -->
+            <p class="hint health" id="health" hidden></p>
     </main>
 
 </div>
@@ -1240,7 +1248,31 @@
 
     // ---- Clock ----
     const ALARM_STATES = ['GRACE', 'EXPIRED'];
+    // Rig health (#52). Each reading is marked when it is the reason the
+    // server's `warn` is set, so the line says *which* thing is wrong.
+    function renderHealth(h) {
+        const el = document.getElementById('health');
+        el.hidden = !h;
+        if (!h) return;
+        const part = (text, bad) => {
+            const span = document.createElement('span');
+            span.innerText = text;
+            if (bad) span.className = 'warn';
+            return span;
+        };
+        const parts = [];
+        if (h.drift != null) {
+            parts.push(part(h.drift_stale ? `Reference drift ${h.drift} — recalibrate`
+                                          : `Reference drift ${h.drift}`, h.drift_stale));
+        }
+        if (h.hz != null) parts.push(part(`${Math.round(h.hz)} Hz`, h.hz_slow));
+        if (h.balls != null) parts.push(part(`${h.balls} balls`, false));
+        el.replaceChildren();
+        parts.forEach((p, i) => { if (i) el.append(' · '); el.append(p); });
+    }
+
     function render(s) {
+        renderHealth(s.health);
         // Freestyle (`timed: false`): there is no countdown, so the number
         // and every key about one leave and the pill says why.
         const untimed = s.timed === false;

@@ -277,6 +277,57 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-15 (checkpoint 112 — recalibrate from the deck, and health where
+  it gets seen; #49 + #52):** no detection code changed, so unit tests are the
+  gate (620 passed) and no corpus battery ran.
+  - **#49 `cueclock recalibrate` + the RECAL key.** One command replaces §E2's
+    `record` → `fit-undistort` → `calibrate` → edit `DEFAULT_REFERENCE`.
+    It records 3 s into a staging dir and refuses, changing nothing, on a ball
+    on the cloth, no table, or either fit residual over 2 px. On success it
+    swaps the undistort file, the calibration and the new **reference pointer**
+    `config/reference.json` together, keeping the previous set in
+    `config/backup/`. The hard-coded constant is gone: `run` reads the pointer
+    when `--reference` is absent, and the Session key no longer passes one. The
+    live reference lives in `~/cueclock-reference/` (internal disk, so a start
+    doesn't need the T7; the new one and the previous one are kept) and is
+    copied to `tests/clips/` when the T7 is mounted. The ball check is a hole
+    in the cloth mask of at least 450 px, measured on the middle frames of
+    corpus clips: empty references ≤ 291 px (spots, marks), balls 500–1460
+    (`static_spread`, `all_balls_still_1115`). The deck key is (2,5), the one
+    free base cell, lit only while the session is off; hold 2 s; the result
+    stays on the key. The pointer was written by hand for the rig at
+    `tests/clips/empty_table_0801`, so nothing changes until the first hold.
+  - **#52 health.** A `reference_drift` journal record at launch;
+    `detect_heartbeat` gains `queue_ms`/`blobs_ms`/`loop_ms`; the payload
+    carries `health` (`design.md` §2.1). The control page shows it as a line
+    under the Play tab and the Session dot goes amber on a stale reference or
+    detection under 78 Hz. `session-stats` gains **Balls appeared mid-rack**
+    (`report.mid_rack_appearances`), reproducing the audit's 88 / 711 (12.38%).
+    `--ring-seconds` help now says ~7.2 GB.
+  - **Live check (scratch `logs/`, port 8011, 2026-11-15 13:23):** drift 27.9
+    stale (the same reading as last night's 28.2, so it is the camera or the
+    light, not noise), 156 Hz, 12 balls tracked. Stages per frame:
+    queue 0.02–0.06 ms, `find_blobs` 4.2–4.3 ms, loop half 0.9 ms. At an idle
+    table nothing is short of time. The 15%-under-nominal reading is from busy
+    play and needs a real session's heartbeats.
+  - **Why `session-20261115-005944` has no `session_summary`: a crash, now
+    fixed.** `~/Library/Logs/DiagnosticReports/python3.12-2026-11-14-203838.ips`
+    (20:38:34 local, the Session hold) shows `run` aborting in the display
+    thread inside `-[SyphonMetalServer stop]` ("BUG IN CLIENT OF LIBDISPATCH:
+    Premature release of a locked queue") while a GPU notification thread was
+    still in `-[SyphonServerConnectionManager publishNewFrame]` for the last
+    frame. The shutdown path never ran. `SyphonOutput.close()` now commits an
+    empty command buffer on the same queue and waits for its completion
+    handler (0.4 ms measured) before `stop()`. The same crash also lost the
+    session's whole run log, because stdout was a block-buffered file.
+    `run_command()` now launches `python -u`. The race could not be reproduced
+    in isolation (0/10 runs of 20 publish/stop cycles before the fix), so the
+    fix rests on the crash report's two stacks. The live check above exited
+    cleanly on SIGTERM.
+  - **Still to do at the table (#49 done-when):** clear the cloth, stop the
+    session, hold RECAL; the next start should log `reference check ok` with
+    drift near 2. The OBS crop may need a nudge afterwards.
+
 - **2026-11-15 (checkpoint 111 — `all_balls_still_1115`: all 16 balls standing
   still on the current mount; #51's last done-when):** recorded at the table
   (939 frames, 156.2 fps, no gaps; the first attempt hit a pylon `PrepareGrab`

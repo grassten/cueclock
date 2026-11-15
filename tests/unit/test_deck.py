@@ -49,6 +49,10 @@ TOURNEY = replace(
 ARMED = replace(TOURNEY, bracket_armed=("Priya Shah", 5, 2))
 
 BY_NAME = {key.name: key for key in LAYOUT}
+# Keys lit only while the server is down (#49's RECAL). No state with the
+# server up ever shows them, so the "every key" sets below leave them out.
+OFFLINE_ONLY = {key.name for key in LAYOUT if key.offline_only}
+ONLINE = set(BY_NAME) - OFFLINE_ONLY
 
 
 def visible_names(state: DeckState) -> set[str]:
@@ -101,18 +105,26 @@ def test_only_session_survives_the_server_going_down() -> None:
     assert visible_names(DOWN) == {"session"}
 
 
+def test_recal_is_lit_only_while_the_session_is_at_rest() -> None:
+    # #49: the recalibration needs the camera, so the key exists only with the
+    # server down *and* no start or stop in progress — never beside a session.
+    assert {"recal"} == OFFLINE_ONLY
+    assert visible_names(replace(DOWN, session_idle=True)) == {"session", "recal"}
+    assert "recal" not in visible_names(replace(MATCH, session_idle=True))
+
+
 # --- removal, not dimming: the deck shrinks to what the mode affords ---
 
 
 def test_match_lights_every_key_a_casual_night_has() -> None:
-    assert visible_names(MATCH) == set(BY_NAME) - {"scene", "confirm"}
+    assert visible_names(MATCH) == ONLINE - {"scene", "confirm"}
 
 
 def test_a_bracket_lights_the_two_keys_it_adds_and_nothing_else() -> None:
     # The governing constraint of #43, on the deck: with no bracket loaded the
     # surface is exactly the surface it was, and loading one only ever adds.
     assert visible_names(TOURNEY) - visible_names(MATCH) == {"scene", "confirm"}
-    assert visible_names(TOURNEY) == set(BY_NAME)
+    assert visible_names(TOURNEY) == ONLINE
 
 
 def test_run_out_drops_the_rack_only_keys() -> None:
@@ -158,7 +170,7 @@ def test_push_is_absent_under_the_eight_ball_rulebooks() -> None:
 def test_an_unknown_mode_hides_nothing() -> None:
     # A server that predates modes (or a hiccup) must not blank the deck:
     # visibility only removes a key when we positively know it doesn't apply.
-    assert visible_names(replace(TOURNEY, mode=None)) == set(BY_NAME)
+    assert visible_names(replace(TOURNEY, mode=None)) == ONLINE
 
 
 def test_keys_never_move_between_modes() -> None:
@@ -192,7 +204,7 @@ def test_the_clock_group_is_exactly_the_keys_that_leave_with_the_clock() -> None
     # clock-scoped. Confirm joins them: a drill has no match to report.
     non_clock = {"ruleset", "new_rack", "p1", "p2", "confirm"}
     quiet = visible_names(replace(TOURNEY, mode="no_clock"))
-    assert clock_keys == set(BY_NAME) - quiet - non_clock
+    assert clock_keys == ONLINE - quiet - non_clock
     for key in LAYOUT:
         if key.group is Group.CLOCK:
             assert key.modes is not None and key.modes <= CLOCKED, key.name
@@ -366,9 +378,11 @@ def test_flag_page_unfolds_into_the_cells_beside_the_flag_key() -> None:
     # the accepted cost rather than an oversight: on a 15-key deck every free
     # cell is one of these three, a flag press lasts seconds, and the scene key
     # is the one key on the deck with no deadline attached to it at all.
+    # RECAL (#49) sits under the page too, and never meets it: the page opens
+    # from Flag, which needs a server, and RECAL is lit only without one.
     reason_cells = {k.index for k in REASON_KEYS}
     borrowed = {k.name for k in LAYOUT if k.index in reason_cells}
-    assert borrowed == {"scene"}
+    assert borrowed == {"scene", "recal"}
 
 
 def test_flag_reasons_send_distinct_labels_through_the_dump_endpoint() -> None:
@@ -701,3 +715,31 @@ def test_no_face_on_the_deck_overflows_its_tile() -> None:
                 font = faces._font(sizes[-1])  # what _fit falls through to
                 widest = max(probe.textlength(line, font=font) for line in text.split("\n"))
                 assert widest <= faces.SIZE - 8, (key.name, state.mode, text)
+
+
+# --- the Session key's health dot (#52) ---
+
+
+def test_session_dot_turns_amber_when_the_health_line_warns() -> None:
+    healthy = {"health": {"drift": 1.9, "hz": 150.0, "balls": 9, "warn": False}}
+    stale = {"health": {"drift": 28.2, "hz": 133.0, "balls": 9, "warn": True}}
+    on = SessionState.ON
+    assert build_state(healthy, on).session_dot == faces.DOT_OK
+    assert build_state(stale, on).session_dot == faces.DOT_WARN
+    # A server that predates the field (or a bare one) reads as healthy.
+    assert build_state({}, on).session_dot == faces.DOT_OK
+    assert build_state({"health": None}, on).session_dot == faces.DOT_OK
+    # And the dot reaches the face.
+    session = BY_NAME["session"]
+    assert session.face(build_state(stale, on)).dot == faces.DOT_WARN
+
+
+def test_recal_face_comes_from_the_recalibration_and_wears_the_system_stripe() -> None:
+    recal = BY_NAME["recal"]
+    state = build_state(None, SessionState.OFF, recal_face=faces.Face(text="RECAL", sub="HOLD 2s"))
+    assert state.session_idle and recal.visible(state)
+    face = recal.face(state)
+    assert (face.text, face.sub, face.stripe) == ("RECAL", "HOLD 2s", Group.SYSTEM.stripe)
+    # Mid-start the camera is spoken for: the key goes dark.
+    assert not recal.visible(build_state(None, SessionState.STARTING))
+    assert recal.visible(build_state(None, SessionState.NO_CAMERA))
