@@ -4,7 +4,10 @@
   including CI.
 - `corpus/` — event-grading tests that replay real recorded table footage. They
   **skip cleanly** when clips or the fitted local calibration are absent (fresh
-  clones and CI have neither).
+  clones and CI have neither). Each clip is graded under the calibration its
+  reference clip carries (`tests/clips/<reference>/table_calibration.json`,
+  written by `cueclock recalibrate`), falling back to `config/`'s, so a
+  recalibration does not silently re-grade older mounts.
 - `clips` — a local, gitignored symlink to wherever the clip corpus lives.
   **Clips are local fixtures, never published.** Code and docs always use the
   `tests/clips` path, so relocating the corpus only means repointing the symlink.

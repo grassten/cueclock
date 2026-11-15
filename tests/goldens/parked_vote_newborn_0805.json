@@ -4,10 +4,10 @@
   "events": [
     {
       "type": "ShotTaken",
-      "t": 11.425,
-      "ball_id": 15,
-      "speed_mms": 2019.4973,
-      "newborn": true
+      "t": 11.3226,
+      "ball_id": 5,
+      "speed_mms": 2733.0939,
+      "newborn": false
     },
     {
       "type": "BallsSettled",

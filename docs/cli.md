@@ -244,7 +244,9 @@ Shared display args only.
 `record` + `fit-undistort` + `calibrate` + the pointer, in one step with the
 checks a person used to make by eye (recipe above; code in
 `src/cueclock/recalibrate.py`). Exit status 0 = swapped in, 1 = refused
-(nothing changed).
+(nothing changed). The new reference directory carries the calibration
+fitted on it (`table_calibration.json`), so the corpus grades clips recorded on
+that mount under it and keeps grading older clips under theirs.
 
 | Flag | Default | Notes |
 |---|---|---|

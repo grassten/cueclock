@@ -1735,7 +1735,16 @@ class EventEngine:
             # and a 5854 mm/s power shot covers another 74 mm in them
             # (power_shot: 411 mm from the rest at the kill frame against a
             # birth-anchored budget of 334).
-            reach = max(reach, raw * (t - obs_t) * cfg.handoff_reach_margin)
+            # The budget is distance from the *rest*, so its clock starts when
+            # the ball left the rest, not when it was last seen: a cue observed
+            # moving before it went dark had already covered part of the
+            # distance (kick_scratch_0811, #56: last seen 45 mm out on a
+            # stick-lagged centroid; 279 mm from the rest at the re-qualify
+            # frame against a last-seen budget of 240). On the breaks the
+            # margin was measured on, the cue goes dark at the strike and the
+            # two clocks agree. Eligibility above stays on the dark time.
+            moving_since = min(obs_t, self._cue_last_still_t)
+            reach = max(reach, raw * (t - moving_since) * cfg.handoff_reach_margin)
         opened = self._open_from_rest(
             t, ball, raw, self._cue_rest, follow_ball=True, reach_mm=reach
         )

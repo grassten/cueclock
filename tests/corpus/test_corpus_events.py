@@ -69,13 +69,10 @@ EXPECTED: dict[
 ] = {
     "empty_table": (0, 0, None),
     "static_spread": (0, 0, None),
-    # all_balls_still_1115: all 16 balls standing still on the current mount,
-    # graded against the live reference (#51's done-when). Nothing moves, so
-    # nothing may fire and nothing may settle. The detector sees 11 blobs for
-    # 16 balls (checkpoint 111): two touching pairs (6+2, 9+8), the red 3
-    # under the 25-level threshold (|diff| 21), the 14 on the left rail merged
-    # into a stale-reference rail blob (#49), the 11 on the right rail cut to
-    # 409 px against the cushion. The shadow gate removes nothing here.
+    # all_balls_still_1115: all 16 balls standing still on the current mount
+    # (#51's done-when). Nothing moves, so nothing may fire and nothing may
+    # settle. Every ball is its own detection on every frame since #56
+    # (`test_every_ball_is_its_own_detection`); checkpoint 111 read 11.
     "all_balls_still_1115": (0, 0, None, 0),
     "soft_shot": (1, 0, 1),
     # medium/power: struck ~4 s in, balls legitimately still rolling when the
@@ -559,11 +556,12 @@ EXPECTED: dict[
     # pot_scratch_nohold: an ordinary pot that scratched. Steven: "the scratch
     # delay didn't apply, clock started immediately."
     "pot_scratch_nohold_0811": (1, 1, 1, 1),
-    # kick_scratch: kicked at a ball, hit nothing, cue scratched. The verdict
-    # itself never lands inside the clip (the census is still open when the
-    # frames run out), so scratches stays 0 and the *candidate* — the thing
-    # that was missing — is pinned by its own test below.
-    "kick_scratch_0811": (1, 0, 2, 2),
+    # kick_scratch: kicked at a ball, hit nothing, cue scratched. Until #56
+    # the verdict never landed inside the clip: the census confirms only when
+    # every roster ball is observed, and a touching pair near the cue's path
+    # was one merged still blob, which the tracker reports unobserved. Split,
+    # both are observed and the Scratch lands at the candidate (16.00 s).
+    "kick_scratch_0811": (1, 1, 2, 2),
     # #40, same session: a real shot at 2047.8 mm/s on which the engine
     # emitted **nothing at all** — no fire, no latch, no settle, 0 events in
     # 20.74 s — because the struck cue was reborn as a new track at the
@@ -622,6 +620,11 @@ EXPECTED: dict[
     # just not count), and the golden keeps the event stream visible.
     "ball_in_hand_carry_0811": (None, 0, 2, 2),
     "ball_in_hand_carry_b_0811": (None, 0, 2, 2),
+    # triple: the middle settle (14.74 s) fires with the cue still in Steven's
+    # hand (frames 14.4-14.9 s, checked at #56): the hand's blob drags the
+    # coasting track of the orange ball it reaches past (446 -> 487 mm; the
+    # orange never moves) and that episode settles mid-carry. Pinned as the
+    # current behaviour, not endorsed.
     "ball_in_hand_triple_0811": (None, 0, 3, 3),
 }
 
@@ -718,8 +721,10 @@ REFERENCES: dict[str, str] = {
     "ball_in_hand_carry_0811": "empty_table_0801",
     "ball_in_hand_carry_b_0811": "empty_table_0801",
     "ball_in_hand_triple_0811": "empty_table_0801",
-    # The live session's reference (deck/session.py DEFAULT_REFERENCE).
-    "all_balls_still_1115": "empty_table_0801",
+    # The reference RECAL recorded on the same mount 38 minutes later (#56;
+    # checkpoint 111 graded it against the stale empty_table_0801, whose rail
+    # blobs swallowed the 14 and cut the 11 under the area floor).
+    "all_balls_still_1115": "empty_table_1115",
 }
 
 
@@ -731,17 +736,36 @@ def _reference_model(name: str) -> "ReferenceModel":
 
     reader = ClipReader(CLIPS / name)
     indices = np.linspace(0, len(reader) - 1, num=15, dtype=int)
-    return ReferenceModel.build([reader.frame(int(i)) for i in indices], _calibration())
+    return ReferenceModel.build([reader.frame(int(i)) for i in indices], _calibration(name))
 
 
 @cache
-def _calibration() -> "TableCalibration":
+def _calibration(reference: str) -> "TableCalibration":
+    """The calibration a reference clip was graded under.
+
+    A reference clip directory may carry its own `table_calibration.json`
+    (`cueclock recalibrate` writes one into every reference it records);
+    otherwise the rig's live one. Without this a recalibration silently
+    re-grades the whole corpus under the new mount's homography: on
+    2026-11-15 RECAL replaced the 2026-08-01 fit every older clip had been
+    graded under.
+    """
     from cueclock.vision.calibration import TableCalibration
 
-    return TableCalibration.load(CALIBRATION)
+    own = CLIPS / reference / CALIBRATION.name
+    return TableCalibration.load(own if own.exists() else CALIBRATION)
 
 
-def _run_clip(name: str, reference: "ReferenceModel") -> list[Event]:
+def _pipeline(reference: str, reader: "ClipReader") -> "VisionPipeline":
+    """A fresh pipeline on `reference`, at the clip's own cadence."""
+    from cueclock.vision.pipeline import VisionPipeline
+
+    return VisionPipeline(
+        _calibration(reference), _reference_model(reference), cadence_hz=reader.cadence_hz
+    )
+
+
+def _run_clip(name: str, reference: str) -> list[Event]:
     """Replay one clip at the live detect cadence and collect its events.
 
     The two pipeline halves are run as two passes rather than interleaved:
@@ -751,10 +775,9 @@ def _run_clip(name: str, reference: "ReferenceModel") -> list[Event]:
     `--detect-cache` is on (see `_detections`).
     """
     from cueclock.capture.clip import ClipReader
-    from cueclock.vision.pipeline import VisionPipeline
 
     reader = ClipReader(CLIPS / name)
-    pipeline = VisionPipeline(_calibration(), reference, cadence_hz=reader.cadence_hz)
+    pipeline = _pipeline(reference, reader)
     indices = reader.detect_indices()
     frames = _detections(reader, CLIPS / name, pipeline, indices)
     events: list[Event] = []
@@ -810,12 +833,9 @@ def test_corpus_clip(name: str) -> None:
     # replaying the corpus a second time — that mistake doubled the battery to
     # 9 minutes when the clock grade first landed.
     from cueclock.capture.clip import ClipReader
-    from cueclock.vision.pipeline import VisionPipeline
 
     reader = ClipReader(CLIPS / name)
-    pipeline = VisionPipeline(
-        _calibration(), _reference_model(ref_name), cadence_hz=reader.cadence_hz
-    )
+    pipeline = _pipeline(ref_name, reader)
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,
@@ -956,6 +976,28 @@ def _assert_clock_outcome(name: str, truth: list[float], timeline: "ClockTimelin
     )
 
 
+# Clips with every ball on the table standing still, and how many there are.
+ALL_BALLS = {"all_balls_still_1115": 16, "static_spread": 16}
+
+
+@pytest.mark.parametrize("name", sorted(ALL_BALLS))
+def test_every_ball_is_its_own_detection(name: str) -> None:
+    """#56: every ball reads as one detection, on every frame. Before it,
+    all_balls_still_1115 read 11 (the red 3 below the gray threshold, two
+    touching pairs as one blob each, two rail balls lost to a stale
+    reference) and static_spread 14."""
+    if not (CLIPS / name).exists():
+        pytest.skip(f"clip {name} not recorded")
+    from cueclock.capture.clip import ClipReader
+
+    reader = ClipReader(CLIPS / name)
+    pipeline = _pipeline(REFERENCES.get(name, "empty_table"), reader)
+    indices = reader.detect_indices()
+    counts = [len(balls) for balls, _, _ in _detections(reader, CLIPS / name, pipeline, indices)]
+    wrong = [(i, c) for i, c in zip(indices, counts, strict=True) if c != ALL_BALLS[name]]
+    assert not wrong, f"{len(wrong)} of {len(indices)} frames miscount, first: {wrong[:5]}"
+
+
 def test_detect_cache_replay_matches_cold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--detect-cache` must not move a single event, on real pixels.
 
@@ -969,7 +1011,7 @@ def test_detect_cache_replay_matches_cold(tmp_path: Path, monkeypatch: pytest.Mo
     clip = "spin_in_place"
     if not (CLIPS / clip).exists():
         pytest.skip(f"clip {clip} not recorded")
-    reference = _reference_model(REFERENCES.get(clip, "empty_table"))
+    reference = REFERENCES.get(clip, "empty_table")
 
     # The cold leg must be genuinely cold even when the whole suite is run
     # with --detect-cache, or this degenerates to comparing the cache to
@@ -1002,7 +1044,7 @@ def test_break_0801_speed_clears_the_idle_gate() -> None:
 
     if not (CLIPS / "break_0801").exists():
         pytest.skip("clip break_0801 not recorded")
-    events = _run_clip("break_0801", _reference_model("empty_table_0729"))
+    events = _run_clip("break_0801", "empty_table_0729")
     shots = [e for e in events if isinstance(e, ShotTaken)]
     assert len(shots) == 1
     assert shots[0].speed_mms is not None
@@ -1026,7 +1068,7 @@ def test_break_outrun_fires_at_the_stroke() -> None:
     """
     if not (CLIPS / "break_outrun_0805").exists():
         pytest.skip("clip break_outrun_0805 not recorded")
-    events = _run_clip("break_outrun_0805", _reference_model("empty_table_0801"))
+    events = _run_clip("break_outrun_0805", "empty_table_0801")
     shots = [e for e in events if isinstance(e, ShotTaken)]
     assert len(shots) == 1, f"expected one break, got {[round(s.t, 3) for s in shots]}"
     assert 4.7 <= shots[0].t <= 5.1, f"break fired at {shots[0].t:.3f}s, stroke was 4.724s"
@@ -1044,7 +1086,7 @@ def test_break_outrun_speed_clears_the_idle_gate() -> None:
 
     if not (CLIPS / "break_outrun_0805").exists():
         pytest.skip("clip break_outrun_0805 not recorded")
-    events = _run_clip("break_outrun_0805", _reference_model("empty_table_0801"))
+    events = _run_clip("break_outrun_0805", "empty_table_0801")
     shots = [e for e in events if isinstance(e, ShotTaken)]
     assert len(shots) == 1
     assert shots[0].speed_mms is not None
@@ -1064,7 +1106,7 @@ def test_break_underread_speed_clears_the_idle_gate() -> None:
 
     if not (CLIPS / "break_underread_0801").exists():
         pytest.skip("clip break_underread_0801 not recorded")
-    events = _run_clip("break_underread_0801", _reference_model("empty_table_0801"))
+    events = _run_clip("break_underread_0801", "empty_table_0801")
     shots = [e for e in events if isinstance(e, ShotTaken)]
     assert len(shots) == 1, f"expected one break, got {[round(s.t, 3) for s in shots]}"
     assert shots[0].speed_mms is not None
@@ -1080,7 +1122,7 @@ def test_spin_in_place_settle_waits_for_spin_stop() -> None:
     """
     if not (CLIPS / "spin_in_place").exists():
         pytest.skip("clip spin_in_place not recorded")
-    events = _run_clip("spin_in_place", _reference_model("empty_table"))
+    events = _run_clip("spin_in_place", "empty_table")
     settles = [e.t for e in events if isinstance(e, BallsSettled)]
     assert settles, "spin_in_place must settle before the clip ends"
     assert settles[-1] >= 7.0, f"settled at {settles[-1]:.2f}s — before spin stopped"
@@ -1101,7 +1143,7 @@ def test_settle_stall_settle_is_prompt() -> None:
     """
     if not (CLIPS / "settle_stall_0801").exists():
         pytest.skip("clip settle_stall_0801 not recorded")
-    events = _run_clip("settle_stall_0801", _reference_model("empty_table_0801"))
+    events = _run_clip("settle_stall_0801", "empty_table_0801")
     settles = [e.t for e in events if isinstance(e, BallsSettled)]
     post_shot = [t for t in settles if t > 6.9]
     assert post_shot, "the shot's settle never fired — the settle stall is back"
@@ -1126,7 +1168,7 @@ def test_phantom_flag_shot_fires_at_the_stroke() -> None:
     """
     if not (CLIPS / "phantom_flag_strike_0805").exists():
         pytest.skip("clip phantom_flag_strike_0805 not recorded")
-    events = _run_clip("phantom_flag_strike_0805", _reference_model("empty_table_0801"))
+    events = _run_clip("phantom_flag_strike_0805", "empty_table_0801")
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the phantom-flag miss is back"
     assert 10.0 <= shots[0] <= 10.8, f"shot at {shots[0]:.2f}s — not anchored on the stroke"
@@ -1146,7 +1188,7 @@ def test_address_chatter_shot_fires_at_impulse() -> None:
     """
     if not (CLIPS / "address_chatter_miss_0801").exists():
         pytest.skip("clip address_chatter_miss_0801 not recorded")
-    events = _run_clip("address_chatter_miss_0801", _reference_model("empty_table_0801"))
+    events = _run_clip("address_chatter_miss_0801", "empty_table_0801")
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the address-chatter miss is back"
     assert 10.0 <= shots[0] <= 11.2, f"shot at {shots[0]:.2f}s — not anchored on the impulse"
@@ -1171,7 +1213,7 @@ def test_blocked_candidate_shot_fires_at_the_stroke() -> None:
     """
     if not (CLIPS / "phantom_candidate_block_0805").exists():
         pytest.skip("clip phantom_candidate_block_0805 not recorded")
-    events = _run_clip("phantom_candidate_block_0805", _reference_model("empty_table_0801"))
+    events = _run_clip("phantom_candidate_block_0805", "empty_table_0801")
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the blocked-candidate miss is back"
     assert 11.2 <= shots[0] <= 11.9, f"shot at {shots[0]:.2f}s — not anchored on the stroke"
@@ -1194,7 +1236,7 @@ def test_late_emergence_shot_fires_at_the_stroke() -> None:
     """
     if not (CLIPS / "late_emergence_strike_0805").exists():
         pytest.skip("clip late_emergence_strike_0805 not recorded")
-    events = _run_clip("late_emergence_strike_0805", _reference_model("empty_table_0801"))
+    events = _run_clip("late_emergence_strike_0805", "empty_table_0801")
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the late-emergence miss is back"
     assert 15.4 <= shots[0] <= 16.1, f"shot at {shots[0]:.2f}s — not anchored on the stroke"
@@ -1226,7 +1268,7 @@ def test_parked_vote_newborn_confirms_on_travel_not_speed() -> None:
     """
     if not (CLIPS / "parked_vote_newborn_0805").exists():
         pytest.skip("clip parked_vote_newborn_0805 not recorded")
-    events = _run_clip("parked_vote_newborn_0805", _reference_model("empty_table_0801"))
+    events = _run_clip("parked_vote_newborn_0805", "empty_table_0801")
     shots = [e.t for e in events if isinstance(e, ShotTaken)]
     assert shots, "the stroke never fired — the parked-vote birth miss is back"
     assert 11.31 <= shots[0] <= 11.8, f"shot at {shots[0]:.2f}s — parked confirm tiers broken"
@@ -1260,12 +1302,9 @@ def test_break_dark_total_settles_at_the_rest() -> None:
     if not (CLIPS / name).exists():
         pytest.skip(f"clip {name} not recorded")
     from cueclock.capture.clip import ClipReader
-    from cueclock.vision.pipeline import VisionPipeline
 
     reader = ClipReader(CLIPS / name)
-    pipeline = VisionPipeline(
-        _calibration(), _reference_model("empty_table_0801"), cadence_hz=reader.cadence_hz
-    )
+    pipeline = _pipeline("empty_table_0801", reader)
     indices = reader.detect_indices()
     frames = _detections(reader, CLIPS / name, pipeline, indices)
     settles: list[tuple[float, bool, int, int]] = []
@@ -1322,13 +1361,10 @@ def test_latch_blind_shot_stops_the_clock() -> None:
     if not (CLIPS / name).exists():
         pytest.skip(f"clip {name} not recorded")
     from cueclock.capture.clip import ClipReader
-    from cueclock.vision.pipeline import VisionPipeline
 
     stroke = 8.756
     reader = ClipReader(CLIPS / name)
-    pipeline = VisionPipeline(
-        _calibration(), _reference_model("empty_table_0801"), cadence_hz=reader.cadence_hz
-    )
+    pipeline = _pipeline("empty_table_0801", reader)
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,
@@ -1362,16 +1398,15 @@ def test_0811_scratches_reach_the_adjudicator() -> None:
     latch simply never armed, and the two-stage verdict #26 built was never
     reached.
 
-    A `ScratchCandidate` is what the counts in EXPECTED cannot pin — the kick
-    never gets a verdict inside its clip, and a candidate is the evidence the
-    hub's hold and adjudication both hang off. Before the one-frame flight
-    allowance in `_near_pocket`, both clips emitted **zero** scratch events of
-    any kind; the pot additionally reaches a full `Scratch`.
+    A `ScratchCandidate` is the evidence the hub's hold and adjudication both
+    hang off. Before the one-frame flight allowance in `_near_pocket`, both
+    clips emitted **zero** scratch events of any kind. Both reach a full
+    `Scratch`; the kick's only since #56 (see its EXPECTED note).
     """
-    for name, wants_verdict in (("pot_scratch_nohold_0811", True), ("kick_scratch_0811", False)):
+    for name, wants_verdict in (("pot_scratch_nohold_0811", True), ("kick_scratch_0811", True)):
         if not (CLIPS / name).exists():
             pytest.skip(f"clip {name} not recorded")
-        events = _run_clip(name, _reference_model("empty_table_0801"))
+        events = _run_clip(name, "empty_table_0801")
         candidates = [e for e in events if type(e).__name__ == "ScratchCandidate"]
         assert len(candidates) == 1, (
             f"{name}: expected exactly one scratch candidate, got {len(candidates)} — "
@@ -1411,12 +1446,9 @@ def test_phantom_still_down_is_rejected_at_the_settle() -> None:
     if not (CLIPS / name).exists():
         pytest.skip(f"clip {name} not recorded")
     from cueclock.capture.clip import ClipReader
-    from cueclock.vision.pipeline import VisionPipeline
 
     reader = ClipReader(CLIPS / name)
-    pipeline = VisionPipeline(
-        _calibration(), _reference_model("empty_table_0801"), cadence_hz=reader.cadence_hz
-    )
+    pipeline = _pipeline("empty_table_0801", reader)
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,
@@ -1483,12 +1515,9 @@ def test_0811_carries_still_count_the_real_stroke(name: str) -> None:
     if not (CLIPS / name).exists():
         pytest.skip(f"clip {name} not recorded")
     from cueclock.capture.clip import ClipReader
-    from cueclock.vision.pipeline import VisionPipeline
 
     reader = ClipReader(CLIPS / name)
-    pipeline = VisionPipeline(
-        _calibration(), _reference_model(REFERENCES[name]), cadence_hz=reader.cadence_hz
-    )
+    pipeline = _pipeline(REFERENCES[name], reader)
     indices = reader.detect_indices()
     timeline = replay_clock(
         name,

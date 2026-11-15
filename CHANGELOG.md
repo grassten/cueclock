@@ -277,6 +277,80 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-15 (checkpoint 113 — 16/16: colour rescue, touching-pair split,
+  and a corpus that keeps its calibration; #56):** `all_balls_still_1115` and
+  `static_spread` read **16 detections on every frame** (939 of 939 each; were
+  11 and 14). New `test_every_ball_is_its_own_detection` pins it. Design in
+  `design.md` §4.1; every constant anchored on a whole-corpus survey (71 clips,
+  every 8th frame, contact sheets).
+  - **Rail balls (the 14, the 11): no code.** Re-measured against RECAL's
+    `empty_table_1115` (recorded 38 min after the clip): both are detected. The
+    clip now grades against that reference.
+  - **The corpus kept re-grading itself under the live calibration.** RECAL
+    replaced `config/table_calibration.json`, and the corpus loads it for every
+    clip, so the next battery would have graded August clips under November's
+    homography with no detection change at all. Each reference clip now
+    carries the calibration it was graded under
+    (`tests/clips/<ref>/table_calibration.json`; the 2026-08-01 fit copied into
+    `empty_table`, `_0729`, `_0801`, the new fit into `_1115`), and
+    `recalibrate` writes one into every reference it records. A cached battery
+    before any detection change hit every old cache entry: 712 passed, the
+    pre-RECAL baseline exactly.
+  - **Chroma rescue (the red 3).** Colour change orthogonal to the cloth's
+    colour, at Bayer-quad resolution; shadow-invariant by construction.
+    Rescue-only, with each guard taken from a case the survey found (gray's
+    verdict on hands/sticks/clusters stands; sticks are thin; the red 3's
+    shadow crescent is replaced, not duplicated). The red 3 was invisible on
+    most corpus clips, not just these two. Replacing *centred* partial gray
+    views was built, measured and reverted: the centroid alternated 3-4 px
+    between the two views (`live_divergence_0731a`) and moved three clip-start
+    settles with no physical cause.
+  - **Touching-pair split.** Gray+colour shape, distance-transform cores at
+    0.75 radii, every part must pass the shadow exemption's disc test. Half of
+    the corpus's merged blobs were touching pairs. It runs before the shadow
+    gate, which was discarding pairs whose centroid fell in the contact shadow:
+    the cue touching the 6 in `cluster_shot_0801` was invisible for 6 s and
+    produced a false Scratch once the rescue made the clip's red 3 visible.
+  - **Bug found on the way:** `_split_touching` crashed at an odd-height ROI
+    edge (colour crop one quad row short). Fixed before any battery passed.
+  - **Engine: the handoff reach starts its clock when the cue left the rest**
+    (`events.py`, `_maybe_open_handoff`), not when it was last seen. The split
+    sees `kick_scratch_0811`'s cue one frame sooner as it passes a pair, the
+    strike goes through the flag-switch re-qualification, and the reach
+    (240 mm, last-seen clock) fell short of the 279 mm the ball had covered:
+    it had been last seen 45 mm out on a stick-lagged centroid. With the old
+    detector the change is inert on that clip (shot at 13.03 s either way).
+  - **Cost:** `detect_frame` 2.2-2.6 -> 3.9-5.2 ms on corpus clips (colour
+    channel ~1.7 ms, split ~0.6 ms per merged blob). Three detect workers;
+    watch `blobs_ms` in the next session's heartbeats.
+  - **Gate:** cold battery **718 passed / 1 failed in 5:24** (the failure is
+    `ball_in_hand_triple_0811`'s speed golden, regenerated below); unit 625.
+    Strike misses: only the pre-existing `stroke_tug_strike_0801`. No new pair
+    of detections closer than a ball radius anywhere in the corpus (88 909 ->
+    100 709 detections over 12 110 frames).
+  - **Expectations changed:** `kick_scratch_0811` scratches 0 -> 1 (Steven's
+    ground truth is a scratch; the census closes now that the pair beside the
+    cue is two observed balls instead of one unobservable merged blob) and its
+    adjudicator test now wants the verdict. `ball_in_hand_triple_0811` keeps
+    3 settles, with a note: the middle one (14.74 s) fires mid-carry, cue
+    still in hand on the frames — pre-existing, not endorsed.
+  - **Goldens (36 rewritten; `stroke_tug_strike_0801` and
+    `parked_vote_strike_0801` kept deliberately stale, as at checkpoint 110).**
+    10 are id renumbering only. Strike times were checked against footage —
+    the struck ball's first 15 mm of travel — not against the goldens, since
+    ground truth is derived from them:
+
+    | Clip | Change | Why |
+    |---|---|---|
+    | `late_emergence_strike_0805`, `lone_roller_0801`, `occluded_address_0731`, `occluded_roll_0806`, `parked_vote_newborn_0805`, `phantom_flag_strike_0805`, `stroke_gear_veto_0802`, `address_chatter_miss_0801`, `cluster_rest_shot_0806`, `drill_shot_0801` | strike 0.03-0.28 s earlier | now fires 0.00-0.10 s after the struck ball's measured departure (was 0.1-0.3 s); `drill_shot` has no clean departure track to measure |
+    | `soft_touch_0731` | strike 6.32 -> 6.61 s; settle 9.61 -> 10.73 s | slowest strike in the corpus: the candidate opens on the true onset (6.017 s) but the ball does not cover 22 mm in one window, so it fires one window later; the latch stops the clock regardless. The settle: the red 3 rolls up the rail until ~9.8 s (frames) |
+    | `kick_scratch_0811` | strike 13.03 -> 13.24 s; Scratch lands | handoff path (above); scratch per ground truth |
+    | `cluster_shot_0801` | settle 14.91 -> 18.43 s; candidate + refute at 12.45 s | the red 3 rolls until ~18.4 s; the cue's candidate is refuted at once by the cue itself, now visible at the 6 |
+    | `break_outrun_0805`, `pickup_snatch_0801`, `soft_shot` | settle +0.30-0.36 s | a ball still rolling, each seen on frames: the 9 rolling into the 4; the cue creeping 7 px with its dots turning (it was one merged unobservable blob with the green); a ball running to the top-left pocket |
+    | `break_dark_total_0806` | settle 51 ms earlier | table still through it (max 5 mm on one ball) |
+    | `address_chatter_miss_0801` | warmup settle at 3.65 s gone | it was a pair flickering between one merged centroid and two balls (25 mm jumps); now steady. The other clip-start change is real motion: `cluster_rest_shot_0806` gains a settle at 3.18 s, the red 3 rolling at clip start |
+    | 10 clips | `speed_mms` only | the fastest corroborated ball in the window changes with more balls on the roster. `ball_in_hand_triple_0811` 6482 -> 2754 corrects an artifact (the cue measures 2267 -> 1650 mm/s through the window in both runs); `phantom_flag_strike_0805` 2281 -> 6682 is the same artifact class in reverse — an uncorroborated opening impulse (the nearest real observation is 1592). The speed bookkeeping does not two-step-corroborate the opening raw; it feeds only the break gate. Not fixed here |
+
 - **2026-11-15 (checkpoint 112 — recalibrate from the deck, and health where
   it gets seen; #49 + #52):** no detection code changed, so unit tests are the
   gate (620 passed) and no corpus battery ran.

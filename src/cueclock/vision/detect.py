@@ -20,6 +20,7 @@ Pure module: arrays in, detections out. No I/O, no clocks, no threads.
 """
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -173,6 +174,50 @@ class DetectConfig:
     # enough to reach it. The seam stays: set True and `detect_frame` returns
     # the list exactly as before.
     export_intrusions: bool = False
+    # Chroma rescue (#56): gray differencing is blind to a ball whose
+    # luminance matches the cloth's. The solid red 3 on this blue cloth reads
+    # centre |diff| 21 against the 25 threshold, yet it moves R by +131 and
+    # B by -77. The rescue channel is the frame's colour change *orthogonal*
+    # to the cloth's own colour direction (`ChromaReference`): a shadow scales
+    # the cloth's RGB along that direction and reads ~0 there, so this channel
+    # cannot resurrect what the shadow gate rejects. Measured 2026-11-15 on
+    # Bayer quads with a 3x3 quad box blur: every empty reference (empty_table,
+    # _0729, _0801, _1115) against itself, 6 frames each over the whole cloth
+    # mask, reads p99.99 6.4-6.7 and max 10.3-12.4. The threshold is 2x that
+    # maximum, and is also where the red 3's chroma blob matches its predicted
+    # ball area (1476 px at 25 vs ~1500).
+    chroma_threshold: float = 25.0
+    chroma_blur_quads: int = 3
+    # A rescued blob must hold a disc of this many predicted ball radii — fat,
+    # not round (§2.3 lesson 2: a streaking ball is still as thick as a ball).
+    # Same corpus survey, all 7228 rescues measured: every one at >= 0.78 was
+    # a ball; below, diagonal cue sticks the 3x3 blur had fattened (0.22-0.30,
+    # n=23), a glove logo (0.39) and one heavily blurred stripe in flight
+    # (0.57). The cut sits in that empty band and keeps the stripe.
+    chroma_core_min: float = 0.5
+    # A whole-ball colour blob replaces a gray detection only when that one
+    # sits at least this many predicted radii off the colour blob's centre: an
+    # off-centre fragment (the crescent of a red ball's shadow), not a centred
+    # partial view. Over the corpus survey the candidates split cleanly: 7558
+    # at 0-12 px (centred partial views, keep gray), none at 12-14, 27 at
+    # 14-25 px (the crescents).
+    chroma_replace_offset: float = 0.6
+    # Touching-pair split (#56, `_split_touching`): the core level, in
+    # predicted ball radii. On all_balls_still_1115 the two pairs read peaks
+    # 0.98-1.02 and saddles ~0.65; cores separate from 0.7 up. Over every
+    # merged gray blob in the corpus (6442, 71 clips, every 8th frame) 0.75
+    # makes 4212 candidates and 3199 pass the per-part disc test; checked on
+    # contact sheets (96 random, plus 79 distinct ones from break and power
+    # clips where streaks live) every one was two or more real balls. Those
+    # that fail stay one merged detection, as before.
+    pair_core_min: float = 0.75
+    # A part of a split is gray *and* colour, so it is larger than the gray
+    # blobs `shadow_disc_area_hi` was measured on: over the same survey, parts
+    # disc-like by IoU run 0.82-1.28x the predicted ball area (p1-p99), and
+    # nothing lies between 1.35 and 1.7. Every distinct split the gray bound
+    # (1.15) refused and this admits (34, contact sheet) was real touching
+    # balls, `static_spread`'s cue and 14 among them.
+    pair_part_area_hi: float = 1.35
 
 
 # Morphology spill past the cloth mask's bounding box: OPEN (3x3) then CLOSE
@@ -190,7 +235,8 @@ def table_roi_of(table_mask: npt.NDArray[np.uint8]) -> tuple[int, int, int, int]
     """
     x, y, w, h = cv2.boundingRect(table_mask)
     fh, fw = table_mask.shape
-    x0, y0 = max(0, x - _ROI_PAD_PX), max(0, y - _ROI_PAD_PX)
+    # Even origin, so the crop's Bayer quads are the frame's (chroma rescue).
+    x0, y0 = max(0, x - _ROI_PAD_PX) & ~1, max(0, y - _ROI_PAD_PX) & ~1
     return x0, y0, min(fw, x + w + _ROI_PAD_PX) - x0, min(fh, y + h + _ROI_PAD_PX) - y0
 
 
@@ -205,6 +251,158 @@ def build_reference(frames: list[npt.NDArray[np.uint8]]) -> npt.NDArray[np.uint8
         raise ValueError("no frames to build a reference from")
     stack = np.stack([bayer_to_gray(f) for f in frames])
     return cast(npt.NDArray[np.uint8], np.median(stack, axis=0).astype(np.uint8))
+
+
+def bayer_quads(bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.float32]:
+    """Half-resolution RGB from the 2x2 Bayer quads — no demosaic.
+
+    BayerRG8 parity is absolute (see :func:`_patch_rgb_means`), so ``bayer``
+    must start on an even row and column of the frame.
+    """
+    h, w = bayer.shape[0] // 2 * 2, bayer.shape[1] // 2 * 2
+    b = bayer[:h, :w]
+    quads = np.empty((h // 2, w // 2, 3), np.float32)
+    quads[..., 0] = b[0::2, 0::2]
+    quads[..., 1] = b[0::2, 1::2]
+    quads[..., 1] += b[1::2, 0::2]
+    quads[..., 1] *= 0.5
+    quads[..., 2] = b[1::2, 1::2]
+    return quads
+
+
+@dataclass(frozen=True, eq=False)
+class ChromaReference:
+    """The empty table in the chroma-rescue channel (#56).
+
+    ``axes`` are two orthonormal RGB directions perpendicular to the cloth's
+    median colour, so projecting onto them discards brightness along the
+    cloth's own colour: a shadow, which scales the cloth's RGB, projects to
+    the cloth's own value and differences to ~0. ``cloth`` is the per-quad
+    median of the reference frames projected onto ``axes``, at half resolution.
+    ``mask`` (0/255) and ``edge`` are the table mask and :func:`table_edge_of`
+    it, sampled at the same quads.
+    """
+
+    axes: npt.NDArray[np.float32]  # (2, 3)
+    cloth: npt.NDArray[np.float32]  # (H/2, W/2, 2)
+    mask: npt.NDArray[np.uint8]  # (H/2, W/2)
+    edge: npt.NDArray[np.bool_]  # (H/2, W/2)
+
+    @classmethod
+    def build(
+        cls, frames: list[npt.NDArray[np.uint8]], table_mask: npt.NDArray[np.uint8]
+    ) -> "ChromaReference":
+        median = np.median(np.stack([bayer_quads(f) for f in frames]), axis=0).astype(np.float32)
+        cloth_rgb = np.median(median[table_mask[0::2, 0::2].astype(bool)], axis=0)
+        u = cloth_rgb / np.linalg.norm(cloth_rgb)
+        e1 = np.cross(u, [1.0, 0.0, 0.0])
+        e1 /= np.linalg.norm(e1)
+        axes = np.stack([e1, np.cross(u, e1)]).astype(np.float32)
+        return cls(
+            axes=axes,
+            cloth=cast(npt.NDArray[np.float32], cv2.transform(median, axes)),
+            mask=np.ascontiguousarray(table_mask[0::2, 0::2] * np.uint8(255)),
+            edge=np.ascontiguousarray(table_edge_of(table_mask)[0::2, 0::2]),
+        )
+
+
+def _chroma_binary(
+    bayer: npt.NDArray[np.uint8],
+    chroma: ChromaReference,
+    roi: tuple[int, int, int, int],
+    cfg: DetectConfig,
+) -> npt.NDArray[np.uint8]:
+    """Where the cloth's colour changed (0/1), per Bayer quad of the ``roi``
+    window (whose origin is even, see :func:`table_roi_of`). See
+    ``DetectConfig.chroma_threshold``."""
+    ox, oy, rw, rh = roi
+    qh, qw = rh // 2, rw // 2
+    window = bayer[oy : oy + 2 * qh, ox : ox + 2 * qw]
+    # Rows of quads as 2-channel views: (R, G) on even rows, (G, B) on odd —
+    # strided views, no demosaic; projecting each onto the axes and summing is
+    # the quad's projection. The whole channel costs ~1.7 ms/frame on the M2
+    # (3.0 ms through `bayer_quads`); `run` has three detect workers.
+    even = window[0::2].reshape(qh, qw, 2).astype(np.float32)
+    odd = window[1::2].reshape(qh, qw, 2).astype(np.float32)
+    a = chroma.axes
+    crop = (slice(oy // 2, oy // 2 + qh), slice(ox // 2, ox // 2 + qw))
+    delta = cv2.add(
+        cv2.transform(even, np.stack([a[:, 0], a[:, 1] / 2], axis=1)),
+        cv2.transform(odd, np.stack([a[:, 1] / 2, a[:, 2]], axis=1)),
+    )
+    k = cfg.chroma_blur_quads
+    du, dv = cv2.split(cv2.blur(cv2.subtract(delta, chroma.cloth[crop]), (k, k)))
+    over = np.asarray(cv2.magnitude(du, dv)) > cfg.chroma_threshold
+    return cast(npt.NDArray[np.uint8], cv2.bitwise_and(over.view(np.uint8), chroma.mask[crop]))
+
+
+def _chroma_rescues(
+    binary: npt.NDArray[np.uint8],
+    edge: npt.NDArray[np.bool_],
+    roi: tuple[int, int, int, int],
+    labels: "cv2.typing.MatLike",
+    sizable: set[int],
+    fragments: set[int],
+    radius_at: Callable[[float, float], float],
+    cfg: DetectConfig,
+) -> list[tuple[float, float, float, tuple[int, int, int, int], bool, bool]]:
+    """Ball-shaped chroma blobs where the gray path segmented nothing (#56).
+
+    Rescue only: a chroma blob that overlaps any gray blob of a whole ball's
+    size or more (``sizable``) is skipped, whether the gray gates accepted
+    that blob or rejected it. An accepted one is a ball already found, and it
+    keeps its gray blob untouched, so this adds balls and never moves one. A
+    rejected one is the gray path's verdict on a hand, a stick, a cluster or
+    an arm reaching in, and the chroma blob inside it (a glove's logo, a
+    stick and the cue ball it touches) must not overturn that verdict. Over
+    the corpus survey (71 clips, every 8th frame) those were the only
+    non-balls the rescue produced. What remains is a ball the gray path saw
+    nothing of, or only crumbs below the area floor.
+
+    ``binary`` is :func:`_chroma_binary` and ``edge`` the table edge at the
+    same quads; ``labels`` is the gray path's full-resolution crop of the
+    ``roi`` window. Returns ``(cx, cy, area, bbox, whole, over_fragment)`` in
+    frame pixels, through the same geometry gates and border rule as a gray
+    blob: ``whole`` when the blob, holes filled, is a disc of ball size (the
+    split's part test), ``over_fragment`` when it overlaps one of the smaller
+    gray blobs in ``fragments`` — see the reconciliation in
+    :func:`detect_frame`.
+    """
+    ox, oy = roi[0], roi[1]
+    qh, qw = binary.shape
+    n, qlabels, stats, centroids = cv2.connectedComponentsWithStats(binary)
+    gray_labels = labels[0 : 2 * qh : 2, 0 : 2 * qw : 2]
+    found = []
+    for i in range(1, n):
+        x, y = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+        w, h = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+        area = 4.0 * float(stats[i, cv2.CC_STAT_AREA])
+        if not (
+            cfg.min_area_px <= area <= cfg.max_area_px
+            and min(2 * w, 2 * h) >= cfg.min_extent_px
+            and max(2 * w, 2 * h) <= cfg.max_extent_px
+        ):
+            continue
+        box = (slice(y, y + h), slice(x, x + w))
+        blob = qlabels[box] == i
+        if edge[box][blob].any():
+            continue  # reaches in from off the cloth, as for a gray blob
+        cx = ox + 2.0 * float(centroids[i, 0]) + 0.5
+        cy = oy + 2.0 * float(centroids[i, 1]) + 0.5
+        radius = radius_at(cx, cy)
+        under = set(np.unique(gray_labels[box][blob]).tolist())
+        if sizable & under:
+            continue  # the gray path segmented something here: its call
+        quads = blob.view(np.uint8)
+        padded = np.pad(quads, 1)
+        core = 2.0 * float(cv2.distanceTransform(padded, cv2.DIST_L2, 5).max())
+        if core < cfg.chroma_core_min * radius:
+            continue  # thin: a cue stick, not a ball
+        # At quad resolution the ball's radius is half its pixel radius.
+        whole = _is_disc_of_ball_size(_filled(quads), radius / 2.0, cfg.pair_part_area_hi, cfg)
+        bbox = (ox + 2 * x, oy + 2 * y, 2 * w, 2 * h)
+        found.append((cx, cy, area, bbox, whole, bool(fragments & under)))
+    return found
 
 
 def _patch_rgb_means(
@@ -286,6 +484,37 @@ def _ring_whiteness(
     return float((darkest[ring] >= cfg.whiteness_quad_floor * 255.0).mean())
 
 
+def _filled(blob: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+    """The blob with its holes filled (a ball's number disc leaves one)."""
+    contours, _ = cv2.findContours(blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled = np.zeros_like(blob)
+    cv2.drawContours(filled, contours, -1, 1, -1)
+    return filled
+
+
+def _is_disc_of_ball_size(
+    filled: npt.NDArray[np.uint8],
+    ball_radius_px: float,
+    area_hi: float,
+    cfg: DetectConfig,
+) -> bool:
+    """Is this hole-free mask a disc of ball size — ``shadow_disc_area_lo`` to
+    ``area_hi`` times the predicted ball area? Compared with a disc of its own
+    area at its own centroid, so the IoU is scale-free (#51; see
+    ``DetectConfig.shadow_disc_iou_min``)."""
+    m = cv2.moments(filled, True)
+    area = float(m["m00"])
+    ball_area = math.pi * ball_radius_px * ball_radius_px
+    if not (cfg.shadow_disc_area_lo * ball_area <= area <= area_hi * ball_area):
+        return False
+    cx, cy = m["m10"] / area, m["m01"] / area
+    h, w = filled.shape
+    yy, xx = np.ogrid[0:h, 0:w]
+    disc = (xx - cx) ** 2 + (yy - cy) ** 2 <= area / math.pi
+    inside = filled.astype(bool)
+    return float((inside & disc).sum()) / float((inside | disc).sum()) >= cfg.shadow_disc_iou_min
+
+
 def _is_ball_disc(
     labels: "cv2.typing.MatLike",
     label: int,
@@ -294,23 +523,85 @@ def _is_ball_disc(
     cfg: DetectConfig,
 ) -> bool:
     """Is this blob, holes filled, a disc of ball size? (#51 — the shadow
-    exemption; see ``DetectConfig.shadow_disc_iou_min``.) ``bbox`` is in
-    ``labels``' own coordinates."""
+    exemption.) ``bbox`` is in ``labels``' own coordinates."""
     x, y, w, h = bbox
     blob = (labels[y : y + h, x : x + w] == label).astype(np.uint8)
-    contours, _ = cv2.findContours(blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filled = np.zeros_like(blob)
-    cv2.drawContours(filled, contours, -1, 1, -1)
+    return _is_disc_of_ball_size(_filled(blob), ball_radius_px, cfg.shadow_disc_area_hi, cfg)
+
+
+def _split_touching(
+    labels: "cv2.typing.MatLike",
+    label: int,
+    bbox: tuple[int, int, int, int],
+    roi: tuple[int, int, int, int],
+    chroma_binary: npt.NDArray[np.uint8] | None,
+    sizable: set[int],
+    radius_at: Callable[[float, float], float],
+    cfg: DetectConfig,
+) -> list[tuple[float, float, float, tuple[int, int, int, int]]] | None:
+    """Touching balls in one merged gray blob, one entry each — or None (#56).
+
+    The gray blob of a touching pair is a poor picture of it: a ball near the
+    cloth's luminance (the yellow 9, the green 6) shows as a sliver or an open
+    ring. So the shape is read from the blob together with the chroma blob it
+    touches, holes filled. Its distance transform peaks at ~1.0 ball radius at
+    each ball's centre, with a saddle of ~0.65 radii at the contact (the shadow
+    between the balls fills the waist); a motion streak is a capsule whose
+    ridge is flat, with no saddle at all. Thresholding at
+    ``pair_core_min`` radii therefore leaves one core per touching ball. Each
+    pixel goes to its nearest core, and the split stands only if *every* part
+    is a disc of ball size by the same test the shadow exemption uses (with
+    the area band of a gray-and-colour part, ``pair_part_area_hi``) — else the
+    blob stays one merged detection, as before.
+
+    ``labels`` and ``bbox`` are in the ``roi`` crop's coordinates;
+    ``chroma_binary`` is :func:`_chroma_binary` of the same crop, or None;
+    ``sizable`` the gray labels of at least ``min_area_px``.
+    """
+    x, y, w, h = bbox
+    ox, oy = roi[0], roi[1]
+    reach = int(radius_at(ox + x + w / 2.0, oy + y + h / 2.0)) + 1  # past a sliver's ball
+    lh, lw = labels.shape
+    x0, y0 = max(0, x - reach) & ~1, max(0, y - reach) & ~1  # even: quads align
+    x1, y1 = min(lw, x + w + reach), min(lh, y + h + reach)
+    blob = (labels[y0:y1, x0:x1] == label).astype(np.uint8)
+    if chroma_binary is not None:
+        quads = chroma_binary[y0 // 2 : (y1 + 1) // 2, x0 // 2 : (x1 + 1) // 2]
+        colour = np.zeros_like(blob)  # an odd crop edge has no last quad row
+        up = np.repeat(np.repeat(quads, 2, axis=0), 2, axis=1)[: y1 - y0, : x1 - x0]
+        colour[: up.shape[0], : up.shape[1]] = up
+        _, comps = cv2.connectedComponents(colour)
+        # Colour that also touches another gray blob is that blob's ball, not
+        # this one's: a halo joining a neighbour would hand it to this split
+        # (walk_around_settle: the red 3 next to a pair, reported twice).
+        others = np.isin(labels[y0:y1, x0:x1], list(sizable - {label}))
+        mine = set(np.unique(comps[blob > 0]).tolist()) - set(np.unique(comps[others]).tolist())
+        mine.discard(0)
+        if mine:
+            blob |= np.isin(comps, list(mine)).astype(np.uint8)
+    filled = _filled(blob)
+    dist = cv2.distanceTransform(np.pad(filled, 1), cv2.DIST_L2, 5)[1:-1, 1:-1]
     m = cv2.moments(filled, True)
-    area = float(m["m00"])
-    ball_area = math.pi * ball_radius_px * ball_radius_px
-    if not (cfg.shadow_disc_area_lo * ball_area <= area <= cfg.shadow_disc_area_hi * ball_area):
-        return False
-    cx, cy = m["m10"] / area, m["m01"] / area
-    yy, xx = np.ogrid[0:h, 0:w]
-    disc = (xx - cx) ** 2 + (yy - cy) ** 2 <= area / math.pi
-    inside = filled.astype(bool)
-    return float((inside & disc).sum()) / float((inside | disc).sum()) >= cfg.shadow_disc_iou_min
+    r = radius_at(ox + x0 + m["m10"] / m["m00"], oy + y0 + m["m01"] / m["m00"])
+    n, cores = cv2.connectedComponents((dist >= cfg.pair_core_min * r).astype(np.uint8))
+    if n < 3:
+        return None  # one core: one ball, a streak, or a ball with a stick
+    # Every pixel labelled with its nearest core in one pass: the zero-pixel
+    # components of the source are the cores.
+    _, nearest = cv2.distanceTransformWithLabels(
+        (cores == 0).astype(np.uint8), cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_CCOMP
+    )
+    parts = []
+    for j in range(1, n):
+        ys, xs = np.nonzero(cores == j)
+        part = ((nearest == nearest[ys[0], xs[0]]) & (filled > 0)).astype(np.uint8)
+        pm = cv2.moments(part, True)
+        cx, cy = ox + x0 + pm["m10"] / pm["m00"], oy + y0 + pm["m01"] / pm["m00"]
+        if not _is_disc_of_ball_size(part, radius_at(cx, cy), cfg.pair_part_area_hi, cfg):
+            return None
+        px, py, pw, ph = cv2.boundingRect(part)
+        parts.append((cx, cy, float(pm["m00"]), (ox + x0 + px, oy + y0 + py, pw, ph)))
+    return parts
 
 
 def _is_shadow(
@@ -425,6 +716,7 @@ def detect_frame(
     gray: npt.NDArray[np.uint8] | None = None,
     table_edge: npt.NDArray[np.bool_] | None = None,
     table_roi: tuple[int, int, int, int] | None = None,
+    chroma: ChromaReference | None = None,
 ) -> tuple[list[Detection], list[Intrusion]]:
     """Find ball-like blobs in one frame. See module docstring for the gates.
 
@@ -452,11 +744,17 @@ def detect_frame(
     (the pipeline needs the gray for churn anyway, and the mask never
     changes). With a mask, segmentation runs only inside its padded bounding
     box; coordinates are offset back, so the output is identical.
+
+    ``chroma`` (optional) turns on the chroma rescue (#56): after the gray
+    blobs, a ball-shaped blob of colour change that overlaps no accepted gray
+    blob is reported too — a ball whose luminance matches the cloth's. See
+    ``DetectConfig.chroma_threshold``. Every production path supplies it.
     """
     cfg = config or DetectConfig()
     if gray is None:
         gray = bayer_to_gray(bayer)
     ox, oy = 0, 0
+    rh, rw = gray.shape
     if table_mask is not None:
         edge = table_edge_of(table_mask) if table_edge is None else table_edge
         ox, oy, rw, rh = table_roi_of(table_mask) if table_roi is None else table_roi
@@ -474,8 +772,27 @@ def detect_frame(
     n, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
     if table_mask is not None:
         border_ids = set(np.unique(labels[edge]).tolist())
+    roi = (ox, oy, rw, rh)
+    chroma_binary = None if chroma is None else _chroma_binary(bayer, chroma, roi, cfg)
+    sizable = {i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= cfg.min_area_px}
     detections: list[Detection] = []
     intrusions: list[Intrusion] = []
+
+    def radius_at(cx: float, cy: float) -> float:
+        if radius_map is None:
+            return cfg.nominal_ball_radius_px
+        return float(radius_map[int(cy), int(cx)])
+
+    def ball(cx: float, cy: float, area: float, bbox: tuple[int, int, int, int]) -> Detection:
+        return Detection(
+            cx=cx,
+            cy=cy,
+            area=area,
+            bbox=bbox,
+            whiteness=_ring_whiteness(bayer, cx, cy, radius_at(cx, cy), cfg),
+            merged=area > cfg.merged_area_px or max(bbox[2], bbox[3]) > cfg.merged_extent_px,
+        )
+
     for i in range(1, n):
         area = float(stats[i, cv2.CC_STAT_AREA])
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
@@ -501,26 +818,65 @@ def detect_frame(
                     intrusions.append(found)
             continue
         cx, cy = float(centroids[i, 0]) + ox, float(centroids[i, 1]) + oy
-        radius = (
-            cfg.nominal_ball_radius_px
-            if radius_map is None
-            else float(radius_map[int(cy), int(cx)])
+        merged = area > cfg.merged_area_px or max(bw, bh) > cfg.merged_extent_px
+        parts = (
+            _split_touching(
+                labels, i, (lx, ly, bw, bh), roi, chroma_binary, sizable, radius_at, cfg
+            )
+            if merged
+            else None
         )
+        if parts is not None:
+            # Touching balls, each one passing the shadow exemption's own disc
+            # test — so this also stands when the shadow gate below would
+            # reject the blob. It did, for a pair whose centroid sample lands
+            # in the shadow at their contact: a white cue touching the green 6
+            # in cluster_shot_0801 was invisible for 6 s (checkpoint 110
+            # recorded the gate rejecting touching pairs).
+            detections += [ball(*part) for part in parts]
+            continue
         if reference_bayer is not None:
             rgb = _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px)
             ref_rgb = _patch_rgb_means(reference_bayer, cx, cy, cfg.patch_radius_px)
             if _is_shadow(rgb, ref_rgb, cfg) and not _is_ball_disc(
-                labels, i, (lx, ly, bw, bh), radius, cfg
+                labels, i, (lx, ly, bw, bh), radius_at(cx, cy), cfg
             ):
                 continue
-        detections.append(
-            Detection(
-                cx=cx,
-                cy=cy,
-                area=area,
-                bbox=bbox,
-                whiteness=_ring_whiteness(bayer, cx, cy, radius, cfg),
-                merged=area > cfg.merged_area_px or max(bw, bh) > cfg.merged_extent_px,
-            )
+        detections.append(ball(cx, cy, area, bbox))
+    if chroma is not None and chroma_binary is not None:
+        edge_quads = chroma.edge[oy // 2 : oy // 2 + rh // 2, ox // 2 : ox // 2 + rw // 2]
+        # The rescue defers to gray blobs of a whole ball's size or more: a
+        # ball, or a hand / stick / cluster verdict. A smaller one is at most
+        # a partial view of a ball (reconciled below), so it does not block.
+        ball_sized = {
+            i
+            for i in sizable
+            if stats[i, cv2.CC_STAT_AREA]
+            >= cfg.shadow_disc_area_lo
+            * math.pi
+            * radius_at(centroids[i, 0] + ox, centroids[i, 1] + oy) ** 2
+        }
+        rescues = _chroma_rescues(
+            chroma_binary, edge_quads, roi, labels, ball_sized, sizable - ball_sized, radius_at, cfg
         )
+        for rcx, rcy, rarea, rbbox, whole, over_fragment in rescues:
+            radius = radius_at(rcx, rcy)
+            near = [d for d in detections if math.hypot(d.cx - rcx, d.cy - rcy) < radius]
+            if near or over_fragment:
+                # Gray saw part of this ball. Usually a centred part — the
+                # white half of a stripe, a dim limb — and it stays: a colour
+                # blob trading places with it frame by frame jitters the
+                # centroid (live_divergence_0731a, 3-4 px each way). But a red
+                # ball can read in gray as only the dark crescent of its own
+                # shadow, hovering at the area floor well off its centre, and
+                # deferring to that made a still ball's track jump 25 mm each
+                # time it crossed the floor (scratch_replace), latching
+                # motion. So a whole ball in colour replaces gray views that
+                # sit off its centre (``chroma_replace_offset``), and nothing
+                # else. Only a whole one: a stripe's colour is half a ball too.
+                offset = cfg.chroma_replace_offset * radius
+                if not whole or any(math.hypot(d.cx - rcx, d.cy - rcy) < offset for d in near):
+                    continue
+                detections = [d for d in detections if d not in near]
+            detections.append(ball(rcx, rcy, rarea, rbbox))
     return detections, intrusions
