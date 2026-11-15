@@ -20,17 +20,16 @@ the settle, with no operator touching anything.
 ## Status (July 2026): the rig is live
 
 Hardware installed and calibrated; the clock runs real practice sessions.
-Detection accuracy work is ongoing — every live miss gets captured by a
-Stream Deck "Flag" key (last ~20 s of raw frames → a clip named for the
-failure reason) and turned into a graded regression scenario. Current
-corpus: 54 scenarios, all green.
+Detection accuracy work is ongoing, driven by the session journals (every
+shot, settle and correction the clock made) and graded against a corpus of
+recorded clips that replay deterministically through the vision core.
 
 | Piece | State |
 |---|---|
 | Basler a2A1920-160ucBAS + Kowa 3.5 mm, ceiling mount | live, settings locked in UserSet1 |
 | Vision pipeline (`cueclock run`): detect → track → events → clock | live |
 | OBS: Syphon table feed + clock overlay → wall TV (Hisense 55" CanvasTV) | live |
-| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Session / Mode / Replay / Flag / Start N / Push / Extension / Ruleset / New Rack / score. Keys that the current mode can't use go dark rather than dim (`hardware.md` §C) |
+| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Session / Mode / Replay / Start N / Push / Extension / Ruleset / New Rack / score. Keys that the current mode can't use go dark rather than dim (`hardware.md` §C) |
 | Session modes: match · run out · no clock — orthogonal to the ruleset | live |
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
@@ -42,7 +41,6 @@ corpus: 54 scenarios, all green.
 
 ```
 grab thread (BayerRG8 @ 156 fps)
- ├─► ring buffer (last ~20 s, POST /api/dump saves it as a corpus clip)
  ├─► detection @ 156 Hz (3 worker threads): |frame − empty-table reference| → blobs → tracker
  │      → undistortPoints + homography → table mm → event engine
  │      → ShotTaken / BallsSettled / Scratch → clock state machine

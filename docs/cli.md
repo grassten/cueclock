@@ -21,15 +21,11 @@ Ground rules that apply to every command:
   instead.
 - **`tests/clips` is a symlink to the T7** (`/Volumes/T7/pool_room_clips`).
   Unmounted ⇒ the symlink dangles: `record` fails fast, corpus tests skip.
-  **Flag dumps do not land here** — they stage on the internal SSD
-  (`run --dump-dir`, default `~/cueclock-dumps`) and reach the corpus only
-  when triage promotes them. Writing them straight to the T7 was starving
-  the live session that produced them (see `--dump-dir`).
 - **A live `run` session must have the machine to itself.** Corpus batteries
   (`pytest -n 4`, even the cached tier — it still saturates four cores) and
   other CPU/T7-heavy jobs starve the detect
-  loop — measured 2026-08-01 evening: 78 Hz → 20 Hz (`flag_missed`'s "20 s"
-  ring spans 78.4 s; a same-night dump with the machine quiet is a flawless
+  loop — measured 2026-08-01 evening: 78 Hz → 20 Hz (a "20 s" capture
+  spanned 78.4 s; a same-night one with the machine quiet was a flawless
   12.8 ms cadence). At starved cadence a break streaks across in 2–3 detect
   frames, reads a few hundred mm/s, and the IDLE break floor eats it: "the
   clock sees nothing" with zero errors anywhere. The journal's
@@ -114,35 +110,16 @@ Streams ~360 MB/s through the symlink onto the T7 — watch the frame-drop
 report. Refuses to eat the last 5 GiB of the disk. Scenario naming and
 recording discipline: `design.md` §9.
 
-### Grade / triage a clip offline
+### Grade a clip offline
 
 ```bash
 uv run python -m cueclock.cli analyze --clip tests/clips/<label> \
-    --reference tests/clips/empty_table_0801 [--warm] [--verbose]
+    --reference tests/clips/empty_table_0801 [--verbose]
 ```
 
-Flag dumps live in `~/cueclock-dumps/` until triage promotes them
-(`--clip ~/cueclock-dumps/<label>`). The full flag→corpus workflow — ground
-truth, journal correlation, warm/cold matrix, promotion, draining staging —
-is the **`/triage-clips` skill** (`.claude/skills/triage-clips/`); the flow it
-implements is `hardware.md` §C5.
-
-Deterministic replay of the pure vision core. Two modes, and knowing which
-you're in matters for triage:
-
-- **Cold (default):** the core starts from empty state — this shows what
-  *current code* does with the frames, which is what corpus grading wants.
-- **Warm (`--warm`, flag dumps only):** restores the live session's state
-  snapshot the dump carries (`state.pkl`, written by `run` at ~1 Hz), skips
-  the frames the snapshot already contains, and replays the rest —
-  reproducing what the live session *actually computed*, accumulated state
-  included (whiteness-vote position, roster membership, motion/episode
-  latches: the divergence class cold replay can never show, e.g. the
-  checkpoint-32 parked-vote shot-1 miss). Timestamps print in session time,
-  matching the dump's `events.jsonl`. No snapshot in the clip → cold replay
-  plus a printed note. A snapshot written by different vision-core code is
-  refused loudly (check out the recording commit, or rerun cold) — never a
-  silent mis-run. Use the same `--reference` the live session ran with.
+Deterministic replay of the pure vision core, from empty state: it shows
+what *current code* does with the frames, which is what corpus grading
+wants. Use the reference the clip was recorded against.
 
 `--verbose` adds per-second track status lines.
 
@@ -177,19 +154,12 @@ The model comes from `scripts/fetch_vosk_model.sh`. Full plan:
 | `--reference` | the clip `config/reference.json` names | override the pointer `recalibrate` writes |
 | `--calibration` | `config/table_calibration.json` | |
 | `--stride` | `1` | detect every Nth camera frame. `1` = every frame (156 Hz, checkpoint 106); `2` = the 78 Hz cadence every constant was tuned at — the vision core converts its frame-count constants to the same span of time either way (`TUNED_HZ`) |
-| `--ring-seconds` | `20.0` | in-RAM rolling buffer that `POST /api/dump` saves as a labeled clip (~7.2 GB at 20 s and stride 1, ~3.6 GB at stride 2; `0` disables). 20 s because a measured live Flag press came 12.7 s after the phantom it reacted to |
-| `--dump-dir` | `~/cueclock-dumps` | where `POST /api/dump` stages flag clips. **Internal SSD on purpose, not the T7:** the T7 is USB, and a multi-GB dump saturates the bus it shares with every peer — one measured press (2026-08-01) dropped the detect loop 75 → 45 Hz and froze the Camo side-angle source in OBS for ~1 s, still blipping 20 s later. Flagging a failure was degrading the session being flagged. In-repo staging is out too: the Desktop is iCloud-synced. Refuses to eat the last 5 GiB |
 | `--verbose` | off | per-second track status lines |
 | `--no-mic` | off | disable the voice-"extension" mic |
 
 Plus the shared display and mic args below.
 
-Flag dumps (`POST /api/dump`) land in `--dump-dir` as `<label>_N` and carry,
-next to the frames and `events.jsonl`:
-`state.pkl` + `state.json` — the warm-replay snapshot `analyze --warm`
-consumes (the oldest of `run`'s ~1 Hz rolling state snapshots that falls
-inside the ring window; measured cost 2.3 MB / ~1 ms per snapshot —
-negligible at the detect cadence). The session journal additionally stamps
+The session journal stamps
 vision events with `frame_t` (the confirming frame's capture timestamp,
 vs. the record's emit-time `mono`) and writes a `detect_heartbeat` line
 every ~5 s (effective detect Hz + age of the newest processed frame, and
@@ -197,10 +167,12 @@ since #52 the mean ms per frame in each stage: `queue_ms` waiting for a
 worker, `blobs_ms` inside `find_blobs`, `loop_ms` for churn + advance +
 dispatch), so detect-loop starvation is measurable from the journal alone,
 and so is where the time went. A `reference_drift` record at launch carries
-the drift reading and whether it crossed the warn level. That is what
-convicted the T7 as the dump target: the heartbeat around a flag press read
-75 → 45 Hz, and the same seconds froze the Camo source in OBS. Dumps stage
-locally now (`--dump-dir`), so a flag press no longer costs the session.
+the drift reading and whether it crossed the warn level.
+
+`run` keeps no frames in memory. Until checkpoint 114 it held the last 20 s
+of raw frames (~7.2 GB at 156 Hz) for the deck's Flag key (`POST /api/dump`,
+`--ring-seconds`, `--dump-dir`, `analyze --warm`); all of that was removed
+when the key went unpressed for three months (#55).
 
 ### `record`
 
@@ -266,8 +238,7 @@ balls 500+), `NO TABLE`, `BAD FIT n.npx` (either residual over 2 px).
 | `--clip` | required | clip directory to analyze |
 | `--reference` | `tests/clips/empty_table` | stale default — always pass the current dated clip |
 | `--calibration` | `config/table_calibration.json` | |
-| `--stride` | `1` | detect every Nth *stored* frame. The default replays every frame at the clip's own cadence (`ClipReader.cadence_hz`): record clips and dumps from checkpoint 106 on store 156 fps, older ring dumps the 78 Hz stream they were detected at — so a dump always replays at the cadence its live session ran (the checkpoint 33 lesson). Larger strides are for experiments; the pipeline is built for `cadence / stride` |
-| `--warm` | off | restore the flag dump's live-state snapshot (`state.pkl`) and replay from it — reproduces what the live session computed, accumulated state included. Without a snapshot: cold replay + a note. See the triage recipe above |
+| `--stride` | `1` | detect every Nth *stored* frame. The default replays every frame at the clip's own cadence (`ClipReader.cadence_hz`): clips from checkpoint 106 on store 156 fps, older live captures the 78 Hz stream they were detected at — so a capture always replays at the cadence its live session ran (the checkpoint 33 lesson). Larger strides are for experiments; the pipeline is built for `cadence / stride` |
 | `--verbose` | off | per-second track status lines |
 
 ### `listen`
@@ -329,8 +300,8 @@ Four things about reading it:
   froze with no shot behind it. What it can show is an implausibly short
   shot→settle interval (<1 s against a measured 2.27–8.62 s roll-out), which is
   reported for review.
-- **A miss below ~50 Hz is not a vision failure.** Flag dumps and corpus
-  batteries starve the detect loop; those misses are counted separately so
+- **A miss below ~50 Hz is not a vision failure.** Corpus batteries and
+  other heavy jobs starve the detect loop; those misses are counted separately so
   contention never gets mistaken for a detection bug.
 - **Scratch counts come in two vintages (2026-08-07, #26).** A journal carrying
   `vision_scratch_candidate` records is adjudicated: `vision_scratch` there is a

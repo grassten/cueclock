@@ -5,8 +5,7 @@ them (docs/design.md §2.1). Keep them stable.
 """
 
 import asyncio
-import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -454,29 +453,5 @@ def create_app(
         """Match-day kill switch: vision events stop moving the clock."""
         await hub.set_vision(False)
         return {"ok": True, "vision": False}
-
-    @app.post("/api/dump")
-    async def api_dump(label: str = "flagged") -> JSONResponse:
-        """Save the ring buffer's raw frames as a labeled clip (~20 s default).
-
-        Only live under `cueclock run` (which wires `app.state.dump` to its
-        ring buffer). This is the "that was wrong / that was interesting"
-        button: every disagreement becomes replayable corpus evidence.
-        """
-        dump: Callable[[str], str] | None = getattr(app.state, "dump", None)
-        if dump is None:
-            return JSONResponse(
-                {"error": "no ring buffer — /api/dump only works under `cueclock run`"},
-                status_code=503,
-            )
-        safe = re.sub(r"[^A-Za-z0-9_-]+", "", label)[:40] or "flagged"
-        try:
-            path = await asyncio.to_thread(dump, safe)
-        except (RuntimeError, OSError) as exc:
-            # Dumps stage on the internal SSD since 2026-08-01, so the old
-            # "is the T7 mounted?" hint is wrong — the writer's own message
-            # names the staging root and the disk-space remedy.
-            return JSONResponse({"error": f"dump failed: {exc}"}, status_code=503)
-        return JSONResponse({"saved": path})
 
     return app

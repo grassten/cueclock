@@ -7,18 +7,9 @@ no threads; replaying a recorded clip through it is deterministic.
 
 The empty-table reference and the table mask come from the corpus's own
 `empty_table` clip (or, live, from a capture taken at startup).
-
-Warm replay: the pipeline's mutable state (tracker, event engine, previous
-gray frame) can be captured with :meth:`VisionPipeline.dump_state` and
-restored with :meth:`VisionPipeline.load_state` — `cueclock run` snapshots
-it at ~1 Hz so a flag-key ring dump carries the live session's accumulated
-state (whiteness-vote position, roster, episode latches) and
-`analyze --warm` reproduces exactly what live computed instead of starting
-cold. Still pure: bytes in/out, no file I/O.
 """
 
 import hashlib
-import pickle  # nosec B403 — state snapshots only; loaded blobs are our own dumps
 from collections import deque
 from dataclasses import dataclass
 from math import hypot
@@ -336,7 +327,6 @@ class VisionPipeline:
         self._grays: deque[npt.NDArray[np.uint8]] = deque(
             maxlen=max(1, round(cadence_hz / TUNED_HZ))
         )
-        self._advanced = 0
         self.last_balls: list[BallState] = []  # diagnostics for analyze/scoreboard
         # E9's identity-free table-motion bit (accuracy plan §13.3): some
         # confirmed track was *observed* at or above the engine's still floor
@@ -467,7 +457,6 @@ class VisionPipeline:
                 )
                 for p, d, c in zip(mm, detections, churn, strict=True)
             ]
-        self._advanced += 1
         balls = self._tracker.update(t, observations)
         self.last_balls = balls
         events = self._engine.update(t, balls)
@@ -555,59 +544,3 @@ class VisionPipeline:
         elif balls:
             self._rearrange_pending = True
         return events
-
-    def dump_state(self) -> bytes:
-        """Serialize the mutable state for warm replay (`analyze --warm`).
-
-        A whole-object pickle of the state-bearing stages — deliberately not
-        a field-by-field schema, so state added to the tracker or engine
-        later rides along automatically. The static stages (reference,
-        mask, configs) are rebuilt by the caller from the same inputs the
-        live session used. Restoring under *different* vision-core code is
-        guarded by the fingerprint stamp in the dump's `state.json` sidecar
-        (cli.py), not here.
-
-        Refuses to snapshot a cache-fed pipeline: churn differences each frame
-        against the previous one's gray, and frames replayed from
-        `capture.detect_cache` never produce one. Such a snapshot would restore
-        with no previous grays and silently mis-compute churn on the first
-        frame after the resume — a wrong answer, not an error. Warm work
-        replays real frames.
-        """
-        if self._advanced and not self._grays:
-            raise RuntimeError(
-                "dump_state() on a pipeline fed from a detection cache: prev_gray was never "
-                "computed, so a warm resume would mis-compute churn on its first frame. "
-                "Replay real frames (VisionPipeline.process) for anything that snapshots state."
-            )
-        return pickle.dumps(
-            {
-                "tracker": self._tracker,
-                "engine": self._engine,
-                "prev_gray": list(self._grays),
-                "last_balls": self.last_balls,
-                "supra": self._supra,
-                "settled_baseline": self._settled_baseline,
-                "rearrange_pending": self._rearrange_pending,
-                "quiet_since": self._quiet_since,
-                "prev_present": self._prev_present,
-                "last_settle_movers": self.last_settle_movers,
-            },
-            protocol=pickle.HIGHEST_PROTOCOL,
-        )
-
-    def load_state(self, blob: bytes) -> None:
-        """Restore :meth:`dump_state` output onto an identically built pipeline."""
-        state = pickle.loads(blob)  # nosec B301 — our own dump_state output
-        self._tracker = state["tracker"]
-        self._engine = state["engine"]
-        grays = state["prev_gray"]  # a bare array (or None) before checkpoint 106
-        self._grays.clear()
-        self._grays.extend(grays if isinstance(grays, list) else [] if grays is None else [grays])
-        self.last_balls = state["last_balls"]
-        self._supra = state.get("supra", {})
-        self._settled_baseline = state.get("settled_baseline")
-        self._rearrange_pending = state.get("rearrange_pending", False)
-        self._quiet_since = state.get("quiet_since")
-        self._prev_present = state.get("prev_present")
-        self.last_settle_movers = state.get("last_settle_movers", [])

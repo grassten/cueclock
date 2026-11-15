@@ -11,9 +11,10 @@ always exactly what is pressable. Nothing reflows when a key leaves: every
 survivor keeps its cell, so position stays learnable even though the set
 changes. Dimming survives only as typography (`Face.sub`), never as state.
 
-**The spine sits top-left and never moves.** Session, Mode, Replay and Flag work
-in every mode, so they hold the 2x2 corner; everything to the right of them is
-mode-dependent. Position therefore answers "does this key persist" while colour
+**The spine sits top-left and never moves.** Session, Mode and Replay work in
+every mode, so they hold the 2x2 corner (its fourth cell, (2,2), has been empty
+since the Flag key was removed in checkpoint 114); everything to the right of
+them is mode-dependent. Position therefore answers "does this key persist" while colour
 answers "how much time do I have" — two questions, two channels.
 
 **Face grammar** — the `OFF`-button confusion was never the word, it was a
@@ -42,7 +43,6 @@ from cueclock.deck.faces import (
     BG,
     BG_ARMED,
     STRIPE_CLOCK,
-    STRIPE_EVIDENCE,
     STRIPE_MATCH,
     STRIPE_SYSTEM,
     Face,
@@ -58,7 +58,6 @@ class Group(Enum):
 
     CLOCK = STRIPE_CLOCK  # seconds matter — extension, push, start
     MATCH = STRIPE_MATCH  # between racks, no pressure — score, new rack, ruleset
-    EVIDENCE = STRIPE_EVIDENCE  # flag and its reasons
     SYSTEM = STRIPE_SYSTEM  # session, mode, replay
 
     @property
@@ -170,35 +169,6 @@ class ScoreAdjust:
 
 
 @dataclass(frozen=True)
-class FlagStart:
-    """Open the reason page. The dump fires from whichever reason is chosen.
-
-    One key pressed by feel beats reading three faces inside a 20 s ring — and
-    the reason itself has no deadline, so it moves off the reflex press. The
-    page auto-files as OTHER after `auto_s`, which is what an unspecified flag
-    has always meant, so walking away still saves the clip. Cost is the couple
-    of seconds between the two presses, off a 20 s ring (`--ring-seconds`).
-    """
-
-    auto_s: float = 4.0
-    auto_reason: str = "flag_other"
-
-
-@dataclass(frozen=True)
-class FlagReason:
-    """One reason on the transient page; dumps the ring under its own label.
-
-    The label names the clip dir (`<dump-dir>/<label>_N`) and rides the
-    journal's `flag_dump` line, so triage starts from *why* it was pressed
-    (2026-08-01: an OBS-side failure spent two triage passes being chased as a
-    vision bug because the label was always `flagged`).
-    """
-
-    label: str
-    timeout: float = 60.0  # a dump replies only after writing ~7.2 GB (20 s at 156 Hz)
-
-
-@dataclass(frozen=True)
 class ReplayShow:
     """Save the OBS replay buffer and cut to it on the TV; press again for live.
 
@@ -209,7 +179,7 @@ class ReplayShow:
     Tap plays the last shot, hold plays the whole rack — the same tap/hold rule
     the score keys follow, and for the same reason: the common press has to stay
     instant. Putting the rare span behind a hold rather than behind a chooser
-    page (Flag's pattern) is what keeps "watch that shot" at one press with
+    page is what keeps "watch that shot" at one press with
     nothing to read. Cost is that a tap now fires on *release*; a hold that
     matures fires while the key is still down, so the answer never waits for a
     finger to come off. Held length matches `ScoreAdjust`, deliberately: one
@@ -267,8 +237,6 @@ Action = (
     | Cycle
     | SessionToggle
     | ScoreAdjust
-    | FlagStart
-    | FlagReason
     | ReplayShow
     | BracketConfirm
     | SceneToggle
@@ -460,8 +428,6 @@ LAYOUT: tuple[Key, ...] = (
     Key(1, 1, "session", Group.SYSTEM, SessionToggle(), offline=True),
     Key(1, 2, "mode", Group.SYSTEM, Cycle("mode")),
     Key(2, 1, "replay", Group.SYSTEM, ReplayShow(), text="REPLAY"),
-    # Flag's reason page unfolds rightward into the empty cells beside it.
-    Key(2, 2, "flag", Group.EVIDENCE, FlagStart(), text="FLAG"),
     # --- the clock: top-right, absent once the clock is off ---
     # Start replaced Reset + Force 30, which differed by exactly one bit: both
     # set the countdown to full and both are rack-aware; one landed IDLE, the
@@ -528,28 +494,13 @@ LAYOUT: tuple[Key, ...] = (
     # asked of the table (`server/report.py`). Because the cell was empty, no
     # existing key changes meaning: with no bracket loaded it stays dark.
     Key(3, 5, "confirm", Group.MATCH, BracketConfirm(), modes=RACKED, needs_bracket=True),
-    # RECAL (#49) takes (2,5), the one base-layer cell nothing else claims.
-    # The Flag reason page overlays it, but Flag needs a running server and
-    # RECAL needs none, so the two never meet. It is on the far side of the
-    # deck from Session, so the key that starts a night is never beside the
-    # one that rewrites the calibration.
+    # RECAL (#49) takes (2,5). It is on the far side of the deck from
+    # Session, so the key that starts a night is never beside the one that
+    # rewrites the calibration.
     Key(2, 5, "recal", Group.SYSTEM, Recalibrate(), offline_only=True),
-    # (2,3) sits inside the block Flag's reason page borrows while it is open,
-    # which is fine and needs no new mechanism: the overlay already wins in
-    # `_visible_key`, and a flag press is seconds long.
     Key(2, 3, "scene", Group.SYSTEM, SceneToggle(), needs_bracket=True),
 )
 
-# The transient reason page: shown only while a Flag press is waiting for a
-# reason, overlaid on the cells to Flag's right (which are otherwise dark).
-REASON_KEYS: tuple[Key, ...] = (
-    Key(2, 3, "flag_phantom", Group.EVIDENCE, FlagReason("flag_phantom"), text="PHANTOM"),
-    Key(2, 4, "flag_missed", Group.EVIDENCE, FlagReason("flag_missed"), text="MISSED"),
-    Key(2, 5, "flag_other", Group.EVIDENCE, FlagReason("flag_other"), text="OTHER"),
-)
-
-FLAG_PENDING_FACE = "WHY?"  # on the Flag key itself while the page is open
-DUMP_PENDING_FACE = "SAVING…"
 REPLAY_PENDING_FACE = "CUEING…"  # while the buffer is written and seeked
 # A held press says what it heard, not just that it is working: the hold fires
 # under the finger, and this face is the only confirmation the gesture landed

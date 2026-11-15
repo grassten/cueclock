@@ -166,16 +166,15 @@ def test_gated_shots_are_counted_apart_from_misses(tmp_path: Path) -> None:
     assert report.missed == []
 
 
-def test_scratches_and_flags_are_tallied(tmp_path: Path) -> None:
+def test_scratches_are_tallied(tmp_path: Path) -> None:
     path = journal(
         tmp_path,
         shot(10.0, 1),
         settle(14.0, 1),
         {"kind": "vision_scratch", "t": 15.0, "rack_shots": 1},
-        {"kind": "flag_dump", "label": "flag_missed"},
     )
     report = build(path)
-    assert (report.scratches, report.flags) == (1, 1)
+    assert report.scratches == 1
 
 
 def test_scratch_adjudication_records_are_tallied(tmp_path: Path) -> None:

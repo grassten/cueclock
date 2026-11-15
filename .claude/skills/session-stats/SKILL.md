@@ -45,7 +45,7 @@ catch now counts inside break auto-catch as a `break_adjudicated` with
 `tier="dark"`), **settles synthesized** (E9 watchdog rescues), **provisional
 shots** (#33: latch freezes / reverted-not-a-shot / suppressed settles —
 reverts and suppressions are placements the clock now correctly ignores, not
-misses), **flags pressed** (each lands in the `triage-clips` loop).
+misses).
 
 ## Known caveats, so the numbers are read honestly
 
@@ -70,4 +70,4 @@ what that means at the table), and check the standing predictions: after
 checkpoint 75, `break auto-catch` should rise toward ~100% of *fired* breaks
 and `false fouls` should read 0. Report the numbers back whether or not they
 moved — including when they got worse. If a tier regressed, that is a
-`triage-clips` trigger, not a reason to soften the summary.
+reason to dig into the session's journal, not a reason to soften the summary.
