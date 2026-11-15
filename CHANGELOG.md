@@ -277,6 +277,44 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-15 (checkpoint 109 — the detector segments only the table and
+  stops describing rejects nothing reads; #50):** two changes, both meant to
+  leave every detection exactly where it was.
+  - **Crop to the cloth.** Threshold, mask, morphology, components and the
+    border lookup now run inside the cloth mask's bounding box padded by 16 px
+    (`detect.table_roi_of`, memoized on `ReferenceModel.table_roi`). Morphology
+    reaches 6 px, so the padding means the crop holds every pixel the full frame
+    would. Bounding boxes and centroids are offset back to frame coordinates.
+  - **Intrusions off.** `DetectConfig.export_intrusions = False`. Nothing has
+    read the channel since checkpoint 104. Set it to True and the old list
+    comes back. The detect cache keeps the field: it's empty by default, and
+    the flag is part of the key, so no schema bump.
+  - **Exactness, checked frame by frame** against a copy of the pre-109
+    `detect.py` on every frame of `static_spread`, `power_shot` and the live-mount
+    dump `pot_scratch_nohold_0811`, plus every third frame of
+    `ball_in_hand_carry_0811` and of `static_spread` against the stale
+    `empty_table_0801`. Ball count, order, area, bbox, whiteness and `merged`
+    are identical on every frame. Centroids differ by at most 2.3e-13 px,
+    floating-point noise from adding the offset back. With the flag on, the
+    intrusion lists are identical too (17 of 17 on the carry clip).
+  - **Timing** (`detect_frame` median, which is `find_blobs` minus the 0.12 ms
+    gray; old and new interleaved on the same frames, M2, single thread):
+
+    | Clip (reference) | Before | After |
+    |---|---|---|
+    | `static_spread` (`empty_table`) | 3.21 ms | 2.33 ms |
+    | `power_shot` (`empty_table`) | 3.17 ms | 2.28 ms |
+    | `pot_scratch_nohold_0811` (`empty_table_0801`, live mount) | 2.80 ms | 2.11 ms |
+    | `ball_in_hand_carry_0811` (`empty_table_0801`) | 2.99 ms | 2.28 ms |
+    | `static_spread` vs stale `empty_table_0801` | 5.15 ms | 2.56 ms |
+
+    The last row is the audit's drift case. The rail blobs a stale reference
+    produces were paying for distance transforms that found nothing (0
+    intrusions exported).
+  - **Gate:** cold battery **687 passed, 0 skipped, in 5:05** (675 in 5:26 at
+    checkpoint 106), **zero golden changes**. Two new unit tests: the crop
+    matches a full-frame ROI exactly, and intrusions are empty by default.
+
 - **2026-11-12 (checkpoint 108 — the side camera's settings are enforced from
   cueclock; Link Controller stays closed):** Steven saw the overhead stutter on
   the TV and asked why. The session's own records answered it before any fix:

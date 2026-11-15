@@ -8,7 +8,14 @@ and whiteness must separate the cue ball from a yellow object ball.
 import numpy as np
 import numpy.typing as npt
 
-from cueclock.vision.detect import DetectConfig, Detection, build_reference, detect_balls
+from cueclock.vision.detect import (
+    DetectConfig,
+    Detection,
+    build_reference,
+    detect_balls,
+    detect_frame,
+    table_roi_of,
+)
 
 CLOTH_BGR = (150, 60, 20)  # dark blue cloth, linear-ish sensor values
 WIDTH, HEIGHT = 960, 600
@@ -120,3 +127,41 @@ def test_config_defaults_reject_nothing_ball_sized() -> None:
     cfg = DetectConfig()
     nominal_area = float(np.pi * 21**2)
     assert cfg.min_area_px < nominal_area < cfg.max_area_px
+
+
+def _masked_scene() -> tuple[npt.NDArray[np.uint8], npt.NDArray[np.uint8]]:
+    """Two balls and a hand-scale blob on a cloth mask that is not the frame."""
+    import cv2
+
+    img = _cloth_scene()
+    _ball(img, 250, 200, (230, 230, 230))
+    _ball(img, 640, 380, (20, 200, 210))
+    cv2.rectangle(img, (400, 150), (500, 250), (100, 140, 180), -1)  # a hand
+    mask = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
+    mask[80:520, 150:800] = 1
+    return _mosaic(img), mask
+
+
+def test_cropped_segmentation_matches_full_frame() -> None:
+    """#50: segmenting only the mask's padded box changes no output — the
+    full-frame ROI is the pre-crop behaviour, so the two must agree exactly."""
+    bayer, mask = _masked_scene()
+    ref = _mosaic(_cloth_scene())
+    cfg = DetectConfig(export_intrusions=True)
+    args = (bayer, build_reference([ref]), cfg, mask, ref)
+    cropped = detect_frame(*args)
+    full = detect_frame(*args, table_roi=(0, 0, WIDTH, HEIGHT))
+    assert table_roi_of(mask) == (134, 64, 682, 472)  # bbox padded by 16
+    assert len(cropped[0]) == 2 and len(cropped[1]) == 1
+    assert cropped[1] == full[1]
+    for a, b in zip(cropped[0], full[0], strict=True):
+        assert (a.bbox, a.area, a.whiteness, a.merged) == (b.bbox, b.area, b.whiteness, b.merged)
+        assert np.isclose(a.cx, b.cx, atol=1e-9) and np.isclose(a.cy, b.cy, atol=1e-9)
+
+
+def test_intrusions_are_off_by_default() -> None:
+    """#50: nothing reads the channel, so the detector no longer computes it."""
+    bayer, mask = _masked_scene()
+    ref = _mosaic(_cloth_scene())
+    balls, intrusions = detect_frame(bayer, build_reference([ref]), None, mask, ref)
+    assert len(balls) == 2 and intrusions == []

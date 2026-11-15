@@ -737,7 +737,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # camera, and the grabs/s deficit shows it, as before.
     pool = ThreadPoolExecutor(DETECT_WORKERS, thread_name_prefix="cueclock-detect")
     find_blobs = vision.find_blobs
-    vision.reference.table_edge  # noqa: B018 — build the memo before workers race to it
+    vision.reference.table_edge  # noqa: B018 — build the memos before workers race to them
+    vision.reference.table_roi  # noqa: B018
     inflight: deque[tuple[float, int, float, Future[DetectedBlobs]]] = deque()
     detects = 0
     detect_s = 0.0

@@ -39,6 +39,7 @@ from cueclock.vision.detect import (
     build_reference,
     detect_frame,
     table_edge_of,
+    table_roi_of,
 )
 from cueclock.vision.events import (
     TUNED_HZ,
@@ -285,8 +286,16 @@ class ReferenceModel:
             self._table_edge = table_edge_of(self.mask)
         return self._table_edge
 
+    @property
+    def table_roi(self) -> tuple[int, int, int, int]:
+        """`detect.table_roi_of` the mask (memoized — it never changes)."""
+        if self._table_roi is None:
+            self._table_roi = table_roi_of(self.mask)
+        return self._table_roi
+
     _digest: str | None = None
     _table_edge: npt.NDArray[np.bool_] | None = None
+    _table_roi: tuple[int, int, int, int] | None = None
 
 
 class VisionPipeline:
@@ -395,6 +404,7 @@ class VisionPipeline:
             self.reference.radius_px,
             gray=gray,
             table_edge=self.reference.table_edge,
+            table_roi=self.reference.table_roi,
         )
         return detections, intrusions, gray
 
@@ -430,11 +440,12 @@ class VisionPipeline:
         is not required.
 
         ``intrusions`` is **accepted and not consumed** since checkpoint 104,
-        when #41's removal took the only reader with it. Say so rather than
-        drop the parameter: the detector still measures the channel (§4.1) and
-        the detect cache still stores it, so this stays the seam a future
-        consumer plugs into — but nothing downstream reads it today, and a
-        parameter quietly ignored is worse than one documented as such.
+        when #41's removal took the only reader with it, and since checkpoint
+        109 the detector no longer measures it by default
+        (``DetectConfig.export_intrusions``) — so it arrives empty. Say so
+        rather than drop the parameter: this stays the seam a future consumer
+        plugs into, and a parameter quietly ignored is worse than one
+        documented as such.
         """
         observations: list[Observation] = []
         if detections:

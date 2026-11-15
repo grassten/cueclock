@@ -150,6 +150,32 @@ class DetectConfig:
     # side is >= 2r and its area >= pi*r^2, so the distance transform runs on
     # a handful of blobs per frame, never on the rails.
     intrusion_min_core_px: float = 21.9
+    # Off since checkpoint 109 (#50): nothing has read the channel since #41
+    # was removed at checkpoint 104, and describing the rejects is not free —
+    # a distance transform per large rejected blob, 1.5 ms/frame (27% of
+    # `find_blobs`) on static_spread, where stale-reference rail blobs are big
+    # enough to reach it. The seam stays: set True and `detect_frame` returns
+    # the list exactly as before.
+    export_intrusions: bool = False
+
+
+# Morphology spill past the cloth mask's bounding box: OPEN (3x3) then CLOSE
+# (5x5) reach 1 + 1 + 2 + 2 = 6 px, so a crop padded by more than that sees
+# exactly the pixels the full frame does wherever a blob can exist.
+_ROI_PAD_PX = 16
+
+
+def table_roi_of(table_mask: npt.NDArray[np.uint8]) -> tuple[int, int, int, int]:
+    """The mask's bounding box padded by ``_ROI_PAD_PX``, clipped to the frame.
+
+    Segmentation is cropped to this (#50): every pixel outside it is zero
+    after the mask is applied, so cropping changes no blob and halves the
+    work — the cloth's box is 51% of the 1920x1200 frame (2.8 → 1.55 ms).
+    """
+    x, y, w, h = cv2.boundingRect(table_mask)
+    fh, fw = table_mask.shape
+    x0, y0 = max(0, x - _ROI_PAD_PX), max(0, y - _ROI_PAD_PX)
+    return x0, y0, min(fw, x + w + _ROI_PAD_PX) - x0, min(fh, y + h + _ROI_PAD_PX) - y0
 
 
 def bayer_to_gray(bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -288,6 +314,7 @@ def _as_intrusion(
     labels: "cv2.typing.MatLike",
     label: int,
     bbox: tuple[int, int, int, int],
+    offset: tuple[int, int],
     area: float,
     bayer: npt.NDArray[np.uint8],
     reference_bayer: npt.NDArray[np.uint8] | None,
@@ -295,8 +322,12 @@ def _as_intrusion(
 ) -> Intrusion | None:
     """Describe a rejected blob as an :class:`Intrusion`, or None if it is not
     hand-scale. See ``DetectConfig.intrusion_min_core_px`` for the gate and
-    for why the two cheap necessary conditions come first."""
+    for why the two cheap necessary conditions come first.
+
+    ``labels`` and ``bbox`` are in the segmentation crop's coordinates;
+    ``offset`` is the crop's origin in the frame (see :func:`table_roi_of`)."""
     x, y, w, h = bbox
+    ox, oy = offset
     r = cfg.intrusion_min_core_px
     if min(w, h) < 2.0 * r or area < math.pi * r * r:
         return None  # cannot hold a disc of radius r, whatever its shape
@@ -312,14 +343,14 @@ def _as_intrusion(
         return None
     if reference_bayer is not None:
         py, px = np.unravel_index(int(dist.argmax()), dist.shape)
-        cx, cy = float(x + int(px) - 1), float(y + int(py) - 1)
+        cx, cy = float(ox + x + int(px) - 1), float(oy + y + int(py) - 1)
         if _is_shadow(
             _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px),
             _patch_rgb_means(reference_bayer, cx, cy, cfg.patch_radius_px),
             cfg,
         ):
             return None  # the player's shadow on the cloth is not a hand
-    return Intrusion(bbox=bbox, area=area, core_radius_px=core)
+    return Intrusion(bbox=(ox + x, oy + y, w, h), area=area, core_radius_px=core)
 
 
 def detect_balls(
@@ -350,6 +381,7 @@ def detect_frame(
     *,
     gray: npt.NDArray[np.uint8] | None = None,
     table_edge: npt.NDArray[np.bool_] | None = None,
+    table_roi: tuple[int, int, int, int] | None = None,
 ) -> tuple[list[Detection], list[Intrusion]]:
     """Find ball-like blobs in one frame. See module docstring for the gates.
 
@@ -367,17 +399,27 @@ def detect_frame(
     perspective disagrees with that nominal. Every production path supplies it.
 
     Returns the balls and, beside them, the hand-scale blobs these gates threw
-    away (:class:`Intrusion`). The second list is additive evidence: it never
-    feeds back into the first, and which blobs become balls is unchanged.
+    away (:class:`Intrusion`) — empty unless ``DetectConfig.export_intrusions``.
+    The second list is additive evidence: it never feeds back into the first,
+    and which blobs become balls is unchanged.
 
-    ``gray`` and ``table_edge`` are precomputed :func:`bayer_to_gray` of this
-    frame and :func:`table_edge_of` the mask — pure savings for a caller that
-    has them (the pipeline needs the gray for churn anyway, and the edge never
-    changes): ~1.6 ms/frame, a quarter of the 6.4 ms budget at 156 Hz.
+    ``gray``, ``table_edge`` and ``table_roi`` are precomputed
+    :func:`bayer_to_gray` of this frame, :func:`table_edge_of` and
+    :func:`table_roi_of` the mask — pure savings for a caller that has them
+    (the pipeline needs the gray for churn anyway, and the mask never
+    changes). With a mask, segmentation runs only inside its padded bounding
+    box; coordinates are offset back, so the output is identical.
     """
     cfg = config or DetectConfig()
     if gray is None:
         gray = bayer_to_gray(bayer)
+    ox, oy = 0, 0
+    if table_mask is not None:
+        edge = table_edge_of(table_mask) if table_edge is None else table_edge
+        ox, oy, rw, rh = table_roi_of(table_mask) if table_roi is None else table_roi
+        window = (slice(oy, oy + rh), slice(ox, ox + rw))
+        gray, reference_gray = gray[window], reference_gray[window]
+        table_mask, edge = table_mask[window], edge[window]
     diff = cv2.absdiff(gray, reference_gray)
     _, binary = cv2.threshold(diff, cfg.diff_threshold, 255, cv2.THRESH_BINARY)
     border_ids: set[int] = set()
@@ -388,7 +430,6 @@ def detect_frame(
 
     n, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
     if table_mask is not None:
-        edge = table_edge_of(table_mask) if table_edge is None else table_edge
         border_ids = set(np.unique(labels[edge]).tolist())
     detections: list[Detection] = []
     intrusions: list[Intrusion] = []
@@ -396,7 +437,8 @@ def detect_frame(
         area = float(stats[i, cv2.CC_STAT_AREA])
         bw = int(stats[i, cv2.CC_STAT_WIDTH])
         bh = int(stats[i, cv2.CC_STAT_HEIGHT])
-        bbox = (int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP]), bw, bh)
+        lx, ly = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+        bbox = (lx + ox, ly + oy, bw, bh)
         ball_shaped = (
             i not in border_ids
             and cfg.min_area_px <= area <= cfg.max_area_px
@@ -408,11 +450,14 @@ def detect_frame(
             # away every arm, stick and reaching hand. Describe it instead of
             # dropping it on the floor (#41); shadow-rejected blobs below are
             # deliberately NOT offered, they are already known to be shadows.
-            found = _as_intrusion(labels, i, bbox, area, bayer, reference_bayer, cfg)
-            if found is not None:
-                intrusions.append(found)
+            if cfg.export_intrusions:
+                found = _as_intrusion(
+                    labels, i, (lx, ly, bw, bh), (ox, oy), area, bayer, reference_bayer, cfg
+                )
+                if found is not None:
+                    intrusions.append(found)
             continue
-        cx, cy = float(centroids[i, 0]), float(centroids[i, 1])
+        cx, cy = float(centroids[i, 0]) + ox, float(centroids[i, 1]) + oy
         if reference_bayer is not None:
             rgb = _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px)
             ref_rgb = _patch_rgb_means(reference_bayer, cx, cy, cfg.patch_radius_px)

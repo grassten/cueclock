@@ -100,6 +100,8 @@ Key architectural choices, each the researched consensus for this setting:
 
   **Nothing consumes it today (2026-08-29, checkpoint 104).** The one consumer, #41's `_hand_delivered`, was deleted with the verdict it fed. The channel stays because it is honest evidence cheaply produced, and because the export itself was never what failed — but note what was measured before reaching for it again: suppressing a ball-shaped blob because it sits *inside* an intrusion box fires on **3.09%** of detections in `occluded_address_0731`, a legitimate address, against **0.62%** on `flag_phantom`, where a white tank top really did mint a track at 1220 mm/s. Used that way it would trade a phantom for blindness at the address, which is the #1 upstream cause of misses. An intrusion says a person is reaching in; it does not say which blob is not a ball.
 
+  **And so it is no longer computed (2026-11-15, checkpoint 109, #50).** `DetectConfig.export_intrusions` defaults to off: describing a reject costs a distance transform per large blob, which reached 27% of `find_blobs` on `static_spread` against a stale reference. Setting it back on restores the list exactly (checked frame by frame against the pre-109 detector, 17 of 17 intrusions on `ball_in_hand_carry_0811`). The same checkpoint crops segmentation to the cloth mask's bounding box padded by 16 px (morphology reaches 6), with coordinates offset back. Same blobs, same order, same areas; centroids agree to 1e-13 px. The two changes take `detect_frame` from 3.2 to 2.3 ms on the corpus clips.
+
 ### 4.2 Event logic (the actual product)
 
 - **`shot_taken` — a conjunction, not a single signal** (patent US10226685 + US8992315 + launch-monitor pattern):

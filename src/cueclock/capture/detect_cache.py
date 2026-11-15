@@ -69,7 +69,10 @@ which has already broken this repo once (CHANGELOG checkpoint 13)."""
 # difference), and the hand-scale blobs the ball gates rejected (#41). The
 # intrusions are cached with the rest because they are detector output: a
 # cached replay that dropped them would grade a different settle verdict than
-# a cold one, which is exactly what the key exists to make impossible.
+# a cold one, which is exactly what the key exists to make impossible. Since
+# checkpoint 109 the detector leaves the list empty unless
+# `DetectConfig.export_intrusions` is set; the field stays (it costs nothing
+# empty, and the flag is in the key, so turning it on can't serve stale rows).
 FrameDetections = tuple[list[Detection], list[float | None], list[Intrusion]]
 
 
