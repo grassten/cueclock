@@ -26,6 +26,10 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from cueclock.server.hub import Hub
     from cueclock.vision.calibration import TableCalibration
+    from cueclock.vision.pipeline import DetectedBlobs
+
+    # find_blobs' result plus when it started and ended on its worker (#52).
+    TimedBlobs = tuple[DetectedBlobs, float, float]
 
 import cv2
 import numpy as np
@@ -33,7 +37,6 @@ import numpy.typing as npt
 
 from cueclock.audio.listener import DEFAULT_DEVICE as DEFAULT_MIC_DEVICE  # no vosk import
 from cueclock.capture.clip import CAMERA_FPS, ClipReader, ClipWriter
-from cueclock.deck.session import DEFAULT_REFERENCE  # pure stdlib; no HID import
 from cueclock.display.pipeline import (
     DEFAULT_UNDISTORT_PATH,
     DisplayPipeline,
@@ -106,25 +109,46 @@ def _unique_dir(root: Path, label: str) -> Path:
 
 
 def _cmd_record(args: argparse.Namespace) -> int:
-    from cueclock.capture.camera import EXPOSURE_US, GAIN, open_camera, stream
-
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
-    needed = int(BYTES_PER_FRAME * NOMINAL_FPS * args.seconds * 1.1)
-    free = shutil.disk_usage(out_root).free
-    if free < needed + DISK_HEADROOM:
-        print(
-            f"not enough disk: need ~{needed / 1e9:.1f} GB + headroom, {free / 1e9:.1f} GB free",
-            file=sys.stderr,
-        )
-        return 1
-
     clip_dir = _unique_dir(out_root, args.label)
-    print(f"recording {args.seconds:.0f}s -> {clip_dir}  (Ctrl-C stops early, clip stays valid)")
-    with open_camera() as cam:
+    try:
+        _record_clip(clip_dir, args.label, args.seconds)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+def _record_clip(clip_dir: Path, label: str, seconds: float) -> None:
+    """Record `seconds` of raw frames into `clip_dir` (which must not exist).
+
+    Raises `RuntimeError` with a short reason when the disk or the camera
+    can't be used. `recalibrate` shows the reason on a deck key, so it is
+    the first line of the message.
+    """
+    from cueclock.capture.camera import EXPOSURE_US, GAIN, open_camera, stream
+
+    clip_dir.parent.mkdir(parents=True, exist_ok=True)
+    needed = int(BYTES_PER_FRAME * NOMINAL_FPS * seconds * 1.1)
+    free = shutil.disk_usage(clip_dir.parent).free
+    if free < needed + DISK_HEADROOM:
+        raise RuntimeError(
+            f"DISK FULL\nneed ~{needed / 1e9:.1f} GB + headroom, {free / 1e9:.1f} GB free"
+        )
+
+    print(f"recording {seconds:.0f}s -> {clip_dir}  (Ctrl-C stops early, clip stays valid)")
+    with contextlib.ExitStack() as stack:
+        try:
+            cam = stack.enter_context(open_camera())
+        except Exception as exc:  # pylon raises its own genicam types
+            from pypylon import pylon
+
+            attached = bool(pylon.TlFactory.GetInstance().EnumerateDevices())
+            raise RuntimeError(f"{'CAMERA BUSY' if attached else 'NO CAMERA'}\n{exc}") from exc
         writer = ClipWriter(
             clip_dir,
-            label=args.label,
+            label=label,
             camera_serial=cam.GetDeviceInfo().GetSerialNumber(),
             exposure_us=EXPOSURE_US,
             gain=GAIN,
@@ -140,7 +164,7 @@ def _cmd_record(args: argparse.Namespace) -> int:
                 elapsed = (ts_ns - first_ns) / 1e9
                 if writer.frame_count % 32 == 0:
                     print(f"\r  {elapsed:5.1f}s  {writer.frame_count} frames", end="")
-                if elapsed >= args.seconds:
+                if elapsed >= seconds:
                     break
         except KeyboardInterrupt:
             print("\nstopped early")
@@ -161,7 +185,38 @@ def _cmd_record(args: argparse.Namespace) -> int:
             print("WARNING: max gap exceeds 1.5x the nominal frame period — dropped frames?")
     else:
         print("\nWARNING: recorded fewer than 2 frames")
-    return 0
+
+
+def _cmd_recalibrate(args: argparse.Namespace) -> int:
+    """Record a fresh reference and refit both calibrations (`recalibrate.py`).
+
+    `run` owns the camera while a session is up, so this refuses when the
+    server answers rather than fighting it for the device. With `--json` the
+    last line of stdout is the result object, which is what the deck reads.
+    """
+    from cueclock.deck.client import get_json
+    from cueclock.recalibrate import CAPTURE_SECONDS, Result, recalibrate
+
+    if get_json(args.server, "/api/state") is not None:
+        result = Result(ok=False, reason="SESSION ON")
+    else:
+        result = recalibrate(
+            lambda clip_dir, label: _record_clip(clip_dir, label, CAPTURE_SECONDS),
+            reference_root=Path(args.reference_root),
+        )
+    if result.ok:
+        before = "n/a" if result.drift_before is None else f"{result.drift_before:.1f}"
+        print(
+            f"recalibrated: residual {result.residual_px:.2f} px, drift {before} -> "
+            f"{result.drift_after:.1f} (noise ~2)\n  reference {result.reference}"
+            + (f"\n  corpus copy {result.corpus_copy}" if result.corpus_copy else "")
+            + "\n  the next session start uses it; the previous set is in config/backup/"
+        )
+    else:
+        print(f"not recalibrated: {result.reason} — the previous calibration is unchanged")
+    if args.json:
+        print(result.to_json())
+    return 0 if result.ok else 1
 
 
 def _build_display_pipeline(args: argparse.Namespace) -> DisplayPipeline:
@@ -459,28 +514,32 @@ def _warn_if_reference_stale(
     ref_gray: npt.NDArray[np.uint8],
     bayer: npt.NDArray[np.uint8],
     calibration: "TableCalibration",
-) -> None:
+) -> tuple[float, bool]:
     """One-shot startup check: does the live scene still match the reference?
 
     A stale reference (camera moved, lighting changed) kills detection with
     no other symptom — the clock just never starts (2026-07-29 lesson).
+    Returns (reading, crossed the warn level), which the hub journals and
+    shows (#52): three months of these warnings went unread in a launchd log.
     """
     from cueclock.vision.calibration import BOUNDARY_DRIFT_WARN, boundary_drift
 
     live_gray = cast(npt.NDArray[np.uint8], cv2.cvtColor(bayer, cv2.COLOR_BayerBG2GRAY))
     drift = boundary_drift(ref_gray, live_gray, calibration)
-    if drift > BOUNDARY_DRIFT_WARN:
+    stale = drift > BOUNDARY_DRIFT_WARN
+    if stale:
         print(
             f"WARNING: table boundary drift {drift:.1f} vs the reference clip "
             f"(same-mount noise ~2, warn >{BOUNDARY_DRIFT_WARN:.0f}).\n"
             "  The camera or lighting changed since the reference was recorded —\n"
             "  detection may be silently blind (no events, clock never starts).\n"
-            "  Fix: record a fresh empty-table clip, `fit-undistort` + `calibrate`\n"
-            "  against it, and relaunch with --reference <new clip>.",
+            "  Fix: clear the cloth, stop the session and hold RECAL on the deck\n"
+            "  (or run `cueclock recalibrate`), then start again.",
             file=sys.stderr,
         )
     else:
         print(f"reference check ok (boundary drift {drift:.1f}, noise ~2)")
+    return drift, stale
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -510,16 +569,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.server.hub import Hub
     from cueclock.vision.calibration import TableCalibration
     from cueclock.vision.events import BallsSettled, ScratchCandidate, ScratchRefuted, ShotTaken
-    from cueclock.vision.pipeline import DetectedBlobs, VisionPipeline
+    from cueclock.vision.pipeline import VisionPipeline
 
     cal_path = Path(args.calibration)
     if not cal_path.exists():
         print(f"calibration not found: {cal_path} — run `calibrate` first", file=sys.stderr)
         return 1
-    ref_path = Path(args.reference)
+    from cueclock.recalibrate import read_pointer
+
+    ref_path = Path(args.reference) if args.reference else read_pointer()
+    if ref_path is None:
+        print(
+            "no reference: config/reference.json is missing — run `cueclock recalibrate` "
+            "(or pass --reference <empty-table clip>)",
+            file=sys.stderr,
+        )
+        return 1
     if not ref_path.is_dir():
         print(f"reference clip not found: {ref_path}", file=sys.stderr)
         return 1
+    print(f"reference {ref_path}")
     calibration = TableCalibration.load(cal_path)
     ref_reader = ClipReader(ref_path)
     ref_indices = np.linspace(0, len(ref_reader) - 1, num=min(15, len(ref_reader)), dtype=int)
@@ -739,7 +808,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     find_blobs = vision.find_blobs
     vision.reference.table_edge  # noqa: B018 — build the memos before workers race to them
     vision.reference.table_roi  # noqa: B018
-    inflight: deque[tuple[float, int, float, Future[DetectedBlobs]]] = deque()
+    inflight: deque[tuple[float, int, float, Future[TimedBlobs]]] = deque()
     detects = 0
     detect_s = 0.0
     detect_max_s = 0.0
@@ -747,10 +816,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     next_snap_t = 0.0
     first_snap = True
 
-    def finish(t: float, ts_ns: int, t_submit: float, blobs: "Future[DetectedBlobs]") -> None:
+    def timed_find_blobs(frame: npt.NDArray[np.uint8]) -> "TimedBlobs":
+        """`find_blobs` on a worker, stamped so the heartbeat can split the time."""
+        started = time.perf_counter()
+        blobs = find_blobs(frame)
+        return blobs, started, time.perf_counter()
+
+    def finish(t: float, ts_ns: int, t_submit: float, job: "Future[TimedBlobs]") -> None:
         """One frame's stateful half, in frame order."""
         nonlocal detects, detect_s, detect_max_s, episode_prev, next_snap_t, first_snap
-        events = vision.advance(t, *vision.churn(*blobs.result()))
+        blobs, blobs_start, blobs_end = job.result()
+        loop_start = time.perf_counter()
+        events = vision.advance(t, *vision.churn(*blobs))
         dt_proc = time.perf_counter() - t_submit  # grab-to-events latency
         detects += 1
         detect_s += dt_proc
@@ -774,8 +851,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     _surface
                 )
         # Detect-loop heartbeat stamp (attribute-only; the Hub's tick loop
-        # journals it every ~5 s).
-        hub.note_frame(t)
+        # journals it every ~5 s). The three stages are where a frame's time
+        # goes (#52): waiting for a worker, inside find_blobs, and this
+        # thread's half (churn + advance + dispatch).
+        hub.note_frame(
+            t,
+            balls=len(vision.last_balls),
+            stages=(
+                blobs_start - t_submit,
+                blobs_end - blobs_start,
+                time.perf_counter() - loop_start,
+            ),
+        )
         # E9 motion bit — same attribute-only contract.
         hub.note_motion(vision.last_motion)
         if ring is not None and t >= next_snap_t:
@@ -828,15 +915,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             grabs += 1
                             frame = grab.Array
                             if frame_i == 0:
-                                _warn_if_reference_stale(ref_gray, frame, calibration)
+                                hub.note_reference_drift(
+                                    *_warn_if_reference_stale(ref_gray, frame, calibration)
+                                )
                             if frame_i % args.stride == 0:
                                 if ring is not None:
                                     ring.push(ts_ns, frame)
                                 if len(inflight) >= DETECT_INFLIGHT:
                                     finish(*inflight.popleft())  # the pool is behind: wait
-                                inflight.append(
-                                    (t, ts_ns, time.perf_counter(), pool.submit(find_blobs, frame))
-                                )
+                                job = pool.submit(timed_find_blobs, frame)
+                                inflight.append((t, ts_ns, time.perf_counter(), job))
                                 while inflight and inflight[0][3].done():
                                     finish(*inflight.popleft())
                             frame_i += 1
@@ -1160,8 +1248,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--port", type=int, default=8000, help="server port (default 8000)")
     p_run.add_argument(
         "--reference",
-        default="tests/clips/empty_table",
-        help="empty-table clip for the background reference",
+        help="empty-table clip for the background reference "
+        "(default: the one config/reference.json names, written by `recalibrate`)",
     )
     p_run.add_argument(
         "--calibration",
@@ -1180,7 +1268,7 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=20.0,
         help="in-RAM rolling buffer POST /api/dump saves as a labeled clip "
-        "(~3.6 GB at the default 20 s; 0 disables). 20 s because a measured "
+        "(~7.2 GB at the default 20 s and 156 Hz; 0 disables). 20 s because a measured "
         "live flag press came 12.7 s after the phantom it reacted to — the "
         "12 s ring had already dropped the evidence frames (2026-08-01)",
     )
@@ -1241,11 +1329,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_deck.add_argument(
         "--reference",
-        default=DEFAULT_REFERENCE,
         help=(
-            "empty-table reference the Session key launches `run` with "
-            f"(default {DEFAULT_REFERENCE}); refresh it after a camera bump"
+            "pin the empty-table reference the Session key launches `run` with "
+            "(default: none, so `run` reads config/reference.json and a RECAL hold "
+            "takes effect on the next start)"
         ),
+    )
+
+    p_recal = sub.add_parser(
+        "recalibrate",
+        help="record a fresh empty-table reference and refit undistort + calibration",
+    )
+    p_recal.add_argument(
+        "--server",
+        default="http://127.0.0.1:8000",
+        help="refuse while a session answers here (it owns the camera)",
+    )
+    p_recal.add_argument(
+        "--reference-root",
+        default="~/cueclock-reference",
+        help="where the live reference is kept (default ~/cueclock-reference, internal disk)",
+    )
+    p_recal.add_argument(
+        "--json", action="store_true", help="print the result as JSON on the last line"
     )
 
     args = parser.parse_args(argv)
@@ -1259,6 +1365,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_fit_undistort(args)
     if args.command == "calibrate":
         return _cmd_calibrate(args)
+    if args.command == "recalibrate":
+        return _cmd_recalibrate(args)
     if args.command == "analyze":
         return _cmd_analyze(args)
     if args.command == "listen":

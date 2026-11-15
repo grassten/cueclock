@@ -315,7 +315,7 @@ Everything below follows from these; they are also the module docstring of
    always exactly what is pressable. **Nothing reflows** when a key leaves — it
    leaves a hole and every survivor keeps its cell, so position stays learnable
    even though the set changes. The deck goes 11 keys in Match → 8 in Run out →
-   4 in No clock → 1 with the server down. Dimming survives only as typography
+   4 in No clock → 2 with the session off (Session and RECAL). Dimming survives only as typography
    (the small second line), never as state.
 2. **The spine sits top-left and never moves.** Session, Mode, Replay and Flag
    work in every mode, so they hold the 2×2 corner. Position therefore answers
@@ -382,7 +382,7 @@ keys outside the modes and rulesets named in **Present in**.
 row 1   SESSION      MODE         START 30     PUSH         EXT ••
         ▁▁grey▁▁     ▁▁grey▁▁     ▁▁▁▁▁▁▁▁▁▁▁▁amber▁▁▁▁▁▁▁▁▁▁▁▁▁
 
-row 2   REPLAY       FLAG         BRACKET*     (·)          (·)
+row 2   REPLAY       FLAG         BRACKET*     (·)          RECAL†
         ▁▁grey▁▁     ▁purple▁     ▁▁grey▁▁      ← reason page →
 
 row 3   RULESET      NEW RACK     P1  3        P2  2        MATCH 4*
@@ -390,14 +390,16 @@ row 3   RULESET      NEW RACK     P1  3        P2  2        MATCH 4*
 ```
 
 `*` = only while a **bracket** is loaded (#43); dark on every other night, so
-the casual deck is exactly the deck it has always been. The reason page still
+the casual deck is exactly the deck it has always been. `†` = only while the
+**session is off** (#49): RECAL needs the camera `run` holds, so it is lit
+exactly when every other key but Session is dark, and the two never meet. The reason page still
 unfolds into 2,3–2,5 and borrows the scene key's cell while it is open — the
 overlay already wins, and every free cell on a 15-key deck is one of those
 three.
 
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
-| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Green dot = server answering | **always**, incl. server down |
+| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Refused (flashes `RECAL…`) while a recalibration has the camera. **Dot** = server answering: green, or **amber when the server's health line warns** (#52): the reference drift at launch crossed the warn level (> 8), or detection is below 78 Hz, the cadence every event constant was tuned at. The numbers are on the control page (bottom of the Play tab) | **always**, incl. server down |
 | 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → match | current over next: `MATCH`/`RUN OUT` | always |
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; timed rulesets |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
@@ -405,6 +407,7 @@ three.
 | 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at the last break and plays that rack — including after a New Rack press, until the new rack is broken. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
 | 2,2 | **Flag** | Opens the reason page at 2,3–2,5. The dump fires from whichever reason is pressed | `FLAG` → `WHY?` | always |
 | 2,3 | **Scene** | Swap the TV between the play scene and the bracket (#43). The deck remembers the scene it left rather than naming one, exactly as Replay does, so the play scene can be renamed in OBS without touching code | `BRACKET`+`TO TV` ⇄ `BACK`+`TO PLAY` | **bracket loaded** |
+| 2,5 | **RECAL** | **Hold 2 s** (longer than Session's 1 s, so neither is mistaken for the other): run `cueclock recalibrate`, which records a fresh empty-table reference, refits undistort + calibration, and swaps the three files in only if every check passes (§E2). Takes ~10–20 s, polled, so the deck keeps drawing; a Session press meanwhile is refused. The result **stays on the key** until the next hold or the next session start | `RECAL`+`HOLD 2s` → `HOLD…` → `RECAL…` → `OK 0.8PX`/`DRIFT 2` on green, or the refusal on red (`BALLS`/`ON CLOTH`, `BAD`/`FIT 2.4px`, `CAMERA`/`BUSY`, `NO`/`TABLE`), each over `HOLD 2s` | **session off** only (server down, not mid-start/stop) |
 | 2,3–2,5 | **Phantom / Missed / Other** | `POST /api/dump?label=flag_phantom` etc. Only visible while the page is open | `PHANTOM` / `MISSED` / `OTHER` → `SAVING…`, flashes `SAVED` / `ERROR` | reason page only |
 | 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` — 8-ball → Final 10 → 9-ball → **Freestyle** (2026-08-13: match play with no shot clock; the amber clock keys go dark with the countdown, the wall shows `FREE STYLE` where the digits were, and vision journals without ever moving a clock) | current over next: `8-BALL`/`FINAL 10`/`9-BALL`/`FREE STYLE` | match, run out |
 | 3,2 | **New Rack** | `POST /api/rack` — you're not shooting, you're building the next rack: clock parks, extensions refill, shot count zeroes. One key for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `NEW RACK`, flashes `RACK` / `ERROR` | match, run out |
@@ -647,9 +650,19 @@ adoption existed the restarted daemon disowned its own session mid-practice
 and the key went dead (2026-08-02). A terminal `run` writes no pidfile, so it
 still reads `DEV` — the ownership rule is unchanged, only recovered from disk.
 
-**The empty-table reference** the toggle launches with is
-`deck --reference` (default `tests/clips/empty_table_0801`) — update it after
-a camera bump alongside the README command (§E2).
+**The empty-table reference** the toggle launches with is whatever
+`config/reference.json` names: `run_command()` passes no `--reference`, and
+`run` reads the pointer at launch. A RECAL hold (§C2, §E2) rewrites it, so the
+next start uses the new reference without restarting the daemon.
+`deck --reference` still pins one if needed.
+
+**The run log survives a crash.** `run` is launched with `python -u`. Its
+stdout is a log file, which Python otherwise block-buffers, and the
+2026-11-15 session lost every line of it. `run` aborted at shutdown inside
+Syphon's `stop()` (libdispatch: "Premature release of a locked queue"),
+before its summary was written. The abort itself is fixed in
+`display/syphon_out.py`: the server now stops only after the GPU has
+finished posting the last frame.
 
 **OBS one-time settings — all done 2026-08-02:** WebSocket server enabled
 (Tools → WebSocket Server Settings; credentials copied to gitignored
@@ -1238,13 +1251,20 @@ and it will move again someday:
 2. Re-peak focus via the live-view SHARP metric; re-lock the lens screws.
 3. Re-verify WB against white paper (lighting unchanged ⇒ ratios hold);
    re-save UserSet1 if anything changed.
-4. Record a fresh reference + refit, all through the symlinked clips dir:
-   `uv run python -m cueclock.cli record --label empty_table_MMDD --seconds 3`
-   → `fit-undistort tests/clips/empty_table_MMDD`
-   → `calibrate tests/clips/empty_table_MMDD`.
-5. Relaunch `run` with `--reference tests/clips/empty_table_MMDD` (and update
-   the launch command in README). The startup drift check warns loudly if the
-   reference has gone stale (warn > 8 vs. same-mount noise ~2).
+4. Clear the cloth, stop the session, step clear, and **hold RECAL 2 s** on
+   the deck (or `uv run python -m cueclock.cli recalibrate`). It records a
+   3 s reference and refits undistort + calibration, refusing without
+   changing anything if a ball is on the cloth or either fit residual is
+   over 2 px. On success it swaps `display_undistort.json`,
+   `table_calibration.json` and the `reference.json` pointer together (the
+   previous set goes to `config/backup/`), keeps the reference in
+   `~/cueclock-reference/` and copies it to `tests/clips/` when the T7 is
+   mounted. The key shows the residual and the new drift reading
+   (`docs/cli.md` has the details). Built 2026-11-15 (#49), replacing three
+   commands and a code edit.
+5. Start the session. It reads the new pointer; the launch log should say
+   `reference check ok` with drift near 2 (warn > 8 vs. same-mount noise ~2),
+   and the control page's health line shows the same reading.
 6. Re-set the OBS crop; re-judge the LUT/grade on the actual TV.
 7. ChArUco intrinsics (`design.md` §4.3) only after a *final* install — void
    the moment the camera moves or refocuses.

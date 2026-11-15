@@ -38,6 +38,7 @@ from cueclock.deck.layout import (
     FlagReason,
     FlagStart,
     Key,
+    Recalibrate,
     ReplayShow,
     SceneToggle,
     ScoreAdjust,
@@ -46,6 +47,7 @@ from cueclock.deck.layout import (
     cycle_next,
     cycle_path,
 )
+from cueclock.deck.recal import Recalibrator
 from cueclock.deck.session import SessionManager, SessionState
 
 POLL_S = 2.0  # server/state poll cadence
@@ -103,12 +105,26 @@ def _bracket_fields(payload: object) -> dict[str, object]:
     return fields
 
 
+def _health_dot(payload: object) -> faces.Rgb:
+    """The Session key's dot: green while the rig is healthy, amber otherwise.
+
+    Amber means the server's own health line says so (#52): the reference
+    had gone stale at launch, or detection is running slower than its
+    constants were tuned at. The numbers are on the control page; the dot is
+    what carries across the room.
+    """
+    if isinstance(payload, dict) and payload.get("warn") is True:
+        return faces.DOT_WARN
+    return faces.DOT_OK
+
+
 def build_state(
     data: dict[str, object] | None,
     session: SessionState,
     *,
     replaying: bool = False,
     on_bracket: bool = False,
+    recal_face: faces.Face | None = None,
 ) -> DeckState:
     """Turn one `GET /api/state` body into everything the faces need.
 
@@ -127,6 +143,8 @@ def build_state(
             session_face=session.face,
             session_sub=session.sub,
             session_bg=faces.BG_ERR if session.failed else faces.BG,
+            session_idle=session is SessionState.OFF or session.failed,
+            recal_face=recal_face or faces.Face(),
         )
 
     def _int(field: str, default: int) -> int:
@@ -151,9 +169,10 @@ def build_state(
         session_face=session.face,
         session_sub=session.sub,
         session_bg=faces.BG_ERR if session.failed else faces.BG,
-        # The session is what the health dot reports on: green once the server
-        # is answering, absent otherwise (there is nothing to be healthy).
-        session_dot=faces.DOT_OK,
+        # The session is what the health dot reports on: present once the
+        # server is answering (there is nothing to be healthy otherwise), and
+        # amber when its health line warns.
+        session_dot=_health_dot(data.get("health")),
         **_bracket_fields(data.get("bracket")),  # type: ignore[arg-type]
     )
 
@@ -283,8 +302,9 @@ def _visible_key(index: int, state: DeckState, reasons: bool) -> Key | None:
     return key
 
 
-def _loop(deck: Any, base: str, session: SessionManager) -> None:
+def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | None = None) -> None:
     """Poll + dispatch forever; raises TransportError on unplug, KeyboardInterrupt on stop."""
+    recal = recal if recal is not None else Recalibrator()
     events: queue.Queue[tuple[int, bool]] = queue.Queue()
     deck.set_key_callback(lambda _deck, k, pressed: events.put((int(k), bool(pressed))))
 
@@ -316,6 +336,7 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
             session.tick(data is not None),
             replaying=playing is not None,
             on_bracket=showing is not None,
+            recal_face=recal.face(),
         )
 
     state = poll()
@@ -361,6 +382,11 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                     # showing somebody *chose* keeps having no deadline.
                     showing = replace(showing, until=now + bracket.DWELL_S)
             shown_decided = decided
+        if recal.poll():
+            # A recalibration finished: its result goes on the key now, not
+            # on the next 2 s poll.
+            state = poll()
+            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
         if playing is not None and now >= playing.until:
             # The file ran out — cut back to whatever was live when it started.
             # A failed cut still clears the handle: leaving the key saying BACK
@@ -395,6 +421,13 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes))
                 continue
+            if kind == "recal":
+                # Re-checked at the moment it fires: a session may have been
+                # started from a terminal while the key was held.
+                if not state.up and state.session_idle and recal.start():
+                    state = poll()
+                _draw_all(deck, state, skip=frozenset(flashes))
+                continue
             if kind == "replay":
                 # Held past the threshold: the whole rack, not the last shot.
                 # It fires here, under the finger, rather than on release —
@@ -422,8 +455,22 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
         if key is None:
             continue  # dark cell: this mode has no such key
 
+        if isinstance(key.action, Recalibrate):
+            if pressed and not recal.busy:
+                holds[index] = (time.monotonic() + key.action.hold_s, "recal")
+                _set_key(deck, index, faces.Face(HOLD_FACE))
+            elif not pressed and holds.pop(index, None) is not None:
+                _set_key(deck, index, key.face(state))  # let go early: nothing ran
+            continue
+
         if isinstance(key.action, SessionToggle):
             sess_state = session.tick(state.up)
+            if pressed and recal.busy:
+                # The recalibration has the camera; `run` would fail to open it.
+                print("session: press ignored — recalibration running", flush=True)
+                _set_key(deck, index, faces.flash_err("RECAL…"))
+                flashes[index] = time.monotonic() + FLASH_S
+                continue
             if not pressed:
                 if holds.pop(index, None) is not None:
                     _set_key(deck, index, key.face(state))
@@ -435,6 +482,7 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
                 # clears the reason and re-runs the camera probe, so the press
                 # after the cable goes back in just works.
                 session.start()
+                recal.result = None  # read by now; the next night starts clean
                 state = poll()
                 _set_key(deck, index, key.face(state))
             else:  # DEV (not ours to touch) or mid-transition — refuse, say why
@@ -551,7 +599,7 @@ def _loop(deck: Any, base: str, session: SessionManager) -> None:
         flashes[index] = time.monotonic() + FLASH_S
 
 
-def run_deck(base: str, brightness: int, reference: str) -> int:
+def run_deck(base: str, brightness: int, reference: str | None) -> int:
     """Open the deck (waiting for one if absent) and run the control loop forever.
 
     Returns only on SIGINT/SIGTERM (cli maps SIGTERM to KeyboardInterrupt, so

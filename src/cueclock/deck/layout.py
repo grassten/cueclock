@@ -34,7 +34,7 @@ the whole grammar rests on.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from cueclock.clock import MODES, RULESETS
@@ -111,6 +111,12 @@ class DeckState:
     bracket_side: str | None = None  # "A SIDE"
     bracket_armed: tuple[str, int, int] | None = None  # (name, their score, other)
     on_bracket: bool = False  # the bracket scene is on the TV, not the table
+    # The RECAL key (#49) needs the camera, so it exists only while no session
+    # holds it: server down *and* the session machine at rest (OFF or a failed
+    # start, not STARTING/STOPPING). Its face is the recalibration's own
+    # (`deck/recal.py`), passed in like `session_face`.
+    session_idle: bool = False
+    recal_face: Face = field(default_factory=Face)
 
 
 # ---------- actions ----------
@@ -189,7 +195,7 @@ class FlagReason:
     """
 
     label: str
-    timeout: float = 60.0  # a dump replies only after writing ~3.6 GB
+    timeout: float = 60.0  # a dump replies only after writing ~7.2 GB (20 s at 156 Hz)
 
 
 @dataclass(frozen=True)
@@ -233,6 +239,20 @@ class BracketConfirm:
 
 
 @dataclass(frozen=True)
+class Recalibrate:
+    """Record a fresh empty-table reference and refit, on a deliberate hold (#49).
+
+    A hold, because it overwrites the calibration, and a longer one than
+    Session's, so neither can be mistaken for the other. Only lit while the
+    session is off: `run` and `record` cannot both hold the camera. The work
+    is `cueclock recalibrate`, run as a child process; the face shows it
+    running and then the result, which stays until the next hold.
+    """
+
+    hold_s: float = 2.0
+
+
+@dataclass(frozen=True)
 class SceneToggle:
     """Swap the TV between the play scene and the bracket.
 
@@ -252,6 +272,7 @@ Action = (
     | ReplayShow
     | BracketConfirm
     | SceneToggle
+    | Recalibrate
 )
 
 
@@ -332,6 +353,9 @@ class Key:
     rulesets: frozenset[str] | None = None  # None = every ruleset
     needs_bracket: bool = False  # dark unless a bracket is loaded (#43)
     offline: bool = False  # survives a server-down deck (Session only)
+    # The inverse: lit only while the server is down and the session is at
+    # rest, dark the moment one is running (RECAL only).
+    offline_only: bool = False
     text: str = ""  # static face text, where the face isn't state-derived
     meta: Mapping[str, str] = field(default_factory=dict)
 
@@ -343,7 +367,9 @@ class Key:
     def visible(self, state: DeckState) -> bool:
         """Is this key pressable right now? If not, its cell goes dark."""
         if not state.up:
-            return self.offline
+            return self.offline or (self.offline_only and state.session_idle)
+        if self.offline_only:
+            return False
         if self.needs_bracket and not state.bracket_loaded:
             return False
         if self.modes is not None and state.mode is not None and state.mode not in self.modes:
@@ -400,6 +426,8 @@ class Key:
                 bg=BG_ARMED,
                 stripe=stripe,
             )
+        if isinstance(action, Recalibrate):
+            return replace(state.recal_face, stripe=stripe)
         if isinstance(action, SceneToggle):
             # Same shape as the Replay key's two faces, and for the same
             # reason: one key, two directions, and the face says which.
@@ -500,6 +528,12 @@ LAYOUT: tuple[Key, ...] = (
     # asked of the table (`server/report.py`). Because the cell was empty, no
     # existing key changes meaning: with no bracket loaded it stays dark.
     Key(3, 5, "confirm", Group.MATCH, BracketConfirm(), modes=RACKED, needs_bracket=True),
+    # RECAL (#49) takes (2,5), the one base-layer cell nothing else claims.
+    # The Flag reason page overlays it, but Flag needs a running server and
+    # RECAL needs none, so the two never meet. It is on the far side of the
+    # deck from Session, so the key that starts a night is never beside the
+    # one that rewrites the calibration.
+    Key(2, 5, "recal", Group.SYSTEM, Recalibrate(), offline_only=True),
     # (2,3) sits inside the block Flag's reason page borrows while it is open,
     # which is fine and needs no new mechanism: the overlay already wins in
     # `_visible_key`, and a flag press is seconds long.

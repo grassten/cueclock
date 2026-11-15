@@ -38,12 +38,6 @@ RUN_LOG = Path.home() / "Library" / "Logs" / "cueclock-run.log"
 # instead of staring at its own session as if it were a stranger's.
 PIDFILE = Path.home() / ".cueclock-session.json"
 
-# The empty-table reference the canonical launch command carries (README).
-# Refreshed after any camera bump — recipe in hardware.md §E2, which is also
-# where this default gets updated. `cueclock deck --reference` overrides it
-# without a code edit.
-DEFAULT_REFERENCE = "tests/clips/empty_table_0801"
-
 # How long a start may take before it is called failed. Cold camera open +
 # reference load + drift check measured ~12 s; 60 s is generous enough that a
 # slow disk never trips it and short enough that a broken start doesn't leave
@@ -163,21 +157,30 @@ class PidProcess:
         self.send_signal(signal.SIGTERM)
 
 
-def run_command(reference: str = DEFAULT_REFERENCE) -> tuple[str, ...]:
+def run_command(reference: str | None = None) -> tuple[str, ...]:
     """The canonical `cueclock run` argv (README "Running it").
 
     `sys.executable` rather than `uv run`: the daemon must never block on uv's
     lock while another cueclock command holds it, and the venv python is the
     same interpreter uv would pick anyway.
+
+    No `--reference` unless one was pinned: `run` reads the pointer that
+    `cueclock recalibrate` writes (#49), so a RECAL hold takes effect on the
+    next start without restarting this daemon.
+
+    `-u` because stdout is a log file, which Python block-buffers. A `run`
+    that died hard took every buffered line with it: the 2026-11-15 session's
+    whole run log was lost behind a crash at shutdown.
     """
+    pinned = ("--reference", reference) if reference else ()
     return (
         sys.executable,
+        "-u",
         "-m",
         "cueclock.cli",
         "run",
         "--rectify",
-        "--reference",
-        reference,
+        *pinned,
         "--host",
         "0.0.0.0",  # nosec B104: LAN-only rig; /control is used from a phone
         "--fps",
@@ -274,7 +277,7 @@ class SessionManager:
     up as a live server with no handle here, and the key refuses to touch it.
     """
 
-    reference: str = DEFAULT_REFERENCE
+    reference: str | None = None
     spawn: Callable[[Sequence[str]], Process] = _spawn
     call: Callable[[Sequence[str]], int] = _call
     now: Callable[[], float] = time.monotonic

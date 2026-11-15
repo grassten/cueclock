@@ -523,6 +523,41 @@ def build(path: Path) -> SessionReport:
     return report
 
 
+# "Balls appeared mid-rack" (#52): a settle well inside a rack, on a table
+# the tracker already held a real baseline for, that reports balls which were
+# not there before the shot. Past the break (rack_shots >= 2) nothing should
+# appear: balls only leave a rack table. So each appearance is a ball the
+# tracker lost and then found again, or a shadow it took for a ball. The
+# baseline floor keeps out mid-action clips whose 1-2 ball baseline makes
+# `appeared` an artifact. 88 of 711 (12.4%) all-time at the 2026-11-15 audit;
+# the shadow-filter work is judged on this number.
+MID_RACK_SHOTS = 2
+MID_RACK_BASELINE = 3
+
+
+def mid_rack_appearances(path: Path) -> tuple[int, int]:
+    """(settles with `appeared >= 1`, eligible mid-rack settles) in one journal."""
+    appeared = eligible = 0
+    for line in path.read_text().splitlines():
+        if SETTLE_KIND not in line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("kind") != SETTLE_KIND:
+            continue
+        rack = record.get("rack_shots")
+        baseline = record.get("baseline")
+        count = record.get("appeared")
+        if not (isinstance(rack, int) and isinstance(baseline, int) and isinstance(count, int)):
+            continue  # older journals carry no rearrangement summary
+        if rack >= MID_RACK_SHOTS and baseline >= MID_RACK_BASELINE:
+            eligible += 1
+            appeared += count >= 1
+    return appeared, eligible
+
+
 def find_journals(logs_dir: Path, since_s: float | None = None) -> list[Path]:
     """Session journals, oldest first, optionally limited to a recent span."""
     paths = sorted(logs_dir.glob("session-*.jsonl"))

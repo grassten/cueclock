@@ -93,6 +93,28 @@ class SyphonOutput:
             )
 
     def close(self) -> None:
+        """Stop the server, but only once the GPU is done with its last frame.
+
+        Syphon posts each frame to its clients from the Metal command buffer's
+        completion handler, on a GPU notification thread, and that handler
+        syncs onto the server's connection queue. `stop()` frees that queue.
+        Stopping while the last frame's handler was still inside it aborted
+        the whole process (2026-11-15, `python3.12-2026-11-14-203838.ips`:
+        "BUG IN CLIENT OF LIBDISPATCH: Premature release of a locked queue"
+        in `-[SyphonMetalServer stop]` while another thread sat in
+        `-[SyphonServerConnectionManager publishNewFrame]`). `run` died before
+        its shutdown path ran, so the session journal had no summary.
+
+        The fence is an empty command buffer committed to the same queue. A
+        queue completes its buffers in order and their completion
+        notifications are delivered one at a time, so once the fence's
+        handler has run, the previous frame's handler has returned.
+        """
+        done = threading.Event()
+        fence = self._server.command_queue.commandBuffer()
+        fence.addCompletedHandler_(lambda _buffer: done.set())
+        fence.commit()
+        done.wait(timeout=1.0)  # bounded: a wedged GPU must not hang shutdown
         self._server.stop()
 
     def __enter__(self) -> "SyphonOutput":

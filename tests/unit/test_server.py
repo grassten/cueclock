@@ -52,12 +52,16 @@ def test_state_snapshot_shape() -> None:
             # The bracket (#43): null in casual play, which is every session
             # that doesn't build one.
             "bracket",
+            # The rig's health line (#52): null on a bare server with no
+            # vision feeding it.
+            "health",
         }
         assert snap["mode"] == "match"
         assert snap["base"] == 30
         assert snap["vision"] is True
         assert snap["solo"] is None
         assert snap["bracket"] is None
+        assert snap["health"] is None
         assert snap["score"] == {
             "p1": {"name": "PLAYER 1", "score": 0, "fargo": None, "target": None},
             "p2": {"name": "PLAYER 2", "score": 0, "fargo": None, "target": None},
@@ -756,6 +760,65 @@ def test_detect_heartbeat_reports_hz_and_frame_age() -> None:
     assert beat["frame_t"] == 3.0  # newest processed frame's capture time
     age = beat["frame_age_s"]
     assert isinstance(age, float) and age >= 0.0
+    assert "queue_ms" not in beat  # no stages reported: the record is unchanged
+
+
+def test_detect_heartbeat_splits_frame_time_by_stage() -> None:
+    """#52: mean ms per frame in queue wait, find_blobs and the loop half."""
+    import time
+
+    hub = Hub()
+    now = time.monotonic()
+    hub.note_frame(0.0, stages=(0.010, 0.020, 0.030))
+    hub._maybe_heartbeat(now)  # baseline
+    hub.note_frame(1.0, stages=(0.001, 0.004, 0.002))
+    hub.note_frame(2.0, stages=(0.003, 0.006, 0.004))
+    hub._maybe_heartbeat(now + 5.0)
+    (beat,) = hub.journal.tail(60.0)
+    # Only the frames since the baseline count: (1+3)/2, (4+6)/2, (2+4)/2.
+    assert (beat["queue_ms"], beat["blobs_ms"], beat["loop_ms"]) == (2.0, 5.0, 3.0)
+
+
+def test_reference_drift_is_journaled_once_and_rides_the_payload() -> None:
+    """#52: the launch drift reading lands in the journal and on every payload."""
+    hub = Hub()
+    assert hub.payload()["health"] is None  # bare server: nothing to report
+    hub.note_reference_drift(28.24, True)
+    hub._maybe_journal_drift()
+    hub._maybe_journal_drift()
+    (record,) = hub.journal.tail(60.0)
+    assert record["kind"] == "reference_drift"
+    assert (record["drift"], record["stale"]) == (28.2, True)
+    health = hub.payload()["health"]
+    assert isinstance(health, dict)
+    assert health["drift"] == 28.2 and health["drift_stale"] is True
+    assert health["warn"] is True
+
+
+def test_health_reports_hz_and_balls_and_warns_when_slow() -> None:
+    import time
+
+    hub = Hub()
+    now = time.monotonic()
+    hub.note_reference_drift(1.9, False)
+    hub.note_frame(0.0, balls=9)
+    hub._maybe_heartbeat(now)
+    for i in range(1000):  # 200 Hz over the 5 s window
+        hub.note_frame(i / 200, balls=10)
+    hub._maybe_heartbeat(now + 5.0)
+    health = hub.health()
+    assert health == {
+        "drift": 1.9,
+        "drift_stale": False,
+        "hz": 200.0,
+        "hz_slow": False,
+        "balls": 10,
+        "warn": False,
+    }
+    hub.note_frame(6.0)
+    hub._maybe_heartbeat(now + 10.0)  # one frame in 5 s: far under 78 Hz
+    health = hub.health()
+    assert health is not None and health["hz_slow"] is True and health["warn"] is True
 
 
 # --- session modes (2026-08-02) ---

@@ -61,8 +61,7 @@ recorded-clip replay tests are deterministic.
 
 ```bash
 # the session (camera + vision + clock + server + Syphon display):
-uv run python -m cueclock.cli run --rectify \
-    --reference tests/clips/empty_table_0801 --host 0.0.0.0 --fps 60
+uv run python -m cueclock.cli run --rectify --host 0.0.0.0 --fps 60
 
 # the Stream Deck daemon (normally installed as a launchd agent):
 uv run python -m cueclock.cli deck
@@ -71,10 +70,12 @@ uv run python -m cueclock.cli deck
 - At the table there is no keyboard: the deck's **Session** key (top-left)
   runs that first command for you and launches OBS behind it — tap to start,
   hold 1 s to stop (`docs/hardware.md` §C4).
-- After any camera bump: record a fresh empty-table reference and point
-  `--reference` at it — recipe in `docs/hardware.md` §E2 (the deck daemon
-  takes the same path via `deck --reference`). The startup drift check warns
-  loudly if the reference has gone stale.
+- The empty-table reference is whatever `config/reference.json` names.
+  After a camera bump, or when the startup drift check warns that the
+  reference has gone stale: clear the cloth, stop the session and **hold the
+  deck's RECAL key 2 s** (or run `uv run python -m cueclock.cli recalibrate`).
+  It records a fresh reference, refits both calibrations, and swaps them in
+  only if the fit is good (`docs/hardware.md` §E2). The next start uses it.
 - OBS browser sources: `http://localhost:8000/shotclock?view=bar` (the live
   scene's bottom bar — clock *and* scoreboard in one 1334×1080 source at
   (0, 0); enable "Control audio via OBS" **and** set Audio Monitoring to

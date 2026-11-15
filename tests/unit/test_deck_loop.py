@@ -25,7 +25,15 @@ import pytest
 
 from cueclock.deck import bracket as deck_bracket
 from cueclock.deck import client, daemon, replay
-from cueclock.deck.layout import LAYOUT, BracketConfirm, ReplayShow, SceneToggle
+from cueclock.deck.layout import (
+    LAYOUT,
+    BracketConfirm,
+    Recalibrate,
+    ReplayShow,
+    SceneToggle,
+    SessionToggle,
+)
+from cueclock.deck.recal import Recalibrator
 from cueclock.deck.session import SessionManager
 
 REPLAY_KEY = next(k for k in LAYOUT if isinstance(k.action, ReplayShow))
@@ -75,14 +83,18 @@ class FakeDeck:
 _STOP = threading.Event()
 
 
-def _start_loop(deck: FakeDeck) -> threading.Thread:
+def _start_loop(
+    deck: FakeDeck,
+    session: SessionManager | None = None,
+    recal: Recalibrator | None = None,
+) -> threading.Thread:
     """`_loop` in a thread that ends quietly when `_STOP` is set."""
 
     def run() -> None:
         # KeyboardInterrupt out of the poll is the loop's own documented exit;
         # swallowing it here is what keeps the thread from dying "unhandled".
         with contextlib.suppress(KeyboardInterrupt):
-            daemon._loop(deck, "http://x", SessionManager())
+            daemon._loop(deck, "http://x", session or SessionManager(), recal)
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -417,3 +429,77 @@ def test_events_are_ignored_while_the_server_is_down(monkeypatch: pytest.MonkeyP
     deck.release(REPLAY_KEY.index)
     assert spy.spans == []
     assert events.empty()
+
+
+# --- RECAL (#49): a hold starts it, and the camera is its until it finishes ---
+
+RECAL_KEY = next(k for k in LAYOUT if isinstance(k.action, Recalibrate))
+RECAL_HOLD_S = RECAL_KEY.action.hold_s if isinstance(RECAL_KEY.action, Recalibrate) else 2.0
+SESSION_KEY = next(k for k in LAYOUT if isinstance(k.action, SessionToggle))
+
+
+class SlowRecal:
+    """A recalibration that runs until the test says it is done."""
+
+    def __init__(self) -> None:
+        self.spawned = threading.Event()
+        self.finish = threading.Event()
+
+    def __call__(self, cmd: object) -> SlowRecal:
+        self.spawned.set()
+        return self
+
+    def poll(self) -> int | None:
+        return 0 if self.finish.is_set() else None
+
+    def communicate(self) -> tuple[str, str]:
+        return '{"ok": true, "reason": "OK", "residual_px": 0.4, "drift_after": 1.9}', ""
+
+
+@pytest.fixture
+def offline(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FakeDeck, SlowRecal, list[object]]]:
+    """A `_loop` with the server down and the session at rest."""
+    _STOP.clear()
+    monkeypatch.setattr(client, "get_json", _stoppable(None))
+    monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)
+    slow = SlowRecal()
+    spawned: list[object] = []
+    # Every command the session runs lands here: a start would show up as a
+    # camera probe, and nothing in these tests may reach the real one.
+    session = SessionManager(call=lambda cmd: spawned.append(cmd) or 1)
+    deck = FakeDeck()
+    thread = _start_loop(deck, session, Recalibrator(spawn=slow))
+    yield deck, slow, spawned
+    slow.finish.set()
+    _stop(thread)
+
+
+def test_a_full_hold_starts_a_recalibration(
+    offline: tuple[FakeDeck, SlowRecal, list[object]],
+) -> None:
+    deck, slow, _ = offline
+    deck.press(RECAL_KEY.index)
+    assert slow.spawned.wait(RECAL_HOLD_S + SETTLE_S), "the hold never started it"
+    deck.release(RECAL_KEY.index)
+
+
+def test_letting_go_early_runs_nothing(offline: tuple[FakeDeck, SlowRecal, list[object]]) -> None:
+    deck, slow, _ = offline
+    deck.press(RECAL_KEY.index)
+    time.sleep(RECAL_HOLD_S / 4)
+    deck.release(RECAL_KEY.index)
+    assert not slow.spawned.wait(RECAL_HOLD_S + 0.5)
+
+
+def test_session_start_is_refused_while_the_camera_is_recalibrating(
+    offline: tuple[FakeDeck, SlowRecal, list[object]],
+) -> None:
+    deck, slow, spawned = offline
+    deck.press(RECAL_KEY.index)
+    assert slow.spawned.wait(RECAL_HOLD_S + SETTLE_S)
+    deck.release(RECAL_KEY.index)
+    deck.press(SESSION_KEY.index)
+    deck.release(SESSION_KEY.index)
+    time.sleep(0.5)
+    assert spawned == []  # not even the camera probe: the start never began

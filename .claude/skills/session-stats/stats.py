@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from cueclock.server.report import SessionReport, build, find_journals
+from cueclock.server.report import SessionReport, build, find_journals, mid_rack_appearances
 
 
 @dataclass
@@ -39,6 +39,8 @@ class Tiers:
     phantom_candidates: int = 0
     scratches_journaled: int = 0
     flags: int = 0
+    mid_rack_appeared: int = 0  # mid-rack settles reporting a ball that was not there
+    mid_rack_settles: int = 0  # eligible: rack_shots >= 2 on a 3+ ball baseline
 
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
@@ -90,6 +92,9 @@ def mine(paths: list[Path]) -> Tiers:
     for p in paths:
         t.add_report(build(p))
         t.add_supplemental(p)
+        appeared, eligible = mid_rack_appearances(p)
+        t.mid_rack_appeared += appeared
+        t.mid_rack_settles += eligible
     return t
 
 
@@ -135,6 +140,12 @@ def table(label: str, t: Tiers) -> str:
             "Scratches journaled",
             f"{t.scratches_journaled}",
             "UPPER BOUND ONLY — channel over-counts ~6x, issue #26",
+        ),
+        (
+            "Balls appeared mid-rack",
+            f"{t.mid_rack_appeared} / {t.mid_rack_settles}  "
+            f"({pct(t.mid_rack_appeared, t.mid_rack_settles)})",
+            "settles past the break reporting a ball that was not there — lower is better",
         ),
     ]
     if t.dark_candidates:

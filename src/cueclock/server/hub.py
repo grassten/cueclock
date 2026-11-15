@@ -249,6 +249,12 @@ QUIET_BASELINE_MIN_BALLS = 3
 # BACKLOG, checkpoint 33), rare enough to be journal noise-free.
 HEARTBEAT_INTERVAL_SECONDS = 5.0
 
+# Below this detect rate the health line warns (#52). 78 Hz is the cadence
+# every event constant was tuned at before detection went to every frame
+# (checkpoint 106): under it the engine is running slower than anything it
+# was ever measured at, not merely slower than nominal.
+DETECT_HZ_WARN = 78.0
+
 # IDLE break gate (checkpoint 28): out of a fresh rack the only legal shot is
 # a break, and the one live phantom that ever started a rack came from racking
 # motion (2026-08-01 11:14:49, journal-pinned: the phantom started the clock
@@ -354,6 +360,17 @@ class Hub:
         self._detect_frames = 0
         self._detect_last: tuple[float, float] | None = None  # (frame_t, mono when processed)
         self._heartbeat_prev: tuple[float, int] | None = None  # (mono, frames) at last line
+        # Per-stage seconds summed over every frame (queue wait, find_blobs,
+        # the loop thread's half), rebound whole on each frame like the
+        # counters above; the heartbeat diffs them against its last line.
+        self._stage_totals: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._stage_prev: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # The health line (#52): what the control page and the Session key
+        # show. All None on a bare server, which has no vision to report on.
+        self._detect_hz: float | None = None
+        self._balls: int | None = None
+        self._reference_drift: tuple[float, bool] | None = None  # (reading, stale)
+        self._drift_journaled = False
         # E9: the vision motion bit (note_motion, camera thread) and the two
         # monotonic stamps its policies compare against — when the bit was
         # last high, and when the clock last entered MOTION. Both feed the
@@ -492,6 +509,7 @@ class Hub:
             "score": self.score.as_dict(),
             "solo": self._solo(),
             "bracket": self._bracket_summary(),
+            "health": self.health(),
         }
 
     def live_scores(self) -> tuple[int, int]:
@@ -574,6 +592,7 @@ class Hub:
                 # GRACE/EXPIRED/auto-restart transitions happen inside tick.
                 self._log("tick_transition")
             self._watch_frozen_clock(now)
+            self._maybe_journal_drift()
             self._maybe_heartbeat(now)
             await self.broadcast(snapshot)
             await asyncio.sleep(BROADCAST_INTERVAL_SECONDS)
@@ -625,15 +644,64 @@ class Hub:
         self._log("settle_synthesized", quiet_s=round(now - anchor, 2))
         self._motion_entered_mono = None
 
-    def note_frame(self, frame_t: float) -> None:
+    def note_frame(
+        self,
+        frame_t: float,
+        *,
+        balls: int | None = None,
+        stages: tuple[float, float, float] | None = None,
+    ) -> None:
         """Camera-thread stamp: one detect frame processed, captured at ``frame_t``.
 
         ``frame_t`` is the frame's capture timestamp (camera clock, seconds
         since the session's first frame — the same timeline vision events
-        carry). Attribute rebinding only; no journal I/O off the asyncio loop.
+        carry). ``balls`` is how many balls the tracker holds; ``stages`` is
+        this frame's (queue wait, find_blobs, loop half) in seconds.
+        Attribute rebinding only; no journal I/O off the asyncio loop.
         """
         self._detect_frames += 1
         self._detect_last = (frame_t, time.monotonic())
+        if balls is not None:
+            self._balls = balls
+        if stages is not None:
+            q, b, loop = self._stage_totals
+            self._stage_totals = (q + stages[0], b + stages[1], loop + stages[2])
+
+    def note_reference_drift(self, drift: float, stale: bool) -> None:
+        """Camera-thread stamp: the launch-time reference check (#52).
+
+        Journaled once by the tick loop (`reference_drift`), and carried on
+        every payload so the reading is in front of somebody instead of in a
+        log file behind the TV.
+        """
+        self._reference_drift = (drift, stale)
+
+    def _maybe_journal_drift(self) -> None:
+        if self._reference_drift is None or self._drift_journaled:
+            return
+        drift, stale = self._reference_drift
+        self._log("reference_drift", drift=round(drift, 1), stale=stale)
+        self._drift_journaled = True
+
+    def health(self) -> dict[str, object] | None:
+        """The rig's health line: reference drift at launch, detect Hz, balls.
+
+        ``warn`` is the one bit the deck needs (an amber dot on Session): the
+        reference has gone stale, or detection is running slower than any
+        rate its constants were tuned at. None on a bare server.
+        """
+        if self._detect_last is None and self._reference_drift is None:
+            return None
+        drift, stale = self._reference_drift if self._reference_drift else (None, False)
+        slow = self._detect_hz is not None and self._detect_hz < DETECT_HZ_WARN
+        return {
+            "drift": None if drift is None else round(drift, 1),
+            "drift_stale": stale,
+            "hz": self._detect_hz,
+            "hz_slow": slow,
+            "balls": self._balls,
+            "warn": stale or slow,
+        }
 
     def _maybe_heartbeat(self, now: float) -> None:
         """Journal a `detect_heartbeat` line every ~5 s while frames flow.
@@ -651,18 +719,33 @@ class Hub:
             return  # no vision feeding this hub (bare server): stay silent
         if self._heartbeat_prev is None:
             self._heartbeat_prev = (now, self._detect_frames)
+            self._stage_prev = self._stage_totals
             return
         prev_mono, prev_frames = self._heartbeat_prev
         if now - prev_mono < HEARTBEAT_INTERVAL_SECONDS:
             return
         frame_t, frame_mono = self._detect_last
+        frames = self._detect_frames - prev_frames
+        self._detect_hz = round(frames / (now - prev_mono), 1)
+        totals = self._stage_totals
+        # Mean ms per frame in each stage since the last line (#52). Absent
+        # when nothing reported stages, so older readers and bare tests see
+        # exactly the record they always did.
+        stages: dict[str, float] = {}
+        if frames and totals != self._stage_prev:
+            for name, total, prev in zip(
+                ("queue_ms", "blobs_ms", "loop_ms"), totals, self._stage_prev, strict=True
+            ):
+                stages[name] = round((total - prev) / frames * 1e3, 2)
         self._log(
             "detect_heartbeat",
-            hz=round((self._detect_frames - prev_frames) / (now - prev_mono), 1),
+            hz=self._detect_hz,
             frame_age_s=round(now - frame_mono, 3),
             frame_t=round(frame_t, 3),
+            **stages,
         )
         self._heartbeat_prev = (now, self._detect_frames)
+        self._stage_prev = totals
 
     # ---------- commands (each also broadcasts, per the "on every event" rule) ----------
 

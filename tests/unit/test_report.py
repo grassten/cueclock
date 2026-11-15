@@ -361,3 +361,31 @@ def test_suppressed_settle_is_tallied_and_not_a_shot(tmp_path: Path) -> None:
     )
     assert report.suppressed_settles == 1
     assert report.total == 1  # the real shot only
+
+
+# --- balls appeared mid-rack (#52) ---
+
+
+def test_mid_rack_appearances_counts_only_settles_inside_a_real_rack(tmp_path: Path) -> None:
+    """Share of mid-rack settles that report a ball which was not there before.
+
+    Eligible: past the break (`rack_shots >= 2`) on a table whose baseline is a
+    real one (3+ balls). The break settle and a degenerate 1-ball baseline are
+    left out, and so is a settle recorded before the rearrangement summary
+    existed.
+    """
+    from cueclock.server.report import mid_rack_appearances
+
+    def mid(rack: int, baseline: int, appeared: int) -> dict[str, Any]:
+        return {**settle(10.0, rack), "baseline": baseline, "appeared": appeared}
+
+    path = journal(
+        tmp_path,
+        mid(1, 1, 5),  # the break: excluded
+        mid(2, 9, 1),  # counts, appeared
+        mid(3, 8, 0),  # counts, clean
+        mid(4, 2, 3),  # degenerate baseline: excluded
+        settle(20.0, 5),  # no summary fields (older journal): excluded
+        mid(6, 7, 2),  # counts, appeared
+    )
+    assert mid_rack_appearances(path) == (2, 3)
