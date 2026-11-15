@@ -5,13 +5,31 @@
     {
       "type": "ShotTaken",
       "t": 10.7977,
-      "ball_id": 2,
+      "ball_id": 4,
       "speed_mms": 3076.9038,
       "newborn": false
     },
     {
+      "type": "ScratchCandidate",
+      "t": 12.4491,
+      "x_mm": 1793.4391,
+      "y_mm": 41.5592,
+      "pocket_x_mm": 1930.0,
+      "pocket_y_mm": 0.0,
+      "whiteness": 0.8643,
+      "color_age_s": 0.0
+    },
+    {
+      "type": "ScratchRefuted",
+      "t": 12.4491,
+      "witness_id": 6,
+      "x_mm": 1486.9407,
+      "y_mm": 486.5895,
+      "whiteness": 0.8643
+    },
+    {
       "type": "BallsSettled",
-      "t": 14.9069
+      "t": 18.4272
     }
   ]
 }

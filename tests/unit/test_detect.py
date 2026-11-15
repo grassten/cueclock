@@ -198,3 +198,68 @@ def test_rejects_ball_sized_shadow_that_is_not_a_disc() -> None:
     img = _light_cloth()
     cv2.ellipse(img, (400, 300), (36, 16), 30.0, 0.0, 360.0, (172, 105, 45), -1)
     assert _colour_gated(img) == []
+
+
+# --- #56: the chroma rescue and the touching-pair split ---------------------
+
+
+def _chroma_detect(img: npt.NDArray[np.uint8], chroma: bool = True) -> list[Detection]:
+    """Detect on the light cloth with the full production inputs."""
+    from cueclock.vision.detect import ChromaReference
+
+    ref = _mosaic(_light_cloth())
+    mask = np.ones((HEIGHT, WIDTH), np.uint8)
+    mask[:2, :] = mask[-2:, :] = mask[:, :2] = mask[:, -2:] = 0  # an edge band
+    reference = ChromaReference.build([ref], mask) if chroma else None
+    return detect_frame(_mosaic(img), build_reference([ref]), None, mask, ref, chroma=reference)[0]
+
+
+def test_red_ball_at_the_cloths_luminance_is_rescued_by_colour() -> None:
+    """The red 3 on this cloth: gray |diff| under the threshold, colour far
+    over it. Gray alone sees nothing; the chroma rescue finds the ball."""
+    img = _light_cloth()
+    _ball(img, 400, 300, (40, 90, 255))  # gray ~134 vs cloth ~126
+    assert _chroma_detect(img, chroma=False) == []
+    found = _chroma_detect(img)
+    assert len(found) == 1 and not found[0].merged
+    assert np.isclose(found[0].cx, 400, atol=2) and np.isclose(found[0].cy, 300, atol=2)
+
+
+def test_a_shadow_is_invisible_to_the_colour_channel() -> None:
+    """A shadow scales the cloth's RGB, which the channel projects away: a
+    ball-sized patch at 0.85x the cloth (gray |diff| ~19) rescues nothing."""
+    img = _light_cloth()
+    _ball(img, 400, 300, (196, 119, 51), radius=22)
+    assert _chroma_detect(img) == []
+
+
+def test_a_thin_coloured_stick_is_not_rescued() -> None:
+    """A maple shaft at the cloth's luminance is colour, but thin: it holds no
+    disc of half a ball radius."""
+    import cv2
+
+    img = _light_cloth()
+    cv2.line(img, (300, 200), (400, 290), (60, 140, 200), 12)
+    assert _chroma_detect(img) == []
+
+
+def test_touching_balls_split_into_one_detection_each() -> None:
+    img = _cloth_scene()
+    _ball(img, 300, 300, (230, 230, 230))
+    _ball(img, 342, 300, (20, 200, 210))  # touching: centres 2r apart
+    found = detect_balls(_mosaic(img), _reference())
+    assert len(found) == 2 and not any(d.merged for d in found)
+    assert sorted(round(d.cx) for d in found) == [300, 342]
+
+
+def test_a_streak_is_not_split() -> None:
+    """§2.3 lesson 2: a fast ball's streak is one ball. Its distance ridge is
+    flat — no saddle — so it stays one merged detection."""
+    import cv2
+
+    img = _cloth_scene()
+    cv2.line(img, (300, 300), (345, 300), (230, 230, 230), 42)
+    _ball(img, 300, 300, (230, 230, 230))
+    _ball(img, 345, 300, (230, 230, 230))
+    found = detect_balls(_mosaic(img), _reference())
+    assert len(found) == 1 and found[0].merged

@@ -8,9 +8,9 @@
     },
     {
       "type": "ShotTaken",
-      "t": 13.0251,
-      "ball_id": 0,
-      "speed_mms": 1833.2645,
+      "t": 13.2428,
+      "ball_id": 9,
+      "speed_mms": 4329.9362,
       "newborn": false
     },
     {
@@ -26,6 +26,10 @@
       "pocket_y_mm": 965.0,
       "whiteness": 1.0,
       "color_age_s": 1.2545
+    },
+    {
+      "type": "Scratch",
+      "t": 16.0014
     }
   ]
 }

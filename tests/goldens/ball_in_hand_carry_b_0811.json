@@ -5,7 +5,7 @@
     {
       "type": "ShotTaken",
       "t": 2.6178,
-      "ball_id": 8,
+      "ball_id": 9,
       "speed_mms": 3379.1003,
       "newborn": true
     },
@@ -16,7 +16,7 @@
     {
       "type": "ShotTaken",
       "t": 12.6219,
-      "ball_id": 12,
+      "ball_id": 11,
       "speed_mms": 1058.042,
       "newborn": false
     },

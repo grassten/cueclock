@@ -16,7 +16,7 @@ import pytest
 
 from cueclock.capture.clip import ClipWriter
 from cueclock.capture.detect_cache import DetectionCache, cache_key
-from cueclock.vision.detect import DetectConfig, Detection, Intrusion
+from cueclock.vision.detect import ChromaReference, DetectConfig, Detection, Intrusion
 from cueclock.vision.pipeline import ReferenceModel
 
 WIDTH, HEIGHT = 64, 48
@@ -47,6 +47,12 @@ def _reference(gray: int = 10, bayer: int = 20, mask: int = 1, radius: int = 22)
         bayer=_array(bayer),
         mask=_array(mask),
         radius_px=_array(radius).astype(np.float32),
+        chroma=ChromaReference(
+            axes=np.eye(2, 3, dtype=np.float32),
+            cloth=np.zeros((HEIGHT // 2, WIDTH // 2, 2), np.float32),
+            mask=np.full((HEIGHT // 2, WIDTH // 2), 255, np.uint8),
+            edge=np.zeros((HEIGHT // 2, WIDTH // 2), np.bool_),
+        ),
     )
 
 

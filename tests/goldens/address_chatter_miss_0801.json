@@ -3,14 +3,10 @@
   "reference": "empty_table_0801",
   "events": [
     {
-      "type": "BallsSettled",
-      "t": 3.6547
-    },
-    {
       "type": "ShotTaken",
-      "t": 10.1897,
+      "t": 10.1513,
       "ball_id": 5,
-      "speed_mms": 8152.5844,
+      "speed_mms": 1647.4034,
       "newborn": false
     },
     {

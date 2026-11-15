@@ -253,7 +253,11 @@ def recalibrate(
         drift_before = _old_drift(config_dir, new_live, old_reference)
         drift_after = boundary_drift(_median_gray(reader), new_live, calibration)
 
-        # Every check passed: from here on, the old set is replaced.
+        # Every check passed: from here on, the old set is replaced. The
+        # reference carries the calibration fitted on it, so the corpus grades
+        # clips recorded on this mount under it and keeps grading older clips
+        # under theirs (tests/corpus `_calibration`).
+        calibration.save(clip / CALIBRATION_NAME)
         final = _unique(reference_root, label)
         clip.rename(final)
 

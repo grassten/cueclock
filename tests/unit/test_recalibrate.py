@@ -169,6 +169,8 @@ def test_success_swaps_all_three_and_keeps_a_backup(rig: dict[str, Path]) -> Non
     # New fits are real files the loaders accept, not the old contents.
     assert "old" not in json.loads((config / UNDISTORT_NAME).read_text())
     assert "homography" in json.loads((config / CALIBRATION_NAME).read_text())
+    # The reference carries the same fit, for the corpus to grade its mount by.
+    assert (reference / CALIBRATION_NAME).read_text() == (config / CALIBRATION_NAME).read_text()
     # The previous set survives, whole.
     backup = config / BACKUP_DIR_NAME
     assert json.loads((backup / UNDISTORT_NAME).read_text()) == {"old": "undistort"}

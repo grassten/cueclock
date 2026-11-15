@@ -31,6 +31,7 @@ import numpy.typing as npt
 from cueclock.display.undistort_fit import cloth_mask
 from cueclock.vision.calibration import TableCalibration
 from cueclock.vision.detect import (
+    ChromaReference,
     DetectConfig,
     Detection,
     Intrusion,
@@ -256,24 +257,28 @@ class ReferenceModel:
     bayer: npt.NDArray[np.uint8]  # first sampled frame, for shadow rejection
     mask: npt.NDArray[np.uint8]  # dilated cloth region
     radius_px: npt.NDArray[np.float32]  # predicted ball radius per pixel
+    chroma: ChromaReference  # the empty cloth in the chroma-rescue channel (#56)
 
     @classmethod
     def build(
         cls, reference_frames: list[npt.NDArray[np.uint8]], calibration: TableCalibration
     ) -> "ReferenceModel":
         gray = build_reference(reference_frames)
+        mask = build_table_mask(reference_frames[0])
         return cls(
             gray=gray,
             bayer=reference_frames[0],
-            mask=build_table_mask(reference_frames[0]),
+            mask=mask,
             radius_px=build_radius_map(gray.shape, calibration),
+            chroma=ChromaReference.build(reference_frames, mask),
         )
 
     def digest(self) -> str:
         """Content hash of every array (memoized — ~20 ms over 6.9 MB)."""
         if self._digest is None:
             h = hashlib.sha256()
-            for array in (self.gray, self.bayer, self.mask, self.radius_px):
+            arrays = (self.gray, self.bayer, self.mask, self.radius_px)
+            for array in (*arrays, self.chroma.axes, self.chroma.cloth):
                 h.update(f"{array.shape}{array.dtype}".encode())
                 h.update(array.tobytes())
             self._digest = h.hexdigest()
@@ -405,6 +410,7 @@ class VisionPipeline:
             gray=gray,
             table_edge=self.reference.table_edge,
             table_roi=self.reference.table_roi,
+            chroma=self.reference.chroma,
         )
         return detections, intrusions, gray
 
