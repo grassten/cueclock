@@ -25,18 +25,13 @@ from PIL import Image
 from cueclock.deck import bracket, client, faces, replay
 from cueclock.deck.layout import (
     CONFIRM_PENDING_FACE,
-    DUMP_PENDING_FACE,
-    FLAG_PENDING_FACE,
     LAYOUT,
     RACK_PENDING_FACE,
-    REASON_KEYS,
     REPLAY_PENDING_FACE,
     ApiPost,
     BracketConfirm,
     Cycle,
     DeckState,
-    FlagReason,
-    FlagStart,
     Key,
     Recalibrate,
     ReplayShow,
@@ -57,16 +52,6 @@ CONFIRM_S = 5.0  # a bracket confirm writes a result, loads a match and racks
 HOLD_FACE = "HOLD…"  # shown while the Session key is held toward a stop
 
 _BY_INDEX: dict[int, Key] = {key.index: key for key in LAYOUT}
-_REASONS_BY_INDEX: dict[int, Key] = {key.index: key for key in REASON_KEYS}
-
-_FLAG_KEY: Key = next(k for k in LAYOUT if isinstance(k.action, FlagStart))
-# What an unanswered reason page files itself as, resolved once at import so a
-# renamed reason key can't leave the auto-file path pointing at nothing.
-_AUTO_REASON: Key = next(
-    k
-    for k in REASON_KEYS
-    if isinstance(_FLAG_KEY.action, FlagStart) and k.name == _FLAG_KEY.action.auto_reason
-)
 
 
 def _score_of(payload: object, slot: str) -> int:
@@ -185,10 +170,6 @@ def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckS
     which would otherwise report the value we already know we changed.
     """
     action = key.action
-    if isinstance(action, FlagReason):
-        result = client.post(base, f"/api/dump?label={action.label}", timeout=action.timeout)
-        print(f"{key.name}: dump {action.label} -> {result.status}", flush=True)
-        return (faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")), None
     if isinstance(action, ApiPost):
         result = client.post(base, action.path, timeout=action.timeout)
         print(
@@ -268,16 +249,14 @@ def _draw_all(
     deck: Any,
     state: DeckState,
     *,
-    reasons: bool = False,
     skip: frozenset[int] = frozenset(),
 ) -> None:
     """Repaint every cell: the visible keys, dark everywhere else."""
-    overlay = _REASONS_BY_INDEX if reasons else {}
     for i in range(deck.key_count()):
         if i in skip:
             continue
-        key = overlay.get(i) or _BY_INDEX.get(i)
-        visible = key is not None and (key.index in overlay or key.visible(state))
+        key = _BY_INDEX.get(i)
+        visible = key is not None and key.visible(state)
         _set_key(deck, i, key.face(state) if visible and key else faces.Face())
 
 
@@ -292,10 +271,8 @@ def _set_key(deck: Any, index: int, face: faces.Face | Image.Image) -> None:
         deck.set_key_image(index, PILHelper.to_native_key_format(deck, image))
 
 
-def _visible_key(index: int, state: DeckState, reasons: bool) -> Key | None:
+def _visible_key(index: int, state: DeckState) -> Key | None:
     """The key at `index` if it is pressable right now, else None."""
-    if reasons and index in _REASONS_BY_INDEX:
-        return _REASONS_BY_INDEX[index]
     key = _BY_INDEX.get(index)
     if key is None or not key.visible(state):
         return None
@@ -343,7 +320,6 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
     _draw_all(deck, state)
     flashes: dict[int, float] = {}
     holds: dict[int, tuple[float, str]] = {}  # index -> (deadline, kind)
-    reason_deadline: float | None = None  # flag reason page auto-files at this time
 
     def begin_replay(index: int, span: replay.Span) -> None:
         """Cue a replay and repaint what it changed — tap and hold share this."""
@@ -353,7 +329,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             _set_key(deck, index, faces.flash_err("ERROR"))
             flashes[index] = time.monotonic() + FLASH_S
         state = replace(state, replaying=playing is not None)
-        _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+        _draw_all(deck, state, skip=frozenset(flashes))
 
     next_poll = time.monotonic() + POLL_S
     while True:
@@ -362,7 +338,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             polled = poll()
             if polled != state:
                 state = polled
-                _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+                _draw_all(deck, state, skip=frozenset(flashes))
             next_poll = now + POLL_S
             # A result landed that nobody pressed a key for — a match conceded
             # or a score reported from a phone. The wall does what the confirm
@@ -374,8 +350,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 if showing is None:
                     showing = bracket.show(dwell_s=bracket.DWELL_S)
                     state = replace(state, on_bracket=showing is not None)
-                    reasons = reason_deadline is not None
-                    _draw_all(deck, state, reasons=reasons, skip=frozenset(flashes))
+                    _draw_all(deck, state, skip=frozenset(flashes))
                 elif showing.until is not None:
                     # Already up on a timer — a second result inside the dwell
                     # gives it a fresh one rather than a new scene cut. A
@@ -386,7 +361,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             # A recalibration finished: its result goes on the key now, not
             # on the next 2 s poll.
             state = poll()
-            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+            _draw_all(deck, state, skip=frozenset(flashes))
         if playing is not None and now >= playing.until:
             # The file ran out — cut back to whatever was live when it started.
             # A failed cut still clears the handle: leaving the key saying BACK
@@ -394,23 +369,13 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             replay.stop(playing)
             playing = None
             state = replace(state, replaying=False)
-            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+            _draw_all(deck, state, skip=frozenset(flashes))
         if showing is not None and _dwell_done(showing, now, clock_state):
             # A failed cut still clears the handle, exactly as the replay return
             # does: a stuck key is worse than one press that does nothing.
             bracket.hide(showing)
             showing = None
             state = replace(state, on_bracket=False)
-            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
-        if reason_deadline is not None and now >= reason_deadline:
-            # Walked away: an unspecified flag has always meant OTHER, and a
-            # saved clip beats a lost one.
-            reason_deadline = None
-            auto = _AUTO_REASON
-            _set_key(deck, auto.index, faces.Face(DUMP_PENDING_FACE))
-            image, _ = _dispatch(auto, base, state)
-            _set_key(deck, auto.index, image)
-            flashes[auto.index] = time.monotonic() + FLASH_S
             _draw_all(deck, state, skip=frozenset(flashes))
         for index, (deadline, kind) in list(holds.items()):
             if now < deadline:
@@ -444,14 +409,14 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
         for index, deadline in list(flashes.items()):
             if now >= deadline:
                 del flashes[index]
-                key = _visible_key(index, state, reason_deadline is not None)
+                key = _visible_key(index, state)
                 _set_key(deck, index, key.face(state) if key else faces.Face())
         try:
             index, pressed = events.get(timeout=0.25)
         except queue.Empty:
             continue
 
-        key = _visible_key(index, state, reason_deadline is not None)
+        key = _visible_key(index, state)
         if key is None:
             continue  # dark cell: this mode has no such key
 
@@ -509,9 +474,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                     replay.stop(playing)
                     playing = None
                     state = replace(state, replaying=False)
-                    _draw_all(
-                        deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes)
-                    )
+                    _draw_all(deck, state, skip=frozenset(flashes))
             elif pressed:
                 holds[index] = (time.monotonic() + key.action.hold_s, "replay")
             elif holds.pop(index, None) is not None:
@@ -539,7 +502,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 # only that one was nobody's decision to look at the bracket.
                 showing = bracket.show()
             state = replace(state, on_bracket=showing is not None)
-            _draw_all(deck, state, reasons=reason_deadline is not None, skip=frozenset(flashes))
+            _draw_all(deck, state, skip=frozenset(flashes))
             continue
 
         if isinstance(key.action, BracketConfirm):
@@ -570,21 +533,6 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             outcome = faces.flash_ok("SAVED") if result.ok else faces.flash_err("ERROR")
             _set_key(deck, index, outcome)
             flashes[index] = time.monotonic() + FLASH_S
-            continue
-
-        if isinstance(key.action, FlagStart):
-            reason_deadline = time.monotonic() + key.action.auto_s
-            _set_key(deck, index, faces.Face(FLAG_PENDING_FACE))
-            _draw_all(deck, state, reasons=True, skip=frozenset(flashes) | {index})
-            continue
-
-        if isinstance(key.action, FlagReason):
-            reason_deadline = None
-            _set_key(deck, index, faces.Face(DUMP_PENDING_FACE))
-            image, _ = _dispatch(key, base, state)
-            _set_key(deck, index, image)
-            flashes[index] = time.monotonic() + FLASH_S
-            _draw_all(deck, state, skip=frozenset(flashes) | {index})
             continue
 
         if isinstance(key.action, ApiPost) and key.action.pending_face is not None:

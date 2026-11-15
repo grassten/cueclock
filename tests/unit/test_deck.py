@@ -18,13 +18,10 @@ from cueclock.deck.layout import (
     COLS,
     LAYOUT,
     MODE_FACES,
-    REASON_KEYS,
     ROWS,
     ApiPost,
     Cycle,
     DeckState,
-    FlagReason,
-    FlagStart,
     Group,
     Key,
     ReplayShow,
@@ -63,12 +60,9 @@ def visible_names(state: DeckState) -> set[str]:
 
 
 def test_layout_positions_unique_and_in_bounds() -> None:
-    # Within each layer. The reason page is an overlay by design, so it is
-    # allowed to land on a cell the base layout uses — see the flag test below.
-    for layer in (LAYOUT, REASON_KEYS):
-        positions = [(k.row, k.col) for k in layer]
-        assert len(set(positions)) == len(positions)
-    for key in (*LAYOUT, *REASON_KEYS):
+    positions = [(k.row, k.col) for k in LAYOUT]
+    assert len(set(positions)) == len(positions)
+    for key in LAYOUT:
         assert 1 <= key.row <= ROWS
         assert 1 <= key.col <= COLS
 
@@ -83,14 +77,15 @@ def test_key_index_is_row_major_from_top_left() -> None:
 
 # --- the spine: top-left 2x2, present in every mode, never moves ---
 
-SPINE = {"session", "mode", "replay", "flag"}
+SPINE = {"session", "mode", "replay"}
 # With "I shot" retired (#19, 2026-08-05) the spine is the whole of what has no
 # mode condition at all — nothing else survives every mode.
 ALWAYS_ON = set(SPINE)
 
 
 def test_spine_holds_the_top_left_block() -> None:
-    assert {BY_NAME[name].index for name in SPINE} == {0, 1, 5, 6}
+    # (2,2) has been empty since Flag was removed (checkpoint 114).
+    assert {BY_NAME[name].index for name in SPINE} == {0, 1, 5}
 
 
 def test_spine_survives_every_mode() -> None:
@@ -194,7 +189,7 @@ def test_group_stripes_are_distinct_and_never_the_outcome_colours() -> None:
 
 
 def test_every_key_carries_its_group_stripe() -> None:
-    for key in (*LAYOUT, *REASON_KEYS):
+    for key in LAYOUT:
         assert key.face(MATCH).stripe == key.group.stripe, key.name
 
 
@@ -367,50 +362,6 @@ def test_score_hold_is_shorter_than_the_session_hold() -> None:
     assert p1.hold_s < session.hold_s
 
 
-# --- flag: one press by feel, reason afterwards ---
-
-
-def test_flag_page_unfolds_into_the_cells_beside_the_flag_key() -> None:
-    flag = BY_NAME["flag"]
-    assert [k.index for k in REASON_KEYS] == [flag.index + 1, flag.index + 2, flag.index + 3]
-    # Two of the three are dark in every mode. The third holds the bracket's
-    # scene key (#43), which the page borrows while it is open — and that is
-    # the accepted cost rather than an oversight: on a 15-key deck every free
-    # cell is one of these three, a flag press lasts seconds, and the scene key
-    # is the one key on the deck with no deadline attached to it at all.
-    # RECAL (#49) sits under the page too, and never meets it: the page opens
-    # from Flag, which needs a server, and RECAL is lit only without one.
-    reason_cells = {k.index for k in REASON_KEYS}
-    borrowed = {k.name for k in LAYOUT if k.index in reason_cells}
-    assert borrowed == {"scene", "recal"}
-
-
-def test_flag_reasons_send_distinct_labels_through_the_dump_endpoint() -> None:
-    # The label is the whole point: it names the clip dir and rides the
-    # journal's flag_dump line, so triage starts from *why* it was pressed.
-    labels = {k.name: k.action.label for k in REASON_KEYS if isinstance(k.action, FlagReason)}
-    assert labels == {
-        "flag_phantom": "flag_phantom",
-        "flag_missed": "flag_missed",
-        "flag_other": "flag_other",
-    }
-
-
-def test_flag_reason_timeouts_cover_the_dump_write() -> None:
-    # A dump replies only after writing ~3.6 GB; a short timeout makes
-    # successful saves flash red (2026-07-31 triage: three "failed" dumps, fine).
-    for key in REASON_KEYS:
-        assert isinstance(key.action, FlagReason)
-        assert key.action.timeout >= 30.0
-
-
-def test_an_unanswered_flag_page_files_itself_as_a_reason_that_exists() -> None:
-    action = BY_NAME["flag"].action
-    assert isinstance(action, FlagStart)
-    assert action.auto_reason in {k.name for k in REASON_KEYS}
-    assert 0 < action.auto_s <= 10  # off a 20 s ring, so it has to stay small
-
-
 # --- faces ---
 
 
@@ -426,7 +377,7 @@ def test_every_key_actually_renders_in_every_mode_and_rulebook() -> None:
         for ruleset in RULESETS:
             for replaying in (False, True):
                 state = replace(MATCH, mode=mode, ruleset=ruleset, replaying=replaying)
-                for key in (*LAYOUT, *REASON_KEYS):
+                for key in LAYOUT:
                     image = faces.render(key.face(state))
                     assert image.size == (faces.SIZE, faces.SIZE), (key.name, mode, ruleset)
 
@@ -573,21 +524,6 @@ def test_dispatch_api_error_flashes_red(monkeypatch: pytest.MonkeyPatch) -> None
     assert moved is None
 
 
-def test_dispatch_flag_reason_posts_its_own_label(monkeypatch: pytest.MonkeyPatch) -> None:
-    posted: list[str] = []
-
-    def fake_post(base: str, path: str, timeout: float = 3.0) -> client.PostResult:
-        posted.append(path)
-        return client.PostResult(True, 200, "{}")
-
-    monkeypatch.setattr(client, "post", fake_post)
-    missed = next(k for k in REASON_KEYS if k.name == "flag_missed")
-    image, moved = _dispatch(missed, "http://x", MATCH)
-    assert posted == ["/api/dump?label=flag_missed"]
-    assert image.getpixel((0, 0)) == faces.BG_OK
-    assert moved is None
-
-
 def test_dispatch_cycle_posts_next_and_moves_the_state(monkeypatch: pytest.MonkeyPatch) -> None:
     posted: list[str] = []
 
@@ -701,7 +637,7 @@ def test_no_face_on_the_deck_overflows_its_tile() -> None:
     ]
     probe = ImageDraw.Draw(faces.render(faces.Face()))
     for state in states:
-        for key in (*LAYOUT, *REASON_KEYS):
+        for key in LAYOUT:
             face = key.face(state)
             image = faces.render(face)  # must not raise
             assert image.size == (faces.SIZE, faces.SIZE)

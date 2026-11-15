@@ -277,6 +277,34 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-15 (checkpoint 114 — Flag, the ring and warm replay removed;
+  #55):** the deck's Flag key had not been pressed since 2026-08-25 (54 flags
+  all-time, `~/cueclock-dumps` empty). Steven's reasons: watching the rack, not the clock, he would not
+  notice a fault inside the 20 s window anyway, and choosing a reason is a
+  classification made at the table. So the ring it fed went too: **`run` no
+  longer holds ~7.2 GB of raw frames** (20 s at 156 Hz) for the whole session.
+  - **Gone:** `capture/ring.py`, `run --ring-seconds` / `--dump-dir`, the
+    dump writer, `POST /api/dump`, the ~1 Hz pickled state snapshots,
+    `analyze --warm`, `VisionPipeline.dump_state` / `load_state`,
+    `settle_probe.py --dump`, the FLAG key and its PHANTOM/MISSED/OTHER page
+    (with the auto-file timer and the purple `EVIDENCE` stripe), the flag
+    column in `cueclock report` and `session-stats`, and the
+    `/triage-clips` skill. Deck cell (2,2) is now empty. Old journals still
+    carry `flag_dump` lines; nothing reads them.
+  - **Kept:** the corpus, `record`, `analyze` (cold), the journals. New clips
+    are deliberate `record` takes.
+  - **To watch next session:** whether the freed RAM moves #53's detect rate
+    (median 133 Hz on the 2026-11-15 session). Every new 2.3 MB frame stayed
+    referenced for 20 s, so none of that memory could be reused; that cost was
+    never measured. Swap read 2.85 GB used, with no session running, when #55
+    was triaged.
+  - **What comes next** (#57): a session-long log of detector output
+    replayable through tracker + events + hub, plus OBS session recordings
+    and a review page where Steven judges flagged moments from footage.
+  - Verified: unit 611 passed (625 before, 14 Flag/ring/warm tests removed);
+    cached full battery 704 passed (719 before, the 15 removed tests exactly);
+    ruff, mypy --strict clean. No detection code changed (`pipeline.py` lost
+    only the snapshot methods), so no cold battery.
 - **2026-11-15 (checkpoint 113 — 16/16: colour rescue, touching-pair split,
   and a corpus that keeps its calibration; #56):** `all_balls_still_1115` and
   `static_spread` read **16 detections on every frame** (939 of 939 each; were

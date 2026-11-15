@@ -11,8 +11,6 @@ Run via:  uv run python -m cueclock.cli run --rectify
 
 import argparse
 import contextlib
-import hashlib
-import json
 import shutil
 import signal
 import sys
@@ -48,55 +46,8 @@ BYTES_PER_FRAME = 1920 * 1200
 NOMINAL_FPS = CAMERA_FPS
 DISK_HEADROOM = 5 * 1024**3  # never eat the last 5 GiB of the disk
 
-# Flag dumps stage on the internal SSD, NOT on the T7 (`tests/clips`), and not
-# anywhere under the repo. Two measured reasons, both from 2026-08-01:
-#   - The T7 is a USB SSD, so a ~3.6 GB dump saturates the USB bus it shares
-#     with every other peer. One press dropped the detect loop 75 -> 45 Hz and
-#     froze the Camo side-angle feed in OBS for ~1 s (28 frames), still
-#     blipping 20 s later. Flagging a failure was degrading the session being
-#     flagged, and visibly stuttering the wall TV.
-#   - The repo lives on an iCloud-synced Desktop, so a dump written inside it
-#     lands in `bird`/`cloudd`'s path (the same sync that stamps UF_HIDDEN and
-#     forced `.venv.nosync` — checkpoint 13).
-# `~` is neither: internal, fast, off the USB bus, outside iCloud's scope
-# (iCloud Drive syncs Desktop and Documents only). `/triage-clips` drains it —
-# promoted clips move to the T7, the rest are deleted.
-DEFAULT_DUMP_DIR = "~/cueclock-dumps"
-
-# Warm replay (state snapshots in ring dumps). Live failures caused by
-# accumulated vision-core state — whiteness-vote position, roster membership,
-# motion/episode latches — do not reproduce under a cold `analyze` (the
-# checkpoint-32 parked-vote miss and several checkpoint-33 residuals were
-# exactly this class). `run` therefore keeps a rolling deque of pickled core
-# state at ~1 Hz spanning the ring, and a flag dump writes the oldest
-# snapshot inside the ring window as `state.pkl` + a `state.json` sidecar;
-# `analyze --warm` restores it and replays the remaining frames — exactly
-# what live computed. Measured cost per snapshot (M2, mid-shot state):
-# ~0.9 ms and ~2.3 MB (dominated by the debayered prev-gray frame) against
-# the 12.8 ms detect budget — negligible at 1 Hz.
-STATE_SNAPSHOT_PERIOD_S = 1.0
 DETECT_WORKERS = 3  # the M2 has 4 performance cores; the 4th runs the loop itself
 DETECT_INFLIGHT = 2 * DETECT_WORKERS  # ~38 ms of queue at 156 Hz before the grab waits
-STATE_SCHEMA = 1
-STATE_PKL_NAME = "state.pkl"
-STATE_META_NAME = "state.json"
-
-
-def _vision_fingerprint() -> str:
-    """Identity stamp for state snapshots (`state.json`).
-
-    Warm replay unpickles live EventEngine/BallTracker objects; if their
-    classes changed since the dump, pickle would happily rehydrate a stale
-    attribute set onto new code and mis-run silently. Hash the state-bearing
-    sources so a stale snapshot fails loudly instead.
-    """
-    from cueclock import vision
-
-    root = Path(str(vision.__file__)).parent
-    digest = hashlib.sha256()
-    for name in ("events.py", "track.py", "pipeline.py"):
-        digest.update((root / name).read_bytes())
-    return digest.hexdigest()[:16]
 
 
 def _unique_dir(root: Path, label: str) -> Path:
@@ -424,56 +375,10 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
         cadence_hz=reader.cadence_hz / args.stride,
     )
 
-    # Warm replay: restore the live session's state snapshot (written into
-    # flag dumps by `run` — see STATE_SNAPSHOT_PERIOD_S), skip the frames it
-    # already contains, and feed session-relative timestamps so the printed
-    # events line up with the dump's events.jsonl. Cold replay (the default,
-    # and the fallback when a clip has no snapshot) starts from empty state:
-    # it shows what *current code* does, not what the live session did.
-    start = 0
-    t_offset = 0.0
-    if args.warm:
-        pkl_path = Path(args.clip) / STATE_PKL_NAME
-        meta_path = Path(args.clip) / STATE_META_NAME
-        if not (pkl_path.exists() and meta_path.exists()):
-            print("no state snapshot in this clip — cold replay (live state starts empty)")
-        else:
-            meta = json.loads(meta_path.read_text())
-            if meta.get("schema") != STATE_SCHEMA:
-                print(
-                    f"state.json schema {meta.get('schema')!r} != {STATE_SCHEMA} — snapshot "
-                    "from an incompatible cueclock version; rerun without --warm",
-                    file=sys.stderr,
-                )
-                return 1
-            fingerprint = _vision_fingerprint()
-            if meta.get("vision_fingerprint") != fingerprint:
-                print(
-                    f"state snapshot written by different vision-core code "
-                    f"({meta.get('vision_fingerprint')} vs current {fingerprint}) — "
-                    "restoring it could mis-run silently. Check out the commit that "
-                    "recorded the dump, or rerun without --warm (cold replay of "
-                    "current code).",
-                    file=sys.stderr,
-                )
-                return 1
-            # Locate the snapshot inside the clip: dump timestamps are stored
-            # relative to the clip's first frame, the snapshot's are session-
-            # relative — the camera-ns stamps tie the two timelines together.
-            snap_clip_t = (int(meta["snapshot_ns"]) - reader.meta.first_timestamp_ns) / 1e9
-            t_offset = float(meta["snapshot_t"]) - snap_clip_t
-            pipeline.load_state(pkl_path.read_bytes())
-            start = int(np.searchsorted(reader.timestamps, snap_clip_t, side="right"))
-            print(
-                f"warm replay: live state restored at session t={float(meta['snapshot_t']):.3f}s"
-                f" — skipping {start} of {len(reader)} frames; timestamps below are "
-                "session-relative (they match the dump's events.jsonl)"
-            )
-
     n_events = 0
-    next_status = t_offset
-    for i in reader.detect_indices(start=start, stride=args.stride):
-        t = t_offset + float(reader.timestamps[i])
+    next_status = 0.0
+    for i in reader.detect_indices(stride=args.stride):
+        t = float(reader.timestamps[i])
         for event in pipeline.process(t, reader.frame(i)):
             n_events += 1
             extra = ""
@@ -562,8 +467,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Import-safe despite the lazy-import rule: listener.py defers its
     # vosk/sounddevice imports to run() (docs/hardware.md Part D).
     from cueclock.audio.listener import ExtensionListener
-    from cueclock.capture.camera import EXPOSURE_US, GAIN, open_camera
-    from cueclock.capture.ring import FrameRing
+    from cueclock.capture.camera import open_camera
     from cueclock.display.syphon_out import DisplayWorker
     from cueclock.server.app import create_app
     from cueclock.server.hub import Hub
@@ -600,83 +504,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
     ).astype(np.uint8)
     display = _build_display_pipeline(args)
 
-    ring_capacity = int(args.ring_seconds * cadence_hz)
-    ring = FrameRing(ring_capacity) if ring_capacity > 0 else None
-    # Made at startup, not at flag time: a bad --dump-dir must fail here, not
-    # when Steven presses Flag at the table with the evidence expiring.
-    dump_root = Path(args.dump_dir).expanduser()
-    if ring_capacity > 0:
-        dump_root.mkdir(parents=True, exist_ok=True)
-    camera_serial = "unknown"
-    # Warm-replay snapshots (see STATE_SNAPSHOT_PERIOD_S): (frame t, camera
-    # ns, pickled core state) at ~1 Hz, retained a little longer than the
-    # ring spans. Appended by the camera thread, read by the dump thread
-    # (`/api/dump` runs via asyncio.to_thread) — hence the lock.
-    state_snaps: deque[tuple[float, int, bytes]] = deque(maxlen=int(args.ring_seconds) + 5)
-    state_lock = threading.Lock()
-
-    def dump_ring(label: str) -> str:
-        """Write the ring to a corpus-style clip (called from the server)."""
-        if ring is None or len(ring) == 0:
-            raise RuntimeError("ring buffer is empty — no frames grabbed yet")
-        # Staging root, not the T7 — see DEFAULT_DUMP_DIR for why.
-        needed = int(len(ring) * BYTES_PER_FRAME * 1.1)
-        free = shutil.disk_usage(dump_root).free
-        if free < needed + DISK_HEADROOM:
-            raise RuntimeError(
-                f"not enough disk at {dump_root}: need ~{needed / 1e9:.1f} GB "
-                f"+ headroom, {free / 1e9:.1f} GB free — run /triage-clips to drain it"
-            )
-        clip_dir = _unique_dir(dump_root, label)
-        writer = ClipWriter(
-            clip_dir,
-            label=label,
-            camera_serial=camera_serial,
-            exposure_us=EXPOSURE_US,
-            gain=GAIN,
-            recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
-            cadence_hz=cadence_hz,
-        )
-        frames = ring.snapshot()
-        for ts_ns, ring_frame in frames:
-            writer.write(ring_frame, ts_ns)
-        writer.close()
-        # Live state for warm replay (`analyze --warm`): the oldest snapshot
-        # inside the ring window. Restored, it replays into exactly what the
-        # live engine computed — accumulated whiteness-vote / roster /
-        # episode state included, the class of divergence a cold replay
-        # cannot reproduce.
-        with state_lock:
-            snaps = list(state_snaps)
-        snap = next((s for s in snaps if s[1] >= frames[0][0]), None)
-        if snap is None:
-            print("no state snapshot covers this ring — dump will replay cold only")
-        else:
-            snap_t, snap_ns, blob = snap
-            (clip_dir / STATE_PKL_NAME).write_bytes(blob)
-            (clip_dir / STATE_META_NAME).write_text(
-                json.dumps(
-                    {
-                        "schema": STATE_SCHEMA,
-                        "snapshot_t": snap_t,
-                        "snapshot_ns": snap_ns,
-                        "vision_fingerprint": _vision_fingerprint(),
-                        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
-                    },
-                    indent=2,
-                )
-                + "\n"
-            )
-        # Journal the press itself (before the tail copy, so it appears in
-        # it): the dump's own timestamp is what locates the ring inside the
-        # session timeline when triaging.
-        hub.journal.log("flag_dump", label=label, path=str(clip_dir), warm=snap is not None)
-        # The other half of the story: what the live engine did during (and
-        # around) these frames — events, commands, clock transitions.
-        hub.journal.dump_tail(clip_dir / "events.jsonl", seconds=args.ring_seconds + 60.0)
-        print(f"ring dumped -> {clip_dir}")
-        return str(clip_dir)
-
     # Scores persist across restarts (a mid-match crash must not lose the match).
     # So does a live bracket (#43), for the same reason and by the same means;
     # finished ones are archived beside the session journals.
@@ -688,8 +515,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         bracket_path=Path("config/bracket.json"),
         archive_dir=journal_path.parent,
     )
-    if ring_capacity > 0:
-        app.state.dump = dump_ring
     hub = cast(Hub, app.state.hub)
     server = uvicorn.Server(
         uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
@@ -808,13 +633,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     find_blobs = vision.find_blobs
     vision.reference.table_edge  # noqa: B018 — build the memos before workers race to them
     vision.reference.table_roi  # noqa: B018
-    inflight: deque[tuple[float, int, float, Future[TimedBlobs]]] = deque()
+    inflight: deque[tuple[float, float, Future[TimedBlobs]]] = deque()
     detects = 0
     detect_s = 0.0
     detect_max_s = 0.0
     episode_prev = False  # #33: the latch's last exported state
-    next_snap_t = 0.0
-    first_snap = True
 
     def timed_find_blobs(frame: npt.NDArray[np.uint8]) -> "TimedBlobs":
         """`find_blobs` on a worker, stamped so the heartbeat can split the time."""
@@ -822,9 +645,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         blobs = find_blobs(frame)
         return blobs, started, time.perf_counter()
 
-    def finish(t: float, ts_ns: int, t_submit: float, job: "Future[TimedBlobs]") -> None:
+    def finish(t: float, t_submit: float, job: "Future[TimedBlobs]") -> None:
         """One frame's stateful half, in frame order."""
-        nonlocal detects, detect_s, detect_max_s, episode_prev, next_snap_t, first_snap
+        nonlocal detects, detect_s, detect_max_s, episode_prev
         blobs, blobs_start, blobs_end = job.result()
         loop_start = time.perf_counter()
         events = vision.advance(t, *vision.churn(*blobs))
@@ -865,25 +688,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         # E9 motion bit — same attribute-only contract.
         hub.note_motion(vision.last_motion)
-        if ring is not None and t >= next_snap_t:
-            # Warm-replay snapshot (~1 Hz in camera time — see
-            # STATE_SNAPSHOT_PERIOD_S).
-            next_snap_t = t + STATE_SNAPSHOT_PERIOD_S
-            t_snap = time.perf_counter()
-            blob = vision.dump_state()
-            with state_lock:
-                state_snaps.append((t, ts_ns, blob))
-            if first_snap:
-                first_snap = False
-                print(
-                    f"state snapshots on: {len(blob) / 1e6:.1f} MB, "
-                    f"{(time.perf_counter() - t_snap) * 1e3:.1f} ms "
-                    "each at 1 Hz (warm replay — analyze --warm)"
-                )
 
     try:
         with open_camera() as cam:
-            camera_serial = cam.GetDeviceInfo().GetSerialNumber()
             # LatestImageOnly: if a detect cycle runs long, the camera hands us
             # the freshest frame instead of building a queue. The event engine
             # is cadence-agnostic, so skipped frames only cost samples.
@@ -919,13 +726,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     *_warn_if_reference_stale(ref_gray, frame, calibration)
                                 )
                             if frame_i % args.stride == 0:
-                                if ring is not None:
-                                    ring.push(ts_ns, frame)
                                 if len(inflight) >= DETECT_INFLIGHT:
                                     finish(*inflight.popleft())  # the pool is behind: wait
                                 job = pool.submit(timed_find_blobs, frame)
-                                inflight.append((t, ts_ns, time.perf_counter(), job))
-                                while inflight and inflight[0][3].done():
+                                inflight.append((t, time.perf_counter(), job))
+                                while inflight and inflight[0][2].done():
                                     finish(*inflight.popleft())
                             frame_i += 1
                             if t >= next_display:
@@ -1232,13 +1037,6 @@ def main(argv: list[str] | None = None) -> int:
         "record clips and dumps since checkpoint 106 store 156 fps, older dumps "
         "the 78 Hz stream they were detected at)",
     )
-    p_an.add_argument(
-        "--warm",
-        action="store_true",
-        help="restore the live state snapshot a flag dump carries (state.pkl) and "
-        "replay from it — reproduces what the live session computed, accumulated "
-        "state included; without a snapshot, falls back to cold replay with a note",
-    )
     p_an.add_argument("--verbose", action="store_true", help="per-second track status lines")
 
     p_run = sub.add_parser(
@@ -1262,23 +1060,6 @@ def main(argv: list[str] | None = None) -> int:
         default=1,
         help="detect every Nth camera frame (default 1 = 156 Hz; 2 = the 78 Hz "
         "cadence every constant was tuned at, before checkpoint 106)",
-    )
-    p_run.add_argument(
-        "--ring-seconds",
-        type=float,
-        default=20.0,
-        help="in-RAM rolling buffer POST /api/dump saves as a labeled clip "
-        "(~7.2 GB at the default 20 s and 156 Hz; 0 disables). 20 s because a measured "
-        "live flag press came 12.7 s after the phantom it reacted to — the "
-        "12 s ring had already dropped the evidence frames (2026-08-01)",
-    )
-    p_run.add_argument(
-        "--dump-dir",
-        default=DEFAULT_DUMP_DIR,
-        help=f"where POST /api/dump stages flag clips (default {DEFAULT_DUMP_DIR}). "
-        "Internal SSD on purpose: dumping to the T7 saturates the USB bus "
-        "(measured: detect 75 -> 45 Hz, Camo frozen ~1 s in OBS), and the repo "
-        "is on an iCloud-synced Desktop. /triage-clips drains it to the corpus",
     )
     p_run.add_argument("--verbose", action="store_true", help="per-second track status lines")
     p_run.add_argument("--no-mic", action="store_true", help='disable the voice "extension" mic')

@@ -14,9 +14,10 @@ they're in `docs/design.md` §2.3 and must not be re-learned the hard way.
 ## Current status
 
 **Rig live (July 2026).** Camera mounted + calibrated, wall TV + OBS installed, Stream
-Deck phase 1 running. Accuracy hardening is the ongoing work: live failures get Flagged
-(ring-buffer dump → labeled clip), triaged offline, and promoted to graded corpus
-scenarios. Live execution status: **`CHANGELOG.md`** (check the newest checkpoint first;
+Deck phase 1 running. Accuracy hardening is the ongoing work, driven by the session
+journals (`cueclock report`, `session-stats`) and graded against the recorded-clip
+corpus; new clips are deliberate `cueclock record` takes (the Flag key and its
+in-RAM ring were removed in checkpoint 114, #55). Live execution status: **`CHANGELOG.md`** (check the newest checkpoint first;
 append a checkpoint entry there in every checkpoint commit). Open work: the
 **[project board](https://github.com/users/grassten/projects/3)** — cards are issues on
 `grassten/cueclock`, so a checkpoint commit closes its own item with `Closes #N`. Filter

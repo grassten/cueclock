@@ -1,6 +1,6 @@
 """Stage 0 probe for issue #33: per-settle episode evidence from replays.
 
-For every BallsSettled a clip (or flag dump) produces, report the engine-side
+For every BallsSettled a corpus clip produces, report the engine-side
 evidence the settle-time shot adjudication (#33) will read:
 
 * every episode mover (``_episode_origin``): how far it actually traveled
@@ -19,7 +19,6 @@ placement/retrieval settles must show arrivals dark for seconds and movers at
 
 Usage:
     uv run python scripts/settle_probe.py medium_shot soft_touch_0731 ...
-    uv run python scripts/settle_probe.py --dump ~/cueclock-dumps/flag_missed_2
 
 Respects CUECLOCK_DETECT_CACHE the same way the corpus battery does (set it
 to reuse stored detector output; unset replays cold).
@@ -49,7 +48,6 @@ from tests.corpus.test_corpus_events import REFERENCES  # noqa: E402
 
 CLIPS = Path("tests/clips")
 CALIBRATION = Path("config/table_calibration.json")
-DEFAULT_REFERENCE = "empty_table_0801"  # what the live session runs with (dump replay)
 
 
 def _reference_model(name: str, cache: dict) -> ReferenceModel:
@@ -106,7 +104,7 @@ def _spread_mm(baseline, present, moved_mm_floor):
     return spread, len(involved)
 
 
-def probe(name, reader, pipeline: VisionPipeline, indices, clip_dir: Path, t_offset=0.0):
+def probe(name, reader, pipeline: VisionPipeline, indices, clip_dir: Path):
     engine = pipeline._engine
     cfg: EventConfig = pipeline.event_config
     episode_start = None  # t when table_moving latched
@@ -117,7 +115,7 @@ def probe(name, reader, pipeline: VisionPipeline, indices, clip_dir: Path, t_off
     frames = _detections(reader, clip_dir, pipeline, indices)
     results = []
     for i, (detections, churn, intrusions) in zip(indices, frames, strict=True):
-        t = t_offset + float(reader.timestamps[i])
+        t = float(reader.timestamps[i])
         # Snapshot episode state BEFORE advance: a settling update() clears it.
         pre_origin = dict(engine._episode_origin)
         pre_last = dict(engine._episode_last)
@@ -212,41 +210,11 @@ def probe(name, reader, pipeline: VisionPipeline, indices, clip_dir: Path, t_off
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("clips", nargs="*", help="corpus clip names under tests/clips/")
-    ap.add_argument("--dump", help="flag-dump directory (warm replay via its state.pkl)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args()
 
     ref_cache: dict = {}
     all_results = []
-
-    if args.dump:
-        from cueclock.cli import STATE_META_NAME, STATE_PKL_NAME, _vision_fingerprint
-
-        dump = Path(args.dump).expanduser()
-        reader = ClipReader(dump)
-        pipeline = VisionPipeline(
-            TableCalibration.load(CALIBRATION),
-            _reference_model(DEFAULT_REFERENCE, ref_cache),
-            cadence_hz=reader.cadence_hz,
-        )
-        start, t_offset = 0, 0.0
-        meta_path = dump / STATE_META_NAME
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
-            if meta.get("vision_fingerprint") != _vision_fingerprint():
-                print(
-                    f"WARNING: snapshot fingerprint {meta.get('vision_fingerprint')} != "
-                    f"current {_vision_fingerprint()} — replaying COLD",
-                    file=sys.stderr,
-                )
-            else:
-                snap_clip_t = (int(meta["snapshot_ns"]) - reader.meta.first_timestamp_ns) / 1e9
-                t_offset = float(meta["snapshot_t"]) - snap_clip_t
-                pipeline.load_state((dump / STATE_PKL_NAME).read_bytes())
-                start = int(np.searchsorted(reader.timestamps, snap_clip_t, side="right"))
-                print(f"warm replay from session t={meta['snapshot_t']:.2f}s", file=sys.stderr)
-        indices = reader.detect_indices(start=start)
-        all_results += probe(dump.name, reader, pipeline, indices, dump, t_offset)
 
     for name in args.clips:
         if not (CLIPS / name).exists():

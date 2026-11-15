@@ -38,7 +38,6 @@ class Tiers:
     left_frozen: int = 0
     phantom_candidates: int = 0
     scratches_journaled: int = 0
-    flags: int = 0
     mid_rack_appeared: int = 0  # mid-rack settles reporting a ball that was not there
     mid_rack_settles: int = 0  # eligible: rack_shots >= 2 on a 3+ ball baseline
 
@@ -52,7 +51,6 @@ class Tiers:
         self.left_frozen += r.left_frozen
         self.phantom_candidates += len(r.phantom_candidates)
         self.scratches_journaled += r.scratches
-        self.flags += r.flags
 
     def add_supplemental(self, path: Path) -> None:
         """Racks, vision-fired breaks, and expired-through misses.
@@ -164,8 +162,6 @@ def table(label: str, t: Tiers) -> str:
                 "E9 watchdog healed a frozen clock (the miss is counted above)",
             )
         )
-    if t.flags:
-        rows.append(("Flags pressed", str(t.flags), "each one lands in the triage-clips loop"))
     width = max(len(r[0]) for r in rows)
     out = [label, "=" * len(label)]
     for name, value, note in rows:

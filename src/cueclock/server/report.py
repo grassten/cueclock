@@ -102,7 +102,6 @@ SCRATCH_KIND = "vision_scratch"
 # the live confession) and must be read as such.
 SCRATCH_CANDIDATE_KIND = "vision_scratch_candidate"
 SCRATCH_REFUTED_KIND = "vision_scratch_refuted"
-FLAG_KIND = "flag_dump"
 HEARTBEAT_KIND = "detect_heartbeat"
 SUMMARY_KIND = "session_summary"
 # E8/E9 hub-policy marks (2026-08-06, accuracy plan §13.2/§13.3). The break
@@ -272,7 +271,6 @@ class SessionReport:
     # can be one short).
     scratch_candidates: int = 0
     scratch_refuted: int = 0
-    flags: int = 0
     racking_settles: int = 0
     gated: dict[str, int] = field(default_factory=dict)
     hz: list[float] = field(default_factory=list)
@@ -425,8 +423,6 @@ def build(path: Path) -> SessionReport:
             report.scratch_candidates += 1
         elif kind == SCRATCH_REFUTED_KIND:
             report.scratch_refuted += 1
-        elif kind == FLAG_KIND:
-            report.flags += 1
         elif kind == BREAK_ADJUDICATED_KIND:
             report.breaks_adjudicated += 1
             adjudicated_pending = True
@@ -582,7 +578,6 @@ def summary_detail(report: SessionReport) -> dict[str, object]:
         "scratches": report.scratches,
         "scratch_candidates": report.scratch_candidates,
         "scratch_refuted": report.scratch_refuted,
-        "flags": report.flags,
         "breaks_adjudicated": report.breaks_adjudicated,
         "break_presses": report.break_presses,
         "dark_candidates": report.dark_candidates,
@@ -711,7 +706,6 @@ def format_session(report: SessionReport) -> str:
         out.append(
             f"    rate             1 per {report.total / max(report.scratches, 1):.0f} shots"
         )
-    out.append(f"  flag dumps         {report.flags}")
     if report.racking_settles:
         out.append(f"  racking settles    {report.racking_settles}   (ignored in IDLE, not shots)")
     for label, count in sorted(report.gated.items()):
@@ -733,21 +727,20 @@ def format_rollup(reports: list[SessionReport]) -> str:
     played = [r for r in reports if r.total]
     out: list[str] = []
     out.append(
-        f"{'session':<34}{'shots':>7}{'missed':>8}{'miss':>8}"
-        f"{'phant':>7}{'phan':>8}{'scr':>6}{'flag':>6}"
+        f"{'session':<34}{'shots':>7}{'missed':>8}{'miss':>8}{'phant':>7}{'phan':>8}{'scr':>6}"
     )
-    out.append("-" * 84)
+    out.append("-" * 78)
     for report in played:
         out.append(
             f"{report.path.name:<34}{report.total:>7}{len(report.missed):>8}"
             f"{_rate(report):>8}{len(report.phantom_candidates):>7}"
-            f"{_phantom_rate(report):>8}{report.scratches:>6}{report.flags:>6}"
+            f"{_phantom_rate(report):>8}{report.scratches:>6}"
         )
     shots = sum(r.total for r in played)
     missed = sum(len(r.missed) for r in played)
     phantoms = sum(len(r.phantom_candidates) for r in played)
     scratches = sum(r.scratches for r in played)
-    out.append("-" * 84)
+    out.append("-" * 78)
     out.append(
         f"{'TOTAL':<34}{shots:>7}{missed:>8}{missed / shots if shots else 0:>7.2%}"
         f"{phantoms:>7}{phantoms / shots if shots else 0:>7.2%}{scratches:>6}"
