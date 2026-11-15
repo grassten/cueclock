@@ -277,6 +277,28 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-15 (checkpoint 111 — `all_balls_still_1115`: all 16 balls standing
+  still on the current mount; #51's last done-when):** recorded at the table
+  (939 frames, 156.2 fps, no gaps; the first attempt hit a pylon `PrepareGrab`
+  USB timeout and the retry was clean). Graded against the live reference
+  `empty_table_0801` as a static scenario: no fire, no settle (`(0, 0, None,
+  0)`, golden empty).
+  - **The detector sees 11 blobs for 16 balls**, and the shadow gate is not
+    why. The old gate and the checkpoint 110 detector agree on every sampled
+    frame (20 of 939: 11 blobs, once 12). The blue 2 touches the 6 here, so
+    the gate never sees it alone. The 5 missing balls:
+    - **two touching pairs**, 6+2 and 9+8, each detected as one `merged` blob;
+    - **the red 3**, mid-table: centre |diff| 21 against the 25 threshold. In
+      gray a red ball reads like this blue cloth (`static_spread` misses its 3
+      the same way);
+    - **the 14, frozen to the left rail**: merged into a 377×737 px blob
+      running along the cushion that touches the mask border, so all of it is
+      rejected. A rail-length blob is the stale-reference signature (#49);
+    - **the 11, frozen to the right rail**: its blob is 409 px, under the
+      600 px area floor, cut short against the cushion.
+  - These are findings, not fixed here. The clip is now the graded scenario
+    any attempt at them starts from.
+
 - **2026-11-15 (checkpoint 110 — the shadow gate stops eating blue balls; #51):**
   the gate drops any ball-shaped blob 0.65–0.95× the reference brightness with
   chroma within 0.15. On this cloth that also describes the blue 2, the 10's

@@ -69,6 +69,14 @@ EXPECTED: dict[
 ] = {
     "empty_table": (0, 0, None),
     "static_spread": (0, 0, None),
+    # all_balls_still_1115: all 16 balls standing still on the current mount,
+    # graded against the live reference (#51's done-when). Nothing moves, so
+    # nothing may fire and nothing may settle. The detector sees 11 blobs for
+    # 16 balls (checkpoint 111): two touching pairs (6+2, 9+8), the red 3
+    # under the 25-level threshold (|diff| 21), the 14 on the left rail merged
+    # into a stale-reference rail blob (#49), the 11 on the right rail cut to
+    # 409 px against the cushion. The shadow gate removes nothing here.
+    "all_balls_still_1115": (0, 0, None, 0),
     "soft_shot": (1, 0, 1),
     # medium/power: struck ~4 s in, balls legitimately still rolling when the
     # 8/10 s clip ends — settle count is unknowable, only the shot is pinned
@@ -710,6 +718,8 @@ REFERENCES: dict[str, str] = {
     "ball_in_hand_carry_0811": "empty_table_0801",
     "ball_in_hand_carry_b_0811": "empty_table_0801",
     "ball_in_hand_triple_0811": "empty_table_0801",
+    # The live session's reference (deck/session.py DEFAULT_REFERENCE).
+    "all_balls_still_1115": "empty_table_0801",
 }
 
 
