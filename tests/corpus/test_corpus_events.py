@@ -150,7 +150,11 @@ EXPECTED: dict[
     # foul reversal (above) that anchor is gone, and the shot AND its settle
     # both land. This pin closes #5.
     "soft_touch_0731": (1, 0, 1),
-    "soft_shot_0731": (1, 0, 1),
+    # soft_shot_0731: the object ball is the blue 2, and it rolls to the end
+    # of the clip (traced frame by frame, 6.5 s -> 12.0 s). The settle at
+    # 8.63 s that this pinned until checkpoint 110 fired while the 2 was
+    # invisible to the shadow gate (#51); there is no settle in-clip.
+    "soft_shot_0731": (1, 0, None),
     # glove_address: bridge glove + watch on the cloth through an address; a
     # gear track reached 87% observed (past the flicker filter). The roster
     # rule keeps it from latching table motion: zero events, ever.
@@ -630,6 +634,22 @@ CARRY_CLIPS: dict[str, list[float]] = {
     "ball_in_hand_triple_0811": [12.455],
 }
 
+# Settles that are a hand placing the cue ball back after a scratch. Since
+# checkpoint 104 ball-in-hand resets the clock (Steven's call; the hub's
+# removal note has the measurement), so a count there is the product working,
+# not a phantom, and the phantom-count check skips it. Everything else in the
+# clip stays graded: the stroke's freeze and its own count.
+#
+#   scratch_replace  §9 checklist: "scratch, fetch the cue ball from the ball
+#                    return". Stroke 3.264 settles 8.449 with the scratch;
+#                    the placement settles 9.998. Ungraded for counts until
+#                    checkpoint 110: with the shadow gate rejecting the blue 2
+#                    the 8.449 settle had no quiet baseline, so the clip read
+#                    as unanchored and the check never ran.
+PLACEMENT_SETTLES: dict[str, list[float]] = {
+    "scratch_replace": [9.998],
+}
+
 # Clips pair with the empty-table reference from the same camera position:
 # post-TV-install clips use empty_table_0729, everything earlier the original;
 # clips from 2026-08-01 midday onward use empty_table_0801 (the §E2 refresh
@@ -913,7 +933,12 @@ def _assert_clock_outcome(name: str, truth: list[float], timeline: "ClockTimelin
     if not timeline.rearrangement_is_anchored:
         return
     lo = (truth[0] - FREEZE_EARLY_S) if truth else float("-inf")
-    counts = [c for c in timeline.counts if c >= lo]
+    placements = PLACEMENT_SETTLES.get(name, [])
+    counts = [
+        c
+        for c in timeline.counts
+        if c >= lo and not any(abs(c - p) <= FREEZE_LATE_S for p in placements)
+    ]
     assert len(counts) == len(truth), (
         f"{name}: clock counted {len(counts)} shots at {[round(c, 2) for c in counts]}, "
         f"ground truth has {len(truth)} at {[round(s, 3) for s in truth]}. Extra counts "

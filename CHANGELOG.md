@@ -277,6 +277,80 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-15 (checkpoint 110 — the shadow gate stops eating blue balls; #51):**
+  the gate drops any ball-shaped blob 0.65–0.95× the reference brightness with
+  chroma within 0.15. On this cloth that also describes the blue 2, the 10's
+  blue stripe and the green 6.
+  - **Plan step 1, delete the gate: rejected by the battery.** 8 corpus
+    failures: phantom counts on `pickup_newborn_0801`,
+    `ball_in_hand_pickup_0801` and `scratch_replace`; missed or late strikes on
+    `no_cue_strike_0801`, `phantom_flag_strike_0805` and
+    `phantom_candidate_block_0805`. Rendered, the gate also rejects forearm and
+    hand shadows beside a reaching player, diagonal cue sticks, and touching
+    pairs. The audit's 10 evenly spaced frames per clip missed the shadows
+    because they only exist while a hand is out.
+  - **Plan step 2, exempt filled discs of ball size.** Fill the blob's holes,
+    then take its IoU with a disc of its own filled area at its own centroid.
+    A blob at ≥ 0.84 and 0.65–1.15× the predicted ball area is a ball, whatever
+    the colour gate says (`DetectConfig.shadow_disc_*`). Anchored on every
+    colour reject in the corpus (9621 blobs, 68 clips, every 8th frame), with
+    still and moving blobs separated and each band checked on contact sheets:
+    - hand and forearm shadows reach 0.76; rail and pocket corners reach 0.82
+    - nothing at 0.83 or above is anything but a ball
+    - still balls run 0.73–1.11× the predicted area
+    - recovers 68% of the gate's rejects; the rest stay rejected, as before
+  - **Two variants failed on the way; recorded in `design.md` §4.1.** IoU
+    against the *predicted* disc put non-balls up to 0.83. At a 0.80 cut a
+    rolling blue 2 (0.8× predicted area) flickered across it and minted a
+    newborn-strike phantom on `soft_shot_0731`. Without hole filling the same
+    ball read 0.67–0.78, because its white number disc leaves a hole.
+    Highlight contrast inside the blob doesn't separate anything either (still
+    balls read 10–20 levels).
+  - **`scratch_replace` is newly graded, with a test change.** It went red on
+    a count at 10.0 s that the clock *already* made before this change
+    (identical counts and freezes with the gate on). The gate had hidden the
+    2, so the 8.45 s settle had no quiet baseline, the clip read as
+    unanchored, and the phantom-count check never ran. The 10.0 s count is the
+    cue ball placed back after the scratch (§9: "scratch, fetch the cue ball
+    from the ball return"). Since checkpoint 104 a ball-in-hand placement
+    resets the clock by Steven's call. New `PLACEMENT_SETTLES` excludes counts
+    on listed placement settles from that check. Everything else in the clip
+    stays graded.
+  - **Goldens.** 26 rewritten. Most are track-id renumbering (one more ball on
+    the roster) or moves of 6–20 ms. Every settle that moved by more than
+    that was traced frame by frame and is a blue ball the gate hid still
+    rolling:
+
+    | Clip | Settle | What the pixels show |
+    |---|---|---|
+    | `latch_blind_shot_0811` | 12.21 → 15.19 s | blue ball rolls 10.5–14.4 s; at 12.2 s still ~10 px / 0.1 s |
+    | `soft_touch_0731` | 7.91 → 9.61 s | blue ball rolls x=1419 → 1569 px until ~9.0 s |
+    | `break_underread_0801` | 7.73 → 8.85 s | blue ball creeps x=1590 → 1558 px until ~8.2 s |
+    | `soft_shot_0731` | 8.63 s → none | object ball is the 2, rolling to the clip's end (`EXPECTED` min settles dropped) |
+    | `ball_in_hand_carry_0811` | 7.905 → 8.007 s | a ball creeps the last 3 px into rest |
+    | `walk_around_settle` | 9.787 → 9.895 s | not traced; the newly seen ball there is standing still |
+
+    `stroke_tug_strike_0801` and `parked_vote_strike_0801` keep their
+    deliberately stale goldens: rewriting them would disagree with `EXPECTED`
+    and un-grade them. `parked_vote_strike_0801` actually moved: settle 3.14 →
+    3.51 s, strike 12.60 → 12.64 s; its graded phantom pair at 10.36/11.73 s is
+    unchanged.
+  - **`static_spread`: 13 tracked / 12 observed → 14 / 13**, the same count as
+    with the gate removed outright. The blue 2 is back. The frame holds 16
+    balls: the cue and the 14 touching on the top rail form one blob, and the
+    solid red 3 isn't detected even without the gate. Its gray level is within
+    threshold of the cloth's, which is a different defect. No full-rate clip
+    of all 15 balls standing still has been recorded yet.
+  - **`_as_intrusion` keeps the plain colour gate.** Intrusions are
+    hand-scale, so a ball-size exemption doesn't apply, and the channel is off.
+  - **Gate:** cold battery **689 passed, 0 skipped, in 5:09**. Strike misses
+    unchanged (only the pre-existing `stroke_tug_strike_0801`). Unit tests: a
+    0.75×-brightness blue ball with the gate live is detected, and fails with
+    the exemption off; an ellipse with the same colour is still rejected.
+  - **Judge it live** by the `appeared >= 1` rate on mid-rack settles
+    against **12.4%** (19 of 133, 14.3%, since checkpoint 106) and the
+    usual session-stats tiers.
+
 - **2026-11-15 (checkpoint 109 — the detector segments only the table and
   stops describing rejects nothing reads; #50):** two changes, both meant to
   leave every detection exactly where it was.

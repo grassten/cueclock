@@ -117,6 +117,22 @@ class DetectConfig:
     shadow_ratio_lo: float = 0.65
     shadow_ratio_hi: float = 0.95
     shadow_chroma_max: float = 0.15
+    # ...but that signature is also a blue ball on blue cloth: the solid 2,
+    # the 10's stripe, the green 6 at the gate edge (#51). Exempted by shape:
+    # a blob that is a filled disc of ball size is a ball. The blob's holes
+    # are filled first (a blue ball's white number disc sits within threshold
+    # of the cloth, so its raw blob is a ring), then compared with a disc of
+    # its own filled area at its own centroid, so the IoU is scale-free.
+    # Measured 2026-11-15 over every colour reject in the corpus (9621 blobs,
+    # 68 clips, every 8th frame), checked by eye on contact sheets. Still
+    # blobs: touching pairs below 0.55, none at 0.55-0.65, single balls
+    # mostly 0.80-1.0. Moving blobs: hand and forearm shadows reach 0.76, rail
+    # and pocket corners 0.82; nothing that is not a ball at 0.83 or above.
+    # Ball sizes run 0.73-1.11x the predicted area (still balls, p1-p99).
+    # The cut recovers 68% of the rejects; the rest stay rejected as before.
+    shadow_disc_iou_min: float = 0.84
+    shadow_disc_area_lo: float = 0.65  # x the predicted ball area
+    shadow_disc_area_hi: float = 1.15
     # Appearance-churn sample (settle-at-spin-stop gate, §4.2 rules caveat):
     # disk radius safely inside the ~21 px ball radius, so centroid jitter
     # never lets cloth pixels into the sample.
@@ -268,6 +284,33 @@ def _ring_whiteness(
     if not ring.any():
         return 0.0  # ball too close to the frame edge to have an annulus
     return float((darkest[ring] >= cfg.whiteness_quad_floor * 255.0).mean())
+
+
+def _is_ball_disc(
+    labels: "cv2.typing.MatLike",
+    label: int,
+    bbox: tuple[int, int, int, int],
+    ball_radius_px: float,
+    cfg: DetectConfig,
+) -> bool:
+    """Is this blob, holes filled, a disc of ball size? (#51 — the shadow
+    exemption; see ``DetectConfig.shadow_disc_iou_min``.) ``bbox`` is in
+    ``labels``' own coordinates."""
+    x, y, w, h = bbox
+    blob = (labels[y : y + h, x : x + w] == label).astype(np.uint8)
+    contours, _ = cv2.findContours(blob, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled = np.zeros_like(blob)
+    cv2.drawContours(filled, contours, -1, 1, -1)
+    m = cv2.moments(filled, True)
+    area = float(m["m00"])
+    ball_area = math.pi * ball_radius_px * ball_radius_px
+    if not (cfg.shadow_disc_area_lo * ball_area <= area <= cfg.shadow_disc_area_hi * ball_area):
+        return False
+    cx, cy = m["m10"] / area, m["m01"] / area
+    yy, xx = np.ogrid[0:h, 0:w]
+    disc = (xx - cx) ** 2 + (yy - cy) ** 2 <= area / math.pi
+    inside = filled.astype(bool)
+    return float((inside & disc).sum()) / float((inside | disc).sum()) >= cfg.shadow_disc_iou_min
 
 
 def _is_shadow(
@@ -458,10 +501,17 @@ def detect_frame(
                     intrusions.append(found)
             continue
         cx, cy = float(centroids[i, 0]) + ox, float(centroids[i, 1]) + oy
+        radius = (
+            cfg.nominal_ball_radius_px
+            if radius_map is None
+            else float(radius_map[int(cy), int(cx)])
+        )
         if reference_bayer is not None:
             rgb = _patch_rgb_means(bayer, cx, cy, cfg.patch_radius_px)
             ref_rgb = _patch_rgb_means(reference_bayer, cx, cy, cfg.patch_radius_px)
-            if _is_shadow(rgb, ref_rgb, cfg):
+            if _is_shadow(rgb, ref_rgb, cfg) and not _is_ball_disc(
+                labels, i, (lx, ly, bw, bh), radius, cfg
+            ):
                 continue
         detections.append(
             Detection(
@@ -469,15 +519,7 @@ def detect_frame(
                 cy=cy,
                 area=area,
                 bbox=bbox,
-                whiteness=_ring_whiteness(
-                    bayer,
-                    cx,
-                    cy,
-                    cfg.nominal_ball_radius_px
-                    if radius_map is None
-                    else float(radius_map[int(cy), int(cx)]),
-                    cfg,
-                ),
+                whiteness=_ring_whiteness(bayer, cx, cy, radius, cfg),
                 merged=area > cfg.merged_area_px or max(bw, bh) > cfg.merged_extent_px,
             )
         )

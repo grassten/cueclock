@@ -8,10 +8,6 @@
       "ball_id": 1,
       "speed_mms": 1973.8499,
       "newborn": false
-    },
-    {
-      "type": "BallsSettled",
-      "t": 8.6344
     }
   ]
 }

@@ -11,12 +11,12 @@
     },
     {
       "type": "BallsSettled",
-      "t": 7.9047
+      "t": 8.0071
     },
     {
       "type": "ShotTaken",
       "t": 13.646,
-      "ball_id": 14,
+      "ball_id": 12,
       "speed_mms": 16274.4348,
       "newborn": false
     },

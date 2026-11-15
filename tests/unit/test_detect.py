@@ -148,7 +148,7 @@ def test_cropped_segmentation_matches_full_frame() -> None:
     bayer, mask = _masked_scene()
     ref = _mosaic(_cloth_scene())
     cfg = DetectConfig(export_intrusions=True)
-    args = (bayer, build_reference([ref]), cfg, mask, ref)
+    args = (bayer, build_reference([ref]), cfg, mask)
     cropped = detect_frame(*args)
     full = detect_frame(*args, table_roi=(0, 0, WIDTH, HEIGHT))
     assert table_roi_of(mask) == (134, 64, 682, 472)  # bbox padded by 16
@@ -163,5 +163,38 @@ def test_intrusions_are_off_by_default() -> None:
     """#50: nothing reads the channel, so the detector no longer computes it."""
     bayer, mask = _masked_scene()
     ref = _mosaic(_cloth_scene())
-    balls, intrusions = detect_frame(bayer, build_reference([ref]), None, mask, ref)
+    balls, intrusions = detect_frame(bayer, build_reference([ref]), None, mask)
     assert len(balls) == 2 and intrusions == []
+
+
+def _light_cloth() -> npt.NDArray[np.uint8]:
+    img = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    img[:, :] = (230, 140, 60)  # the room's light blue, BGR
+    return img
+
+
+def _colour_gated(img: npt.NDArray[np.uint8]) -> list[Detection]:
+    """Detect with the reference Bayer supplied, so the shadow gate is live."""
+    ref = _mosaic(_light_cloth())
+    return detect_balls(_mosaic(img), build_reference([ref]), reference_bayer=ref)
+
+
+def test_detects_blue_ball_on_blue_cloth() -> None:
+    """#51: a blue ball on blue cloth has the shadow signature ("the cloth,
+    darker, same chroma" — 0.75x here), but it is a filled disc at the ball
+    radius, so the disc-IoU exemption keeps it."""
+    img = _light_cloth()
+    _ball(img, 400, 300, (172, 105, 45), radius=22)
+    detections = _colour_gated(img)
+    assert len(detections) == 1
+    assert np.isclose(detections[0].cx, 400, atol=2)
+
+
+def test_rejects_ball_sized_shadow_that_is_not_a_disc() -> None:
+    """The same colour as an elongated, ball-area blob — a forearm's shadow —
+    is still rejected: the exemption is for discs only."""
+    import cv2
+
+    img = _light_cloth()
+    cv2.ellipse(img, (400, 300), (36, 16), 30.0, 0.0, 360.0, (172, 105, 45), -1)
+    assert _colour_gated(img) == []
