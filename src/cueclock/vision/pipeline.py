@@ -26,6 +26,7 @@ from cueclock.vision.detect import (
     DetectConfig,
     Detection,
     Intrusion,
+    Reject,
     ball_churn,
     bayer_to_gray,
     build_reference,
@@ -224,8 +225,9 @@ def build_radius_map(
     )
 
 
-# `VisionPipeline.find_blobs` output: balls, intrusions, and the frame's gray.
-DetectedBlobs = tuple[list[Detection], list[Intrusion], npt.NDArray[np.uint8]]
+# `VisionPipeline.find_blobs` output: balls, intrusions, rejects (#57), and
+# the frame's gray.
+DetectedBlobs = tuple[list[Detection], list[Intrusion], list[Reject], npt.NDArray[np.uint8]]
 
 
 @dataclass(eq=False)
@@ -300,7 +302,7 @@ class VisionPipeline:
     def __init__(
         self,
         calibration: TableCalibration,
-        reference: list[npt.NDArray[np.uint8]] | ReferenceModel,
+        reference: list[npt.NDArray[np.uint8]] | ReferenceModel | None,
         detect_config: DetectConfig | None = None,
         track_config: TrackConfig | None = None,
         event_config: EventConfig | None = None,
@@ -309,11 +311,17 @@ class VisionPipeline:
         """``cadence_hz`` is the rate frames will arrive at: 156.25 for every
         camera frame, TUNED_HZ for stride 2. Configs are given as tuned and
         converted here (`EventConfig.at_cadence`, `TrackConfig.at_cadence`),
-        so every caller passes the same constants whatever its cadence."""
+        so every caller passes the same constants whatever its cadence.
+
+        ``reference`` None builds the stateful half only — :meth:`advance` and
+        :meth:`churn` work, the detector does not. That is a session-log
+        replay (#57), which feeds logged detections and has no pixels."""
         self._calibration = calibration
         self.cadence_hz = cadence_hz
-        self.reference = (
-            reference
+        self._reference = (
+            None
+            if reference is None
+            else reference
             if isinstance(reference, ReferenceModel)
             else ReferenceModel.build(reference, calibration)
         )
@@ -358,6 +366,12 @@ class VisionPipeline:
         self.last_settle_movers: list[SettleMover] = []
 
     @property
+    def reference(self) -> ReferenceModel:
+        if self._reference is None:
+            raise RuntimeError("this pipeline was built without a reference: it cannot detect")
+        return self._reference
+
+    @property
     def episode_active(self) -> bool:
         """Is the engine's motion episode latched? (#33's provisional-freeze
         trigger — the hardened roster-mover latch, deliberately not the raw
@@ -376,7 +390,8 @@ class VisionPipeline:
     def detect(
         self, bayer: npt.NDArray[np.uint8]
     ) -> tuple[list[Detection], list[float | None], list[Intrusion]]:
-        return self.churn(*self.find_blobs(bayer))
+        detections, intrusions, _rejects, gray = self.find_blobs(bayer)
+        return self.churn(detections, intrusions, gray)
 
     def find_blobs(self, bayer: npt.NDArray[np.uint8]) -> DetectedBlobs:
         """Frame-bound half: ball-like blobs plus each one's appearance churn.
@@ -390,7 +405,7 @@ class VisionPipeline:
         the GIL); :meth:`churn` is the stateful remainder, run in frame order.
         """
         gray = bayer_to_gray(bayer)
-        detections, intrusions = detect_frame(
+        detections, intrusions, rejects = detect_frame(
             bayer,
             self.reference.gray,
             self.detect_config,
@@ -402,7 +417,7 @@ class VisionPipeline:
             table_roi=self.reference.table_roi,
             chroma=self.reference.chroma,
         )
-        return detections, intrusions, gray
+        return detections, intrusions, rejects, gray
 
     def churn(
         self,

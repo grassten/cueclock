@@ -61,6 +61,33 @@ class Intrusion:
     core_radius_px: float
 
 
+# Reject reason bits (:class:`Reject`). A blob can fail several gates at once
+# (an arm reaching in is both BORDER and LARGE), so they combine.
+REJECT_BORDER = 1  # touches the cloth mask's edge: reaches in from off-table
+REJECT_SMALL = 2  # area under ``min_area_px``
+REJECT_LARGE = 4  # area over ``max_area_px`` — a hand, an arm, a tight rack
+REJECT_THIN = 8  # short bbox side under ``min_extent_px`` — a cue stick
+REJECT_LONG = 16  # long bbox side over ``max_extent_px``
+REJECT_SHADOW = 32  # ball-sized but reads as the cloth in shadow
+
+
+@dataclass(frozen=True)
+class Reject:
+    """One gray blob the ball gates rejected, and which gates (#57).
+
+    The cheap sibling of :class:`Intrusion`: bbox, area and the reason bits
+    the gates already computed, nothing measured beyond them — no distance
+    transform. It exists so a session log can say what the detector saw and
+    threw away: a tight rack (nine-plus touching balls) is one blob far over
+    ``max_area_px``, invisible in the ball output and so undiagnosable after
+    the fact (#59). Off unless ``DetectConfig.export_rejects``.
+    """
+
+    bbox: tuple[int, int, int, int]  # x, y, w, h — distorted pixels
+    area: float
+    reason: int  # REJECT_* bits
+
+
 @dataclass(frozen=True)
 class Detection:
     """One ball-like blob in one frame, in distorted pixel coordinates."""
@@ -174,6 +201,10 @@ class DetectConfig:
     # enough to reach it. The seam stays: set True and `detect_frame` returns
     # the list exactly as before.
     export_intrusions: bool = False
+    # Session-log evidence (#57): report every gray blob the gates reject as a
+    # :class:`Reject`. Off by default so offline corpus output is unchanged;
+    # `cueclock run` turns it on for the session log.
+    export_rejects: bool = False
     # Chroma rescue (#56): gray differencing is blind to a ball whose
     # luminance matches the cloth's. The solid red 3 on this blue cloth reads
     # centre |diff| 21 against the 25 threshold, yet it moves R by +131 and
@@ -717,7 +748,7 @@ def detect_frame(
     table_edge: npt.NDArray[np.bool_] | None = None,
     table_roi: tuple[int, int, int, int] | None = None,
     chroma: ChromaReference | None = None,
-) -> tuple[list[Detection], list[Intrusion]]:
+) -> tuple[list[Detection], list[Intrusion], list[Reject]]:
     """Find ball-like blobs in one frame. See module docstring for the gates.
 
     ``table_mask`` (optional, uint8 0/1) restricts detection to the cloth.
@@ -736,7 +767,9 @@ def detect_frame(
     Returns the balls and, beside them, the hand-scale blobs these gates threw
     away (:class:`Intrusion`) — empty unless ``DetectConfig.export_intrusions``.
     The second list is additive evidence: it never feeds back into the first,
-    and which blobs become balls is unchanged.
+    and which blobs become balls is unchanged. The third is every gray blob
+    the gates rejected (:class:`Reject`) — empty unless
+    ``DetectConfig.export_rejects``, and additive in the same way.
 
     ``gray``, ``table_edge`` and ``table_roi`` are precomputed
     :func:`bayer_to_gray` of this frame, :func:`table_edge_of` and
@@ -777,6 +810,7 @@ def detect_frame(
     sizable = {i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= cfg.min_area_px}
     detections: list[Detection] = []
     intrusions: list[Intrusion] = []
+    rejects: list[Reject] = []
 
     def radius_at(cx: float, cy: float) -> float:
         if radius_map is None:
@@ -806,6 +840,18 @@ def detect_frame(
             and max(bw, bh) <= cfg.max_extent_px
         )
         if not ball_shaped:
+            if cfg.export_rejects:
+                rejects.append(
+                    Reject(
+                        bbox=bbox,
+                        area=area,
+                        reason=(REJECT_BORDER if i in border_ids else 0)
+                        | (REJECT_SMALL if area < cfg.min_area_px else 0)
+                        | (REJECT_LARGE if area > cfg.max_area_px else 0)
+                        | (REJECT_THIN if min(bw, bh) < cfg.min_extent_px else 0)
+                        | (REJECT_LONG if max(bw, bh) > cfg.max_extent_px else 0),
+                    )
+                )
             # Rejected on geometry — the three gates that between them throw
             # away every arm, stick and reaching hand. Describe it instead of
             # dropping it on the floor (#41); shadow-rejected blobs below are
@@ -841,6 +887,8 @@ def detect_frame(
             if _is_shadow(rgb, ref_rgb, cfg) and not _is_ball_disc(
                 labels, i, (lx, ly, bw, bh), radius_at(cx, cy), cfg
             ):
+                if cfg.export_rejects:
+                    rejects.append(Reject(bbox=bbox, area=area, reason=REJECT_SHADOW))
                 continue
         detections.append(ball(cx, cy, area, bbox))
     if chroma is not None and chroma_binary is not None:
@@ -879,4 +927,4 @@ def detect_frame(
                     continue
                 detections = [d for d in detections if d not in near]
             detections.append(ball(rcx, rcy, rarea, rbbox))
-    return detections, intrusions
+    return detections, intrusions, rejects

@@ -25,6 +25,7 @@ recognize.
 import json
 import time
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -36,16 +37,27 @@ class SessionJournal:
     (Hub commands, vision dispatch coroutines, the tick loop).
     """
 
-    def __init__(self, path: Path | None = None, keep: int = 4000) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        keep: int = 4000,
+        *,
+        now: Callable[[], float] = time.monotonic,
+        wall: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        """``now`` / ``wall`` stamp each record; a session replay passes its
+        virtual clock (#57), everything else the real one."""
         self._records: deque[dict[str, object]] = deque(maxlen=keep)
         self._path = path
+        self._now = now
+        self._wall = wall
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
 
     def log(self, kind: str, **detail: object) -> None:
         record: dict[str, object] = {
-            "wall": datetime.now(UTC).isoformat(timespec="milliseconds"),
-            "mono": round(time.monotonic(), 3),
+            "wall": self._wall().isoformat(timespec="milliseconds"),
+            "mono": round(self._now(), 3),
             "kind": kind,
             **detail,
         }
@@ -56,7 +68,7 @@ class SessionJournal:
 
     def tail(self, seconds: float) -> list[dict[str, object]]:
         """Records from the last ``seconds`` of monotonic time."""
-        cutoff = time.monotonic() - seconds
+        cutoff = self._now() - seconds
         return [r for r in self._records if isinstance(r["mono"], float) and r["mono"] >= cutoff]
 
     def dump_tail(self, path: Path, seconds: float = 60.0) -> None:

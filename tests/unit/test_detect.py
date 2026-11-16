@@ -9,6 +9,9 @@ import numpy as np
 import numpy.typing as npt
 
 from cueclock.vision.detect import (
+    REJECT_LARGE,
+    REJECT_LONG,
+    REJECT_THIN,
     DetectConfig,
     Detection,
     build_reference,
@@ -163,8 +166,30 @@ def test_intrusions_are_off_by_default() -> None:
     """#50: nothing reads the channel, so the detector no longer computes it."""
     bayer, mask = _masked_scene()
     ref = _mosaic(_cloth_scene())
-    balls, intrusions = detect_frame(bayer, build_reference([ref]), None, mask)
-    assert len(balls) == 2 and intrusions == []
+    balls, intrusions, rejects = detect_frame(bayer, build_reference([ref]), None, mask)
+    assert len(balls) == 2 and intrusions == [] and rejects == []
+
+
+def test_rejects_name_the_gates_that_refused_them() -> None:
+    """#57: every gray blob the gates throw away is reported with its reasons,
+    and turning the export on changes no ball."""
+    import cv2
+
+    bayer, mask = _masked_scene()
+    img = _cloth_scene()
+    _ball(img, 250, 200, (230, 230, 230))
+    _ball(img, 640, 380, (20, 200, 210))
+    cv2.rectangle(img, (300, 300), (600, 420), (100, 140, 180), -1)  # an arm
+    cv2.rectangle(img, (200, 470), (500, 480), (100, 140, 180), -1)  # a stick
+    bayer = _mosaic(img)
+    ref = build_reference([_mosaic(_cloth_scene())])
+    off = detect_frame(bayer, ref, None, mask)
+    on = detect_frame(bayer, ref, DetectConfig(export_rejects=True), mask)
+    assert on[0] == off[0] and off[2] == []
+    reasons = sorted(r.reason for r in on[2])
+    assert reasons == [REJECT_LARGE | REJECT_LONG, REJECT_THIN | REJECT_LONG]
+    arm = next(r for r in on[2] if r.reason & REJECT_LARGE)
+    assert arm.bbox[0] == 300 and arm.area > DetectConfig().max_area_px
 
 
 def _light_cloth() -> npt.NDArray[np.uint8]:

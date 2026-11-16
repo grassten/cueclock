@@ -663,3 +663,73 @@ The CHANGELOG entries for 97–102 stay where they are; the git history is at
 survives only because CHANGELOG entries 97–102 cite `§11.x` subsection numbers,
 and this file's rule is that § numbers are never renumbered or recycled — a
 future section appends as §12.
+
+## 12. The session log and replay (issue #57, 2026-11-16)
+
+Every `cueclock run` writes `sessions.nosync/<stamp>/` (the journal's stamp),
+archived to `/Volumes/T7/cueclock_sessions/<stamp>/` after the session. It
+replaces Flag's raw ring (checkpoint 114) with evidence that needs no button:
+
+| File | What | Measured |
+|---|---|---|
+| `header.json` | git sha + dirty, cadence, stride, churn lag, `DetectConfig`, reference path + digest, the calibration's JSON, the hub's starting ruleset / mode / score / bracket, and a `started_mono`/`started_wall` pair that maps the two clocks | — |
+| `detections/NNNNNN.npz` | per detect frame: camera `frame_i` (BlockID, so gaps are camera drops), `t`, `mono` (when the frame's stateful half ran, which is the hub's clock), balls + churn + intrusions in `detect_cache`'s array layout (`pack_frames`), and every rejected blob (`detect.Reject`: bbox, area, reason bits). ~10 s chunks, `savez_compressed`, each landing by rename | **189 B/frame, ~106 MB/hour** at 156 Hz; 17 µs/frame of writer time (6 corpus clips, 1800 frames) |
+| `inputs.jsonl` | every non-vision hub input, `{"mono","wall","method","kwargs"}` | a few KB |
+| `stills/` | raw Bayer PNGs (lossless), each with its churn-lag predecessor: at every ShotTaken its own frame and the one 0.5 s earlier (the table before the stroke; for a break, the racked pack, #59), at every BallsSettled, at every input | **1.62 MB, 40 ms per PNG** at compression 1; ~1.5 GB/hour |
+
+**Rejected blobs** are the one detector change (`DetectConfig.export_rejects`,
+off by default so corpus output is untouched, on in `run`). The gates already
+compute everything a `Reject` carries, so it costs nothing measurable:
++0.03 ms/frame mean, +0.005 ms paired median, against a 4.8 ms `find_blobs`
+(1800 corpus frames, interleaved on/off). 3.9 rejects/frame on average, 14 at
+p99. It is deliberately not `Intrusion`, whose distance transform checkpoint
+109 turned off for cost.
+
+**PNG level** 1, from the 2026-11-16 measurement on three corpus frames:
+level 0 is 11 ms but 2.31 MB; 1, 2, 3 and 6 all land at 1.61-1.62 MB for 40,
+44, 45 and 66 ms. Bayer noise does not compress past the first level.
+
+**Stills per hour** come from the 2026-11-16 journal (10.1 minutes: 22 strikes,
+23 settles, 11 commands): 4 PNGs a strike, 2 a settle, 2 a command, 156 PNGs,
+253 MB, so ~1.5 GB/hour. That makes stills, not detections, the session log's
+bulk. If the T7 ever minds, crop them to the cloth's ROI (51% of the frame,
+`table_roi_of`) before anything else.
+
+**Off the detect loop.** The loop thread appends one `LoggedFrame` per frame
+to a list and, every 10 s of camera time, hands the list to a writer thread
+through a bounded queue (32 items: chunks and stills). Packing, compression
+and PNG encoding all run on that thread, and zlib releases the GIL. When the
+queue is full the item is dropped and counted, never waited for, and each drop
+journals `session_log_drop`; the exit line `session_log` carries the totals.
+The stills ring holds references (`grab.Array` is already a copy, which is why
+it can outlive `Release` on the detect workers): ~1 s, ~360 MB. Inputs are
+written synchronously on the asyncio loop, as the journal is: they are rare,
+and replay parity needs every one. The live Hz check against the
+`detect_heartbeat` baseline (p50 155.7) happens on the first session.
+
+**One input seam.** `hub.hub_input` decorates every Hub coroutine an outside
+caller reaches (API, deck, voice, ruleset / mode / score / bracket), and logs
+only the outermost call (a ContextVar, since each API request is its own
+task), so a bracket result's own `new_rack` is not logged twice. Score
+mutations moved from `app.py` onto the hub for this. Vision calls are not
+inputs: replay re-derives them, through the same `bridge.hub_calls` `run`
+uses.
+
+**Virtual time.** The hub reads its clock only through `now`/`wall` (and the
+journal likewise), and the tick loop's body is the synchronous `Hub.tick()`.
+`session replay` sets the clock to each frame's logged `mono`, each input's
+`mono`, and a 0.1 s tick grid. It cannot reproduce the tick loop's phase or
+the few milliseconds a vision event takes to cross to the asyncio loop, so
+`verify` matches decision records by kind, state, rack_shots and verdict
+fields, and `remaining` within two ticks (0.2 s).
+
+**The self-check.** Under the code that ran live (`same_code`), replay must
+reproduce every decision. A divergence there means the log is missing an
+input, and it is reported rather than explained away. Under newer code a
+divergence is what the change did, which is the point of keeping the logs.
+
+**Limits.** A detector change makes old logs stale for detection questions
+(they stay valid for tracker, events and hub work). Replay always runs from
+the top (`--from`/`--to` filter the output) because tracker and clock state
+need the history. A bracket input that needs an archived file replay does not
+have journals `replay_input_failed` instead of failing.

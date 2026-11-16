@@ -48,11 +48,14 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 from cueclock.capture.clip import FRAMES_NAME, META_NAME
 from cueclock.vision.detect import DetectConfig, Detection, Intrusion
@@ -139,64 +142,7 @@ class DetectionCache:
                     f"{len(frame_indices)} requested — churn is sequence-dependent, so this "
                     "entry cannot be reused. Delete the cache directory and re-run."
                 )
-            counts = data["counts"]
-            cx, cy, area = data["cx"], data["cy"], data["area"]
-            whiteness, churn = data["whiteness"], data["churn"]
-            merged, bbox = data["merged"], data["bbox"]
-            icounts = data["intrusion_counts"]
-            ibbox, iarea, icore = (
-                data["intrusion_bbox"],
-                data["intrusion_area"],
-                data["intrusion_core"],
-            )
-        if int(counts.sum()) != len(cx):
-            raise ValueError(f"{path.name}: counts sum to {counts.sum()} but hold {len(cx)} rows")
-        if int(icounts.sum()) != len(iarea):
-            raise ValueError(
-                f"{path.name}: intrusion counts sum to {icounts.sum()} but hold {len(iarea)} rows"
-            )
-
-        out: list[FrameDetections] = []
-        offsets = np.concatenate([[0], np.cumsum(counts)])
-        ioffsets = np.concatenate([[0], np.cumsum(icounts)])
-        for f in range(len(counts)):
-            lo, hi = int(offsets[f]), int(offsets[f + 1])
-            ilo, ihi = int(ioffsets[f]), int(ioffsets[f + 1])
-            out.append(
-                (
-                    [
-                        Detection(
-                            cx=float(cx[i]),
-                            cy=float(cy[i]),
-                            area=float(area[i]),
-                            bbox=(
-                                int(bbox[i, 0]),
-                                int(bbox[i, 1]),
-                                int(bbox[i, 2]),
-                                int(bbox[i, 3]),
-                            ),
-                            whiteness=float(whiteness[i]),
-                            merged=bool(merged[i]),
-                        )
-                        for i in range(lo, hi)
-                    ],
-                    [None if np.isnan(churn[i]) else float(churn[i]) for i in range(lo, hi)],
-                    [
-                        Intrusion(
-                            bbox=(
-                                int(ibbox[i, 0]),
-                                int(ibbox[i, 1]),
-                                int(ibbox[i, 2]),
-                                int(ibbox[i, 3]),
-                            ),
-                            area=float(iarea[i]),
-                            core_radius_px=float(icore[i]),
-                        )
-                        for i in range(ilo, ihi)
-                    ],
-                )
-            )
-        return out
+            return unpack_frames(data, path.name)
 
     def store(
         self,
@@ -213,36 +159,17 @@ class DetectionCache:
         must be unique, or two workers interleave into one path and produce a
         genuinely corrupt file.
         """
-        flat = [(d, c) for dets, churns, _ in frames for d, c in zip(dets, churns, strict=True)]
-        iflat = [x for _, _, intrusions in frames for x in intrusions]
         self.root.mkdir(parents=True, exist_ok=True)
         path = self._path(clip_dir, key)
         tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
         try:
             with open(tmp, "wb") as fh:
-                # float64 throughout: the corpus turns on knife-edge margins (a
-                # 12.04 mm tug against a 12 mm floor), so the cache must not
-                # perturb a centroid. Not savez_compressed — float64 centroids
-                # barely compress and every write would pay for it.
+                # Not savez_compressed — float64 centroids barely compress and
+                # every write would pay for it.
                 np.savez(
                     fh,
                     frame_indices=np.asarray(frame_indices, dtype=np.int32),
-                    counts=np.asarray([len(d) for d, _, _ in frames], dtype=np.int32),
-                    intrusion_counts=np.asarray([len(i) for _, _, i in frames], dtype=np.int32),
-                    intrusion_bbox=np.asarray([i.bbox for i in iflat], dtype=np.int32).reshape(
-                        -1, 4
-                    ),
-                    intrusion_area=np.asarray([i.area for i in iflat], dtype=np.float64),
-                    intrusion_core=np.asarray([i.core_radius_px for i in iflat], dtype=np.float64),
-                    cx=np.asarray([d.cx for d, _ in flat], dtype=np.float64),
-                    cy=np.asarray([d.cy for d, _ in flat], dtype=np.float64),
-                    area=np.asarray([d.area for d, _ in flat], dtype=np.float64),
-                    whiteness=np.asarray([d.whiteness for d, _ in flat], dtype=np.float64),
-                    churn=np.asarray(
-                        [np.nan if c is None else c for _, c in flat], dtype=np.float64
-                    ),
-                    merged=np.asarray([d.merged for d, _ in flat], dtype=np.bool_),
-                    bbox=np.asarray([d.bbox for d, _ in flat], dtype=np.int32).reshape(-1, 4),
+                    **pack_frames(frames),
                 )
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -250,3 +177,78 @@ class DetectionCache:
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+
+
+def pack_frames(frames: list[FrameDetections]) -> dict[str, Any]:
+    """Frames of detector output as flat arrays: per-frame counts plus rows.
+
+    The one array layout for detector output on disk, shared by this cache and
+    the session log (`capture.session_log`). float64 throughout: the corpus
+    turns on knife-edge margins (a 12.04 mm tug against a 12 mm floor), so the
+    store must not perturb a centroid.
+    """
+    flat = [(d, c) for dets, churns, _ in frames for d, c in zip(dets, churns, strict=True)]
+    iflat = [x for _, _, intrusions in frames for x in intrusions]
+    return {
+        "counts": np.asarray([len(d) for d, _, _ in frames], dtype=np.int32),
+        "intrusion_counts": np.asarray([len(i) for _, _, i in frames], dtype=np.int32),
+        "intrusion_bbox": np.asarray([i.bbox for i in iflat], dtype=np.int32).reshape(-1, 4),
+        "intrusion_area": np.asarray([i.area for i in iflat], dtype=np.float64),
+        "intrusion_core": np.asarray([i.core_radius_px for i in iflat], dtype=np.float64),
+        "cx": np.asarray([d.cx for d, _ in flat], dtype=np.float64),
+        "cy": np.asarray([d.cy for d, _ in flat], dtype=np.float64),
+        "area": np.asarray([d.area for d, _ in flat], dtype=np.float64),
+        "whiteness": np.asarray([d.whiteness for d, _ in flat], dtype=np.float64),
+        "churn": np.asarray([np.nan if c is None else c for _, c in flat], dtype=np.float64),
+        "merged": np.asarray([d.merged for d, _ in flat], dtype=np.bool_),
+        "bbox": np.asarray([d.bbox for d, _ in flat], dtype=np.int32).reshape(-1, 4),
+    }
+
+
+def unpack_frames(data: Mapping[str, npt.NDArray[Any]], name: str) -> list[FrameDetections]:
+    """Inverse of :func:`pack_frames`; ``name`` labels a corrupt file's error."""
+    counts = data["counts"]
+    cx, cy, area = data["cx"], data["cy"], data["area"]
+    whiteness, churn = data["whiteness"], data["churn"]
+    merged, bbox = data["merged"], data["bbox"]
+    icounts = data["intrusion_counts"]
+    ibbox, iarea, icore = data["intrusion_bbox"], data["intrusion_area"], data["intrusion_core"]
+    if int(counts.sum()) != len(cx):
+        raise ValueError(f"{name}: counts sum to {counts.sum()} but hold {len(cx)} rows")
+    if int(icounts.sum()) != len(iarea):
+        raise ValueError(
+            f"{name}: intrusion counts sum to {icounts.sum()} but hold {len(iarea)} rows"
+        )
+    out: list[FrameDetections] = []
+    offsets = np.concatenate([[0], np.cumsum(counts)])
+    ioffsets = np.concatenate([[0], np.cumsum(icounts)])
+    for f in range(len(counts)):
+        lo, hi = int(offsets[f]), int(offsets[f + 1])
+        ilo, ihi = int(ioffsets[f]), int(ioffsets[f + 1])
+        out.append(
+            (
+                [
+                    Detection(
+                        cx=float(cx[i]),
+                        cy=float(cy[i]),
+                        area=float(area[i]),
+                        bbox=_box(bbox[i]),
+                        whiteness=float(whiteness[i]),
+                        merged=bool(merged[i]),
+                    )
+                    for i in range(lo, hi)
+                ],
+                [None if np.isnan(churn[i]) else float(churn[i]) for i in range(lo, hi)],
+                [
+                    Intrusion(
+                        bbox=_box(ibbox[i]), area=float(iarea[i]), core_radius_px=float(icore[i])
+                    )
+                    for i in range(ilo, ihi)
+                ],
+            )
+        )
+    return out
+
+
+def _box(row: npt.NDArray[Any]) -> tuple[int, int, int, int]:
+    return int(row[0]), int(row[1]), int(row[2]), int(row[3])
