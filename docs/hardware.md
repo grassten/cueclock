@@ -104,10 +104,9 @@ locally via **Syphon** — a GPU texture handoff, not streaming.
 grab thread (BayerRG8 @ 156 fps)
   ├─ detection path (every frame, 156 Hz since checkpoint 106 — distorted pixels)
   └─ display branch @ ~60 fps (own thread — DisplayWorker):
-       debayer (COLOR_BayerBG2BGR_EA) → RGBA, written straight into a
-         shared-memory Metal texture (no upload)
-       → rectify as a Metal compute pass (the same remap maps, on the GPU)
-       → Syphon publish (same command buffer)
+       debayer (COLOR_BayerBG2BGR_EA, 0.22 ms)
+       → cv2.remap undistort (rails-fit map, ~2 ms)
+       → Syphon publish (Metal texture)
   ⇒ OBS "Syphon Client" source → scenes → Fullscreen Projector on the TV
 ```
 
@@ -117,18 +116,6 @@ grab thread (BayerRG8 @ 156 fps)
   the detect loop a third of its cadence (77 → 51 Hz). 30 fps was cheap
   enough to hide the same cost; 60 was not.
 
-- **The rectify runs on the GPU** (checkpoint 117, #53). On the CPU,
-  `cv2.remap` looked cheap by wall time (~1.7–2 ms on eight threads) but cost
-  ~12.5 ms of CPU per frame, and the whole feed ~17 ms of CPU, about one
-  full core at 60 fps. Its memory traffic, next to OBS compositing a 4K60
-  canvas, slowed `find_blobs` on the performance cores from 9.7 to 17.9 ms and
-  held detection near 134 Hz. The Metal pass samples exactly the coordinates
-  `cv2.remap` does (`pipeline.remap_coordinates`) and matches it to within
-  1/255; the feed then costs ~3.4 ms of CPU. If the shader fails to compile
-  or the device refuses the buffer-backed texture, `run` prints one line and
-  falls back to `cv2.remap`. `replay` and `live_view` still use the CPU path;
-  with `--no-undistort` there is nothing to warp and the feed is just a debayer.
-  `run` prints `display: rectify on the GPU` when the fast path is up.
 - **Quality debayer belongs here, not in detection**: edge-aware (`_EA`) is
   effectively free at display rate; VNG is slower *and* not better in OpenCV.
 - **Full-frame undistortion runs only here** — detection undistorts
