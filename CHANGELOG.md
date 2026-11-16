@@ -300,9 +300,10 @@ survive unchanged in `design.md`.
     `set` now pauses 150 ms between writes and writes anti-flicker before
     shutter. A full apply now lands 17/17 in about 3.2 s (was 14/17). The
     deck's `ensure()` restored a drifted camera on all three tries.
-  - **Still open on #47:** firmware 0.3.5.8 (Link Controller, Steven), the
-    far-rail voice test and the cue-strike recording (both at the table), and
-    the detect rate with both cameras streaming (next session's journal).
+  - **#47 closed.** Firmware 0.3.5.8 is dropped: it was arrival hygiene, and
+    v0.2.5.8 is the firmware these quirks were measured on. Hot-plug re-apply
+    isn't built (a USB blip has never happened). Voice sensitivity moved to #58
+    (the 0.9 confidence floor is from v1 and was never measured on this mic).
   - Verified: sidecam unit tests pass; ruff clean. No detection code changed,
     so no battery.
 - **2026-11-15 (checkpoint 114 — Flag, the ring and warm replay removed;
