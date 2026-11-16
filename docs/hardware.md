@@ -935,8 +935,8 @@ Flag path went is in §C2.
    chunks instead of v1's 250 ms. Measured on a synthesized "extension"
    with `say`. Re-run the script after any model re-download.
    Since 2026-11-16 (checkpoint 116, #58) `run` journals **every** final
-   as a `voice_final` record (`text`, `conf`, `accepted`, `reason`), rejected
-   ones too, so a missed "extension" leaves its confidence behind. The 0.9
+   as a `voice_final` record (`text`, `conf`, `accepted`, `reason`, and from
+   checkpoint 121 `peak_dbfs`), rejected and wordless ones too, so a missed "extension" leaves its confidence behind. The 0.9
    floor is v1's and gets re-anchored to those records (#58). A separate
    `listen` started while `run` is live heard nothing on 2026-11-16, so
    measure from the session journal rather than a second listener.

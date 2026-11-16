@@ -11,9 +11,12 @@ per-word confidence >= 0.9, 2 s cooldown.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
+
+import numpy as np
 
 
 class Recognizer(Protocol):
@@ -34,6 +37,9 @@ class Final:
     confidence: float  # per-word confidence of the keyword (0.0 when absent)
     accepted: bool
     reason: str  # human-readable verdict for the `listen` soak tool
+    # Loudest sample heard since the previous final, dB below full scale. An
+    # "extension" that never comes back as a word still leaves this (#58).
+    peak_dbfs: float = -math.inf
 
 
 class ExtensionSpotter:
@@ -54,19 +60,28 @@ class ExtensionSpotter:
         # None (not 0.0) so the first fire is never suppressed regardless of
         # the caller's clock epoch — the only deliberate change from v1.
         self._last_fire: float | None = None
-        self.last_final: Final | None = None  # set per non-empty final, for `listen`
+        self.last_final: Final | None = None  # set per final, for `listen` and the journal
+        self._peak = 0  # loudest |sample| since the previous final
 
     def feed(self, chunk: bytes, now: float) -> bool:
         """Process one 16 kHz mono int16 chunk; True when the keyword fires."""
         self.last_final = None
+        samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16)
+        if samples.size:
+            self._peak = max(self._peak, int(np.abs(samples.astype(np.int32)).max()))
         # Only act on finalized results — partials are noisy and misfire on
         # words that merely start like "extension" (v1 lesson).
         if not self._rec.AcceptWaveform(chunk):
             return False
         res = json.loads(self._rec.Result())
         text = str(res.get("text", "")).strip()
+        peak_dbfs = 20 * math.log10(self._peak / 32768) if self._peak else -math.inf
+        self._peak = 0
         if not text:
-            return False  # silence marker, not a recognition
+            # No words. Usually silence, but a quiet or clipped "extension"
+            # lands here too, and its peak level is the only trace it leaves.
+            self.last_final = Final("", 0.0, False, "no words", peak_dbfs)
+            return False
         # Require high confidence on the keyword word itself.
         confidence = max(
             (
@@ -89,7 +104,7 @@ class ExtensionSpotter:
         else:
             accepted, reason = True, "accepted"
             self._last_fire = now
-        self.last_final = Final(text, confidence, accepted, reason)
+        self.last_final = Final(text, confidence, accepted, reason, peak_dbfs)
         return accepted
 
 
