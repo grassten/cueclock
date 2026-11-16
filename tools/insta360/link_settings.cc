@@ -20,9 +20,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <chrono>
 #include <map>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace uvc;
@@ -85,6 +87,9 @@ bool ExtendStatus(Camera& c, ExtendFuction func, bool& out) {
     return true;
 }
 
+// Pause after each write in `set` (why: at its use below).
+constexpr auto kWriteGap = std::chrono::milliseconds(150);
+
 // The order here is the order `set` applies them in: modes before the values
 // they gate, so a manual shutter is not written while auto exposure still owns it.
 std::vector<Setting> Settings() {
@@ -110,7 +115,11 @@ std::vector<Setting> Settings() {
              bool on;
              return c.ext.GetAutoExposureStatus(on) || c.std.GetAutoExposureStatus(on) ? Bool(on) : Null();
          },
-         [](Camera& c, const std::string& v) { return c.std.EnableAutoExposure(ParseBool(v)); }},
+         // Extension first, matching the getter: on firmware v0.2.5.8 the
+         // standard UVC call reports success and changes nothing (2026-11-15).
+         [](Camera& c, const std::string& v) {
+             return c.ext.EnableAutoExposure(ParseBool(v)) || c.std.EnableAutoExposure(ParseBool(v));
+         }},
         {"wb_auto",
          [](Camera& c) {
              uint8_t mode;
@@ -123,6 +132,16 @@ std::vector<Setting> Settings() {
              return c.std.GetAutoFocusStatus(on) ? Bool(on) : Null();
          },
          [](Camera& c, const std::string& v) { return c.std.EnableAutoFocus(ParseBool(v)); }},
+        // Before shutter: under anti-flicker Auto the camera refuses shutters
+        // that are not a multiple of the mains period (1/240 s, 2026-11-15).
+        {"anti_flicker",
+         [](Camera& c) {
+             PowerLineFrequency f;
+             return c.std.GetPowerLineFrequency(f) ? Int(static_cast<long>(f)) : Null();
+         },
+         [](Camera& c, const std::string& v) {
+             return c.std.SetPowerLineFrequency(static_cast<PowerLineFrequency>(std::stol(v)));
+         }},
         {"shutter",
          [](Camera& c) {
              long s;
@@ -161,14 +180,6 @@ std::vector<Setting> Settings() {
              return c.std.GetZoomAbsolute(z) ? Int(z) : Null();
          },
          [](Camera& c, const std::string& v) { return c.std.SetZoomAbsolute(std::stol(v)); }},
-        {"anti_flicker",
-         [](Camera& c) {
-             PowerLineFrequency f;
-             return c.std.GetPowerLineFrequency(f) ? Int(static_cast<long>(f)) : Null();
-         },
-         [](Camera& c, const std::string& v) {
-             return c.std.SetPowerLineFrequency(static_cast<PowerLineFrequency>(std::stol(v)));
-         }},
         {"brightness",
          [](Camera& c) {
              int16_t b;
@@ -289,6 +300,11 @@ int main(int argc, char* argv[]) {
             }
             results.emplace_back(s.key, Bool(ok));
             wanted.erase(it);
+            // Firmware v0.2.5.8 silently drops a write that lands while it is
+            // still taking the previous one: after video_mode/hdr/auto_exposure,
+            // a back-to-back shutter and ISO were lost; 100 ms between writes
+            // kept them (measured 2026-11-15).
+            std::this_thread::sleep_for(kWriteGap);
         }
         if (!wanted.empty()) {
             std::fprintf(stderr, "unknown setting: %s\n", wanted.begin()->first.c_str());
