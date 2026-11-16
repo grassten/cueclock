@@ -62,3 +62,7 @@ docs/accuracy-plan.md
 # Golden diffs from the last corpus run — per-run output, not a record.
 # Written by tests/corpus/goldens.py so a truncated capture never costs a rerun.
 tests/goldens/.failures/
+
+# Per-session detection logs, stills, cuts, moments and verdicts (#57). `.nosync`
+# keeps iCloud off it, same reason as config/models above.
+sessions.nosync/

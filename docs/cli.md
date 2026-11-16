@@ -54,6 +54,7 @@ Ground rules that apply to every command:
 | `recalibrate` | Record a fresh empty-table reference, refit both, swap them in only if good (the deck's RECAL key) | owns it |
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
 | `report` | Accuracy report: missed strikes per session, read back from the journals | no |
+| `review` | Session review (#57): find a session's candidate moments, or serve the always-up review page | no |
 | `deck` | Stream Deck control-surface daemon | no |
 | `sidecam` | Side-angle camera settings: show, save the current ones, apply the saved ones | side camera only |
 
@@ -318,6 +319,45 @@ One key pressed every shot was the right idea and the wrong mechanism — it was
 used in 2 sessions out of 29, because a key you must remember is a key that
 stops being pressed. The compensation signal above needs nothing at the table
 and covers every session ever recorded, including the two that carry presses.
+
+### `review`
+
+**Desk-side review of a session (#57).** Two actions, neither touches the
+camera or needs `run`:
+
+- `review moments <session dir>` reads the session's journal (`journal.jsonl`
+  in the directory, else `logs/session-<stamp>.jsonl`) and writes
+  `moments.json` beside it: the handful of places worth a look. Kinds:
+  `reverted` (a freeze released as not-a-shot), `phantom` (exactly `report`'s
+  phantom candidates), `correction` (Restart / Start / Reset, or New Rack out
+  of a frozen clock; presses within 10 s are one moment), `idle_strike`
+  (strikes seen with the clock IDLE, burst-merged), `synthesized` (the
+  frozen-clock watchdog's settle), `quiet` (90 s of a running clock with
+  nothing seen — longer than any legal turn) and `replay` (the parity check's
+  diffs, when `replay.json` has any). About one per ten shots over the
+  history. Ids are `<kind>-<mono ms>`, so re-running keeps verdicts attached.
+  `cueclock sessions maintain` runs it on every session it archives.
+- `review serve` serves the review page on the LAN (`0.0.0.0:8001`) and prints
+  the URL a phone should open. It lists the session directories under
+  `sessions.nosync/` and `/Volumes/T7/cueclock_sessions/` (an unmounted T7 is
+  just skipped), and shows each moment with its footage — the session's
+  `cuts/<id>.mp4`, else the full OBS recording from `sessions.nosync/
+  recordings.jsonl` seeked to the moment, else "footage pruned" — the journal
+  lines around it in plain words, and **Clock right / Clock wrong** buttons
+  plus a note, saved to the session's `verdicts.json`. It only serves those
+  cuts and listed recordings. Always up under launchd as
+  `com.cueclock.review` (`scripts/install_review_agent.sh`).
+
+| Flag | Default | What |
+|---|---|---|
+| `--logs DIR` | `logs` | where the live journals live (both actions) |
+| `--host` | `0.0.0.0` | `serve` only: bind address |
+| `--port` | `8001` | `serve` only — never 8000, which is `run`'s |
+
+```bash
+uv run python -m cueclock.cli review moments sessions.nosync/20261116-225226
+uv run python -m cueclock.cli review serve
+```
 
 ### `deck`
 

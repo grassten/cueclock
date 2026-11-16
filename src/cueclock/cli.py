@@ -959,6 +959,33 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_review(args: argparse.Namespace) -> int:
+    """#57 desk-side review: find a session's moments, or serve the review page."""
+    if args.action == "moments":
+        from collections import Counter
+
+        from cueclock.review import moments
+
+        try:
+            found = moments.write(args.session, args.logs)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        kinds = ", ".join(f"{n} {k}" for k, n in sorted(Counter(m.kind for m in found).items()))
+        print(f"{len(found)} moments -> {args.session / moments.MOMENTS_FILE}  ({kinds or 'none'})")
+        return 0
+
+    import uvicorn
+
+    from cueclock.review.app import create_app
+    from cueclock.server.lan import join_url
+
+    url = join_url(args.port, "/") or f"http://127.0.0.1:{args.port}/"
+    print(f"review page: {url}", flush=True)
+    uvicorn.run(create_app(logs_dir=args.logs), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def _cmd_sidecam(args: argparse.Namespace) -> int:
     """Side-angle camera settings: show them, save them, or put them back."""
     from cueclock.deck import sidecam
@@ -1120,6 +1147,28 @@ def main(argv: list[str] | None = None) -> int:
         "--all", action="store_true", help="roll up every session journal on disk"
     )
 
+    p_review = sub.add_parser(
+        "review", help="session review (#57): find candidate moments, or serve the review page"
+    )
+    review_sub = p_review.add_subparsers(dest="action", required=True)
+    p_moments = review_sub.add_parser(
+        "moments", help="write <session dir>/moments.json from the session's journal"
+    )
+    p_moments.add_argument(
+        "session", type=Path, help="session directory, e.g. sessions.nosync/<stamp>"
+    )
+    p_serve = review_sub.add_parser("serve", help="serve the review page on the LAN")
+    p_serve.add_argument(
+        "--host",
+        default="0.0.0.0",  # nosec B104 — the point: Steven opens it from his phone on the LAN
+        help="bind address (default 0.0.0.0, the LAN)",
+    )
+    p_serve.add_argument("--port", type=int, default=8001, help="port (default 8001)")
+    for p in (p_moments, p_serve):
+        p.add_argument(
+            "--logs", type=Path, default=Path("logs"), help="journal directory (default logs/)"
+        )
+
     p_sidecam = sub.add_parser(
         "sidecam",
         help="side-angle camera settings: show, save the current ones, or apply the saved ones",
@@ -1185,6 +1234,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_deck(args)
     if args.command == "sidecam":
         return _cmd_sidecam(args)
+    if args.command == "review":
+        return _cmd_review(args)
     return _cmd_run(args)
 
 

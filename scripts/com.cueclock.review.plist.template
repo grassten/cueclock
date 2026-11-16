@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the always-on session review page (#57; docs/cli.md `review`).
+     install_review_agent.sh substitutes __REPO__/__HOME__ and installs it.
+     Independent of `run` and the camera: it serves sessions.nosync/ and the T7's
+     cueclock_sessions/ on port 8001. Everything it reads at launch (.venv ->
+     .venv.nosync, src/, logs/) must stay materialised — a launchd job cannot
+     fetch an iCloud-evicted file (EDEADLK, CLAUDE.md "Dev workflow"); the repo
+     root's Keep Downloaded pin covers src/ and logs/. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cueclock.review</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>cueclock.cli</string>
+        <string>review</string>
+        <string>serve</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/cueclock-review.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/cueclock-review.log</string>
+</dict>
+</plist>
