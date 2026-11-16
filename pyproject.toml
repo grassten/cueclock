@@ -63,7 +63,7 @@ strict = true
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["pypylon.*", "syphon.*", "Foundation", "objc", "StreamDeck.*", "vosk", "sounddevice"]
+module = ["pypylon.*", "syphon.*", "Foundation", "Metal", "objc", "StreamDeck.*", "vosk", "sounddevice"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -277,6 +277,17 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 119 — checkpoint 117 is back; #53):** 118's
+  rollback misread the timeline. The jitter Steven reported was on the
+  session started 17:29 local on the *old* CPU feed (`session-20261116-222922`),
+  and he says it was gone after the restart onto 117. So the GPU rectify
+  *fixed* a jitter rather than caused one. 117's display code, tests and docs
+  are restored unchanged; 118's voice change stays.
+  - Still open for #53: in 117's 4-minute session detection held 156 Hz at
+    `blobs_ms` 7–10 ms until the first shot, then 127–153 Hz at 16–24 ms
+    during play. A longer session decides it.
+  - Verified: display and audio unit tests pass (incl. the Metal warp test);
+    mypy clean.
 - **2026-11-16 (checkpoint 118 — checkpoint 117 rolled back; a quick repeat
   of "extension" counts; #53, #58):** first session on 117 (`session-20261116-224256`,
   4 min, 6 shots). `run` printed `display: rectify on the GPU`.
