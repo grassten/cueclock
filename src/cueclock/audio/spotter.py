@@ -3,7 +3,8 @@
 The recognizer is injected (any object with vosk's ``AcceptWaveform``/
 ``Result`` shape), so this module has no vosk dependency and unit-tests with
 a scripted fake. The accept logic is the v1 prototype's proven listener,
-ported as-is (docs/hardware.md Part D): finals only, exact keyword match,
+ported as-is (docs/hardware.md Part D): finals only, exact keyword match
+(a back-to-back repeat counts as one),
 per-word confidence >= 0.9, 2 s cooldown.
 """
 
@@ -75,7 +76,11 @@ class ExtensionSpotter:
             ),
             default=0.0,
         )
-        if text != self.keyword:
+        # A repeat said without a pause ("extension extension") comes back as
+        # one final; it is still one call (2026-11-16, voice_final journal:
+        # five in a row merged into a single rejected final at conf 1.0).
+        # Anything else alongside the keyword stays a rejection (v1 rule).
+        if set(text.split()) != {self.keyword}:
             accepted, reason = False, "not the keyword"
         elif confidence < self.min_confidence:
             accepted, reason = False, f"confidence {confidence:.2f} < {self.min_confidence}"

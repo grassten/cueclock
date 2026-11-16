@@ -277,6 +277,25 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 118 — checkpoint 117 rolled back; a quick repeat
+  of "extension" counts; #53, #58):** first session on 117 (`session-20261116-224256`,
+  4 min, 6 shots). `run` printed `display: rectify on the GPU`.
+  - **The TV picture jittered and jumped around** (Steven, at the table). The
+    cause is not known: OBS's own log for that run shows 1 lagged frame of
+    13,910, so OBS rendered smoothly and the fault is in the frames we
+    published. Detection held 156 Hz with `blobs_ms` 7–10 ms until the first
+    shot (81 s in), then ran 127–153 Hz at 16–24 ms, no better than the
+    2026-11-15 baseline. 117's code is reverted so the TV is right tonight.
+    Its tests and the prototype numbers stay in history (`bfe6215`) for the
+    re-land, which needs the jitter explained first.
+  - **Voice:** of about 20 "extension"s, 3 finals came back, all at
+    confidence 1.0. Five said back to back merged into one final,
+    `extension extension extension extension extension`, rejected as "not the
+    keyword"; most of the rest fell inside the 2.5 s post-grant mute. The 0.9
+    floor is not what's losing them. The spotter now accepts a final made
+    only of the keyword as one call; anything else beside it is still
+    rejected.
+  - Verified: audio unit tests pass; ruff clean.
 - **2026-11-16 (checkpoint 117 — the TV feed's rectify runs on the GPU;
   #53):** the cause of live detection sitting at ~134 Hz was competition for
   memory bandwidth, not cores (#53 comments, measured 2026-11-15): OBS's 4K60

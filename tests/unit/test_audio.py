@@ -87,6 +87,18 @@ def test_ignores_other_words() -> None:
     assert not spotter.last_final.accepted
 
 
+def test_a_back_to_back_repeat_is_one_call() -> None:
+    # Measured 2026-11-16: five quick "extension"s merged into one final.
+    result = json.dumps(
+        {
+            "text": "extension extension extension",
+            "result": [{"word": "extension", "conf": c} for c in (1.0, 0.95, 1.0)],
+        }
+    )
+    spotter = spotter_with([result])
+    assert spotter.feed(b"pcm", now=0.0)
+
+
 def test_ignores_sentences_containing_the_keyword() -> None:
     # Exact-match rule: "extension please" is not a call (v1 behavior).
     spotter = spotter_with([final("extension please")])

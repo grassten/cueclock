@@ -85,7 +85,7 @@ pypylon grab thread (BayerRG8 @ 160 fps)
  │     → cue-ball ID: white-fraction + hue stats on central disk, resolved globally
  │     → undistortPoints + homography → positions/velocities in table mm
  │     → event logic (§4.4) → clock state machine
- └─► display path (30–60 Hz): debayer (EA) → full-frame remap (Metal, checkpoint 117) → Syphon → OBS
+ └─► display path (30–60 Hz): debayer (EA) → full-frame remap → Syphon → OBS
 ```
 
 Key architectural choices, each the researched consensus for this setting:
