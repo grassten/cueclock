@@ -62,3 +62,8 @@ docs/accuracy-plan.md
 # Golden diffs from the last corpus run — per-run output, not a record.
 # Written by tests/corpus/goldens.py so a truncated capture never costs a rerun.
 tests/goldens/.failures/
+
+# Per-session evidence (#57): detection logs, stills, OBS recording list.
+# `.nosync` for the same reason as config/models. No trailing slash: a worktree
+# may symlink it back to the main checkout.
+sessions.nosync

@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from cueclock import archive
 from cueclock.audio.listener import DEFAULT_DEVICE as DEFAULT_MIC_DEVICE  # no vosk import
 from cueclock.capture.clip import CAMERA_FPS, ClipReader, ClipWriter
 from cueclock.display.pipeline import (
@@ -1002,6 +1003,26 @@ def _cmd_sidecam(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sessions(args: argparse.Namespace) -> int:
+    """After-session housekeeping (`archive.py`): never while a session is live."""
+    reason = archive.live_session(args.server)
+    if reason is not None:
+        print(f"sessions maintain: nothing done — {reason}")
+        return 0  # not an error: the launchd agent just tries again later
+    root = Path(args.archive_root).expanduser()
+    mounted = archive.archive_available(root)
+    if not mounted:
+        print(f"sessions maintain: {root} not available — sessions stay local this pass")
+    return archive.Maintainer(
+        root=Path(args.root).expanduser(),
+        archive_root=root if mounted else None,
+        logs=Path(args.logs).expanduser(),
+        movies=Path(args.movies).expanduser(),
+        budget_bytes=int(args.budget_gb * 1e9),
+        dry_run=args.dry_run,
+    ).pass_()
+
+
 def main(argv: list[str] | None = None) -> int:
     # `kill <pid>` unwinds like Ctrl-C: clips close cleanly, Syphon servers
     # post their retire notification instead of leaving a stale entry.
@@ -1162,6 +1183,43 @@ def main(argv: list[str] | None = None) -> int:
         "--json", action="store_true", help="print the result as JSON on the last line"
     )
 
+    p_sessions = sub.add_parser(
+        "sessions", help="after-session housekeeping: archive session logs, cut + prune footage"
+    )
+    sessions_sub = p_sessions.add_subparsers(dest="sessions_command", required=True)
+    p_maintain = sessions_sub.add_parser(
+        "maintain",
+        help="verify, find moments, cut them from the OBS recording, move to the T7, prune",
+    )
+    p_maintain.add_argument(
+        "--dry-run", action="store_true", help="print what would happen, change nothing"
+    )
+    p_maintain.add_argument(
+        "--budget-gb",
+        type=float,
+        default=archive.DEFAULT_BUDGET_GB,
+        help=f"footage kept on the internal disk (default {archive.DEFAULT_BUDGET_GB:.0f} GB)",
+    )
+    p_maintain.add_argument(
+        "--root", default=str(archive.SESSIONS_ROOT), help="local session root (sessions.nosync/)"
+    )
+    p_maintain.add_argument(
+        "--archive-root",
+        default=str(archive.ARCHIVE_ROOT),
+        help=f"where finished sessions go (default {archive.ARCHIVE_ROOT}; skipped if unmounted)",
+    )
+    p_maintain.add_argument(
+        "--logs", default=str(archive.REPO_ROOT / "logs"), help="journal directory (logs/)"
+    )
+    p_maintain.add_argument(
+        "--movies", default=str(archive.MOVIES), help="OBS recording folder (default ~/Movies)"
+    )
+    p_maintain.add_argument(
+        "--server",
+        default="http://127.0.0.1:8000",
+        help="refuse while a session answers here",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "record":
         return _cmd_record(args)
@@ -1185,6 +1243,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_deck(args)
     if args.command == "sidecam":
         return _cmd_sidecam(args)
+    if args.command == "sessions":
+        return _cmd_sessions(args)
     return _cmd_run(args)
 
 
