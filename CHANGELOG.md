@@ -277,6 +277,23 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 121 — the unheard "extension"s leave a trace;
+  #53, #58):** first long session on the GPU feed (checkpoint 119),
+  `session-20261116-225226`, 10 min, 22 shots.
+  - **#53: detection held full rate.** `hz` p5/p50/p95 141.4/155.7/156.6
+    (baseline 2026-11-15 23:10: 117.4/133.9/151.8). `blobs_ms` p50 13.9
+    (was 22.4), `queue_ms` p50 1.9 (was 18.3).
+  - **#58: most misses never became a final at all.** Steven reported many
+    missed calls, even 2.5 s after a grant. The journal holds 8 finals in
+    10 minutes: 6 accepted at conf 1.0, one "extension" at conf 0.61
+    (rejected by the 0.9 floor and repeated 6 s later), one `[unk]`. The
+    rest of what he said produced no keyword final: either wordless finals
+    (which the spotter dropped unlogged) or nothing. `voice_final` now also
+    carries `peak_dbfs`, the loudest sample since the previous final, and
+    wordless finals are journalled with reason `no words`, so the next session
+    can show whether those calls were too quiet for the mic or heard and not
+    recognised. `listen` prints the peak too.
+  - Verified: audio unit tests pass; ruff and mypy clean.
 - **2026-11-16 (checkpoint 120 — "extension" answers in under half a
   second; #58):** Steven found the response too slow. Vosk only finalizes
   after a stretch of silence. On a synthesized "extension" the final came

@@ -11,6 +11,7 @@ Run via:  uv run python -m cueclock.cli run --rectify
 
 import argparse
 import contextlib
+import math
 import shutil
 import signal
 import sys
@@ -571,6 +572,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         conf=round(final.confidence, 3),
                         accepted=final.accepted,
                         reason=final.reason,
+                        peak_dbfs=round(final.peak_dbfs, 1)
+                        if final.peak_dbfs > -math.inf
+                        else None,
                     )
                 )
 
@@ -868,7 +872,10 @@ def _cmd_listen(args: argparse.Namespace) -> int:
 
     def _show(final: Final) -> None:
         verdict = "ACCEPTED" if final.accepted else f"rejected: {final.reason}"
-        print(f"heard {final.text!r}  conf={final.confidence:.2f}  {verdict}")
+        print(
+            f"heard {final.text!r}  conf={final.confidence:.2f}  "
+            f"peak={final.peak_dbfs:.1f} dBFS  {verdict}"
+        )
 
     def _on_accept() -> None:
         if args.post is None:

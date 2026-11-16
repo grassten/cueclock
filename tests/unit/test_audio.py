@@ -8,7 +8,11 @@ no vosk, no model, no microphone (mic paths are exercised live via
 from __future__ import annotations
 
 import json
+import math
 import time
+
+import numpy as np
+import pytest
 
 from cueclock.audio.listener import ExtensionListener
 from cueclock.audio.spotter import ExtensionSpotter, match_input_device
@@ -114,10 +118,19 @@ def test_ignores_low_confidence() -> None:
     assert not spotter.last_final.accepted
 
 
-def test_empty_final_is_silence_not_a_recognition() -> None:
-    spotter = spotter_with([json.dumps({"text": ""})])
-    assert not spotter.feed(b"pcm", now=0.0)
-    assert spotter.last_final is None
+def test_empty_final_is_reported_with_its_peak_level() -> None:
+    # A wordless final never fires, but it is reported with the loudest
+    # sample since the last final, so an unheard "extension" leaves a trace.
+    spotter = spotter_with([None, json.dumps({"text": ""}), final("extension")])
+    loud = np.array([0, -16384, 100], dtype=np.int16).tobytes()  # half scale
+    assert not spotter.feed(loud, now=0.0)
+    assert not spotter.feed(bytes(6), now=0.25)
+    assert spotter.last_final is not None
+    assert spotter.last_final.reason == "no words"
+    assert spotter.last_final.peak_dbfs == pytest.approx(-6.02, abs=0.01)
+    assert spotter.feed(bytes(6), now=0.5)  # the peak resets at each final
+    assert spotter.last_final is not None
+    assert spotter.last_final.peak_dbfs == -math.inf
 
 
 # --- cooldown ---
