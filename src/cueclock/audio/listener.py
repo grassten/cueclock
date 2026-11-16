@@ -26,7 +26,10 @@ from typing import Any
 from cueclock.audio.spotter import ExtensionSpotter, Final, match_input_device
 
 SAMPLE_RATE = 16_000  # Vosk small-EN models are trained at 16 kHz
-BLOCKSIZE_FRAMES = 4000  # 250 ms per chunk at 16 kHz (v1 value)
+# 100 ms per chunk at 16 kHz. v1 used 250 ms; each chunk is a wait before the
+# recognizer sees the silence that ends the word, and 100 ms cut the final
+# 150 ms sooner (measured 2026-11-16, #58; 50 ms gained nothing more).
+BLOCKSIZE_FRAMES = 1600
 # How long the mic stays deaf after a granted extension, because the overlay
 # answers it by speaking "Extension called" out of the TV — in the same room,
 # into this microphone, containing this keyword. Anchored to the asset:
