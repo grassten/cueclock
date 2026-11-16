@@ -125,6 +125,24 @@ def build_rectified_maps(
     )
 
 
+def remap_coordinates(
+    map1: npt.NDArray[np.int16], map2: npt.NDArray[np.uint16]
+) -> npt.NDArray[np.float32]:
+    """The exact source coordinates a CV_16SC2 remap samples, as float32 (h, w, 2).
+
+    `cv2.remap` with INTER_LINEAR on fixed-point maps samples at the integer
+    part in `map1` plus a 1/32-pixel fraction packed into `map2` (x in the low
+    5 bits, y in the next 5). The GPU rectify (syphon_out.py) samples these
+    same coordinates, so its picture matches the CPU path to within rounding.
+    """
+    frac_x = (map2 & 31).astype(np.float32) / 32.0
+    frac_y = (map2 >> 5).astype(np.float32) / 32.0
+    coords = np.empty((*map2.shape, 2), dtype=np.float32)
+    coords[..., 0] = map1[..., 0].astype(np.float32) + frac_x
+    coords[..., 1] = map1[..., 1].astype(np.float32) + frac_y
+    return coords
+
+
 class DisplayPipeline:
     """BayerRG8 in -> RGBA out for Syphon.
 
@@ -150,6 +168,16 @@ class DisplayPipeline:
         pipeline._maps = (map1, map2)
         pipeline.out_size = (width, height)
         return pipeline
+
+    @property
+    def maps(self) -> tuple[npt.NDArray[np.int16], npt.NDArray[np.uint16]] | None:
+        """The remap maps, or None when the feed is not undistorted at all."""
+        return self._maps
+
+    def debayer_rgba(self, bayer: npt.NDArray[np.uint8], out: npt.NDArray[np.uint8]) -> None:
+        """Debayer into `out` (h, w, 4) without the remap; the GPU path warps after."""
+        bgr = cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR_EA)
+        cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA, dst=out)
 
     def to_rgba(self, bayer: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         # GenICam "BayerRG8" needs OpenCV's *BG* constant (opposite-corner

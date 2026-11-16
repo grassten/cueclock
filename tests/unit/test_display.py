@@ -1,12 +1,18 @@
 """Display pipeline + rail-fit tests (no camera, no Syphon)."""
 
+import sys
 from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
 import pytest
 
-from cueclock.display.pipeline import DisplayPipeline, UndistortParams, build_undistort_maps
+from cueclock.display.pipeline import (
+    DisplayPipeline,
+    UndistortParams,
+    build_undistort_maps,
+    remap_coordinates,
+)
 from cueclock.display.undistort_fit import (
     BoundaryPoints,
     cloth_mask,
@@ -127,3 +133,73 @@ def test_cloth_mask_rejects_frame_without_cloth() -> None:
     grey = np.full((100, 100, 3), 90, dtype=np.uint8)
     with pytest.raises(ValueError, match="cloth"):
         cloth_mask(grey)
+
+
+def _barrel_params(width: int = 192, height: int = 120) -> UndistortParams:
+    return UndistortParams(
+        fx=110.0,
+        fy=110.0,
+        cx=width / 2,
+        cy=height / 2,
+        dist=(-0.3, 0.09, 0.001, -0.001, 0.0),
+        width=width,
+        height=height,
+        fit_residual_px=0.0,
+    )
+
+
+def test_remap_coordinates_sample_what_the_fixed_point_maps_sample() -> None:
+    """The GPU rectify's coordinates (#53) must reproduce cv2.remap's own maps."""
+    import cv2
+
+    map1, map2 = build_undistort_maps(_barrel_params())
+    coords = remap_coordinates(map1, map2)
+    assert coords.shape == (120, 192, 2)
+    assert coords.dtype == np.float32
+    # Back through OpenCV's own conversion: the very same fixed-point maps.
+    back1, back2 = cv2.convertMaps(coords[..., 0], coords[..., 1], cv2.CV_16SC2)
+    np.testing.assert_array_equal(back1, map1)
+    np.testing.assert_array_equal(back2, map2)
+
+
+def test_debayer_rgba_is_to_rgba_without_the_warp() -> None:
+    bayer = np.random.default_rng(9).integers(0, 256, size=(120, 192), dtype=np.uint8)
+    out = np.zeros((120, 192, 4), dtype=np.uint8)
+    DisplayPipeline(_barrel_params()).debayer_rgba(bayer, out)
+    np.testing.assert_array_equal(out, DisplayPipeline().to_rgba(bayer))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Metal is macOS-only")
+def test_gpu_rectify_matches_cv2_remap() -> None:
+    """The Metal warp against cv2.remap on a real Syphon server's device (#53)."""
+    import syphon
+
+    from cueclock.display.syphon_out import _GpuRemap
+
+    params = _barrel_params()
+    pipeline = DisplayPipeline(params)
+    bayer = np.random.default_rng(11).integers(0, 256, size=(120, 192), dtype=np.uint8)
+    # smooth the noise a little so bilinear rounding, not aliasing, is what's compared
+    bayer = np.ascontiguousarray(np.repeat(np.repeat(bayer[::4, ::4], 4, 0), 4, 1))
+    expected = pipeline.to_rgba(bayer)
+
+    server = syphon.SyphonMetalServer("cueclock-unit-test")
+    try:
+        assert pipeline.maps is not None
+        gpu = _GpuRemap(server, remap_coordinates(*pipeline.maps), 192, 120)
+        pipeline.debayer_rgba(bayer, gpu.begin())
+        cb = gpu.encode()
+        cb.commit()
+        cb.waitUntilCompleted()
+        got = np.zeros((120, 192, 4), dtype=np.uint8)
+        import Metal
+
+        raw = bytearray(got.nbytes)
+        gpu.output.getBytes_bytesPerRow_fromRegion_mipmapLevel_(
+            raw, 192 * 4, Metal.MTLRegionMake2D(0, 0, 192, 120), 0
+        )
+        got = np.frombuffer(bytes(raw), np.uint8).reshape(120, 192, 4)
+    finally:
+        server.stop()
+    diff = np.abs(got.astype(np.int16) - expected.astype(np.int16))
+    assert diff.max() <= 1, f"max diff {diff.max()}"

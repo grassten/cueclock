@@ -277,6 +277,30 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 117 — the TV feed's rectify runs on the GPU;
+  #53):** the cause of live detection sitting at ~134 Hz was competition for
+  memory bandwidth, not cores (#53 comments, measured 2026-11-15): OBS's 4K60
+  compositing plus our own 60 fps `cv2.remap` cut what the performance cores
+  could get by ~3.5×, and `find_blobs` slowed from 9.7 to 17.9 ms a call. The
+  issue's "2.4 ms per frame, 14% of one core" was wall time; the feed's real
+  CPU cost was ~17 ms per frame, about a full core.
+  - `DisplayWorker` now debayers straight into a shared-memory Metal texture
+    and rectifies in a compute pass on the Syphon server's own command
+    buffer. CPU cost of the feed: ~3.4 ms per frame. In the prototype,
+    `blobs_ms` with OBS and the projector up went 17.9 → 11.4 ms at the full
+    60 fps. Falls back to `cv2.remap` with one printed line if Metal refuses.
+    The `close()` fence is unchanged and still runs after the last frame.
+  - `DisplayWorker` takes the `DisplayPipeline` itself (it needs the maps).
+    `replay` and `live_view` keep the CPU path.
+  - **To verify at the table, lights on:** the TV picture looks right, and
+    the next session's `detect_heartbeat` shows `hz` ≈ 156 with `blobs_ms`
+    well under 19 ms (baseline 2026-11-15 23:10: 133.9 Hz, 22.4 ms, `queue_ms`
+    18.3). #53 closes on that.
+  - Verified: display unit tests pass, including a Metal test that compares
+    the GPU warp against `cv2.remap` (max difference 1/255); ruff and mypy
+    clean. No detection code changed, so no battery. `test_deck_loop` timing
+    tests failed with and without this change while a live session loaded the
+    machine.
 - **2026-11-16 (checkpoint 116 — every voice final is journalled; #58):**
   `run` used to log only accepted hits, so a missed "extension" left no
   evidence. Tonight's test at the table: of 13 spoken "extension"s, the live

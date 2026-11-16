@@ -719,7 +719,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 # Publishing runs on its own thread: inline at 60 fps it cost
                 # the detect loop a third of its cadence (77 -> 51 Hz,
                 # 2026-08-07). The loop below only copies the Bayer frame.
-                with DisplayWorker(display.to_rgba, args.name, *display.out_size) as out:
+                with DisplayWorker(display, args.name) as out:
                     t0_ns: int | None = None
                     frame_i = 0
                     next_display = 0.0
