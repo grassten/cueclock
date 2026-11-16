@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Template for the after-session housekeeping agent (docs/hardware.md §C7,
-     `cueclock sessions maintain`). The install line there substitutes
+     `cueclock session maintain`). The install line there substitutes
      __REPO__/__HOME__. Every 15 min plus at login; a pass while a session is
      live does nothing, so the interval needs no coordination with the deck. -->
 <plist version="1.0">

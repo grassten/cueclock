@@ -1,4 +1,4 @@
-"""After-session housekeeping: `cueclock sessions maintain` (#57).
+"""After-session housekeeping: `cueclock session maintain` (#57).
 
 A session leaves two kinds of evidence behind. The **session directory**
 (`sessions.nosync/<stamp>/`, written by `run`) is the detection log, raw stills
@@ -332,12 +332,20 @@ class Maintainer:
             self.say(f"{session.name}: would run `cueclock {what}`")
             return "done"
         code, err = self.run(argv, HOOK_TIMEOUT_S)
-        if code == 0:
-            self.say(f"{session.name}: `cueclock {what}` wrote {output}")
+        if (session / output).exists():
+            # Written is done, whatever the exit: `session verify` exits 1 on a
+            # divergence, which is a finding for the review page, not a failure.
+            self.say(f"{session.name}: `cueclock {what}` wrote {output} (exit {code})")
             return "done"
         if code == 127 or (code == 2 and "invalid choice" in err):
             self.say(f"{session.name}: `cueclock {what}` doesn't exist here — skipped")
             return "absent"
+        if code == 2:
+            # Both hooks exit 2 for "nothing to work from" (no detection log, no
+            # journal: a `run` that died at startup). Retrying can't help.
+            tail = err.strip().splitlines()[-1:] or ["no stderr"]
+            self.say(f"{session.name}: `cueclock {what}` had nothing to work from: {tail[0]}")
+            return "done"
         tail = err.strip().splitlines()[-1:] or ["no stderr"]
         self.say(f"{session.name}: `cueclock {what}` failed ({code}): {tail[0]}")
         return "failed"

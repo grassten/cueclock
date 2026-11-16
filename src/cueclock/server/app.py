@@ -229,15 +229,13 @@ def create_app(
     @app.post("/api/score/reset")
     async def api_score_reset() -> dict[str, object]:
         """Scores back to zero; names and race-to are kept."""
-        hub.score.reset_scores()
-        await hub.score_changed()
+        await hub.score_reset()
         return {"ok": True, "score": hub.score.as_dict()}
 
     @app.post("/api/score/config")
     async def api_score_config(body: dict[str, object]) -> dict[str, object]:
         """Partial update: `p1_name` / `p2_name` / `race_to` (null clears)."""
-        hub.score.configure(body)
-        await hub.score_changed()
+        await hub.score_configure(body)
         return {"ok": True, "score": hub.score.as_dict()}
 
     @app.post("/api/score/{player}/{op}")
@@ -247,8 +245,7 @@ def create_app(
                 {"ok": False, "error": f"unknown score action: {player}/{op}"},
                 status_code=404,
             )
-        hub.score.adjust(player, 1 if op == "increment" else -1)  # floors at 0
-        await hub.score_changed()
+        await hub.score_adjust(player, 1 if op == "increment" else -1)
         return JSONResponse({"ok": True, "score": hub.score.as_dict()})
 
     @app.get("/api/fargo/search")

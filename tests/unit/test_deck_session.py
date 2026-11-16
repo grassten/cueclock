@@ -754,7 +754,7 @@ def test_an_adopted_recording_is_back_dated_to_its_first_frame(tmp_path: Path) -
 
 
 def test_an_unconfirmed_stop_leaves_the_file_unlisted() -> None:
-    # An unlisted file is one `sessions maintain` never cuts or deletes —
+    # An unlisted file is one `session maintain` never cuts or deletes —
     # the safe direction to be wrong in.
     h = Harness(record_path=None)
     _session_on(h)

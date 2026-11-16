@@ -948,7 +948,7 @@ devices, so the two don't compete. If it ever drops out of the recording:
 OBS → Settings → Audio → Global Audio Devices → **Mic/Auxiliary Audio** =
 `Insta360 Link 2C Pro`, and check its meter moves in the Audio Mixer.
 
-**`cueclock sessions maintain`** (`archive.py`, `cli.md`) does the rest after
+**`cueclock session maintain`** (`archive.py`, `cli.md`) does the rest after
 the session: journal copy, parity check, moments, footage cuts into each
 session directory, then moves the directory to `/Volumes/T7/cueclock_sessions/`
 and prunes footage to a 10 GB budget (the listed recordings plus the Replay

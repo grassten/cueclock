@@ -1,4 +1,4 @@
-"""`cueclock sessions maintain` (#57) — every step against a temp tree, with
+"""`cueclock session maintain` (#57) — every step against a temp tree, with
 the subprocesses (hooks, ffmpeg) faked so no OBS, camera or ffmpeg is needed."""
 
 from __future__ import annotations
@@ -222,6 +222,29 @@ def test_a_failing_hook_keeps_the_session_local_and_fails_the_pass(tmp_path: Pat
     assert any("RuntimeError: boom" in line for line in t.lines)
 
 
+def test_a_diverged_verify_still_counts_as_done(tmp_path: Path) -> None:
+    """`session verify` exits 1 on a divergence after writing replay.json — a
+    finding for the review page, not a reason to hold the session back."""
+    t = Tree(tmp_path)
+    real = t.maintainer.run
+
+    def diverging(argv: list[str], timeout: float) -> tuple[int, str]:
+        code, err = real(argv, timeout)
+        return (1, "diverged") if "verify" in argv else (code, err)
+
+    t.maintainer.run = diverging
+    assert t.maintainer.pass_() == 0
+    assert (t.t7 / STAMP / "replay.json").is_file()
+
+
+def test_nothing_to_work_from_does_not_block_the_archive(tmp_path: Path) -> None:
+    """Exit 2 without writing (a `run` that died before logging anything)."""
+    t = Tree(tmp_path)
+    t.maintainer.run = lambda argv, timeout: (2, "no detection log in x")
+    assert t.maintainer.pass_() == 0
+    assert (t.t7 / STAMP).is_dir()
+
+
 def test_dry_run_changes_nothing(tmp_path: Path) -> None:
     t = Tree(tmp_path)
     t.maintainer.dry_run = True
@@ -265,7 +288,7 @@ def test_maintain_refuses_while_a_session_is_live(
     monkeypatch.setattr(archive, "live_session", lambda server: "a cueclock server answers")
     built: list[Maintainer] = []
     monkeypatch.setattr(archive, "Maintainer", lambda **kw: built.append(kw))  # type: ignore[arg-type,return-value]
-    assert cli.main(["sessions", "maintain", "--root", str(tmp_path)]) == 0
+    assert cli.main(["session", "maintain", "--root", str(tmp_path)]) == 0
     assert built == []
     assert "nothing done — a cueclock server answers" in capsys.readouterr().out
 

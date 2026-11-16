@@ -19,11 +19,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cueclock.archive import RECORDINGS_LOG, SESSIONS_ROOT
 from cueclock.review.moments import MOMENTS_FILE, write_json
 
-LOCAL_ROOT = Path("sessions.nosync")
-ARCHIVE_ROOT = Path("/Volumes/T7/cueclock_sessions")
-RECORDINGS_FILE = "recordings.jsonl"
+LOCAL_ROOT = SESSIONS_ROOT
+RECORDINGS_FILE = RECORDINGS_LOG.name
 VERDICTS_FILE = "verdicts.json"
 VERDICTS = ("right", "wrong")
 

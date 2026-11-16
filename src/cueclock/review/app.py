@@ -25,6 +25,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from cueclock import archive
 from cueclock.review import sessions as sess
 from cueclock.review.moments import session_journal
 
@@ -168,7 +169,7 @@ def create_app(
     logs_dir: Path = Path("logs"),
 ) -> FastAPI:
     """`roots` defaults to the local root, then the T7 archive."""
-    session_roots = roots if roots is not None else [local_root, sess.ARCHIVE_ROOT]
+    session_roots = roots if roots is not None else [local_root, archive.ARCHIVE_ROOT]
     app = FastAPI(title="cueclock review")
 
     def session(stamp: str) -> sess.Session:

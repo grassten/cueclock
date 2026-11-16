@@ -249,7 +249,7 @@ def _spawn(cmd: Sequence[str]) -> Process:
 def _log_recording(entry: dict[str, str]) -> None:
     """Append one finished OBS recording to `sessions.nosync/recordings.jsonl`.
 
-    `cueclock sessions maintain` reads this to cut review clips and to prune
+    `cueclock session maintain` reads this to cut review clips and to prune
     footage by byte budget; a file not listed here is never touched by it.
     """
     try:
@@ -596,7 +596,7 @@ class SessionManager:
         """Stop the recording and log where it went and the wall span it covers.
 
         Only a recording this session opened, and only one OBS names on the
-        way out: an unlisted file is one `sessions maintain` will never cut or
+        way out: an unlisted file is one `session maintain` will never cut or
         delete, which is the safe way to be wrong.
         """
         if self._record_start is None:

@@ -1,17 +1,23 @@
 """WebSocket hub: owns the clock, its 10 Hz tick loop, and connected clients.
 
 This is where wall-clock time enters the system — ``ShotClock`` is pure, and
-only this module calls ``time.monotonic()``. It also owns the match score and
+only this module reads the clock, through the ``now`` it is built with
+(``time.monotonic`` live; a virtual clock when `cueclock session replay`
+drives it, #57). It also owns the match score and
 the vision kill switch, and composes them with the clock snapshot into the
 one payload every WS client and ``GET /api/state`` see.
 """
 
 import asyncio
+import functools
+import inspect
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
+from contextvars import ContextVar
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec, TypeVar
 
 from fastapi import WebSocket
 
@@ -320,6 +326,57 @@ def _as_opt_int(value: object) -> int | None:
     return int(value) if isinstance(value, int | float) else None
 
 
+def _monotonic() -> float:
+    """The live clock, looked up per call so tests can pin the module's `time`."""
+    return time.monotonic()
+
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+# Set while a hub input runs, so the inputs it calls itself (a bracket result
+# racks the table through `new_rack`) are not logged a second time. A
+# ContextVar rather than a flag: every API request and every
+# run_coroutine_threadsafe call is its own asyncio task, and interleaved tasks
+# must not see each other's.
+_IN_INPUT: ContextVar[bool] = ContextVar("hub_input", default=False)
+
+
+def hub_input(
+    method: "Callable[Concatenate[Hub, _P], Coroutine[Any, Any, _R]]",
+) -> "Callable[Concatenate[Hub, _P], Coroutine[Any, Any, _R]]":
+    """Mark a Hub coroutine as an input: something from outside vision (#57).
+
+    Every API command, deck key, voice extension and ruleset / mode / score /
+    bracket change reaches the hub through one of these, so this is the one
+    seam where they are recorded — `Hub.on_input` gets
+    ``{"mono", "wall", "method", "kwargs"}`` before the method runs, and a
+    session replay calls ``method(**kwargs)`` at that ``mono``. Vision events
+    are not inputs: replay re-derives them from the detection log.
+    """
+    signature = inspect.signature(method)
+
+    @functools.wraps(method)
+    async def wrapper(hub: "Hub", /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        if _IN_INPUT.get() or hub.on_input is None:
+            return await method(hub, *args, **kwargs)
+        bound = signature.bind(hub, *args, **kwargs)
+        hub.on_input(
+            {
+                "mono": round(hub._now(), 4),
+                "wall": hub._wall().isoformat(timespec="milliseconds"),
+                "method": method.__name__,
+                "kwargs": dict(list(bound.arguments.items())[1:]),  # all but self
+            }
+        )
+        token = _IN_INPUT.set(True)
+        try:
+            return await method(hub, *args, **kwargs)
+        finally:
+            _IN_INPUT.reset(token)
+
+    return wrapper
+
+
 class Hub:
     def __init__(
         self,
@@ -327,10 +384,19 @@ class Hub:
         journal_path: Path | None = None,
         bracket_path: Path | None = None,
         archive_dir: Path | None = None,
+        *,
+        now: Callable[[], float] = _monotonic,
+        wall: Callable[[], datetime] | None = None,
     ) -> None:
-        self.clock = ShotClock(
-            get_ruleset(DEFAULT_RULESET), now=time.monotonic(), mode=get_mode(DEFAULT_MODE)
-        )
+        """``now`` is the monotonic clock every policy reads and ``wall`` the
+        matching UTC wall clock the journal stamps; both default to the real
+        ones. A session replay passes a virtual pair (#57)."""
+        self._now = now
+        self._wall = wall if wall is not None else (lambda: datetime.now(UTC))
+        # Called with each input record (see `hub_input`); `cueclock run`
+        # points it at the session log. None records nothing.
+        self.on_input: Callable[[dict[str, object]], None] | None = None
+        self.clock = ShotClock(get_ruleset(DEFAULT_RULESET), now=now(), mode=get_mode(DEFAULT_MODE))
         self.clients: set[WebSocket] = set()
         self.score = MatchScore(path=score_path)  # None = in-memory only
         # The bracket (#43) is optional state layered on top of the score: with
@@ -350,7 +416,7 @@ class Hub:
         # Every command / vision event / clock state transition, timestamped —
         # ring dumps copy the tail so a flagged clip records what the live
         # engine actually did (journal.py module docstring).
-        self.journal = SessionJournal(path=journal_path)
+        self.journal = SessionJournal(path=journal_path, now=now, wall=self._wall)
         self._journal_state = self.clock.state.value
         # Detect-loop telemetry: the `cueclock run` camera thread stamps each
         # processed detect frame via note_frame(); the tick loop turns the
@@ -433,7 +499,7 @@ class Hub:
         # Drill counters: ShotTaken fires seen while no_clock (approximate —
         # they inherit detection accuracy) and when the mode was entered.
         self._drill_reps = 0
-        self._mode_entered_mono = time.monotonic()
+        self._mode_entered_mono = self._now()
         # Called after a *granted* extension has been broadcast, because the
         # overlay answers that broadcast by speaking "Extension called" out of
         # the TV. `cueclock run` points it at the mic listener's mute window:
@@ -463,7 +529,7 @@ class Hub:
         """
         if self._last_shot_mono is None:
             return None
-        return time.monotonic() - self._last_shot_mono
+        return self._now() - self._last_shot_mono
 
     def rack_age(self) -> float | None:
         """Seconds since the last break, or None if none has been seen.
@@ -486,7 +552,7 @@ class Hub:
         """
         if self._rack_break_mono is None:
             return None
-        return time.monotonic() - self._rack_break_mono
+        return self._now() - self._rack_break_mono
 
     @property
     def clock_live(self) -> bool:
@@ -554,7 +620,7 @@ class Hub:
         if mode == "no_clock":
             return {
                 "reps": self._drill_reps,
-                "elapsed_s": round(time.monotonic() - self._mode_entered_mono, 1),
+                "elapsed_s": round(self._now() - self._mode_entered_mono, 1),
             }
         return None
 
@@ -586,16 +652,21 @@ class Hub:
 
     async def tick_loop(self) -> None:
         while True:
-            now = time.monotonic()
-            snapshot = self.clock.tick(now, motion=self._table_motion)
-            if snapshot.state != self._journal_state:
-                # GRACE/EXPIRED/auto-restart transitions happen inside tick.
-                self._log("tick_transition")
-            self._watch_frozen_clock(now)
-            self._maybe_journal_drift()
-            self._maybe_heartbeat(now)
-            await self.broadcast(snapshot)
+            await self.broadcast(self.tick())
             await asyncio.sleep(BROADCAST_INTERVAL_SECONDS)
+
+    def tick(self) -> Snapshot:
+        """One beat of the tick loop, synchronous so a replay can drive it at
+        the live cadence on its virtual clock (#57)."""
+        now = self._now()
+        snapshot = self.clock.tick(now, motion=self._table_motion)
+        if snapshot.state != self._journal_state:
+            # GRACE/EXPIRED/auto-restart transitions happen inside tick.
+            self._log("tick_transition")
+        self._watch_frozen_clock(now)
+        self._maybe_journal_drift()
+        self._maybe_heartbeat(now)
+        return snapshot
 
     # ---------- detect-loop telemetry (journal heartbeat) ----------
 
@@ -609,7 +680,7 @@ class Hub:
         """
         self._table_motion = moving
         if moving:
-            self._motion_high_mono = time.monotonic()
+            self._motion_high_mono = self._now()
 
     def _watch_frozen_clock(self, now: float) -> None:
         """E9: synthesize the settle a frozen MOTION clock is waiting for.
@@ -660,7 +731,7 @@ class Hub:
         Attribute rebinding only; no journal I/O off the asyncio loop.
         """
         self._detect_frames += 1
-        self._detect_last = (frame_t, time.monotonic())
+        self._detect_last = (frame_t, self._now())
         if balls is not None:
             self._balls = balls
         if stages is not None:
@@ -749,8 +820,9 @@ class Hub:
 
     # ---------- commands (each also broadcasts, per the "on every event" rule) ----------
 
+    @hub_input
     async def start(self) -> None:
-        now = time.monotonic()
+        now = self._now()
         fresh = self.clock.state is not State.RUNNING  # resuming doesn't restart the pace
         self.clock.start(now)
         self._idle_fire = None
@@ -762,6 +834,7 @@ class Hub:
         self._log("cmd_start")
         await self.broadcast(self.clock.snapshot())
 
+    @hub_input
     async def pause(self) -> None:
         self.clock.pause()
         self._idle_fire = None
@@ -770,6 +843,7 @@ class Hub:
         self._log("cmd_pause")
         await self.broadcast(self.clock.snapshot())
 
+    @hub_input
     async def reset(self) -> None:
         self.clock.reset()
         self._idle_fire = None
@@ -778,8 +852,9 @@ class Hub:
         self._log("cmd_reset")
         await self.broadcast(self.clock.snapshot())
 
+    @hub_input
     async def new_rack(self) -> None:
-        now = time.monotonic()
+        now = self._now()
         self.clock.new_rack(now)
         self._idle_fire = None
         self._abandon_provisional()
@@ -794,8 +869,9 @@ class Hub:
         self._log("cmd_new_rack")
         await self.broadcast(self.clock.snapshot())
 
+    @hub_input
     async def restart(self) -> None:
-        now = time.monotonic()
+        now = self._now()
         self.clock.restart(now)
         self._idle_fire = None
         self._abandon_provisional()
@@ -803,8 +879,9 @@ class Hub:
         self._log("cmd_restart")
         await self.broadcast(self.clock.snapshot())
 
+    @hub_input
     async def push(self) -> None:
-        now = time.monotonic()
+        now = self._now()
         self.clock.push(now)
         self._idle_fire = None
         self._abandon_provisional()
@@ -815,6 +892,7 @@ class Hub:
         self._log("cmd_push")
         await self.broadcast(self.clock.snapshot())
 
+    @hub_input
     async def extension(self) -> bool:
         """Grant an extension if the rules allow, and have the overlay say so.
 
@@ -833,6 +911,7 @@ class Hub:
             self.on_extension_granted()
         return accepted
 
+    @hub_input
     async def set_ruleset(self, name: str) -> bool:
         """Switch ruleset by canonical name or alias; False if unknown."""
         try:
@@ -847,6 +926,7 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return True
 
+    @hub_input
     async def set_mode(self, name: str) -> bool:
         """Switch session mode by name; False if unknown.
 
@@ -864,11 +944,12 @@ class Hub:
         # A mode switch is a new activity: the whole solo panel rescopes.
         self._reset_pace()
         self._drill_reps = 0
-        self._mode_entered_mono = time.monotonic()
+        self._mode_entered_mono = self._now()
         self._log("cmd_mode", mode=self.clock.mode.name)
         await self.broadcast(self.clock.snapshot())
         return True
 
+    @hub_input
     async def set_vision(self, enabled: bool) -> None:
         self.vision_enabled = enabled
         self._log("cmd_vision", enabled=enabled)
@@ -877,6 +958,24 @@ class Hub:
     async def score_changed(self) -> None:
         """Broadcast after any MatchScore mutation (score rides every payload)."""
         await self.broadcast(self.clock.snapshot())
+
+    # The score's own mutations come through here rather than straight onto
+    # `self.score` from the API, so they are hub inputs like every other key.
+
+    @hub_input
+    async def score_reset(self) -> None:
+        self.score.reset_scores()
+        await self.score_changed()
+
+    @hub_input
+    async def score_configure(self, body: dict[str, object]) -> None:
+        self.score.configure(body)
+        await self.score_changed()
+
+    @hub_input
+    async def score_adjust(self, player: str, delta: int) -> None:
+        self.score.adjust(player, delta)  # floors at 0
+        await self.score_changed()
 
     # ---------- the bracket (#43) ----------
     #
@@ -890,6 +989,7 @@ class Hub:
             raise BracketError("no bracket loaded")
         return self.bracket
 
+    @hub_input
     async def create_bracket(self, body: Mapping[str, object]) -> Bracket:
         """Build a draw from a field of players. Replaces any existing one."""
         raw = body.get("players")
@@ -945,6 +1045,7 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return self.bracket
 
+    @hub_input
     async def clear_bracket(self) -> Path | None:
         """Back to casual: the pages behave exactly as they did before #43.
 
@@ -978,6 +1079,7 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return archived
 
+    @hub_input
     async def clear_match_day(self) -> Path | None:
         """The end-of-day reset: the deck's Session hold calls this on the way
         down (2026-08-13), so the next session comes up clean instead of
@@ -1003,6 +1105,7 @@ class Hub:
         self._log("bracket_archived", name=bracket.name, path=str(path))
         return path
 
+    @hub_input
     async def reopen_archive(self, name: str) -> Bracket:
         """Make an archived bracket the live one again.
 
@@ -1025,6 +1128,7 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return restored
 
+    @hub_input
     async def load_match(self, match_id: int) -> Match:
         """Put a match's two players and their own race targets on the wall."""
         bracket = self.require_bracket()
@@ -1072,6 +1176,7 @@ class Hub:
         self.score.configure(updates)
         self.score.set_scores(match.scores[0], match.scores[1])
 
+    @hub_input
     async def report_result(
         self, match_id: int, scores: tuple[int, int] | None = None
     ) -> dict[str, object]:
@@ -1120,6 +1225,7 @@ class Hub:
             "champion": bracket.champion(),
         }
 
+    @hub_input
     async def withdraw_player(self, index: int, out: bool) -> Player:
         """Somebody has gone home, or come back. Their matches follow.
 
@@ -1135,6 +1241,7 @@ class Hub:
         await self._follow_the_draw(bracket)
         return player
 
+    @hub_input
     async def concede_match(self, match_id: int, body: Mapping[str, object] | None) -> Match:
         """One match given up by one player, the rest of their draw kept.
 
@@ -1155,6 +1262,7 @@ class Hub:
         await self._follow_the_draw(bracket)
         return match
 
+    @hub_input
     async def set_bracket_races(self, body: Mapping[str, object]) -> Bracket:
         """Change the base races mid-tournament — unplayed matches only."""
         bracket = self.require_bracket()
@@ -1187,6 +1295,7 @@ class Hub:
         await self.new_rack()
         await self.score_changed()
 
+    @hub_input
     async def clear_result(self, match_id: int) -> Match:
         """Un-play a match so the one feeding it can be corrected."""
         bracket = self.require_bracket()
@@ -1195,6 +1304,7 @@ class Hub:
         await self.broadcast(self.clock.snapshot())
         return match
 
+    @hub_input
     async def edit_match(self, match_id: int, body: Mapping[str, object]) -> Match:
         """Redraw a Round-1 matchup, or override its race targets."""
         bracket = self.require_bracket()
@@ -1238,7 +1348,7 @@ class Hub:
         detail: dict[str, object] = {"t": t, "frame_t": t, "ball": ball_id, "newborn": newborn}
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
-        self._last_shot_mono = time.monotonic()  # replay anchor — before every gate
+        self._last_shot_mono = self._now()  # replay anchor — before every gate
         if self._rack_pending or self._rack_break_mono is None:
             # The break: the first shot after a New Rack press, or the session's
             # first shot (a `no_clock` drill has no New Rack key at all). From
@@ -1262,7 +1372,7 @@ class Hub:
             # In-flight tracks under-read speed 2-4x, so the fires the floor
             # eats are mostly real breaks — 15 of the 84 eaten fires on
             # record needed a manual rescue press.
-            self._idle_fire = (time.monotonic(), speed_mms)
+            self._idle_fire = (self._now(), speed_mms)
         if (
             self.clock.state is State.IDLE
             and floor is not None
@@ -1294,7 +1404,7 @@ class Hub:
             # #33 Part B: the fire opened (or joined) the provisional
             # episode — its count is the settle's decision now.
             if self._provisional_open_mono is None:
-                self._provisional_open_mono = time.monotonic()
+                self._provisional_open_mono = self._now()
             detail["provisional"] = True
         self._log("vision_shot_taken", **detail)
         await self.broadcast(self.clock.snapshot())
@@ -1333,7 +1443,7 @@ class Hub:
         if not self.clock_live:
             self._log("vision_balls_settled_no_clock", **detail)
             return  # journaled, not clocked — as above
-        now = time.monotonic()
+        now = self._now()
         # Both settle-time refusals are decided here, before anything touches
         # the clock, and against the state the settle ARRIVED in. That is what
         # keeps them disjoint from the break adjudication below: E8 acts only
@@ -1552,7 +1662,7 @@ class Hub:
         """
         if not self.vision_enabled or not self.clock_live:
             return
-        now = time.monotonic()
+        now = self._now()
         if not self.clock.motion_started(now):
             return  # only a RUNNING countdown freezes; GRACE/IDLE decline
         self._provisional_open_mono = now
@@ -1572,7 +1682,7 @@ class Hub:
         """
         if not self.vision_enabled or not self.clock_live:
             return
-        now = time.monotonic()
+        now = self._now()
         if self.clock.motion_reverted(now):
             self._revert_pace()
             self._log("shot_provisional_reverted", t=t, frame_t=t, reason="pickup_discard")
@@ -1633,7 +1743,7 @@ class Hub:
         # so a live candidate is auditable from the journal alone.
         self._scratch_candidate_open = True
         self._scratch_hold_done = False
-        self._scratch_candidate_mono = time.monotonic()  # #33 episode guard
+        self._scratch_candidate_mono = self._now()  # #33 episode guard
         self._log(
             "vision_scratch_candidate",
             t=t,
@@ -1669,7 +1779,7 @@ class Hub:
         # #25: nobody is at the return — resume the countdown immediately.
         # For a typical false scratch the refutation is same-frame with the
         # candidate, so the grant/release pair never visibly touches the wall.
-        if self.clock.release_hold(time.monotonic()):
+        if self.clock.release_hold(self._now()):
             self._log("scratch_hold_released")
             await self.broadcast(self.clock.snapshot())
 
@@ -1687,6 +1797,6 @@ class Hub:
             return
         if self.clock.state is not State.RUNNING:
             return
-        self.clock.hold(time.monotonic(), SCRATCH_HOLD_SECONDS)
+        self.clock.hold(self._now(), SCRATCH_HOLD_SECONDS)
         self._scratch_hold_done = True
         self._log("scratch_hold", hold_s=SCRATCH_HOLD_SECONDS)
