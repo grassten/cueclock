@@ -56,6 +56,7 @@ Ground rules that apply to every command:
 | `report` | Accuracy report: missed strikes per session, read back from the journals | no |
 | `deck` | Stream Deck control-surface daemon | no |
 | `sidecam` | Side-angle camera settings: show, save the current ones, apply the saved ones | side camera only |
+| `sessions maintain` | After-session housekeeping: journal copy, parity check, moments, footage cuts, move to the T7, footage budget (refuses while a session is live) | no |
 
 ## Recipes
 
@@ -359,6 +360,55 @@ uv run python -m cueclock.cli sidecam          # check it, any time
 Every deck session start re-applies whatever drifted, once OBS has the camera
 open. Needs `scripts/fetch_insta360_sdk.sh` run once: it downloads Insta360's
 SDK into gitignored `vendor.nosync/` and builds the `link-settings` helper.
+
+### `sessions maintain`
+
+**Everything a finished session needs, done unattended** (#57). The
+`com.cueclock.maintain` launchd agent runs it every 15 minutes
+(`hardware.md` §C7); running it by hand is the same pass. It does **nothing
+at all** while a session is live — the deck's pidfile names a live `run`, a
+server answers `--server`'s `/api/state`, or a `cueclock run` process exists —
+and exits 0, so the agent simply tries again later.
+
+For each session directory under `sessions.nosync/` (the layout `run` writes):
+
+1. copy `logs/session-<stamp>.jsonl` in as `journal.jsonl` (the original stays in `logs/`);
+2. `cueclock session verify <dir>` → `replay.json`, if that file isn't there yet;
+3. `cueclock review moments <dir>` → `moments.json`, likewise;
+4. cut each moment out of the OBS recording covering it → `cuts/<id>.mp4`
+   (ffmpeg stream copy, 10 s either side, matched by wall time against
+   `sessions.nosync/recordings.jsonl`);
+5. move the directory to `--archive-root` when that drive is mounted: copy,
+   check every file's size, then delete the local copy.
+
+A step that is already done is skipped, so passes repeat safely. A hook command
+that doesn't exist in this build is logged and skipped, and the session then
+stays local until it does. Without the T7 the session is finished in place and
+moved on a later pass.
+
+Then the **footage budget**: the recordings the deck listed in
+`recordings.jsonl`, plus the Replay key's saves (`~/Movies/Replay <date>
+<time>.mov`, which nothing else prunes), are deleted oldest-first until they
+total ≤ `--budget-gb`. Nothing else in `~/Movies` is ever touched. One
+recording larger than the whole budget goes too, once its moments are cut.
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--dry-run` | off | print every action, change nothing (hooks and ffmpeg aren't run) |
+| `--budget-gb` | `10` | footage kept on the internal disk, in GB (10⁹ bytes); ~3 GB per hour of recording |
+| `--root` | `sessions.nosync/` | local session root |
+| `--archive-root` | `/Volumes/T7/cueclock_sessions` | under `/Volumes` it must be a mounted volume, or sessions stay local |
+| `--logs` | `logs/` | where the session journals are |
+| `--movies` | `~/Movies` | OBS's recording folder (Simple output → Recording Path) |
+| `--server` | `http://127.0.0.1:8000` | a server answering here means a session is live |
+
+```bash
+uv run python -m cueclock.cli sessions maintain --dry-run   # what would it do?
+uv run python -m cueclock.cli sessions maintain
+tail -f ~/Library/Logs/cueclock-maintain.log                 # the agent's passes
+```
+
+Exit 1 when a step failed (that session stays local and is retried next pass).
 
 ### Shared display args (`run`, `replay`, `live`)
 

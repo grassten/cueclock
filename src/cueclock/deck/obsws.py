@@ -260,6 +260,37 @@ def last_replay_path() -> str | None:
     return path if isinstance(path, str) and path else None
 
 
+def start_record() -> float | None:
+    """Make sure OBS is recording; return how many seconds it already has.
+
+    0.0 for a recording this call started. A recording already running (a
+    restarted deck daemon re-adopting its own session) is left alone and
+    reports its age, so the caller can back-date the start to the file's real
+    first frame instead of to the moment it happened to ask. None = OBS
+    couldn't be asked or refused.
+    """
+    status = request("GetRecordStatus")
+    if status is None:
+        return None
+    if status.get("outputActive"):
+        duration_ms = status.get("outputDuration")
+        return float(duration_ms) / 1000.0 if isinstance(duration_ms, int | float) else 0.0
+    if request("StartRecord") is None:
+        return None
+    print("obsws: recording started", flush=True)
+    return 0.0
+
+
+def stop_record() -> str | None:
+    """Stop the recording; return the file OBS wrote, or None if it couldn't."""
+    data = request("StopRecord", timeout=10.0)  # finalising the file takes a moment
+    if data is None:
+        return None
+    path = data.get("outputPath")
+    print(f"obsws: recording stopped ({path})", flush=True)
+    return path if isinstance(path, str) and path else None
+
+
 def current_scene() -> str | None:
     """The program scene's name — what to return to when a replay finishes."""
     data = request("GetCurrentProgramScene")
