@@ -277,6 +277,17 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 116 — every voice final is journalled; #58):**
+  `run` used to log only accepted hits, so a missed "extension" left no
+  evidence. Tonight's test at the table: of 13 spoken "extension"s, the live
+  session accepted 10 in 22:32:56–22:33:23, plus 1 at 22:33:45 during the
+  non-keyword part (a false hit or a late real one; nothing recorded which).
+  A second `listen` process run beside `run` heard nothing at all. `run` now
+  journals each final as `voice_final` (`text`, `conf`, `accepted`, `reason`),
+  handed from the listener thread to the loop. #58 stays open: the threshold
+  gets set from the confidences the next session records.
+  - Verified: audio unit tests pass; ruff and mypy clean. No detection code
+    changed, so no battery.
 - **2026-11-15 (checkpoint 115 — side camera tuned, its colour fixed, and the
   helper that could not lock exposure; #47):** settings came from stills grabbed
   through OBS on staged balls, with the overhead running for reference. Full

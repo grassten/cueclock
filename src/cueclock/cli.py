@@ -460,6 +460,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     import asyncio
     import threading
     from concurrent.futures import Future, ThreadPoolExecutor
+    from functools import partial
 
     import uvicorn
     from pypylon import pylon
@@ -467,6 +468,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Import-safe despite the lazy-import rule: listener.py defers its
     # vosk/sounddevice imports to run() (docs/hardware.md Part D).
     from cueclock.audio.listener import ExtensionListener
+    from cueclock.audio.spotter import Final
     from cueclock.capture.camera import open_camera
     from cueclock.display.syphon_out import DisplayWorker
     from cueclock.server.app import create_app
@@ -557,8 +559,26 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     _extension_done
                 )
 
+            def _voice_final(final: Final) -> None:
+                # Every final, rejected ones too, so a missed "extension"
+                # leaves its text and confidence in the journal (#58). The
+                # listener thread hands off: journal writes stay on the loop.
+                loop.call_soon_threadsafe(
+                    partial(
+                        hub.journal.log,
+                        "voice_final",
+                        text=final.text,
+                        conf=round(final.confidence, 3),
+                        accepted=final.accepted,
+                        reason=final.reason,
+                    )
+                )
+
             listener = ExtensionListener(
-                _voice_extension, model_path=model_dir, device_name=args.mic_device
+                _voice_extension,
+                model_path=model_dir,
+                device_name=args.mic_device,
+                on_final=_voice_final,
             )
             listener.start()
             # Every granted extension is announced out of the TV, whoever
