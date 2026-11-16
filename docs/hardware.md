@@ -919,7 +919,7 @@ Flag path went is in §C2.
 1. **v1 — voice "extension"** (built 2026-07-31, the only shipped use): Vosk
    small-EN model, grammar `["extension", "[unk]"]`, finals only, per-word
    confidence ≥ 0.9, 2 s cooldown, 16 kHz mono int16 — the old app's proven
-   listener ported as-is (`design.md` §2.1 audio row). Code:
+   listener ported as-is (two latency changes since, below) (`design.md` §2.1 audio row). Code:
    `src/cueclock/audio/` — `spotter.py` is the pure accept/reject gate
    (recognizer injected, unit-tested with a scripted fake), `listener.py`
    owns the mic stream and thread. `cueclock run` starts it automatically
@@ -928,6 +928,12 @@ Flag path went is in §C2.
    `--no-mic`, `--mic-device NAME`, `--mic-model PATH`. Model:
    `scripts/fetch_vosk_model.sh` fetches `vosk-model-small-en-us-0.15`
    (~40 MB) into gitignored `models/` — idempotent.
+   **Latency** (checkpoint 120, #58): the final arrives ~0.44 s after the
+   word ends, down from ~0.94 s. `scripts/fetch_vosk_model.sh` sets the
+   model's endpoint rules 2–4 to 0.2 s of trailing silence (shipped
+   0.5/0.75/1.0; 0.15 s gained nothing), and the mic is read in 100 ms
+   chunks instead of v1's 250 ms. Measured on a synthesized "extension"
+   with `say`. Re-run the script after any model re-download.
    Since 2026-11-16 (checkpoint 116, #58) `run` journals **every** final
    as a `voice_final` record (`text`, `conf`, `accepted`, `reason`), rejected
    ones too, so a missed "extension" leaves its confidence behind. The 0.9

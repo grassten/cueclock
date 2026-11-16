@@ -277,6 +277,17 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 120 — "extension" answers in under half a
+  second; #58):** Steven found the response too slow. Vosk only finalizes
+  after a stretch of silence. On a synthesized "extension" the final came
+  935–1085 ms after the word ended (100 or 250 ms chunks, shipped endpoint
+  rules 0.5/0.75/1.0 s). With endpoint rules 2–4 at 0.2 s and 100 ms chunks:
+  435 ms (463 ms for a fast-spoken word). 0.15 s and 50 ms chunks gained
+  nothing. The endpoint rules live in the gitignored model's
+  `conf/model.conf`, so `scripts/fetch_vosk_model.sh` now patches them on
+  every run, and the local model is patched. The 2.5 s mute after a grant is
+  unchanged: it is not response time.
+  - Verified: audio unit tests pass; latency re-measured on the patched model.
 - **2026-11-16 (checkpoint 119 — checkpoint 117 is back; #53):** 118's
   rollback misread the timeline. The jitter Steven reported was on the
   session started 17:29 local on the *old* CPU feed (`session-20261116-222922`),
