@@ -277,6 +277,26 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 123 — the whole session, from the couch; #57):**
+  first session on checkpoint 122, `session-20261117-001351`, 4 min, 10 shots.
+  - **Detection held full rate with logging and stills on.** `hz`
+    p5/p50/p95 144.8/155.2/156.5 (checkpoint 121's session:
+    140.5/155.7/156.6); `blobs_ms` p50 15.0 (13.9). Camera `BlockID` gaps:
+    710 frames skipped of 37,239 (1.9%), none out of order.
+  - **The log is complete.** 36,529 frames, 34 still pairs, 0 dropped
+    frames or stills; 109 MB on disk (stills 105 MB: ~1.6 GB/hour).
+    `session verify`: 35/35 decisions reproduced, 0 diffs, `same_code`,
+    in 13 s.
+  - **OBS with recording on:** 1 lagged frame in the run. The file ran
+    9.8 Mbps, so footage is ~4.4 GB/hour, not the ~3 estimated.
+  - **Full-session player:** `session maintain` hard-links the recording into
+    the session (`recording/` + `recording.json`) right before the T7 move,
+    so every archived session keeps its full footage (the 10 GB budget still
+    prunes the original in `~/Movies`). The review page's `/s/<stamp>/full`
+    plays it above a tap-to-seek list of strikes, settles, reverts and key
+    presses. Wordless voice finals no longer clutter a moment's context.
+  - Verified: unit tests pass; the session archived for real (journal, cut,
+    recording, 102 files to the T7) and both pages rendered at phone width.
 - **2026-11-16 (checkpoint 122 — every session leaves evidence; #57):**
   the Flag key's successor, with nothing to press. Built as three parallel
   pieces and merged.

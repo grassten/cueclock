@@ -125,6 +125,10 @@ button.wrong.on { border-color:var(--wrong); color:var(--wrong); }
 textarea { width:100%; font:inherit; margin-top:8px; padding:8px; border-radius:8px;
            border:1px solid var(--line); background:transparent; color:var(--fg); }
 .card.judged { opacity:.7; }
+.events { max-height:45vh; overflow-y:auto; }
+.events a { text-decoration:none; display:flex; gap:10px; padding:4px 0; }
+.events li.moment a { font-weight:600; }
+video.full { position:sticky; top:0; z-index:1; }
 """
 
 _SCRIPT = """
@@ -146,6 +150,13 @@ document.querySelectorAll('.card[data-id]').forEach(card => {
   note.addEventListener('change', () => { if (card.dataset.verdict)
     send(card.dataset.verdict); });
 });
+// Full-session player: tap an event to jump the video to it.
+document.querySelectorAll('[data-seek]').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault();
+  const v = document.getElementById(a.dataset.video);
+  v.currentTime = parseFloat(a.dataset.seek); v.play();
+  v.scrollIntoView({behavior:'smooth', block:'nearest'});
+}));
 // Seek recordings to the moment even where #t= fragments are ignored.
 document.querySelectorAll('video[data-at]').forEach(v =>
   v.addEventListener('loadedmetadata', () => {
@@ -212,9 +223,66 @@ def create_app(
         verdicts = s.verdicts()
         records = _records(session_journal(s.path, logs_dir))
         available = sess.recordings(local_root)
+        if full_sources(s, records):
+            head += (
+                f'<a class="card row" href="/s/{s.stamp}/full">'
+                "<span>▶ Watch the full session</span></a>"
+            )
         cards = [_card(s, m, verdicts.get(str(m.get("id"))), records, available) for m in moments]
         body = "".join(cards) or '<p class="dim">Nothing in this session needs a look.</p>'
         return _page(stamp, head + body, script=True)
+
+    def full_sources(
+        s: sess.Session, records: list[dict[str, object]]
+    ) -> list[tuple[str, sess.Recording]]:
+        """(url, recording) for the whole session: its own kept copy, else the
+        listed recordings still in ~/Movies that overlap it."""
+        own = s.full_recordings()
+        if own:
+            return [(f"/full/{s.stamp}/{r.index}", r) for r in own]
+        walls = [w for w in (_wall(r) for r in records) if w is not None]
+        end = max(walls, default=s.started)
+        listed = sess.overlapping(s.started, end, sess.recordings(local_root))
+        return [(f"/recording/{r.index}", r) for r in listed]
+
+    @app.get("/s/{stamp}/full", response_class=HTMLResponse)
+    async def full_page(stamp: str) -> HTMLResponse:
+        s = session(stamp)
+        records = _records(session_journal(s.path, logs_dir))
+        sources = full_sources(s, records)
+        head = f'<p><a href="/s/{s.stamp}">← Moments</a></p><h1>{_local(s.started)}</h1>'
+        if not sources:
+            return _page(
+                stamp, head + '<p class="dim">No full recording kept for this session.</p>'
+            )
+        moment_walls = {str(m.get("wall")) for m in s.moments() or []}
+        parts = []
+        for n, (url, rec) in enumerate(sources):
+            vid = f"full{n}"
+            items = []
+            for record in records:
+                when = _wall(record)
+                if when is None or record.get("kind") not in _TIMELINE or not rec.covers(when):
+                    continue
+                at = (when - rec.start).total_seconds()
+                mark = ' class="moment"' if str(record.get("wall")) in moment_walls else ""
+                items.append(
+                    f'<li{mark}><a href="#" data-video="{vid}" data-seek="{at:.1f}">'
+                    f'<span class="at">{_clock(at)}</span>'
+                    f"<span>{escape(describe(record))}</span></a></li>"
+                )
+            parts.append(
+                f'<video id="{vid}" class="full" {_VIDEO} src="{url}"></video>'
+                f'<ol class="events">{"".join(items)}</ol>'
+            )
+        return _page(stamp, head + "".join(parts), script=True)
+
+    @app.get("/full/{stamp}/{index}")
+    async def full_file(stamp: str, index: int) -> FileResponse:
+        for rec in session(stamp).full_recordings():
+            if rec.index == index:
+                return FileResponse(rec.path, media_type=_media_type(rec.path))
+        raise HTTPException(404, "no such recording")
 
     @app.post("/api/verdict/{stamp}/{moment_id}")
     async def verdict(stamp: str, moment_id: str, request: Request) -> JSONResponse:
@@ -243,14 +311,47 @@ def create_app(
     async def recording(index: int) -> FileResponse:
         for rec in sess.recordings(local_root):
             if rec.index == index:
-                media = "video/quicktime" if rec.path.suffix.lower() == ".mov" else "video/mp4"
-                return FileResponse(rec.path, media_type=media)
+                return FileResponse(rec.path, media_type=_media_type(rec.path))
         raise HTTPException(404, "no such recording")
 
     return app
 
 
 _VIDEO = 'controls playsinline preload="metadata"'
+
+# What the full-session event list shows: what happened at the table and what
+# the clock did about it. Bookkeeping (heartbeats, voice finals) stays out.
+_TIMELINE = {
+    "vision_shot_taken",
+    "vision_balls_settled",
+    "shot_provisional_reverted",
+    "settle_synthesized",
+    "break_adjudicated",
+    "vision_scratch",
+    "cmd_extension",
+    "cmd_new_rack",
+    "cmd_restart",
+    "cmd_start",
+    "cmd_reset",
+    "cmd_pause",
+    "cmd_push",
+}
+
+
+def _media_type(path: Path) -> str:
+    return "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4"
+
+
+def _wall(record: dict[str, object]) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(record["wall"]))
+    except (KeyError, ValueError):
+        return None
+
+
+def _clock(seconds: float) -> str:
+    m, sec = divmod(int(max(0.0, seconds)), 60)
+    return f"{m // 60}:{m % 60:02d}:{sec:02d}" if m >= 60 else f"{m}:{sec:02d}"
 
 
 def _card(
@@ -287,6 +388,8 @@ def _card(
             continue
         if record.get("kind") in _NOISE or not start <= when <= end:
             continue
+        if record.get("kind") == "voice_final" and not record.get("text"):
+            continue  # a wordless final (checkpoint 121): mic noise, not something said
         delta = (when - at).total_seconds()
         here = ' class="here"' if abs(delta) < 0.0005 else ""
         lines.append(

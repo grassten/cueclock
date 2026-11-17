@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cueclock.archive import RECORDINGS_LOG, SESSIONS_ROOT
+from cueclock.archive import FULL_INDEX, RECORDINGS_LOG, SESSIONS_ROOT
 from cueclock.review.moments import MOMENTS_FILE, write_json
 
 LOCAL_ROOT = SESSIONS_ROOT
@@ -80,6 +80,27 @@ class Session:
             }
         write_json(self.path / VERDICTS_FILE, verdicts)
 
+    def full_recordings(self) -> list[Recording]:
+        """The session's own copy of its full recording(s), kept by `session maintain`.
+
+        Only files inside the session directory: `recording.json` names them,
+        and a name that resolves anywhere else is ignored.
+        """
+        data = _read_json(self.path / FULL_INDEX)
+        root = self.path.resolve()
+        out = []
+        for index, entry in enumerate(data if isinstance(data, list) else []):
+            try:
+                path = (self.path / str(entry["file"])).resolve()
+                start = datetime.fromisoformat(entry["start_wall"])
+                stop_text = entry.get("stop_wall")
+                stop = datetime.fromisoformat(stop_text) if stop_text else None
+            except (ValueError, KeyError, TypeError, OSError):
+                continue
+            if path.is_relative_to(root) and path.is_file():
+                out.append(Recording(index, path, start, stop))
+        return out
+
     def cut(self, moment_id: str) -> Path | None:
         if not MOMENT_ID.match(moment_id):
             return None
@@ -139,6 +160,14 @@ def recordings(local_root: Path) -> list[Recording]:
         if path.is_file():
             out.append(Recording(index, path, start, stop))
     return out
+
+
+def overlapping(start: datetime, end: datetime, available: list[Recording]) -> list[Recording]:
+    """Recordings overlapping a wall span, oldest first."""
+    return sorted(
+        (r for r in available if r.start < end and (r.stop is None or r.stop > start)),
+        key=lambda r: r.start,
+    )
 
 
 def recording_for(when: datetime, available: list[Recording]) -> Recording | None:

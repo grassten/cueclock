@@ -308,3 +308,32 @@ def test_a_live_deck_session_is_detected_from_its_pidfile(
 
 def test_an_unmounted_volume_is_not_an_archive() -> None:
     assert not archive.archive_available(Path("/Volumes/no-such-cueclock-drive/x"))
+
+
+def test_the_full_recording_travels_to_the_t7_with_its_session(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    (t.logs / f"session-{STAMP}.jsonl").write_text(
+        "".join(json.dumps({"wall": _iso(s), "kind": "x"}) + "\n" for s in (5, 240))
+    )
+    assert t.maintainer.pass_() == 0
+    dest = t.t7 / STAMP
+    kept = json.loads((dest / archive.FULL_INDEX).read_text())
+    assert kept == [
+        {"file": f"recording/{t.recording.name}", "start_wall": _iso(0), "stop_wall": _iso(1800)}
+    ]
+    assert (dest / kept[0]["file"]).read_bytes() == t.recording.read_bytes()
+    assert t.recording.is_file()  # the original stays under the footage budget
+
+
+def test_a_session_waiting_for_the_drive_holds_no_link(tmp_path: Path) -> None:
+    """A link in a session stuck on the SSD would keep pruned footage alive."""
+    t = Tree(tmp_path, archive_mounted=False)
+    t.maintainer.pass_()
+    assert not (t.session / archive.FULL_INDEX).exists()
+    assert os.stat(t.recording).st_nlink == 1
+
+
+def test_only_recordings_overlapping_the_session_are_kept() -> None:
+    recs = [_rec("/m/before.mov", -900, -60), _rec("/m/this.mov", 0, 600)]
+    span = (T0, T0 + timedelta(seconds=300))
+    assert [r.path.name for r in archive.session_recordings(span, recs)] == ["this.mov"]

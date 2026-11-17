@@ -356,8 +356,12 @@ camera or needs `run`:
   `cuts/<id>.mp4`, else the full OBS recording from `sessions.nosync/
   recordings.jsonl` seeked to the moment, else "footage pruned" — the journal
   lines around it in plain words, and **Clock right / Clock wrong** buttons
-  plus a note, saved to the session's `verdicts.json`. It only serves those
-  cuts and listed recordings. Always up under launchd as
+  plus a note, saved to the session's `verdicts.json`. **Watch the full
+  session** (`/s/<stamp>/full`) plays the whole recording — the session's own
+  kept copy (`recording.json`), else the listed recording while it is still in
+  `~/Movies` — above a list of strikes, settles, reverts and key presses; tap
+  one to jump there. It only serves those cuts, kept copies and listed
+  recordings. Always up under launchd as
   `com.cueclock.review` (`scripts/install_review_agent.sh`).
 
 | Flag | Default | What |
@@ -429,7 +433,10 @@ For each session directory under `sessions.nosync/` (the layout `run` writes):
 4. cut each moment out of the OBS recording covering it → `cuts/<id>.mp4`
    (ffmpeg stream copy, 10 s either side, matched by wall time against
    `sessions.nosync/recordings.jsonl`);
-5. move the directory to `--archive-root` when that drive is mounted: copy,
+5. when that drive is mounted, hard-link the OBS recording(s) overlapping the
+   session into `recording/` (indexed in `recording.json`; free on the SSD,
+   and the budget still prunes the original), then move the directory to
+   `--archive-root`: copy,
    check every file's size, then delete the local copy.
 
 A step that is already done is skipped, so passes repeat safely. A hook command

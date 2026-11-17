@@ -13,8 +13,12 @@ One pass, for every session directory still on the internal SSD:
 2. `cueclock session verify <dir>` → `replay.json` (the parity check);
 3. `cueclock review moments <dir>` → `moments.json` (what the review page lists);
 4. cut each moment out of the recording that covers it → `cuts/<id>.mp4`;
-5. move the directory to the T7 (`/Volumes/T7/cueclock_sessions/<stamp>/`)
-   when it is mounted — copied, sizes checked, then the local copy deleted.
+5. when the T7 is mounted, hard-link the session's full OBS recording into
+   `recording/` (listed in `recording.json`, for the review page's
+   full-session player), then move the directory to the T7
+   (`/Volumes/T7/cueclock_sessions/<stamp>/`) — copied, sizes checked, then
+   the local copy deleted. The link costs no space on the internal SSD; the
+   original in `~/Movies` stays under the footage budget below.
 
 Then footage is pruned oldest-first until it fits a byte budget (10 GB by
 default). "Footage" is exactly the files the deck listed plus the deck's own
@@ -33,13 +37,14 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shutil
 import subprocess  # nosec B404: fixed argv lists, no shell
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +61,8 @@ DEFAULT_BUDGET_GB = 10.0
 # Either side of a moment. A shot's wind-up and the settle after it both fit,
 # and at ~6 Mbps a 20 s cut is ~16 MB.
 CUT_PAD_S = 10.0
+FULL_DIR = "recording"  # the session's own copy of its full recording(s)
+FULL_INDEX = "recording.json"  # [{"file", "start_wall", "stop_wall"}], read by the review page
 HOOK_TIMEOUT_S = 600.0  # a whole-session replay measured well under a minute (#57)
 
 _STAMP = re.compile(r"^\d{8}-\d{6}$")  # the journal's `session-<stamp>.jsonl`
@@ -163,6 +170,29 @@ def cut_command(cut: Cut, out: Path) -> list[str]:
         "+faststart",  # the review page streams it; the index has to come first
         str(out),
     ]
+
+
+def journal_span(journal: Path, stamp: str) -> tuple[datetime, datetime]:
+    """Wall span a session covers: its stamp to the journal's last record."""
+    start = datetime.strptime(stamp, "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
+    end = start
+    with contextlib.suppress(OSError):
+        for line in journal.read_text().splitlines():
+            try:
+                end = max(end, parse_wall(json.loads(line)["wall"]))
+            except (ValueError, KeyError, TypeError):
+                continue
+    return start, end
+
+
+def session_recordings(
+    span: tuple[datetime, datetime], recordings: Sequence[Recording]
+) -> list[Recording]:
+    """The recordings overlapping a session's span, oldest first."""
+    lo, hi = span
+    return sorted(
+        (r for r in recordings if min(hi, r.stop) > max(lo, r.start)), key=lambda r: r.start
+    )
 
 
 @dataclass(frozen=True)
@@ -304,7 +334,47 @@ class Maintainer:
             # footage to cut from still is.
             self.say(f"{name}: kept local until both hooks exist")
             return True
+        if self.archive_root is not None:
+            # Only on the way to the T7: a link left in a session stuck on
+            # the internal SSD would keep a pruned recording's bytes alive.
+            self.keep_recording(session, recordings)
         return self.move(session)
+
+    def keep_recording(self, session: Path, recordings: Sequence[Recording]) -> None:
+        """Hard-link the full recording(s) in, so they travel to the T7 with the session.
+
+        Same APFS volume as `~/Movies`, so the link is free; `move` copies the
+        bytes to the T7 and the budget still prunes the original. A recording
+        already pruned is simply not kept — the cuts still are.
+        """
+        index = session / FULL_INDEX
+        if index.exists():
+            return
+        span = journal_span(session / "journal.jsonl", session.name)
+        kept = []
+        for rec in session_recordings(span, recordings):
+            if not rec.path.is_file():
+                continue
+            dst = session / FULL_DIR / rec.path.name
+            if self.dry_run:
+                self.say(f"{session.name}: would keep {rec.path.name} as the full recording")
+                continue
+            dst.parent.mkdir(exist_ok=True)
+            if not dst.exists():
+                try:
+                    os.link(rec.path, dst)
+                except OSError:
+                    shutil.copyfile(rec.path, dst)  # another volume: pay for a copy
+            kept.append(
+                {
+                    "file": f"{FULL_DIR}/{rec.path.name}",
+                    "start_wall": rec.start.isoformat(timespec="milliseconds"),
+                    "stop_wall": rec.stop.isoformat(timespec="milliseconds"),
+                }
+            )
+        if kept:
+            index.write_text(json.dumps(kept, indent=1) + "\n")
+            self.say(f"{session.name}: kept {len(kept)} full recording(s)")
 
     def copy_journal(self, session: Path) -> bool:
         src = self.logs / f"session-{session.name}.jsonl"

@@ -273,3 +273,50 @@ def test_session_page_reads_journal_in_plain_language(
     assert "Strike seen" in page
     assert "Pressed Restart" in page
     assert "detect_heartbeat" not in page and "Detect heartbeat" not in page
+
+
+def test_full_session_player_lists_events_and_serves_the_kept_copy(
+    roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local, _ = roots
+    session_dir = local / STAMP
+    (session_dir / "recording").mkdir()
+    (session_dir / "recording" / "full.mov").write_bytes(b"\0" * 4096)
+    (tmp_path / "outside.mov").write_bytes(b"\0")
+    start = (T0 - timedelta(seconds=10)).isoformat()
+    stop = (T0 + timedelta(hours=1)).isoformat()
+    (session_dir / "recording.json").write_text(
+        json.dumps(
+            [
+                {"file": "recording/full.mov", "start_wall": start, "stop_wall": stop},
+                {"file": "../../outside.mov", "start_wall": start, "stop_wall": stop},
+            ]
+        )
+    )
+    app = client(roots, tmp_path)
+    assert f'href="/s/{STAMP}/full"' in app.get(f"/s/{STAMP}").text
+    page = app.get(f"/s/{STAMP}/full").text
+    assert f'src="/full/{STAMP}/0"' in page
+    assert "Strike seen" in page and "data-seek=" in page
+    reply = app.get(f"/full/{STAMP}/0", headers={"Range": "bytes=0-9"})
+    assert reply.status_code == 206 and len(reply.content) == 10
+    assert app.get(f"/full/{STAMP}/1").status_code == 404  # resolves outside the session
+
+
+def test_full_session_falls_back_to_the_listed_recording(
+    roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local, _ = roots
+    video = tmp_path / "obs.mov"
+    video.write_bytes(b"\0" * 64)
+    line = {
+        "path": str(video),
+        "start_wall": T0.isoformat(),
+        "stop_wall": (T0 + timedelta(hours=1)).isoformat(),
+    }
+    (local / "recordings.jsonl").write_text(json.dumps(line) + "\n")
+    app = client(roots, tmp_path)
+    assert 'src="/recording/0"' in app.get(f"/s/{STAMP}/full").text
+    video.unlink()
+    assert "No full recording" in app.get(f"/s/{STAMP}/full").text
+    assert "/full" not in app.get(f"/s/{STAMP}").text.split("<section")[0]
