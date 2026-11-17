@@ -349,14 +349,23 @@ camera or needs `run`:
   diffs, when `replay.json` has any). About one per ten shots over the
   history. Ids are `<kind>-<mono ms>`, so re-running keeps verdicts attached.
   `cueclock session maintain` runs it on every session it archives.
+- `review check [stamp ...]` replays every judged session (or just those
+  named) through the code checked out now and grades each verdict on the
+  differences inside its moment's window: a **right** verdict *holds* or is
+  **REGRESSED**; a **wrong** one is *still wrong* or *changed* (maybe fixed —
+  re-judge it). Exit 1 on any regression. Roughly 3 minutes per hour of play:
+  the check for `events.py` / `track.py` / hub-policy work, beside the corpus
+  battery.
 - `review serve` serves the review page on the LAN (`0.0.0.0:8001`) and prints
   the URL a phone should open. It lists the session directories under
   `sessions.nosync/` and `/Volumes/T7/cueclock_sessions/` (an unmounted T7 is
   just skipped), and shows each moment with its footage — the session's
   `cuts/<id>.mp4`, else the full OBS recording from `sessions.nosync/
   recordings.jsonl` seeked to the moment, else "footage pruned" — the journal
-  lines around it in plain words, and **Clock right / Clock wrong** buttons
-  plus a note, saved to the session's `verdicts.json`. **Watch the full
+  lines around it in plain words. Judging is two steps: **Clock right / Clock
+  wrong** opens a note box, **Save** writes the session's `verdicts.json` and
+  collapses the card to a one-line summary (**Change** reopens it, **Clear
+  verdict** withdraws it); the page then scrolls to the next open moment. **Watch the full
   session** (`/s/<stamp>/full`) plays the whole recording — the session's own
   kept copy (`recording.json`), else the listed recording while it is still in
   `~/Movies` — above a list of strikes, settles, reverts and key presses; tap
@@ -435,7 +444,8 @@ For each session directory under `sessions.nosync/` (the layout `run` writes):
    `sessions.nosync/recordings.jsonl`);
 5. when that drive is mounted, hard-link the OBS recording(s) overlapping the
    session into `recording/` (indexed in `recording.json`; free on the SSD,
-   and the budget still prunes the original), then move the directory to
+   and the budget still prunes the original; only the newest `--keep-full`
+   archived sessions keep it), then move the directory to
    `--archive-root`: copy,
    check every file's size, then delete the local copy.
 
@@ -450,10 +460,25 @@ Then the **footage budget**: the recordings the deck listed in
 total ≤ `--budget-gb`. Nothing else in `~/Movies` is ever touched. One
 recording larger than the whole budget goes too, once its moments are cut.
 
+Then **retention on the T7** — every kind of evidence has a purge rule, so
+nothing grows without bound:
+
+| What | Rule |
+|---|---|
+| a moment's cut | deleted once the moment is judged (the verdict and the log remain) |
+| full recordings + unjudged cuts | only the newest `--keep-full` archived sessions keep any footage |
+| session logs + stills | `--archive-gb` for all full sessions, oldest first. A session with verdicts is **pinned** instead of deleted: stripped to its header, detection log, inputs, journal, moments, verdicts and the stills inside each judged moment's window (`pinned.json` marks it), which is everything `review check` needs |
+| pinned sessions | `--pinned-gb`, oldest first |
+| journals in `logs/` | `--journals-gb`, oldest `session-*.jsonl` first |
+
 | Flag | Default | Notes |
 |---|---|---|
 | `--dry-run` | off | print every action, change nothing (hooks and ffmpeg aren't run) |
 | `--budget-gb` | `10` | footage kept on the internal disk, in GB (10⁹ bytes); ~3 GB per hour of recording |
+| `--keep-full` | `10` | archived sessions that keep any footage (full recording, unjudged cuts), newest first |
+| `--archive-gb` | `100` | session logs + stills on the T7 (~1.7 GB per hour of play) |
+| `--pinned-gb` | `5` | pinned sessions (judged, stripped to their detection log) |
+| `--journals-gb` | `1` | session journals in `logs/` (~1 MB each) |
 | `--root` | `sessions.nosync/` | local session root |
 | `--archive-root` | `/Volumes/T7/cueclock_sessions` | under `/Volumes` it must be a mounted volume, or sessions stay local |
 | `--logs` | `logs/` | where the session journals are |

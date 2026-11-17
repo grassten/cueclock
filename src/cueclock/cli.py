@@ -1014,6 +1014,22 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 def _cmd_review(args: argparse.Namespace) -> int:
     """#57 desk-side review: find a session's moments, or serve the review page."""
+    if args.action == "check":
+        from cueclock import archive
+        from cueclock.review import check, sessions
+
+        judged = check.judged_sessions([sessions.LOCAL_ROOT, archive.ARCHIVE_ROOT], args.stamps)
+        if not judged:
+            print("no judged sessions with a detection log")
+            return 0
+        regressed = 0
+        for session in judged:
+            for r in check.check_session(session):
+                regressed += r.status == "REGRESSED"
+                print(f"{r.stamp}  {r.moment_id:28}  {r.verdict:5}  {r.status}")
+                for d in r.diffs[:3]:
+                    print(f"      {d['summary']}")
+        return 1 if regressed else 0
     if args.action == "moments":
         from collections import Counter
 
@@ -1143,6 +1159,10 @@ def _cmd_maintain(args: argparse.Namespace) -> int:
         logs=Path(args.logs).expanduser(),
         movies=Path(args.movies).expanduser(),
         budget_bytes=int(args.budget_gb * 1e9),
+        keep_full=args.keep_full,
+        archive_bytes=int(args.archive_gb * 1e9),
+        pinned_bytes=int(args.pinned_gb * 1e9),
+        journals_bytes=int(args.journals_gb * 1e9),
         dry_run=args.dry_run,
     ).pass_()
 
@@ -1282,6 +1302,12 @@ def main(argv: list[str] | None = None) -> int:
         help="bind address (default 0.0.0.0, the LAN)",
     )
     p_serve.add_argument("--port", type=int, default=8001, help="port (default 8001)")
+    p_check = review_sub.add_parser(
+        "check", help="replay judged sessions through current code; grade each verdict"
+    )
+    p_check.add_argument(
+        "stamps", nargs="*", help="only these sessions (default: every judged one)"
+    )
     for p in (p_moments, p_serve):
         p.add_argument(
             "--logs", type=Path, default=Path("logs"), help="journal directory (default logs/)"
@@ -1367,6 +1393,21 @@ def main(argv: list[str] | None = None) -> int:
         default=archive.DEFAULT_BUDGET_GB,
         help=f"footage kept on the internal disk (default {archive.DEFAULT_BUDGET_GB:.0f} GB)",
     )
+    p_maintain.add_argument(
+        "--keep-full",
+        type=int,
+        default=archive.DEFAULT_KEEP_FULL,
+        help="archived sessions that keep any footage, newest first "
+        f"(default {archive.DEFAULT_KEEP_FULL})",
+    )
+    for flag, default, what in (
+        ("--archive-gb", archive.DEFAULT_ARCHIVE_GB, "session logs + stills on the T7"),
+        ("--pinned-gb", archive.DEFAULT_PINNED_GB, "pinned (judged, stripped) sessions"),
+        ("--journals-gb", archive.DEFAULT_JOURNALS_GB, "session journals in logs/"),
+    ):
+        p_maintain.add_argument(
+            flag, type=float, default=default, help=f"budget for {what} (default {default:g} GB)"
+        )
     p_maintain.add_argument(
         "--root", default=str(archive.SESSIONS_ROOT), help="local session root (sessions.nosync/)"
     )

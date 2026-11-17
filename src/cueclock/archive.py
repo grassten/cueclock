@@ -2,9 +2,11 @@
 
 A session leaves two kinds of evidence behind. The **session directory**
 (`sessions.nosync/<stamp>/`, written by `run`) is the detection log, raw stills
-and replay header — small, and kept forever. The **OBS recording** (`~/Movies`,
-listed in `sessions.nosync/recordings.jsonl` by the deck's Session key) is ~3 GB
-an hour and disposable once the moments worth a look have been cut out of it.
+and replay header — kept on the T7 under a byte budget, pinned (stripped
+to what replaying its verdicts needs) if Steven judged any of its moments.
+The **OBS recording** (`~/Movies`, listed
+in `sessions.nosync/recordings.jsonl` by the deck's Session key) is ~4.4 GB an
+hour and disposable once the moments worth a look have been cut out of it.
 
 One pass, for every session directory still on the internal SSD:
 
@@ -21,7 +23,10 @@ One pass, for every session directory still on the internal SSD:
    original in `~/Movies` stays under the footage budget below.
 
 Then footage is pruned oldest-first until it fits a byte budget (10 GB by
-default). "Footage" is exactly the files the deck listed plus the deck's own
+default), and the T7's retention rules run (`Maintainer.retain`): judged cuts
+go, footage lasts the newest 10 sessions, logs + stills, pinned sessions and
+journals each have a budget. Nothing grows without bound. "Footage" on the
+internal disk is exactly the files the deck listed plus the deck's own
 Replay-key saves; nothing else in `~/Movies` is ever looked at.
 
 Every step skips work that is already done, so a pass is safe to repeat — the
@@ -58,6 +63,19 @@ MOVIES = Path.home() / "Movies"
 FFMPEG = "/opt/homebrew/bin/ffmpeg"  # absolute: launchd's PATH has no Homebrew
 
 DEFAULT_BUDGET_GB = 10.0
+# Retention (Steven, 2026-11-17: no linear growth — a purge rule for everything).
+# Footage lasts the newest DEFAULT_KEEP_FULL archived sessions; a moment's cut
+# goes as soon as it is judged. Session logs + stills share one T7 budget,
+# oldest session first; a session with verdicts is *pinned* on the way out —
+# stripped to its detection log, inputs, journal and the stills around each
+# judged moment, which is all `review check` needs to replay it — and pinned
+# sessions have a budget of their own. Journals in logs/ get one too.
+DEFAULT_KEEP_FULL = 10
+DEFAULT_ARCHIVE_GB = 100.0  # ~60 hours of play at ~1.7 GB/hour of log + stills
+DEFAULT_PINNED_GB = 5.0  # ~50 hours of detection log, if every session had a verdict
+DEFAULT_JOURNALS_GB = 1.0  # ~1 MB per session journal: decades, but bounded
+VERDICTS_FILE = "verdicts.json"  # written by the review page
+PINNED_MARK = "pinned.json"  # a stripped session: what was kept, and when
 # Either side of a moment. A shot's wind-up and the settle after it both fit,
 # and at ~6 Mbps a 20 s cut is ~16 MB.
 CUT_PAD_S = 10.0
@@ -170,6 +188,26 @@ def cut_command(cut: Cut, out: Path) -> list[str]:
         "+faststart",  # the review page streams it; the index has to come first
         str(out),
     ]
+
+
+def _size(path: Path) -> int:
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+
+
+def _json_dict(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _json_list(path: Path) -> list[Any]:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
 
 
 def journal_span(journal: Path, stamp: str) -> tuple[datetime, datetime]:
@@ -299,6 +337,10 @@ class Maintainer:
     movies: Path = MOVIES
     recordings_log: Path | None = None  # default: <root>/recordings.jsonl
     budget_bytes: int = int(DEFAULT_BUDGET_GB * 1e9)
+    keep_full: int = DEFAULT_KEEP_FULL
+    archive_bytes: int = int(DEFAULT_ARCHIVE_GB * 1e9)
+    pinned_bytes: int = int(DEFAULT_PINNED_GB * 1e9)
+    journals_bytes: int = int(DEFAULT_JOURNALS_GB * 1e9)
     dry_run: bool = False
     run: Callable[[Sequence[str], float], tuple[int, str]] = _run_command
     say: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
@@ -316,7 +358,177 @@ class Maintainer:
         for session in self.sessions():
             ok &= self.maintain_session(session, recordings)
         ok &= self.prune(recordings)
+        ok &= self.retain()
         return 0 if ok else 1
+
+    def archived(self) -> list[Path]:
+        """Session directories on the T7, oldest first ([] when it isn't mounted)."""
+        if self.archive_root is None:
+            return []
+        try:
+            return sorted(
+                p for p in self.archive_root.iterdir() if p.is_dir() and _STAMP.match(p.name)
+            )
+        except OSError:
+            return []
+
+    def _remove(self, path: Path) -> None:
+        if self.dry_run:
+            return
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+
+    def retain(self) -> bool:
+        """Every purge rule, in order. Each is idempotent; a failure stops the rest."""
+        try:
+            self.drop_judged_cuts()
+            self.expire_footage()
+            self.fit_archive()
+            self.fit_journals()
+        except OSError as exc:
+            self.say(f"retention: stopped ({exc})")
+            return False
+        return True
+
+    def drop_judged_cuts(self) -> None:
+        """A judged moment's cut has done its job: the verdict and the log remain."""
+        for session in self.sessions() + self.archived():
+            judged = _json_dict(session / VERDICTS_FILE)
+            for mid in judged:
+                cut = session / "cuts" / f"{mid}.mp4"
+                if _MOMENT_ID.match(mid) and cut.is_file():
+                    self._remove(cut)
+                    self.say(f"{session.name}: {self._verb} the judged cut {mid}")
+
+    def expire_footage(self) -> None:
+        """Only the newest `keep_full` archived sessions keep any footage."""
+        archived = self.archived()
+        for session in archived[: max(0, len(archived) - self.keep_full)]:
+            gone = [
+                p
+                for p in (session / FULL_DIR, session / FULL_INDEX, session / "cuts")
+                if p.exists()
+            ]
+            for path in gone:
+                self._remove(path)
+            if gone:
+                self.say(
+                    f"{session.name}: {self._verb} its footage "
+                    f"(only the newest {self.keep_full} sessions keep any)"
+                )
+
+    def fit_archive(self) -> None:
+        """Hold full sessions to `archive_bytes` and pinned ones to `pinned_bytes`.
+
+        Oldest first. A session leaving the full budget is pinned if it has
+        verdicts (they are regression evidence), deleted otherwise.
+        """
+        full = [s for s in self.archived() if not (s / PINNED_MARK).exists()]
+        total = sum(_size(s) for s in full)
+        for session in full:
+            if total <= self.archive_bytes:
+                break
+            before = _size(session)
+            if _json_dict(session / VERDICTS_FILE):
+                self.pin(session)
+            else:
+                self._remove(session)
+                self.say(
+                    f"{session.name}: {self._verb} (session budget "
+                    f"{self.archive_bytes / 1e9:.0f} GB)"
+                )
+            total -= before
+        pinned = [s for s in self.archived() if (s / PINNED_MARK).exists()]
+        total = sum(_size(s) for s in pinned)
+        for session in pinned:
+            if total <= self.pinned_bytes:
+                break
+            total -= _size(session)
+            self._remove(session)
+            self.say(
+                f"{session.name}: {self._verb} the pinned session "
+                f"(pinned budget {self.pinned_bytes / 1e9:.0f} GB)"
+            )
+
+    def pin(self, session: Path) -> None:
+        """Strip a judged session to what replaying its verdicts needs.
+
+        Kept: header, detection log, inputs, journal, moments, verdicts, the
+        parity verdict, and the stills within each judged moment's window.
+        Gone: every other still, footage, the replay journal.
+        """
+        judged = _json_dict(session / VERDICTS_FILE)
+        windows = []
+        for moment in _json_list(session / "moments.json"):
+            if isinstance(moment, dict) and moment.get("id") in judged:
+                with contextlib.suppress(KeyError, ValueError, TypeError):
+                    windows.append(
+                        (parse_wall(moment["start_wall"]), parse_wall(moment["end_wall"]))
+                    )
+        index = session / "stills" / "index.jsonl"
+        keep: list[dict[str, Any]] = []
+        drop: list[dict[str, Any]] = []
+        with contextlib.suppress(OSError):
+            for line in index.read_text().splitlines():
+                try:
+                    entry = json.loads(line)
+                    when = parse_wall(entry["wall"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                (keep if any(lo <= when <= hi for lo, hi in windows) else drop).append(entry)
+        self.say(
+            f"{session.name}: {'would pin' if self.dry_run else 'pinned'} "
+            f"({len(judged)} verdicts, {len(keep)} still sets kept)"
+        )
+        if self.dry_run:
+            return
+        kept_files = {name for entry in keep for name in entry.get("files", [])}
+        for entry in drop:
+            for name in entry.get("files", []):
+                # Two triggers on one frame share a PNG: never delete a kept one.
+                if isinstance(name, str) and _MOMENT_ID.match(name) and name not in kept_files:
+                    (session / "stills" / name).unlink(missing_ok=True)
+        if index.exists():
+            index.write_text("".join(json.dumps(e) + "\n" for e in keep))
+        for path in (
+            session / FULL_DIR,
+            session / FULL_INDEX,
+            session / "cuts",
+            session / "replay-journal.jsonl",
+        ):
+            self._remove(path)
+        (session / PINNED_MARK).write_text(
+            json.dumps(
+                {
+                    "pinned_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                    "verdicts": len(judged),
+                    "still_sets": len(keep),
+                }
+            )
+            + "\n"
+        )
+
+    def fit_journals(self) -> None:
+        """Session journals in logs/, oldest first, under `journals_bytes`."""
+        try:
+            journals = sorted(self.logs.glob("session-*.jsonl"))
+        except OSError:
+            return
+        total = sum(p.stat().st_size for p in journals)
+        for path in journals:
+            if total <= self.journals_bytes:
+                break
+            total -= path.stat().st_size
+            self._remove(path)
+            self.say(
+                f"{path.name}: {self._verb} (journal budget {self.journals_bytes / 1e9:.1f} GB)"
+            )
+
+    @property
+    def _verb(self) -> str:
+        return "would drop" if self.dry_run else "dropped"
 
     def maintain_session(self, session: Path, recordings: Sequence[Recording]) -> bool:
         name = session.name

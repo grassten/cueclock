@@ -122,9 +122,23 @@ button { flex:1; font:inherit; padding:12px; border-radius:10px; cursor:pointer;
          border:2px solid var(--line); background:transparent; color:var(--fg); }
 button.right.on { border-color:var(--right); color:var(--right); }
 button.wrong.on { border-color:var(--wrong); color:var(--wrong); }
-textarea { width:100%; font:inherit; margin-top:8px; padding:8px; border-radius:8px;
+button.save { background:var(--fg); color:var(--bg); border-color:var(--fg); font-weight:600; }
+textarea { width:100%; font:inherit; margin-top:10px; padding:10px; border-radius:8px;
            border:1px solid var(--line); background:transparent; color:var(--fg); }
-.card.judged { opacity:.7; }
+.compose { display:none; }
+.card.chosen .compose { display:block; }
+.summary { display:none; gap:4px 10px; align-items:baseline; flex-wrap:wrap; }
+.summary .meta { flex:1; }
+.card.done .summary { display:flex; }
+.card.done .body { display:none; }
+.card.done { padding:10px 14px; }
+.summary .note-text { color:var(--dim); order:9; flex-basis:100%; }
+.summary .note-text:empty { display:none; }
+.verdict-text { font-weight:600; white-space:nowrap; }
+.verdict-text.right { color:var(--right); }
+.verdict-text.wrong { color:var(--wrong); }
+.links { display:flex; justify-content:space-between; margin-top:8px; font-size:.9rem; }
+#progress { margin:-.6rem 0 1rem; }
 .events { max-height:45vh; overflow-y:auto; }
 .events a { text-decoration:none; display:flex; gap:10px; padding:4px 0; }
 .events li.moment a { font-weight:600; }
@@ -132,23 +146,58 @@ video.full { position:sticky; top:0; z-index:1; }
 """
 
 _SCRIPT = """
+// A verdict is two steps: pick Right/Wrong (opens the note), then Save, which
+// collapses the card to a one-line summary and moves on to the next open one.
 document.querySelectorAll('.card[data-id]').forEach(card => {
   const note = card.querySelector('textarea');
-  const send = verdict => fetch(card.dataset.post, {method:'POST',
+  const saveBtn = card.querySelector('.save');
+  const pick = v => {
+    card.dataset.pick = v;
+    card.classList.toggle('chosen', !!v);
+    card.querySelectorAll('.pick').forEach(b => b.classList.toggle('on', b.value === v));
+    if (v) { saveBtn.textContent = v === 'right' ? 'Save: clock right' : 'Save: clock wrong';
+             note.focus({preventScroll:true}); }
+  };
+  const post = verdict => fetch(card.dataset.post, {method:'POST',
       headers:{'content-type':'application/json'},
       body: JSON.stringify({verdict, note: note.value})})
-    .then(r => { if (!r.ok) throw r; return r.json(); })
+    .then(r => { if (!r.ok) throw r; return r.json(); });
+  const progress = () => {
+    const cards = [...document.querySelectorAll('.card[data-id]')];
+    const done = cards.filter(c => c.classList.contains('done')).length;
+    const el = document.getElementById('progress');
+    if (el) el.textContent = `${done} of ${cards.length} reviewed`;
+  };
+  const collapse = v => {
+    card.dataset.verdict = v.verdict || '';
+    card.classList.toggle('done', !!v.verdict);
+    card.classList.remove('editing');
+    const sum = card.querySelector('.verdict-text');
+    sum.textContent = v.verdict === 'right' ? '✓ Clock right' : '✗ Clock wrong';
+    sum.className = 'verdict-text ' + (v.verdict || '');
+    card.querySelector('.note-text').textContent = v.note ? '— ' + v.note : '';
+    card.querySelectorAll('video').forEach(x => x.pause());
+    progress();
+  };
+  card.querySelectorAll('.pick').forEach(b => b.addEventListener('click', () => pick(b.value)));
+  saveBtn.addEventListener('click', () => post(card.dataset.pick)
     .then(v => {
-      card.dataset.verdict = v.verdict || '';
-      card.classList.toggle('judged', !!v.verdict);
-      card.querySelectorAll('button').forEach(b =>
-        b.classList.toggle('on', b.value === v.verdict));
+      collapse(v);
+      const next = [...document.querySelectorAll('.card[data-id]:not(.done)')][0];
+      (next || card).scrollIntoView({behavior:'smooth', block:'start'});
     })
+    .catch(() => alert('Not saved — is the review server still up?')));
+  card.querySelector('.change').addEventListener('click', e => {
+    e.preventDefault(); card.classList.add('editing'); card.classList.remove('done');
+    pick(card.dataset.verdict);
+  });
+  card.querySelector('.clear').addEventListener('click', e => {
+    e.preventDefault();
+    post(null).then(() => { note.value = ''; card.dataset.verdict = '';
+      card.classList.remove('done', 'editing'); pick(''); progress(); })
     .catch(() => alert('Not saved — is the review server still up?'));
-  card.querySelectorAll('button').forEach(b => b.addEventListener('click', () =>
-    send(card.dataset.verdict === b.value ? null : b.value)));
-  note.addEventListener('change', () => { if (card.dataset.verdict)
-    send(card.dataset.verdict); });
+  });
+  if (card.dataset.verdict) pick(card.dataset.verdict);
 });
 // Full-session player: tap an event to jump the video to it.
 document.querySelectorAll('[data-seek]').forEach(a => a.addEventListener('click', e => {
@@ -229,6 +278,9 @@ def create_app(
                 "<span>▶ Watch the full session</span></a>"
             )
         cards = [_card(s, m, verdicts.get(str(m.get("id"))), records, available) for m in moments]
+        judged = sum(1 for m in moments if str(m.get("id")) in verdicts)
+        if moments:
+            head += f'<p id="progress" class="dim">{judged} of {len(moments)} reviewed</p>'
         body = "".join(cards) or '<p class="dim">Nothing in this session needs a look.</p>'
         return _page(stamp, head + body, script=True)
 
@@ -400,15 +452,27 @@ def _card(
 
     call = str(given.get("verdict")) if given else ""
     note = escape(str(given.get("note", ""))) if given else ""
-    on = {v: " on" if call == v else "" for v in sess.VERDICTS}
+    kind = escape(str(moment.get("kind", "")).replace("_", " "))
+    at_clock = at.astimezone().strftime("%H:%M:%S")
+    shown = {"right": "✓ Clock right", "wrong": "✗ Clock wrong"}.get(call, "")
     return (
-        f'<section class="card{" judged" if call else ""}" id="{mid}" data-id="{mid}" '
+        f'<section class="card{" done" if call else ""}" id="{mid}" data-id="{mid}" '
         f'data-verdict="{call}" data-post="/api/verdict/{s.stamp}/{mid}">'
-        f'<div class="row"><strong>{escape(str(moment.get("kind", "")).replace("_", " "))}</strong>'
-        f'<span class="dim">{at.astimezone().strftime("%H:%M:%S")}</span></div>'
+        # Collapsed, once judged: one line, and a way back in.
+        f'<div class="summary"><span class="verdict-text {call}">{shown}</span>'
+        f'<span class="note-text">{"— " + note if note else ""}</span>'
+        f'<span class="dim meta">{kind} · {at_clock}</span>'
+        f'<a href="#" class="change">Change</a></div>'
+        f'<div class="body">'
+        f'<div class="row"><strong>{kind}</strong><span class="dim">{at_clock}</span></div>'
         f"<p>{escape(str(moment.get('summary', '')))}</p>{video}{journal}"
         f'<div class="buttons">'
-        f'<button class="right{on["right"]}" value="right">Clock right</button>'
-        f'<button class="wrong{on["wrong"]}" value="wrong">Clock wrong</button></div>'
-        f'<textarea rows="1" placeholder="Note (optional)">{note}</textarea></section>'
+        f'<button class="pick right" value="right">Clock right</button>'
+        f'<button class="pick wrong" value="wrong">Clock wrong</button></div>'
+        f'<div class="compose">'
+        f'<textarea rows="2" placeholder="Note (optional): what you saw">{note}</textarea>'
+        f'<div class="buttons"><button class="save">Save</button></div>'
+        f'<div class="links"><span></span>'
+        f'<a href="#" class="clear dim">{"Clear verdict" if call else ""}</a></div>'
+        f"</div></div></section>"
     )

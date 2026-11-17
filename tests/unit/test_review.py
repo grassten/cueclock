@@ -320,3 +320,18 @@ def test_full_session_falls_back_to_the_listed_recording(
     video.unlink()
     assert "No full recording" in app.get(f"/s/{STAMP}/full").text
     assert "/full" not in app.get(f"/s/{STAMP}").text.split("<section")[0]
+
+
+def test_a_judged_moment_renders_collapsed_with_progress(
+    roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local, _ = roots
+    mid = first_id(local / STAMP)
+    total = len(json.loads((local / STAMP / "moments.json").read_text()))
+    app = client(roots, tmp_path)
+    assert f"0 of {total} reviewed" in app.get(f"/s/{STAMP}").text
+    app.post(f"/api/verdict/{STAMP}/{mid}", json={"verdict": "wrong", "note": "it was a safety"})
+    page = app.get(f"/s/{STAMP}").text
+    assert f"1 of {total} reviewed" in page
+    assert f'<section class="card done" id="{mid}"' in page
+    assert "✗ Clock wrong" in page and "— it was a safety" in page

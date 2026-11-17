@@ -277,6 +277,27 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 124 — a purge rule for everything; verdicts that
+  bite; #57):** Steven: no linear growth of storage.
+  - **Retention** (`archive.Maintainer.retain`, every maintain pass): a
+    moment's cut is deleted once judged; only the newest 10 archived sessions
+    keep any footage (full recording, unjudged cuts); session logs + stills
+    share a 100 GB T7 budget, oldest first; a session with verdicts is
+    **pinned** instead of deleted (stripped to header, detection log, inputs,
+    journal, moments, verdicts and the stills inside each judged window);
+    pinned sessions get 5 GB, journals in `logs/` 1 GB. All flags on
+    `session maintain`. Worst case on the T7 ≈ 145 GB.
+  - **`cueclock review check`**: checkpoint 122 said "right" verdicts become
+    regression checks, but nothing used them. Now each judged session is
+    replayed through current code and every verdict graded on the diffs inside
+    its window: right → holds / REGRESSED, wrong → still wrong / changed.
+  - **Review page**: judging is pick → note → **Save**; a saved card collapses
+    to one line (verdict, note, Change), the page scrolls to the next open
+    moment, and a progress line counts what is reviewed. Rendered at phone
+    width in WKWebView against a scratch copy.
+  - Verified: unit tests 686 passed on an idle machine (4 deck-loop timing
+    tests had failed only while a live session held the server); ruff, mypy
+    clean.
 - **2026-11-17 (checkpoint 123 — the whole session, from the couch; #57):**
   first session on checkpoint 122, `session-20261117-001351`, 4 min, 10 shots.
   - **Detection held full rate with logging and stills on.** `hz`

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import shutil
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -272,3 +273,25 @@ def test_compare_tolerates_timing_but_not_verdicts() -> None:
     changed = compare(live, [live[0], rec("cmd_extension", 12.0, accepted=False)])
     assert [d["op"] for d in changed] == ["changed"]
     assert compare([*live, {"kind": "detect_heartbeat"}], live) == []
+
+
+def test_review_check_grades_verdicts_against_a_replay(tmp_path: Path) -> None:
+    """`review check`: a right verdict holds while the replay agrees with live,
+    and regresses once it doesn't (here: the log loses the Start press)."""
+    from cueclock.review import check, sessions
+
+    root = _record_live_session(tmp_path)
+    shutil.copyfile(tmp_path / "live.jsonl", root / "journal.jsonl")
+    walls = [r["wall"] for r in read_journal(root / "journal.jsonl")]
+    window = {"start_wall": walls[0], "end_wall": walls[-1]}
+    (root / "moments.json").write_text(json.dumps([{"id": "phantom-1", **window}]))
+    session = sessions.Session(root.name, root)
+    session.set_verdict("phantom-1", "right", "")
+
+    [result] = check.check_session(session)
+    assert (result.verdict, result.status) == ("right", "holds")
+
+    lines = (root / "inputs.jsonl").read_text().splitlines()
+    (root / "inputs.jsonl").write_text("\n".join(lines[1:]) + "\n")
+    [result] = check.check_session(session)
+    assert result.status == "REGRESSED" and result.diffs

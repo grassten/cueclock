@@ -337,3 +337,113 @@ def test_only_recordings_overlapping_the_session_are_kept() -> None:
     recs = [_rec("/m/before.mov", -900, -60), _rec("/m/this.mov", 0, 600)]
     span = (T0, T0 + timedelta(seconds=300))
     assert [r.path.name for r in archive.session_recordings(span, recs)] == ["this.mov"]
+
+
+# --- retention -----------------------------------------------------------------
+
+
+def _archived(t7: Path, stamp: str, *, verdicts: dict[str, object] | None = None) -> Path:
+    """An archived session: 4 still sets (1 inside moment m1's window), footage, a cut."""
+    d = t7 / stamp
+    (d / "detections").mkdir(parents=True)
+    (d / "detections" / "000000.npz").write_bytes(b"d" * 100)
+    (d / "stills").mkdir()
+    lines = []
+    for n, at in enumerate((10, 95, 100, 300)):
+        names = [f"{n:09d}.png", "shared.png" if at in (95, 300) else f"{n:09d}b.png"]
+        for name in names:
+            (d / "stills" / name).write_bytes(b"s" * 1000)
+        lines.append(json.dumps({"wall": _iso(at), "files": names}))
+    (d / "stills" / "index.jsonl").write_text("\n".join(lines) + "\n")
+    moments = [{"id": "m1", "wall": _iso(100), "start_wall": _iso(90), "end_wall": _iso(110)}]
+    (d / "moments.json").write_text(json.dumps(moments))
+    (d / archive.FULL_DIR).mkdir()
+    (d / archive.FULL_DIR / "full.mov").write_bytes(b"v" * 5000)
+    (d / archive.FULL_INDEX).write_text("[]")
+    (d / "cuts").mkdir()
+    (d / "cuts" / "m1.mp4").write_bytes(b"c")
+    if verdicts is not None:
+        (d / archive.VERDICTS_FILE).write_text(json.dumps(verdicts))
+    return d
+
+
+STAMPS = ["20261101-120000", "20261102-120000", "20261103-120000"]
+
+
+def test_a_judged_cut_is_dropped_and_unjudged_ones_stay(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    judged = _archived(t.t7, STAMPS[0], verdicts={"m1": {"verdict": "right"}})
+    open_ = _archived(t.t7, STAMPS[1])
+    t.maintainer.drop_judged_cuts()
+    assert not (judged / "cuts" / "m1.mp4").exists()
+    assert (open_ / "cuts" / "m1.mp4").is_file()
+
+
+def test_only_the_newest_sessions_keep_any_footage(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    t.maintainer.keep_full = 2
+    dirs = [_archived(t.t7, s) for s in STAMPS]
+    t.maintainer.expire_footage()
+    assert not any((dirs[0] / p).exists() for p in (archive.FULL_DIR, archive.FULL_INDEX, "cuts"))
+    assert (dirs[0] / "detections" / "000000.npz").is_file()  # the log stays
+    assert all((d / archive.FULL_INDEX).is_file() and (d / "cuts").is_dir() for d in dirs[1:])
+
+
+def test_over_budget_the_oldest_session_goes_and_a_judged_one_is_pinned(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    judged = _archived(t.t7, STAMPS[0], verdicts={"m1": {"verdict": "wrong"}})
+    plain = _archived(t.t7, STAMPS[1])
+    newest = _archived(t.t7, STAMPS[2])
+    t.maintainer.archive_bytes = archive._size(newest)  # room for exactly one
+    t.maintainer.fit_archive()
+
+    assert not plain.exists()
+    assert newest.exists() and not (newest / archive.PINNED_MARK).exists()
+    assert (judged / archive.PINNED_MARK).is_file()
+    assert (judged / "detections" / "000000.npz").is_file()
+    stills = sorted(p.name for p in (judged / "stills").glob("*.png"))
+    # Kept: the two sets inside m1's 90-110 s window, incl. the PNG shared with
+    # the 300 s set; gone: the 10 s and 300 s sets' own frames.
+    assert stills == ["000000001.png", "000000002.png", "000000002b.png", "shared.png"]
+    assert len((judged / "stills" / "index.jsonl").read_text().splitlines()) == 2
+    assert not (judged / archive.FULL_DIR).exists() and not (judged / "cuts").exists()
+
+
+def test_pinned_sessions_have_their_own_budget(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    for stamp in STAMPS[:2]:
+        d = _archived(t.t7, stamp, verdicts={"m1": {"verdict": "right"}})
+        t.maintainer.pin(d)
+    t.maintainer.pinned_bytes = archive._size(t.t7 / STAMPS[1])
+    t.maintainer.fit_archive()
+    assert not (t.t7 / STAMPS[0]).exists()
+    assert (t.t7 / STAMPS[1] / archive.PINNED_MARK).is_file()
+
+
+def test_journals_are_held_to_their_budget_oldest_first(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    for stamp in STAMPS:
+        (t.logs / f"session-{stamp}.jsonl").write_bytes(b"j" * 100)
+    (t.logs / "bracket-old.json").write_bytes(b"b" * 1000)  # not a journal: untouched
+    t.maintainer.journals_bytes = 250
+    t.maintainer.fit_journals()
+    left = sorted(p.name for p in t.logs.iterdir())
+    assert left == [
+        "bracket-old.json",
+        f"session-{STAMPS[1]}.jsonl",
+        f"session-{STAMPS[2]}.jsonl",
+        f"session-{STAMP}.jsonl",
+    ]
+
+
+def test_retention_dry_run_changes_nothing(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    _archived(t.t7, STAMPS[0], verdicts={"m1": {"verdict": "right"}})
+    _archived(t.t7, STAMPS[1])
+    t.maintainer.dry_run = True
+    t.maintainer.keep_full = 0
+    t.maintainer.archive_bytes = t.maintainer.journals_bytes = 0
+    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    assert t.maintainer.retain()
+    assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before
+    assert any("would pin" in line for line in t.lines)
