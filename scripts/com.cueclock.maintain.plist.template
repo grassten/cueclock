@@ -13,7 +13,7 @@
         <string>__REPO__/.venv/bin/python</string>
         <string>-m</string>
         <string>cueclock.cli</string>
-        <string>sessions</string>
+        <string>session</string>
         <string>maintain</string>
     </array>
     <key>WorkingDirectory</key>
