@@ -54,8 +54,11 @@ Ground rules that apply to every command:
 | `recalibrate` | Record a fresh empty-table reference, refit both, swap them in only if good (the deck's RECAL key) | owns it |
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
 | `report` | Accuracy report: missed strikes per session, read back from the journals | no |
+| `review` | Session review (#57): find a session's candidate moments, or serve the always-up review page | no |
 | `deck` | Stream Deck control-surface daemon | no |
 | `sidecam` | Side-angle camera settings: show, save the current ones, apply the saved ones | side camera only |
+| `session maintain` | After-session housekeeping: journal copy, parity check, moments, footage cuts, move to the T7, footage budget (refuses while a session is live) | no |
+| `session` | `replay` / `verify` a session log through current code against the live journal | no |
 
 ## Recipes
 
@@ -169,10 +172,20 @@ dispatch), so detect-loop starvation is measurable from the journal alone,
 and so is where the time went. A `reference_drift` record at launch carries
 the drift reading and whether it crossed the warn level.
 
-`run` keeps no frames in memory. Until checkpoint 114 it held the last 20 s
-of raw frames (~7.2 GB at 156 Hz) for the deck's Flag key (`POST /api/dump`,
-`--ring-seconds`, `--dump-dir`, `analyze --warm`); all of that was removed
-when the key went unpressed for three months (#55).
+Every session also writes a **session log** (#57) to
+`sessions.nosync/<stamp>/`, `<stamp>` being the journal's: the detector's
+output for every frame (rejected blobs included), every non-vision hub input,
+and raw stills at each strike, half a second before it, each settle and each
+operator command. `session replay` / `session verify` read it back; the layout
+and the measured costs are in `design.md` §12. The writer runs on its own
+thread and drops rather than waits when it falls behind; a `session_log`
+journal line at exit carries its counters, and any drop journals a
+`session_log_drop` line as it happens.
+
+The stills come from a ~1 s ring of raw frames (~360 MB at 156 Hz). Until
+checkpoint 114 `run` held 20 s (~7.2 GB) for the deck's Flag key
+(`POST /api/dump`, `--ring-seconds`, `--dump-dir`, `analyze --warm`); all of
+that was removed when the key went unpressed for three months (#55).
 
 ### `record`
 
@@ -319,6 +332,45 @@ used in 2 sessions out of 29, because a key you must remember is a key that
 stops being pressed. The compensation signal above needs nothing at the table
 and covers every session ever recorded, including the two that carry presses.
 
+### `review`
+
+**Desk-side review of a session (#57).** Two actions, neither touches the
+camera or needs `run`:
+
+- `review moments <session dir>` reads the session's journal (`journal.jsonl`
+  in the directory, else `logs/session-<stamp>.jsonl`) and writes
+  `moments.json` beside it: the handful of places worth a look. Kinds:
+  `reverted` (a freeze released as not-a-shot), `phantom` (exactly `report`'s
+  phantom candidates), `correction` (Restart / Start / Reset, or New Rack out
+  of a frozen clock; presses within 10 s are one moment), `idle_strike`
+  (strikes seen with the clock IDLE, burst-merged), `synthesized` (the
+  frozen-clock watchdog's settle), `quiet` (90 s of a running clock with
+  nothing seen — longer than any legal turn) and `replay` (the parity check's
+  diffs, when `replay.json` has any). About one per ten shots over the
+  history. Ids are `<kind>-<mono ms>`, so re-running keeps verdicts attached.
+  `cueclock session maintain` runs it on every session it archives.
+- `review serve` serves the review page on the LAN (`0.0.0.0:8001`) and prints
+  the URL a phone should open. It lists the session directories under
+  `sessions.nosync/` and `/Volumes/T7/cueclock_sessions/` (an unmounted T7 is
+  just skipped), and shows each moment with its footage — the session's
+  `cuts/<id>.mp4`, else the full OBS recording from `sessions.nosync/
+  recordings.jsonl` seeked to the moment, else "footage pruned" — the journal
+  lines around it in plain words, and **Clock right / Clock wrong** buttons
+  plus a note, saved to the session's `verdicts.json`. It only serves those
+  cuts and listed recordings. Always up under launchd as
+  `com.cueclock.review` (`scripts/install_review_agent.sh`).
+
+| Flag | Default | What |
+|---|---|---|
+| `--logs DIR` | `logs` | where the live journals live (both actions) |
+| `--host` | `0.0.0.0` | `serve` only: bind address |
+| `--port` | `8001` | `serve` only — never 8000, which is `run`'s |
+
+```bash
+uv run python -m cueclock.cli review moments sessions.nosync/20261116-225226
+uv run python -m cueclock.cli review serve
+```
+
 ### `deck`
 
 | Flag | Default | Notes |
@@ -359,6 +411,84 @@ uv run python -m cueclock.cli sidecam          # check it, any time
 Every deck session start re-applies whatever drifted, once OBS has the camera
 open. Needs `scripts/fetch_insta360_sdk.sh` run once: it downloads Insta360's
 SDK into gitignored `vendor.nosync/` and builds the `link-settings` helper.
+
+### `session maintain`
+
+**Everything a finished session needs, done unattended** (#57). The
+`com.cueclock.maintain` launchd agent runs it every 15 minutes
+(`hardware.md` §C7); running it by hand is the same pass. It does **nothing
+at all** while a session is live — the deck's pidfile names a live `run`, a
+server answers `--server`'s `/api/state`, or a `cueclock run` process exists —
+and exits 0, so the agent simply tries again later.
+
+For each session directory under `sessions.nosync/` (the layout `run` writes):
+
+1. copy `logs/session-<stamp>.jsonl` in as `journal.jsonl` (the original stays in `logs/`);
+2. `cueclock session verify <dir>` → `replay.json`, if that file isn't there yet;
+3. `cueclock review moments <dir>` → `moments.json`, likewise;
+4. cut each moment out of the OBS recording covering it → `cuts/<id>.mp4`
+   (ffmpeg stream copy, 10 s either side, matched by wall time against
+   `sessions.nosync/recordings.jsonl`);
+5. move the directory to `--archive-root` when that drive is mounted: copy,
+   check every file's size, then delete the local copy.
+
+A step that is already done is skipped, so passes repeat safely. A hook command
+that doesn't exist in this build is logged and skipped, and the session then
+stays local until it does. Without the T7 the session is finished in place and
+moved on a later pass.
+
+Then the **footage budget**: the recordings the deck listed in
+`recordings.jsonl`, plus the Replay key's saves (`~/Movies/Replay <date>
+<time>.mov`, which nothing else prunes), are deleted oldest-first until they
+total ≤ `--budget-gb`. Nothing else in `~/Movies` is ever touched. One
+recording larger than the whole budget goes too, once its moments are cut.
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--dry-run` | off | print every action, change nothing (hooks and ffmpeg aren't run) |
+| `--budget-gb` | `10` | footage kept on the internal disk, in GB (10⁹ bytes); ~3 GB per hour of recording |
+| `--root` | `sessions.nosync/` | local session root |
+| `--archive-root` | `/Volumes/T7/cueclock_sessions` | under `/Volumes` it must be a mounted volume, or sessions stay local |
+| `--logs` | `logs/` | where the session journals are |
+| `--movies` | `~/Movies` | OBS's recording folder (Simple output → Recording Path) |
+| `--server` | `http://127.0.0.1:8000` | a server answering here means a session is live |
+
+```bash
+uv run python -m cueclock.cli session maintain --dry-run   # what would it do?
+uv run python -m cueclock.cli session maintain
+tail -f ~/Library/Logs/cueclock-maintain.log                 # the agent's passes
+```
+
+Exit 1 when a step failed (that session stays local and is retried next pass).
+
+### `session`
+
+**Replay a session log through the code checked out now** (#57). `<session>`
+is a stamp (`20261116-225226`), looked up in `sessions.nosync/` and then the
+T7 archive `/Volumes/T7/cueclock_sessions/`, or a session directory.
+
+| Subcommand | What |
+|---|---|
+| `replay <session>` | logged detections → tracker → events → hub on a virtual clock, inputs re-applied at their logged times, ticks at 10 Hz; writes a journal in the live format |
+| `verify <session>` | replay, then compare its decision records (vision verdicts, provisionals, commands, tick transitions: kind, state, rack_shots, verdict fields, remaining within 0.2 s) with the live journal; writes `<session>/replay.json`. Exit 0 = reproduced, 1 = diverged, 2 = nothing to compare |
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--out` | `<session>/replay-journal.jsonl` | the replay's journal |
+| `--from`, `--to` (`replay`) | whole session | keep records from / stop at: seconds into the session, or an ISO wall time (UTC unless it says otherwise). Replay still starts at the top, since the tracker and clock need the history |
+| `--journal` (`verify`) | `<session>/journal.jsonl`, else `logs/session-<stamp>.jsonl` | the live journal |
+
+```bash
+uv run python -m cueclock.cli session verify 20261116-225226
+uv run python -m cueclock.cli session replay 20261116-225226 --from 600 --to 660
+```
+
+`replay.json` carries `ok`, `code_sha` (HEAD now), `same_code` (HEAD equals
+the session's `git_sha` and neither tree was dirty) and up to 50 `diffs`, each
+with the live record's `wall`/`mono`, a one-line `summary` and both records.
+**A divergence under `same_code` means the log is missing an input**: under
+the code that ran live, replay must reproduce the session. Under newer code a
+divergence is what the change did.
 
 ### Shared display args (`run`, `replay`, `live`)
 

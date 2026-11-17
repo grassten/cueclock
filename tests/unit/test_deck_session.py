@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import signal
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import mkdtemp
 
@@ -37,6 +38,9 @@ TV_OFF = ("tv", "PowerOff")
 BIND = ("obsws", "BindSyphon")
 PROJECTOR = ("obsws", "OpenProjector")
 SIDECAM = ("sidecam", "Ensure")
+RECORD = ("obsws", "StartRecord")
+STOP_RECORD = ("obsws", "StopRecord")
+WALL0 = datetime(2026, 11, 16, 22, 0, tzinfo=UTC)
 
 
 class FakeProcess:
@@ -73,6 +77,8 @@ class Harness:
         sidecam_settles: bool = True,
         camera: bool = True,
         pidfile: Path | None = None,
+        record_elapsed: float | None = 0.0,
+        record_path: str | None = "/Movies/2026-11-16 22-00-00.mov",
     ) -> None:
         self.spawned: list[tuple[str, ...]] = []
         self.called: list[tuple[str, ...]] = []
@@ -86,6 +92,9 @@ class Harness:
         self.sidecam_settles = sidecam_settles
         self.camera = camera
         self.camera_probes = 0
+        self.record_elapsed = record_elapsed
+        self.record_path = record_path
+        self.recordings: list[dict[str, str]] = []
         self.adoptable: dict[int, FakeProcess] = {}
         self.manager = SessionManager(
             pidfile=pidfile or Path(mkdtemp()) / "session.json",
@@ -100,7 +109,19 @@ class Harness:
             tv_off=self._tv_off,
             sidecam_ready=self._sidecam_ready,
             clear_match=self._clear_match,
+            start_record=self._start_record,
+            stop_record=self._stop_record,
+            log_recording=self.recordings.append,
+            wall=lambda: WALL0 + timedelta(seconds=self.clock),
         )
+
+    def _start_record(self) -> float | None:
+        self.called.append(RECORD)
+        return self.record_elapsed
+
+    def _stop_record(self) -> str | None:
+        self.called.append(STOP_RECORD)
+        return self.record_path
 
     def _clear_match(self) -> bool:
         self.called.append(("api", "MatchClear"))
@@ -191,7 +212,7 @@ def test_start_spawns_run_and_caffeinate_then_launches_obs_when_the_server_answe
     # after it point OBS's Syphon source at this session's server and confirm
     # the TV actually came up.
     assert h.manager.tick(server_up=True) is SessionState.ON
-    assert h.called == [TV_ON, OBS_OPEN, TV_ON, BIND, PROJECTOR, SIDECAM]
+    assert h.called == [TV_ON, OBS_OPEN, TV_ON, BIND, PROJECTOR, SIDECAM, RECORD]
 
 
 def test_the_syphon_source_is_rebound_once_per_session() -> None:
@@ -205,11 +226,11 @@ def test_the_syphon_source_is_rebound_once_per_session() -> None:
     h.called.clear()
 
     h.manager.tick(server_up=True)
-    assert h.called == [TV_ON, BIND, PROJECTOR, SIDECAM]
+    assert h.called == [TV_ON, BIND, PROJECTOR, SIDECAM, RECORD]
 
-    for _ in range(5):  # all four done: stop asking
+    for _ in range(5):  # all five done: stop asking
         h.manager.tick(server_up=True)
-    assert h.called == [TV_ON, BIND, PROJECTOR, SIDECAM]
+    assert h.called == [TV_ON, BIND, PROJECTOR, SIDECAM, RECORD]
 
 
 def test_side_camera_settings_retry_until_they_take_then_stop() -> None:
@@ -654,3 +675,99 @@ def test_a_start_that_died_before_obs_has_nothing_to_quit() -> None:
     h.run_proc.exit_code = 1
     assert h.manager.tick(server_up=False) is SessionState.FAILED
     assert OBS_QUIT not in h.called
+
+
+# --- OBS session recording (#57) -------------------------------------------
+
+
+def _session_on(h: Harness) -> None:
+    h.manager.start()
+    h.manager.tick(server_up=True)  # server up: OBS launched
+    h.clock = 30.0
+    h.manager.tick(server_up=True)  # prep: recording starts here
+
+
+def test_stop_ends_the_recording_by_name_before_obs_is_told_to_quit() -> None:
+    h = Harness()
+    _session_on(h)
+    h.called.clear()
+    h.clock = 1830.0
+
+    h.manager.stop()
+    # StopRecord before the blanket output stop: it is the one request that
+    # names the file, and a quit over a live recording raises the dialog.
+    assert h.called == [
+        ("api", "MatchClear"),
+        ("signal", "SIGINT"),
+        STOP_RECORD,
+        ("obsws", "StopOutputs"),
+        OBS_QUIT,
+    ]
+    assert h.recordings == [
+        {
+            "path": "/Movies/2026-11-16 22-00-00.mov",
+            "start_wall": "2026-11-16T22:00:30.000+00:00",
+            "stop_wall": "2026-11-16T22:30:30.000+00:00",
+        }
+    ]
+
+
+def test_the_recording_starts_once_and_retries_until_obs_answers() -> None:
+    h = Harness(record_elapsed=None)  # OBS's WebSocket not up yet
+    h.manager.start()
+    h.manager.tick(server_up=True)
+    for _ in range(3):
+        h.manager.tick(server_up=True)
+    assert h.called.count(RECORD) == 3
+
+    h.record_elapsed = 0.0
+    for _ in range(5):
+        h.manager.tick(server_up=True)
+    assert h.called.count(RECORD) == 4
+
+
+def test_a_recording_that_never_starts_warns_and_logs_nothing_on_stop(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    h = Harness(record_elapsed=None)
+    h.manager.start()
+    for _ in range(PREP_ATTEMPTS + 2):
+        assert h.manager.tick(server_up=True) is SessionState.ON
+    assert "setup incomplete — recording" in capsys.readouterr().out
+
+    h.manager.stop()
+    assert STOP_RECORD not in h.called  # nothing of ours to stop
+    assert h.recordings == []
+
+
+def test_an_adopted_recording_is_back_dated_to_its_first_frame(tmp_path: Path) -> None:
+    # A restarted daemon finds OBS already recording: the file began when the
+    # first daemon started it, and cuts seek by offsets from that instant.
+    h = Harness(pidfile=tmp_path / "session.json", record_elapsed=600.0)
+    h.adoptable[777] = FakeProcess(pid=777)
+    (tmp_path / "session.json").write_text('{"run": 777}')
+    h.clock = 900.0
+    assert h.manager.tick(server_up=True) is SessionState.ON  # adopts
+    h.manager.tick(server_up=True)  # prep
+    h.manager.stop()
+    assert h.recordings[0]["start_wall"] == "2026-11-16T22:05:00.000+00:00"
+
+
+def test_an_unconfirmed_stop_leaves_the_file_unlisted() -> None:
+    # An unlisted file is one `session maintain` never cuts or deletes —
+    # the safe direction to be wrong in.
+    h = Harness(record_path=None)
+    _session_on(h)
+    h.manager.stop()
+    assert STOP_RECORD in h.called
+    assert h.recordings == []
+
+
+def test_a_failed_start_still_logs_what_it_recorded() -> None:
+    h = Harness()
+    _session_on(h)
+    h.called.clear()
+    h.run_proc.exit_code = 1
+    assert h.manager.tick(server_up=False) is SessionState.FAILED
+    assert h.called[:2] == [STOP_RECORD, ("obsws", "StopOutputs")]
+    assert len(h.recordings) == 1

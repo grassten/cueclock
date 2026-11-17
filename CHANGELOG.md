@@ -277,6 +277,45 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 122 — every session leaves evidence; #57):**
+  the Flag key's successor, with nothing to press. Built as three parallel
+  pieces and merged.
+  - **Detection log** (`capture/session_log.py`, `sessions.nosync/<stamp>/`):
+    every frame's detector output, including the blobs the gates *reject*
+    (new `DetectConfig.export_rejects`, on in `run` only; bbox, area, reason
+    bits). That is what #59 lacked: a tight rack rejected as hand-scale left
+    no trace. Offline: +0.03 ms/frame for the export, 189 B/frame
+    compressed (~106 MB/hour), written by one thread behind a bounded queue
+    that drops and journals rather than blocks the detect loop.
+  - **Stills**: raw Bayer PNG pairs (frame + churn-lag predecessor) at every
+    strike, 0.5 s before every strike (the rack before a break), every settle
+    and every hub input, from a ~1 s in-RAM ring (~360 MB). 1.6 MB/frame,
+    40 ms encode on the writer thread; ~1.5 GB/hour estimated from the
+    2026-11-16 journal. The biggest part of the log, so it is archived.
+  - **Replay** (`capture/session_replay.py`, `bridge.py`): the hub takes an
+    injected clock and every non-vision input passes one `@hub_input` seam
+    into `inputs.jsonl`. `cueclock session replay|verify` re-runs a session
+    through current code on a virtual clock. `verify` compares decisions with
+    the live journal; a divergence under the same code means the log is
+    missing an input.
+  - **OBS recording**: the Session key starts and stops it and lists each
+    file in `sessions.nosync/recordings.jsonl`. The side-cam mic is already
+    in the mix (checked read-only).
+  - **`cueclock session maintain`** (launchd `com.cueclock.maintain`, every
+    15 min, never while `run` is live): journal copy → verify → moments →
+    ffmpeg stream-copy cuts → move to `/Volumes/T7/cueclock_sessions/`.
+    Footage (listed recordings + the Replay key's saves, which nothing pruned
+    before) is held to a 10 GB budget, oldest first.
+  - **Review page** (`cueclock review serve`, launchd `com.cueclock.review`,
+    always up on :8001, LAN): sessions from both roots, each moment's cut or
+    the recording at the right offset, journal context, Right/Wrong + note →
+    `verdicts.json`. The finder (`review moments`, built on `report.py`)
+    gives ~1 moment per 10 shots over the existing journals.
+  - **Unmeasured until the next session:** detection `hz` with logging and
+    stills on (baseline p50 155.7), OBS cost of recording, `BlockID` on the
+    live camera, the real stills rate, and a first `verify` on a real log.
+  - Verified: cold corpus battery 766 passed (5:37); unit 673 passed; ruff,
+    mypy --strict, pre-commit clean.
 - **2026-11-16 (checkpoint 121 — the unheard "extension"s leave a trace;
   #53, #58):** first long session on the GPU feed (checkpoint 119),
   `session-20261116-225226`, 10 min, 22 shots.

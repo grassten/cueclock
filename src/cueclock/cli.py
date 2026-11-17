@@ -11,12 +11,14 @@ Run via:  uv run python -m cueclock.cli run --rectify
 
 import argparse
 import contextlib
+import json
 import math
 import shutil
 import signal
 import sys
 import time
 from collections import deque
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
@@ -34,6 +36,7 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from cueclock import archive
 from cueclock.audio.listener import DEFAULT_DEVICE as DEFAULT_MIC_DEVICE  # no vosk import
 from cueclock.capture.clip import CAMERA_FPS, ClipReader, ClipWriter
 from cueclock.display.pipeline import (
@@ -49,6 +52,17 @@ DISK_HEADROOM = 5 * 1024**3  # never eat the last 5 GiB of the disk
 
 DETECT_WORKERS = 3  # the M2 has 4 performance cores; the 4th runs the loop itself
 DETECT_INFLIGHT = 2 * DETECT_WORKERS  # ~38 ms of queue at 156 Hz before the grab waits
+
+# Session-log stills (#57): how far back the raw-frame ring reaches, and where
+# the "before the strike" still is taken. A ShotTaken confirms ~0.5 s after the
+# stroke, so its own frame shows the balls in flight and the one 0.5 s earlier
+# the table as it stood — for a break, the racked pack (#59). The ring also
+# has to cover the DETECT_INFLIGHT frames dispatch lags the grab by, plus the
+# churn lag. References only: `grab.Array` is already a copy (it outlives
+# Release on the detect workers), so the ring costs memory, not copies —
+# ~1 s at 156 Hz is ~360 MB.
+STILL_RING_S = 1.0
+STILL_PRE_SHOT_S = 0.5
 
 
 def _unique_dir(root: Path, label: str) -> Path:
@@ -470,12 +484,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # vosk/sounddevice imports to run() (docs/hardware.md Part D).
     from cueclock.audio.listener import ExtensionListener
     from cueclock.audio.spotter import Final
+    from cueclock.bridge import hub_calls
     from cueclock.capture.camera import open_camera
+    from cueclock.capture.session_log import (
+        SESSIONS_DIR,
+        LoggedFrame,
+        SessionLogWriter,
+        StillFrame,
+        git_state,
+    )
     from cueclock.display.syphon_out import DisplayWorker
     from cueclock.server.app import create_app
     from cueclock.server.hub import Hub
     from cueclock.vision.calibration import TableCalibration
-    from cueclock.vision.events import BallsSettled, ScratchCandidate, ScratchRefuted, ShotTaken
+    from cueclock.vision.detect import DetectConfig
+    from cueclock.vision.events import BallsSettled, ShotTaken
     from cueclock.vision.pipeline import VisionPipeline
 
     cal_path = Path(args.calibration)
@@ -501,7 +524,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
     ref_indices = np.linspace(0, len(ref_reader) - 1, num=min(15, len(ref_reader)), dtype=int)
     ref_frames = [ref_reader.frame(int(i)) for i in ref_indices]
     cadence_hz = NOMINAL_FPS / args.stride
-    vision = VisionPipeline(calibration, ref_frames, cadence_hz=cadence_hz)
+    # Rejected blobs ride into the session log (#57); they change no ball.
+    vision = VisionPipeline(
+        calibration,
+        ref_frames,
+        detect_config=DetectConfig(export_rejects=True),
+        cadence_hz=cadence_hz,
+    )
     ref_gray = np.median(
         np.stack([cv2.cvtColor(f, cv2.COLOR_BayerBG2GRAY) for f in ref_frames]), axis=0
     ).astype(np.uint8)
@@ -519,6 +548,46 @@ def _cmd_run(args: argparse.Namespace) -> int:
         archive_dir=journal_path.parent,
     )
     hub = cast(Hub, app.state.hub)
+
+    def _journal_drop(what: str, count: int) -> None:
+        loop.call_soon_threadsafe(
+            partial(hub.journal.log, "session_log_drop", what=what, count=count)
+        )
+
+    # The session log (#57), started before the server so it sees every input.
+    started_mono, started_wall = time.monotonic(), datetime.now(UTC)
+    sha, dirty = git_state()
+    slog = SessionLogWriter(
+        SESSIONS_DIR / session_stamp,
+        {
+            "stamp": session_stamp,
+            "started_wall": started_wall.isoformat(timespec="milliseconds"),
+            "started_mono": started_mono,
+            "git_sha": sha,
+            "git_dirty": dirty,
+            "cadence_hz": cadence_hz,
+            "stride": args.stride,
+            "churn_lag": vision.churn_lag,
+            "detect_config": asdict(vision.detect_config),
+            "reference": {"path": str(ref_path), "digest": vision.reference.digest()},
+            "calibration": json.loads(cal_path.read_text()),
+            "hub": {
+                "ruleset": hub.clock.ruleset.name,
+                "mode": hub.clock.mode.name,
+                "vision": hub.vision_enabled,
+                "score": _json_or_none(Path("config/score.json")),
+                "bracket": _json_or_none(Path("config/bracket.json")),
+            },
+        },
+        on_drop=_journal_drop,
+    )
+    still_requests: deque[str] = deque()  # input methods awaiting a still (loop → main)
+
+    def _on_input(record: dict[str, object]) -> None:
+        slog.input(record)
+        still_requests.append(str(record["method"]))
+
+    hub.on_input = _on_input
     server = uvicorn.Server(
         uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
     )
@@ -595,49 +664,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if exc is not None:
             print(f"clock dispatch failed: {exc!r}", file=sys.stderr)
 
-    def dispatch(event: object, t: float) -> None:
-        print(f"{t:8.3f}s  {type(event).__name__}")
-        if isinstance(event, ShotTaken):
-            coro = hub.shot_taken(
-                t, ball_id=event.ball_id, speed_mms=event.speed_mms, newborn=event.newborn
-            )
-        elif isinstance(event, BallsSettled):
-            # The rearrangement summary and mover evidence set by the same
-            # process() call that emitted this settle — the hub's E8 break
-            # adjudication and #33 settle-time shot adjudication evidence.
-            coro = hub.balls_settled(
-                t,
-                rearrange=vision.last_settle_rearrange,
-                backstop=vision.last_settle_backstop,
-                movers=vision.last_settle_movers,
-            )
-        elif isinstance(event, ScratchCandidate):
-            # Two-stage verdict (#26): the candidate also grants the #25
-            # post-scratch hold, which a refutation releases; the confirmed
-            # Scratch below stays journal-only.
-            coro = hub.scratch_candidate(
-                t,
-                x_mm=event.x_mm,
-                y_mm=event.y_mm,
-                pocket_x_mm=event.pocket_x_mm,
-                pocket_y_mm=event.pocket_y_mm,
-                whiteness=event.whiteness,
-                color_age_s=event.color_age_s,
-            )
-        elif isinstance(event, ScratchRefuted):
-            coro = hub.scratch_refuted(
-                t,
-                witness_id=event.witness_id,
-                x_mm=event.x_mm,
-                y_mm=event.y_mm,
-                whiteness=event.whiteness,
-            )
-        else:
-            # Scratch (confirmed verdict): journaled only — the clock action
-            # lives on the candidate/refuted pair above (#25)
-            coro = hub.scratch_seen(t)
-        asyncio.run_coroutine_threadsafe(coro, loop).add_done_callback(_surface)
-
     print(
         f"run -> overlay http://{args.host}:{args.port}/shotclock?view=bar | control /control | "
         f"detect ~{cadence_hz:.0f} Hz | display ~{args.fps:.0f} fps "
@@ -657,7 +683,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
     find_blobs = vision.find_blobs
     vision.reference.table_edge  # noqa: B018 — build the memos before workers race to them
     vision.reference.table_roi  # noqa: B018
-    inflight: deque[tuple[float, float, Future[TimedBlobs]]] = deque()
+    inflight: deque[tuple[int, float, float, Future[TimedBlobs]]] = deque()
+    ring: deque[StillFrame] = deque(maxlen=math.ceil(STILL_RING_S * cadence_hz))
+
+    def take_still(reason: str, t_target: float) -> None:
+        """Hand the newest ring frame at or before ``t_target`` to the session
+        log, with its churn-lag predecessor so churn can be recomputed."""
+        if not ring:
+            return
+        i = next((k for k in range(len(ring) - 1, -1, -1) if ring[k].t <= t_target), 0)
+        frames = [ring[i - vision.churn_lag], ring[i]] if i >= vision.churn_lag else [ring[i]]
+        slog.still(
+            reason,
+            mono=time.monotonic(),
+            wall=datetime.now(UTC).isoformat(timespec="milliseconds"),
+            t=ring[i].t,
+            frame_i=ring[i].frame_i,
+            frames=frames,
+        )
+
     detects = 0
     detect_s = 0.0
     detect_max_s = 0.0
@@ -669,34 +713,30 @@ def _cmd_run(args: argparse.Namespace) -> int:
         blobs = find_blobs(frame)
         return blobs, started, time.perf_counter()
 
-    def finish(t: float, t_submit: float, job: "Future[TimedBlobs]") -> None:
+    def finish(block: int, t: float, t_submit: float, job: "Future[TimedBlobs]") -> None:
         """One frame's stateful half, in frame order."""
         nonlocal detects, detect_s, detect_max_s, episode_prev
-        blobs, blobs_start, blobs_end = job.result()
+        (detections, intrusions, rejects, gray), blobs_start, blobs_end = job.result()
         loop_start = time.perf_counter()
-        events = vision.advance(t, *vision.churn(*blobs))
+        mono = time.monotonic()  # the hub's clock for this frame: replay's too (#57)
+        detections, churn, intrusions = vision.churn(detections, intrusions, gray)
+        slog.frame(LoggedFrame(block, t, mono, detections, churn, intrusions, rejects))
+        events = vision.advance(t, detections, churn, intrusions)
         dt_proc = time.perf_counter() - t_submit  # grab-to-events latency
         detects += 1
         detect_s += dt_proc
         if dt_proc > detect_max_s:
             detect_max_s = dt_proc
         for event in events:
-            dispatch(event, t)
-        # #33 Part B: the motion-episode latch edges, posted to the loop AFTER
-        # this frame's events so a same-frame ShotTaken opens the provisional
-        # itself and a same-frame settle resolves it (a falling edge with a
-        # settle is the settle; without one it is the engine's pickup discard).
-        episode = vision.episode_active
-        if episode != episode_prev:
-            episode_prev = episode
-            if episode:
-                asyncio.run_coroutine_threadsafe(hub.episode_started(t), loop).add_done_callback(
-                    _surface
-                )
-            elif not any(isinstance(e, BallsSettled) for e in events):
-                asyncio.run_coroutine_threadsafe(hub.episode_discarded(t), loop).add_done_callback(
-                    _surface
-                )
+            print(f"{t:8.3f}s  {type(event).__name__}")
+            if isinstance(event, ShotTaken):
+                take_still("shot", t)
+                take_still("pre_shot", t - STILL_PRE_SHOT_S)
+            elif isinstance(event, BallsSettled):
+                take_still("settle", t)
+        calls, episode_prev = hub_calls(hub, vision, t, events, episode_prev)
+        for call in calls:
+            asyncio.run_coroutine_threadsafe(call, loop).add_done_callback(_surface)
         # Detect-loop heartbeat stamp (attribute-only; the Hub's tick loop
         # journals it every ~5 s). The three stages are where a frame's time
         # goes (#52): waiting for a worker, inside find_blobs, and this
@@ -745,6 +785,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             t = (ts_ns - t0_ns) / 1e9
                             grabs += 1
                             frame = grab.Array
+                            block = int(grab.BlockID)  # camera frame counter: gaps are drops
                             if frame_i == 0:
                                 hub.note_reference_drift(
                                     *_warn_if_reference_stale(ref_gray, frame, calibration)
@@ -753,8 +794,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                 if len(inflight) >= DETECT_INFLIGHT:
                                     finish(*inflight.popleft())  # the pool is behind: wait
                                 job = pool.submit(timed_find_blobs, frame)
-                                inflight.append((t, time.perf_counter(), job))
-                                while inflight and inflight[0][2].done():
+                                inflight.append((block, t, time.perf_counter(), job))
+                                ring.append(StillFrame(block, t, frame))
+                                while still_requests:
+                                    take_still(f"cmd_{still_requests.popleft()}", t)
+                                while inflight and inflight[0][3].done():
                                     finish(*inflight.popleft())
                             frame_i += 1
                             if t >= next_display:
@@ -795,8 +839,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
             listener.stop()
         server.should_exit = True
         server_thread.join(timeout=5)
+        hub.journal.log("session_log", path=str(slog.root), **slog.close().as_dict())
         _log_session_summary(hub, journal_path)
     return 0
+
+
+def _json_or_none(path: Path) -> object:
+    """A JSON file's content for the session header, or None if absent/corrupt."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def _log_session_summary(hub: "Hub", journal_path: Path) -> None:
@@ -959,6 +1012,78 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_review(args: argparse.Namespace) -> int:
+    """#57 desk-side review: find a session's moments, or serve the review page."""
+    if args.action == "moments":
+        from collections import Counter
+
+        from cueclock.review import moments
+
+        try:
+            found = moments.write(args.session, args.logs)
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        kinds = ", ".join(f"{n} {k}" for k, n in sorted(Counter(m.kind for m in found).items()))
+        print(f"{len(found)} moments -> {args.session / moments.MOMENTS_FILE}  ({kinds or 'none'})")
+        return 0
+
+    import uvicorn
+
+    from cueclock.review.app import create_app
+    from cueclock.server.lan import join_url
+
+    url = join_url(args.port, "/") or f"http://127.0.0.1:{args.port}/"
+    print(f"review page: {url}", flush=True)
+    uvicorn.run(create_app(logs_dir=args.logs), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
+def _cmd_session(args: argparse.Namespace) -> int:
+    """Replay a session log through current code, or check it against its journal (#57)."""
+    if args.session_command == "maintain":
+        return _cmd_maintain(args)
+    from cueclock.capture.session_log import SessionLog, resolve_session
+    from cueclock.capture.session_replay import (
+        REPLAY_JOURNAL,
+        live_journal_of,
+        replay,
+        to_mono,
+        verify,
+    )
+
+    try:
+        log = SessionLog(resolve_session(args.session))
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    out = args.out if args.out is not None else log.root / REPLAY_JOURNAL
+    if args.session_command == "replay":
+        try:
+            lo = None if args.from_ is None else to_mono(log.header, args.from_)
+            hi = None if args.to is None else to_mono(log.header, args.to)
+        except ValueError as exc:
+            print(f"--from/--to: {exc}", file=sys.stderr)
+            return 2
+        started = time.perf_counter()
+        frames = replay(log, out, mono_from=lo, mono_to=hi)
+        print(f"replayed {frames} frames in {time.perf_counter() - started:.1f} s -> {out}")
+        return 0
+    journal = args.journal if args.journal is not None else live_journal_of(log)
+    if not journal.exists():
+        print(f"no live journal: {journal}", file=sys.stderr)
+        return 2
+    verdict = verify(log, journal, out)
+    print(
+        f"{'ok' if verdict['ok'] else 'DIVERGED'}: {verdict['live_decisions']} live / "
+        f"{verdict['replay_decisions']} replayed decisions, {verdict['diff_count']} diffs, "
+        f"same_code={verdict['same_code']} -> {log.root / 'replay.json'}"
+    )
+    for diff in verdict["diffs"][:10]:
+        print(f"  {diff['wall']}  {diff['op']:9s} {diff['summary']}")
+    return 0 if verdict["ok"] else 1
+
+
 def _cmd_sidecam(args: argparse.Namespace) -> int:
     """Side-angle camera settings: show them, save them, or put them back."""
     from cueclock.deck import sidecam
@@ -1000,6 +1125,26 @@ def _cmd_sidecam(args: argparse.Namespace) -> int:
     if saved is None:
         print("nothing saved — `cueclock sidecam save` captures the above")
     return 0
+
+
+def _cmd_maintain(args: argparse.Namespace) -> int:
+    """After-session housekeeping (`archive.py`): never while a session is live."""
+    reason = archive.live_session(args.server)
+    if reason is not None:
+        print(f"session maintain: nothing done — {reason}")
+        return 0  # not an error: the launchd agent just tries again later
+    root = Path(args.archive_root).expanduser()
+    mounted = archive.archive_available(root)
+    if not mounted:
+        print(f"session maintain: {root} not available — sessions stay local this pass")
+    return archive.Maintainer(
+        root=Path(args.root).expanduser(),
+        archive_root=root if mounted else None,
+        logs=Path(args.logs).expanduser(),
+        movies=Path(args.movies).expanduser(),
+        budget_bytes=int(args.budget_gb * 1e9),
+        dry_run=args.dry_run,
+    ).pass_()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1120,6 +1265,53 @@ def main(argv: list[str] | None = None) -> int:
         "--all", action="store_true", help="roll up every session journal on disk"
     )
 
+    p_review = sub.add_parser(
+        "review", help="session review (#57): find candidate moments, or serve the review page"
+    )
+    review_sub = p_review.add_subparsers(dest="action", required=True)
+    p_moments = review_sub.add_parser(
+        "moments", help="write <session dir>/moments.json from the session's journal"
+    )
+    p_moments.add_argument(
+        "session", type=Path, help="session directory, e.g. sessions.nosync/<stamp>"
+    )
+    p_serve = review_sub.add_parser("serve", help="serve the review page on the LAN")
+    p_serve.add_argument(
+        "--host",
+        default="0.0.0.0",  # nosec B104 — the point: Steven opens it from his phone on the LAN
+        help="bind address (default 0.0.0.0, the LAN)",
+    )
+    p_serve.add_argument("--port", type=int, default=8001, help="port (default 8001)")
+    for p in (p_moments, p_serve):
+        p.add_argument(
+            "--logs", type=Path, default=Path("logs"), help="journal directory (default logs/)"
+        )
+    p_session = sub.add_parser(
+        "session",
+        help="replay or verify a session log; maintain = after-session archive + footage prune",
+    )
+    session_sub = p_session.add_subparsers(dest="session_command", required=True)
+    p_sreplay = session_sub.add_parser("replay", help="replay a session log into a journal")
+    p_sverify = session_sub.add_parser(
+        "verify", help="replay, compare decisions with the live journal, write replay.json"
+    )
+    for sp in (p_sreplay, p_sverify):
+        sp.add_argument("session", help="session stamp (YYYYMMDD-HHMMSS) or directory")
+        sp.add_argument(
+            "--out", type=Path, help="replay journal (default <session>/replay-journal.jsonl)"
+        )
+    p_sreplay.add_argument(
+        "--from",
+        dest="from_",
+        help="keep records from here: seconds into the session, or an ISO wall time",
+    )
+    p_sreplay.add_argument("--to", help="stop here: seconds into the session, or ISO wall time")
+    p_sverify.add_argument(
+        "--journal",
+        type=Path,
+        help="live journal (default <session>/journal.jsonl, else logs/session-<stamp>.jsonl)",
+    )
+
     p_sidecam = sub.add_parser(
         "sidecam",
         help="side-angle camera settings: show, save the current ones, or apply the saved ones",
@@ -1162,6 +1354,39 @@ def main(argv: list[str] | None = None) -> int:
         "--json", action="store_true", help="print the result as JSON on the last line"
     )
 
+    p_maintain = session_sub.add_parser(
+        "maintain",
+        help="verify, find moments, cut them from the OBS recording, move to the T7, prune",
+    )
+    p_maintain.add_argument(
+        "--dry-run", action="store_true", help="print what would happen, change nothing"
+    )
+    p_maintain.add_argument(
+        "--budget-gb",
+        type=float,
+        default=archive.DEFAULT_BUDGET_GB,
+        help=f"footage kept on the internal disk (default {archive.DEFAULT_BUDGET_GB:.0f} GB)",
+    )
+    p_maintain.add_argument(
+        "--root", default=str(archive.SESSIONS_ROOT), help="local session root (sessions.nosync/)"
+    )
+    p_maintain.add_argument(
+        "--archive-root",
+        default=str(archive.ARCHIVE_ROOT),
+        help=f"where finished sessions go (default {archive.ARCHIVE_ROOT}; skipped if unmounted)",
+    )
+    p_maintain.add_argument(
+        "--logs", default=str(archive.REPO_ROOT / "logs"), help="journal directory (logs/)"
+    )
+    p_maintain.add_argument(
+        "--movies", default=str(archive.MOVIES), help="OBS recording folder (default ~/Movies)"
+    )
+    p_maintain.add_argument(
+        "--server",
+        default="http://127.0.0.1:8000",
+        help="refuse while a session answers here",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "record":
         return _cmd_record(args)
@@ -1185,6 +1410,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_deck(args)
     if args.command == "sidecam":
         return _cmd_sidecam(args)
+    if args.command == "review":
+        return _cmd_review(args)
+    if args.command == "session":
+        return _cmd_session(args)
     return _cmd_run(args)
 
 

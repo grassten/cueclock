@@ -63,7 +63,18 @@ uv run python -m cueclock.cli run --rectify --host 0.0.0.0 --fps 60
 
 # the Stream Deck daemon (normally installed as a launchd agent):
 uv run python -m cueclock.cli deck
+
+# after-session evidence (#57) — both normally launchd agents:
+uv run python -m cueclock.cli review serve      # review page, always up, :8001
+uv run python -m cueclock.cli session maintain  # verify, cut, archive to the T7
 ```
+
+- Every session leaves a replayable detection log, raw stills at each
+  strike/settle/command, and an OBS recording. After it ends, `session
+  maintain` checks that replay reproduces the live journal, cuts the moments
+  worth a look, and moves the session to the T7; the review page
+  (`http://<mac>:8001/`) plays each moment for a right/wrong verdict
+  (`docs/design.md` §12, `docs/cli.md`).
 
 - At the table there is no keyboard: the deck's **Session** key (top-left)
   runs that first command for you and launches OBS behind it — tap to start,

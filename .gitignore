@@ -53,6 +53,11 @@ config.nosync/
 # Session logs (symlinked in worktrees — see the note on config)
 logs
 
+# Per-session detection logs, inputs and stills written by `cueclock run`
+# (#57, docs/design.md §12). Local data, archived to the T7; `.nosync` for the
+# same iCloud reason as config/models.
+sessions.nosync/
+
 # Working copy of a retired implementation plan. docs/accuracy-plan.md drove
 # checkpoints 53-58 and was deleted once they landed (its reasoning lives in
 # those CHANGELOG entries and in design.md). Ignored so a local copy can be
@@ -62,3 +67,8 @@ docs/accuracy-plan.md
 # Golden diffs from the last corpus run — per-run output, not a record.
 # Written by tests/corpus/goldens.py so a truncated capture never costs a rerun.
 tests/goldens/.failures/
+
+# Per-session evidence (#57): detection logs, stills, OBS recording list.
+# `.nosync` for the same reason as config/models. No trailing slash: a worktree
+# may symlink it back to the main checkout.
+sessions.nosync

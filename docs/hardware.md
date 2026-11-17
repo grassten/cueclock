@@ -566,7 +566,8 @@ OBS's WebSocket answers ~10 s after launch: **confirm the TV is on**
 (`tv.ensure_on`, which re-fires the magic packet each attempt so a TV that
 missed the first one still comes up), **rebind the Syphon source**
 (`obsws.bind_syphon`) and **open the program projector on the TV**
-(`obsws.open_projector`, monitor 0 — the mini drives one display). Opening the
+(`obsws.open_projector`, monitor 0 — the mini drives one display), and **start
+the OBS session recording** (`obsws.start_record`, §C7). Opening the
 projector explicitly beats "Save projectors on exit", which only restores what
 was open at the last quit: a session that ended without one came back to a
 blank TV, and the key's promise is that the last session's state doesn't
@@ -609,7 +610,9 @@ tap does nothing), in this order — every step learned from live presses on
    once held the signal for 20 s and burned its whole grace window, forcing a
    pointless SIGTERM.
 2. **Drive every OBS output to stopped over obs-websocket** (replay buffer,
-   record, stream, virtual cam). Quitting OBS with *any* output active raises
+   record, stream, virtual cam). The session recording is stopped on its own
+   just before, because `StopRecord` is the one request that names the file
+   (§C7). Quitting OBS with *any* output active raises
    a modal *"OBS is still currently active"* dialog, and there is no keyboard
    at the table to click it. This **loops** rather than checking once, because
    `--startreplaybuffer` arms the buffer asynchronously — a stop pressed a few
@@ -911,6 +914,61 @@ Flag path went is in §C2.
       sleep off, and screen lock is off so nothing covers the projector.
 - [ ] `pmset -g assertions` clean after session stop.
 - [ ] OBS relaunch restores projector + replay buffer, twice in a row.
+
+### C7. Session recording + after-session housekeeping (#57, built 2026-11-16)
+
+**OBS records every deck session.** Once OBS's WebSocket answers, the Session
+key's setup retries `StartRecord` with the other prep steps (§C4); on stop it
+sends `StopRecord` before the blanket output stop and appends one line to
+`sessions.nosync/recordings.jsonl`: `{"path", "start_wall", "stop_wall"}`
+(ISO UTC, the journal's own format). A daemon restart mid-session re-adopts the
+running recording and back-dates its start by OBS's `outputDuration`, so
+offsets into the file stay right. A stop OBS doesn't confirm leaves the file
+**unlisted** — and an unlisted file is one housekeeping never cuts or deletes.
+A terminal `run` (`DEV`) is not recorded: the deck only records sessions it owns.
+
+What gets recorded is the profile's Simple-mode recording (read 2026-11-16 from
+`basic/profiles/Untitled/basic.ini`): `~/Movies`, `hybrid_mov`, Apple H.264
+(`RecQuality=HQ`), OBS's default `%CCYY-%MM-%DD %hh-%mm-%ss` file name, the
+program output at 1920×1080/60 — both angles with the overlay burned in.
+The replay buffer (600 s) shares that encoder in Simple mode, so recording
+should add a disk write, not a second encode. **Unmeasured**: the recording's
+cost to OBS frame stats and detection `hz` — read both off the first recorded
+session (journal heartbeats; OBS log's "frames missed/skipped") before trusting it.
+At the replay saves' measured ~6.6 Mbps it is ~3 GB an hour.
+
+**The side-angle mic is in the mix** (checked 2026-11-16, read-only, OBS
+closed): the scene collection's global `Mic/Aux` input is the
+`Insta360 Link 2C Pro` CoreAudio device, unmuted, volume 1.0, on every audio
+tracks, and Simple mode records track 1. The newest Replay-key save
+(2026-11-14, after the Insta360 switchover) carries a stereo AAC track
+peaking at −12.9 dB (mean −59.5 dB) — real room sound, not digital silence.
+The voice listener opens the same mic through CoreAudio, which shares input
+devices, so the two don't compete. If it ever drops out of the recording:
+OBS → Settings → Audio → Global Audio Devices → **Mic/Auxiliary Audio** =
+`Insta360 Link 2C Pro`, and check its meter moves in the Audio Mixer.
+
+**`cueclock session maintain`** (`archive.py`, `cli.md`) does the rest after
+the session: journal copy, parity check, moments, footage cuts into each
+session directory, then moves the directory to `/Volumes/T7/cueclock_sessions/`
+and prunes footage to a 10 GB budget (the listed recordings plus the Replay
+key's saves — §C4a notes nothing pruned those before). It refuses to do
+anything while a session is live, because a multi-GB T7 copy mid-session is the
+USB stall in §C5.
+
+It runs as its own launchd agent, `com.cueclock.maintain`
+(`scripts/com.cueclock.maintain.plist.template`): every 900 s plus at load,
+`ProcessType Background` + `LowPriorityIO`, logging to
+`~/Library/Logs/cueclock-maintain.log`. It reads only the repo (pinned Keep
+Downloaded), `logs/`, `sessions.nosync/` and `~/Movies` — nothing iCloud can
+evict out from under a launchd job (see CLAUDE.md on EDEADLK). Install once:
+
+```sh
+sed -e "s|__REPO__|$HOME/Desktop/cueclock|g" -e "s|__HOME__|$HOME|g" \
+    scripts/com.cueclock.maintain.plist.template \
+    > ~/Library/LaunchAgents/com.cueclock.maintain.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.plist
+```
 
 ---
 

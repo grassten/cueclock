@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the after-session housekeeping agent (docs/hardware.md §C7,
+     `cueclock session maintain`). The install line there substitutes
+     __REPO__/__HOME__. Every 15 min plus at login; a pass while a session is
+     live does nothing, so the interval needs no coordination with the deck. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cueclock.maintain</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python</string>
+        <string>-m</string>
+        <string>cueclock.cli</string>
+        <string>sessions</string>
+        <string>maintain</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <!-- Copying a session to the T7 and cutting footage is batch work: never
+         let it compete with OBS or the deck for the CPU or the disk. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/cueclock-maintain.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/cueclock-maintain.log</string>
+</dict>
+</plist>

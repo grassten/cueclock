@@ -26,10 +26,12 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import IO, Protocol
 
+from cueclock.archive import RECORDINGS_LOG
 from cueclock.deck import client, obsws, sidecam, tv
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -244,6 +246,29 @@ def _spawn(cmd: Sequence[str]) -> Process:
     )
 
 
+def _log_recording(entry: dict[str, str]) -> None:
+    """Append one finished OBS recording to `sessions.nosync/recordings.jsonl`.
+
+    `cueclock session maintain` reads this to cut review clips and to prune
+    footage by byte budget; a file not listed here is never touched by it.
+    """
+    try:
+        RECORDINGS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with RECORDINGS_LOG.open("a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError as exc:
+        print(f"session: could not log the recording ({exc})", flush=True)
+
+
+def _wall_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _iso(when: datetime) -> str:
+    """The journal's own wall format, so the two compare as equals."""
+    return when.isoformat(timespec="milliseconds")
+
+
 def _clear_match() -> bool:
     """End-of-day reset over the CLI's default server URL (`--server` in
     `run_deck` swaps in the real base). Short timeout: this rides the stop
@@ -288,6 +313,10 @@ class SessionManager:
     sidecam_ready: Callable[[], bool] = sidecam.ensure
     tv_off: Callable[[], bool] = tv.power_off
     clear_match: Callable[[], bool] = _clear_match
+    start_record: Callable[[], float | None] = obsws.start_record
+    stop_record: Callable[[], str | None] = obsws.stop_record
+    log_recording: Callable[[dict[str, str]], None] = _log_recording
+    wall: Callable[[], datetime] = _wall_now
     pidfile: Path = PIDFILE
     process_for_pid: Callable[[int], Process] = PidProcess
 
@@ -302,6 +331,8 @@ class SessionManager:
     _projector_open: bool = False
     _tv_ready: bool = False
     _sidecam_set: bool = False
+    # When the OBS recording's first frame was written; None = not recording.
+    _record_start: datetime | None = None
     _prep_tries: int = 0
     # A start that failed, held on the key until the next press retries it.
     _failure: SessionState | None = None
@@ -342,6 +373,7 @@ class SessionManager:
         self._projector_open = False
         self._tv_ready = False
         self._sidecam_set = False
+        self._record_start = None
         self._prep_tries = 0
         self._write_pidfile()
         print(f"session: starting (log: {RUN_LOG})", flush=True)
@@ -365,6 +397,10 @@ class SessionManager:
         # shutdown and burned SIGINT's entire grace window before it was even
         # sent, forcing a pointless SIGTERM.
         self._signal_run(signal.SIGINT)
+        # The recording is stopped on its own first, because StopRecord is the
+        # one request that names the file OBS wrote; the blanket stop below
+        # would end it just the same, but anonymously.
+        self._close_recording()
         # Then OBS, in three steps because each one alone has been seen to
         # fail (2026-08-02): drive every output to stopped over obs-websocket,
         # quit gracefully, and — if a dialog caught the quit anyway — click it.
@@ -421,6 +457,7 @@ class SessionManager:
             # Outputs first, same as `stop()`: the replay buffer is armed at
             # launch (`--startreplaybuffer`), and quitting over a live output
             # raises the modal dialog nobody is at the table to click.
+            self._close_recording()
             self.stop_outputs()
             self.call(OBS_QUIT)
             print("session: start failed — OBS quit so the next one comes up clean", flush=True)
@@ -490,6 +527,7 @@ class SessionManager:
         self._projector_open = False
         self._tv_ready = False
         self._sidecam_set = False
+        self._record_start = None
         self._prep_tries = 0
         print(f"session: adopted the running session (run pid {run_pid})", flush=True)
         return True
@@ -505,7 +543,13 @@ class SessionManager:
         leaving a dark wall, a black table, a blank TV or an auto-exposed side
         angle. The side camera never blocks anything: it only feeds OBS.
         """
-        done = self._tv_ready and self._syphon_bound and self._projector_open and self._sidecam_set
+        done = (
+            self._tv_ready
+            and self._syphon_bound
+            and self._projector_open
+            and self._sidecam_set
+            and self._record_start is not None
+        )
         if done or self._prep_tries >= PREP_ATTEMPTS:
             return
         self._prep_tries += 1
@@ -520,6 +564,8 @@ class SessionManager:
             self._projector_open = True
         if not self._sidecam_set and self.sidecam_ready():
             self._sidecam_set = True
+        if self._record_start is None:
+            self._open_recording()
         if self._prep_tries == PREP_ATTEMPTS:
             missing = [
                 name
@@ -528,11 +574,41 @@ class SessionManager:
                     ("table feed", self._syphon_bound),
                     ("TV projector", self._projector_open),
                     ("side camera", self._sidecam_set),
+                    ("recording", self._record_start is not None),
                 )
                 if not ok
             ]
             if missing:
                 print(f"session: setup incomplete — {', '.join(missing)}", flush=True)
+
+    def _open_recording(self) -> None:
+        """Start the session's OBS recording (#57), or note one already running.
+
+        An already-running recording reports its age, so a re-adopted session
+        back-dates its start to the file's first frame rather than to the
+        moment this daemon came back — the review cuts seek by that offset.
+        """
+        elapsed = self.start_record()
+        if elapsed is not None:
+            self._record_start = self.wall() - timedelta(seconds=elapsed)
+
+    def _close_recording(self) -> None:
+        """Stop the recording and log where it went and the wall span it covers.
+
+        Only a recording this session opened, and only one OBS names on the
+        way out: an unlisted file is one `session maintain` will never cut or
+        delete, which is the safe way to be wrong.
+        """
+        if self._record_start is None:
+            return
+        start, self._record_start = self._record_start, None
+        path = self.stop_record()
+        if path is None:
+            print("session: recording stop not confirmed — file left unlisted", flush=True)
+            return
+        self.log_recording(
+            {"path": path, "start_wall": _iso(start), "stop_wall": _iso(self.wall())}
+        )
 
     def _tick_stopping(self, stopping_since: float) -> SessionState:
         # A graceful OBS quit takes a couple of seconds, so "still alive" only
@@ -585,4 +661,5 @@ class SessionManager:
         self._projector_open = False
         self._tv_ready = False
         self._sidecam_set = False
+        self._record_start = None
         self._prep_tries = 0
