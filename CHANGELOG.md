@@ -277,6 +277,45 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 129 — the ball list's first session; #54):**
+  `session-20261117-201731`, 13.5 min, two racks of 9-ball (run_out, then
+  match), 33 shots: 0 missed, hands-off 100%, `verify` 110/110 decisions
+  with 0 diffs.
+  - **Detection unchanged.** Outside 15:18–15:23 local, `hz` p5/p50/p95
+    142.7/155.2/156.5 and `blobs_ms` p50 13.9 (checkpoint 123:
+    144.8/155.2/156.5, 15.0). Inside that window it fell to 88.9/133.4/150.7
+    because I ran the checkpoint 128 work on the Mac during play (OBS
+    screenshots and a source reload, two unit suites on 4 workers, the
+    commit hooks), against the standing no-heavy-jobs-while-live rule. The
+    dips do not line up with list reads.
+  - **The log:** 88 lists (33 settles, 55 at rest, 40 of them with an arm
+    over the table), 132 KB (~0.6 MB/hour), none dropped.
+  - **Settles: 198 of 199 readings right.** All 33 settle lists follow the
+    pot order of both racks, and the scratch settle (320 s) listed no cue
+    until the cue was put back (331 s), which is #63's signal. The one
+    wrong label: the break settle (159.7 s) read the solid 1 as the 9. It
+    lay number up, and the number circle plus the lamp's rectangular
+    reflection made its disc 0.21 white, just over the 0.20 stripe cut (the
+    lamp reflection is a known gap in #54, never built). That one error is
+    both stats rows' duplicate and one of their three "returns". The
+    tracker's count disagreed at 2 settles (159.7 s, 262.6 s); at both the
+    list matches the settles either side, so the tracker was short.
+  - **Arm-free rest lists past a break: 3 of 8 wrong, each for one read:**
+    the 5 as 13 (354.9 s, the known orange-rim case), an extra 10 (604.5
+    s), and the 8 missing a second after an arm list (710.6 s). The next
+    read corrected each. The sample is biased toward errors, because a still
+    table that reads right repeats itself and is not written. On the strip
+    they show as a one-second flicker.
+  - **Racking** (rack 0, 508–554 s) reads in pieces, as expected, mostly
+    with an arm reported; nothing judges it.
+  - **Review page:** the "Ball list at each settle" link now shows before
+    the moments finder has run on a session (it hid behind that check);
+    `review check` still grades `20261117-001351` (holds).
+  - `session-stats` read "Break auto-catch 200%" here: the first rack began
+    in run_out with no New Rack press, so two breaks over one press. The
+    denominator, not a miss.
+  - Verified: unit 703 passed; ruff clean.
+
 - **2026-11-17 (checkpoint 128 — overlay pages are never served stale):**
   the first session on checkpoint 127 started after the commit and served
   the ball strip (`/api/state` held `cue 1-9`), yet the wall showed no

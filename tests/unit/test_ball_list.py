@@ -164,6 +164,8 @@ def test_the_review_page_draws_each_settle(tmp_path: Path) -> None:
     root = _settle_session(tmp_path)
     cv2.imwrite(str(root / "stills" / "000000150.png"), _mosaic(_cloth()))
     client = TestClient(review_app([tmp_path], local_root=tmp_path, logs_dir=tmp_path))
+    # Linked before the moments finder has run on the session (it has not here).
+    assert f"/s/{root.name}/balls" in client.get(f"/s/{root.name}").text
     page = client.get(f"/s/{root.name}/balls").text
     assert "cue 1" in page and "Still pruned." in page  # 300's still is gone
     image = client.get(f"/balls/{root.name}/150.jpg")

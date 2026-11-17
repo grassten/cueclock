@@ -268,6 +268,11 @@ def create_app(
         s = session(stamp)
         moments = s.moments()
         head = f'<p><a href="/">← Sessions</a></p><h1>{_local(s.started)}</h1>'
+        if s.settle_lists():  # needs only the session log, not the moments finder
+            head += (
+                f'<a class="card row" href="/s/{s.stamp}/balls">'
+                "<span>● Ball list at each settle</span></a>"
+            )
         if moments is None:
             return _page(stamp, head + '<p class="dim">The moments finder has not run here.</p>')
         verdicts = s.verdicts()
@@ -277,11 +282,6 @@ def create_app(
             head += (
                 f'<a class="card row" href="/s/{s.stamp}/full">'
                 "<span>▶ Watch the full session</span></a>"
-            )
-        if s.settle_lists():
-            head += (
-                f'<a class="card row" href="/s/{s.stamp}/balls">'
-                "<span>● Ball list at each settle</span></a>"
             )
         cards = [_card(s, m, verdicts.get(str(m.get("id"))), records, available) for m in moments]
         judged = sum(1 for m in moments if str(m.get("id")) in verdicts)
