@@ -277,6 +277,20 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 128 — overlay pages are never served stale):**
+  the first session on checkpoint 127 started after the commit and served
+  the ball strip (`/api/state` held `cue 1-9`), yet the wall showed no
+  strip: a `GetSourceScreenshot` of "Clock + Score bar" was the old page.
+  `FileResponse` sends `Last-Modified` and no `Cache-Control`, so OBS's
+  browser cached `shotclock.html` heuristically (a tenth of its age, days
+  for a page untouched since August). A `refreshnocache` press on the
+  source put the strip up live (detect 147 Hz through it). `/shotclock`,
+  `/control`, `/replay` and `/bracket` now send `Cache-Control: no-cache`:
+  every load revalidates, and an unchanged page costs a 304. Unit test
+  added; the 4–5 `test_deck_loop` timing failures seen during the live
+  session reproduce identically on checkpoint 127 (known live-server
+  contention), server + ball-list tests 122 passed.
+
 - **2026-11-17 (checkpoint 127 — the table, ball by ball; #54):** the
   ball list and its test graphic. The clock is untouched: #63 (every scratch
   gets its hold) and #64 (ball in hand keeps the clock running) build on it.

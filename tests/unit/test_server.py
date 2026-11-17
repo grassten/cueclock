@@ -182,6 +182,14 @@ def test_websocket_snapshot_on_connect() -> None:
         assert snap["score"]["race_to"] is None
 
 
+def test_pages_are_revalidated_on_every_load() -> None:
+    """OBS's browser kept drawing a cached bar after a new `run` (2026-11-17):
+    without this header a page untouched for weeks is cached for days."""
+    with make_client() as client:
+        for page in ("/shotclock", "/control", "/replay", "/bracket"):
+            assert client.get(page).headers["cache-control"] == "no-cache", page
+
+
 def test_html_pages_served() -> None:
     with make_client() as client:
         page = client.get("/shotclock").text

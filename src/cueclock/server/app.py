@@ -25,6 +25,18 @@ STATIC_DIR = Path(__file__).parent / "static"
 VOICE_DIR = STATIC_DIR / "voice"
 
 
+def _page(name: str) -> FileResponse:
+    """One of the static pages, which every browser must re-validate on load.
+
+    Without `Cache-Control` a browser may cache a page heuristically, for a
+    tenth of its age since `Last-Modified` — days, for a page untouched for
+    weeks. OBS's browser sources did exactly that on 2026-11-17: a fresh `run`
+    served checkpoint 127's ball strip and the wall kept drawing the old page.
+    `no-cache` still lets the copy be reused, but only after a 304 says so.
+    """
+    return FileResponse(STATIC_DIR / name, headers={"Cache-Control": "no-cache"})
+
+
 def create_app(
     score_path: Path | None = None,
     journal_path: Path | None = None,
@@ -67,16 +79,16 @@ def create_app(
         two OBS sources. It replaced the standalone `/score` page on
         2026-08-03 (issue #23); `?view=full` and the bare square are unchanged.
         """
-        return FileResponse(STATIC_DIR / "shotclock.html")
+        return _page("shotclock.html")
 
     @app.get("/control")
     async def control_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "control.html")
+        return _page("control.html")
 
     @app.get("/replay")
     async def replay_page() -> FileResponse:
         """REPLAY badge for the OBS Replay scene (`?s=<seconds>` drains the bar)."""
-        return FileResponse(STATIC_DIR / "replay.html")
+        return _page("replay.html")
 
     @app.get("/bracket")
     async def bracket_page() -> FileResponse:
@@ -87,7 +99,7 @@ def create_app(
         live match is the highlighted box, so repeating either only costs the
         boxes the space that makes them readable from the couch.
         """
-        return FileResponse(STATIC_DIR / "bracket.html")
+        return _page("bracket.html")
 
     @app.get("/audio/extension_called.wav")
     async def extension_called_audio() -> FileResponse:
