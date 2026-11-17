@@ -1,6 +1,6 @@
 """The ball list (#54) on synthetic frames, and everything downstream of it:
-what counts as a changed list, the strip the hub serves, the switch, the
-session-log record and the review page's lookup. No camera, no clips."""
+what counts as a changed list, the strip the hub serves, the switch and the
+session-log record. No camera, no clips."""
 
 import json
 from pathlib import Path
@@ -11,7 +11,6 @@ import numpy.typing as npt
 from fastapi.testclient import TestClient
 
 from cueclock.capture.session_log import SessionLog, SessionLogWriter
-from cueclock.review.sessions import Session
 from cueclock.server import create_app
 from cueclock.server.hub import Hub
 from cueclock.vision.ball_list import BallList, ListedBall, read_ball_list, same_table
@@ -133,41 +132,13 @@ def test_the_control_page_switch_hides_the_strip() -> None:
     assert client.get("/api/state").json()["ball_strip"]["shown"] is True
 
 
-def _settle_session(tmp_path: Path) -> Path:
+def test_lists_are_written_to_the_session_log(tmp_path: Path) -> None:
     root = tmp_path / "20261117-120000"
     writer = SessionLogWriter(root, {"stamp": root.name})
     for frame_i, labels in ((100, ["cue", "1"]), (300, ["cue"])):
         found = BallList(balls=tuple(_ball(n, 100 * k) for k, n in enumerate(labels)), arm=False)
         assert writer.ball_list({"frame_i": frame_i, "t": frame_i / 156, **found.as_dict()})
     writer.close()
-    with (root / "stills" / "index.jsonl").open("w") as fh:
-        for frame_i, reason in ((150, "settle"), (200, "shot"), (300, "settle")):
-            fh.write(json.dumps({"frame_i": frame_i, "t": frame_i / 156, "reason": reason}) + "\n")
-    return root
-
-
-def test_lists_are_written_to_the_session_log(tmp_path: Path) -> None:
-    log = SessionLog(_settle_session(tmp_path))
+    log = SessionLog(root)
     assert [r["frame_i"] for r in log.ball_lists()] == [100, 300]
     assert BallList.from_dict(log.ball_lists()[0]).labels == ["cue", "1"]
-
-
-def test_each_settle_gets_the_list_in_force_at_its_frame(tmp_path: Path) -> None:
-    root = _settle_session(tmp_path)
-    pairs = Session(root.name, root).settle_lists()
-    assert [(s["frame_i"], r and r["frame_i"]) for s, r in pairs] == [(150, 100), (300, 300)]
-
-
-def test_the_review_page_draws_each_settle(tmp_path: Path) -> None:
-    from cueclock.review.app import create_app as review_app
-
-    root = _settle_session(tmp_path)
-    cv2.imwrite(str(root / "stills" / "000000150.png"), _mosaic(_cloth()))
-    client = TestClient(review_app([tmp_path], local_root=tmp_path, logs_dir=tmp_path))
-    # Linked before the moments finder has run on the session (it has not here).
-    assert f"/s/{root.name}/balls" in client.get(f"/s/{root.name}").text
-    page = client.get(f"/s/{root.name}/balls").text
-    assert "cue 1" in page and "Still pruned." in page  # 300's still is gone
-    image = client.get(f"/balls/{root.name}/150.jpg")
-    assert image.status_code == 200 and image.content[:2] == b"\xff\xd8"
-    assert client.get(f"/balls/{root.name}/300.jpg").status_code == 404

@@ -789,9 +789,11 @@ refined once sessions show how often it is wrong; a switch on the control
 page's Setup tab hides it.
 
 **Judging it.** `session-stats` adds the list's own rows (two balls with one
-number and a number returning within a rack are always errors); the review
-page draws each settle's still with its list (`/s/<stamp>/balls`); `cueclock
-balls` re-reads a session's stills, or a clip, offline.
+number and a number returning within a rack are always errors); `cueclock
+balls` re-reads a session's stills, or a clip, offline. The lists and stills
+are debugging logs. Amended 2026-11-17 (checkpoint 130): the review page's
+view of them was removed at Steven's request. He asks for timestamps when he
+wants to see one, and reads them off the recording.
 
 **Known limits.** A stripe showing only white gets no number until it rolls.
 A solid 5 can read 13 (its orange rim passes the rim-wrap floor). Labels were

@@ -277,6 +277,15 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 130 — the ball list leaves the review page):**
+  Steven: the settle stills with their lists drawn on them are debugging
+  logs, not something he reviews. He asks for timestamps when he wants to
+  see one. Removed `/s/<stamp>/balls`, its image route and link,
+  `review/balls.py`, and the review session's `settle_lists`/`still`
+  helpers with their tests. The lists, the stills and `cueclock balls`
+  stay. `ball_list` journal lines stay off the moment cards. Unit 701
+  passed; ruff, mypy clean.
+
 - **2026-11-17 (checkpoint 129 — the ball list's first session; #54):**
   `session-20261117-201731`, 13.5 min, two racks of 9-ball (run_out, then
   match), 33 shots: 0 missed, hands-off 100%, `verify` 110/110 decisions
