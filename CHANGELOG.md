@@ -277,6 +277,78 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 127 — the table, ball by ball; #54):** the
+  ball list and its test graphic. The clock is untouched: #63 (every scratch
+  gets its hold) and #64 (ball in hand keeps the clock running) build on it.
+  - **The list** (`vision/ball_list.py`, `design.md` §13): a pure function,
+    Bayer frame + `ReferenceModel` in, every ball's centre, cue flag, number
+    (or none) and raw readings out, plus `arm`. Ported from the #54
+    prototype as measured, with the brief's three changes: radius read at
+    each fitted centre, no private detector import (`chroma_binary` and
+    `ring_whiteness` are now public, `detect_frame` unchanged), and a ball
+    with under 10 coloured pixels gets no number instead of 9.
+  - **One measured deviation kept out:** sizing the outline search on the
+    refitted edge model lost a rack ball on 3 of 21 frames of
+    `break_dark_flight_0806` and gave 3 duplicate numbers at the 162 corpus
+    rests. The search, fill and colour disc stay on the first fit, which
+    every finding and label count was measured with (21 of 21, 2
+    duplicates); the cue ring and rim wrap use the refit, as measured.
+  - **Gates (corpus, `tests/corpus/test_corpus_ball_list.py`):** the 13
+    stills of `20261117-001351` read the rack `cue 1-9`, then 5, 8, 1, 2, 3,
+    4, 6, 7 leave, ending `cue 9` (stills copied into the corpus as
+    `stills_20261117-001351` so retention cannot take the check away);
+    racks count exactly on all seven named clips at every 2 Hz frame; one
+    cue at 57 of the 64 golden settles and none at exactly the brief's 7
+    (cue ≥ 0.87, next-whitest ≤ 0.54). At the 162 corpus rests the labels
+    agree with the prototype on 1,476 of 1,478 balls, with 2 duplicates and
+    9 balls with no number, as the brief predicted. Read time on the 64
+    settles: p50 18 ms, p95 28 ms, max ~100 ms.
+  - **Live** (`cli.py` `run`): read on the detect pool at every settle and
+    once a second while the engine reports no episode and no motion,
+    consumed in the order asked. Every settle's list is written; a rest
+    list only when it differs from the last written (my call on the brief:
+    a settle list is written even when unchanged, so each settle has a list
+    and the tracker's count beside it). Written = `balls.jsonl` in the
+    session log, keyed by frame, plus a `ball_list` journal line. Only
+    written lists reach the hub, which keeps the latest one with no arm.
+  - **Storage:** ~0.9 KB a list at 6 balls, ~2 KB at 16. Even at one
+    written list every second that is ~7 MB an hour, against stills at
+    ~1.6 GB; it lives in the session directory, so the archive move, the
+    100 GB session budget and pinning cover it with no new rule (pinning
+    keeps it).
+  - **The strip:** chips above the bar's left end on
+    `/shotclock?view=bar` (cue, 1–15, grey `?`; a duplicate drawn twice),
+    switched from the control page's Setup tab (`POST
+    /api/ball_strip/{on,off}`, a hub input). Rendered in WKWebView against a
+    scratch server, on and off.
+  - **Judging it:** `session-stats` gains five rows (lists and arm share,
+    list count vs the tracker's at each settle, duplicate numbers, numbers
+    back within a rack, balls with no number); the review page gains
+    `/s/<stamp>/balls`, each settle's still with its list drawn (rendered at
+    phone width on a copy of `20261117-001351`); `cueclock balls` re-reads a
+    session's stills or a clip offline.
+  - **Known limits** (from #54): a stripe showing only white gets no number
+    until it rolls; a solid 5 can read 13 (a stricter rim-wrap test fixes
+    that one case but was picked on the sample it was scored on, so it is a
+    candidate, not a constant); labels were measured almost entirely on
+    older mounts with the 1115 colour references; a cue in a pocket jaw
+    reads 0.75–0.84 against the 0.65 floor; the arm test misses some hands
+    (`scratch_replace` 9.5 s, `pickup_newborn_0801` 13.5 s,
+    `ball_in_hand_place` 4.5 s) and a hand holding the cue on the cloth can
+    read "no cue, no arm" (`ball_in_hand_nudge` 1.00 s); a ball under a
+    hand is unknown until the next list.
+  - **First live session to check:** detect rate unchanged (p50 was 155.2
+    Hz) with no dropped frames; `session verify` zero diffs; `review check`
+    still working; then the session-stats rows.
+  - **Cost to detection, offline:** the 3-worker pool fed as fast as it
+    takes frames runs 539/544 frames/s with no list and 539/537 with a list
+    read every second (`break_0801`): no measurable change, against the 156
+    Hz the camera delivers. The live number is the first session's check.
+  - Verified: cold battery 804 passed in 7:27 with **zero golden changes**
+    (the two drift warnings, `parked_vote_strike_0801` and
+    `stroke_tug_strike_0801`, reproduce identically on checkpoint 126 in a
+    worktree); unit 702 passed; ruff, mypy --strict clean.
+
 - **2026-11-16 (checkpoint 126 — a forgotten session stops itself; #60.)**
   Walking away without holding Session left `run`, OBS recording (~4.4 GB/h),
   the TV and `caffeinate` up all night.

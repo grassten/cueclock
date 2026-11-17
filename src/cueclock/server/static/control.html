@@ -553,6 +553,14 @@
                 <select id="ruleset" onchange="setRuleset(this.value)"></select>
                 <p class="hint" id="ruleset-detail"></p>
             </section>
+            <!-- #54's test graphic: the strip of balls above the wall's bar. -->
+            <section>
+                <h2>Ball strip</h2>
+                <button class="ghost" id="ball-strip-btn" onclick="toggleBallStrip()">Hide ball strip</button>
+                <p class="hint">The row of balls above the bar on the TV: what the
+                    overhead camera reads on the table whenever it is still. A test
+                    graphic &mdash; it shows its mistakes as read, on purpose.</p>
+            </section>
             <!-- Rig health (#52): reference drift at launch, detect rate, balls
                  tracked. Three months of drift warnings went unread in a log
                  behind the TV; this is where somebody looks. -->
@@ -596,6 +604,16 @@
 
     async function post(url) {
         await fetch(url, { method: 'POST' });
+    }
+    let ballStripShown = true;
+    function toggleBallStrip() {
+        post('/api/ball_strip/' + (ballStripShown ? 'off' : 'on'));
+    }
+    function renderBallStrip(strip) {
+        if (!strip) return;
+        ballStripShown = strip.shown;
+        document.getElementById('ball-strip-btn').innerText =
+            ballStripShown ? 'Hide ball strip' : 'Show ball strip';
     }
     async function setRuleset(name) {
         await fetch('/api/ruleset/' + encodeURIComponent(name), { method: 'POST' });
@@ -1273,6 +1291,7 @@
 
     function render(s) {
         renderHealth(s.health);
+        renderBallStrip(s.ball_strip);
         // Freestyle (`timed: false`): there is no countdown, so the number
         // and every key about one leave and the pill says why.
         const untimed = s.timed === false;

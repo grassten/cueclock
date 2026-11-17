@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cueclock.archive import FULL_INDEX, RECORDINGS_LOG, SESSIONS_ROOT
 from cueclock.review.moments import MOMENTS_FILE, write_json
@@ -31,6 +32,22 @@ VERDICTS = ("right", "wrong")
 # id is `<kind>-<digits>`. Both are checked before either touches a path.
 STAMP = re.compile(r"^\d{8}-\d{6}$")
 MOMENT_ID = re.compile(r"^[a-z_]+-\d+$")
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out
 
 
 def _read_json(path: Path) -> object:
@@ -100,6 +117,26 @@ class Session:
             if path.is_relative_to(root) and path.is_file():
                 out.append(Recording(index, path, start, stop))
         return out
+
+    def settle_lists(self) -> list[tuple[dict[str, Any], dict[str, Any] | None]]:
+        """Each settle still with the ball list (#54) in force at its frame:
+        the newest written list at or before it. Empty before #54."""
+        lists = _read_jsonl(self.path / "balls.jsonl")
+        if not lists:
+            return []
+        out = []
+        for still in _read_jsonl(self.path / "stills" / "index.jsonl"):
+            if still.get("reason") != "settle":
+                continue
+            frame = int(still.get("frame_i", -1))
+            before = [r for r in lists if int(r.get("frame_i", -1)) <= frame]
+            out.append((still, before[-1] if before else None))
+        return out
+
+    def still(self, frame_i: int) -> Path | None:
+        """A still's raw Bayer PNG by frame number, if retention kept it."""
+        path = self.path / "stills" / f"{frame_i:09d}.png"
+        return path if path.is_file() else None
 
     def cut(self, moment_id: str) -> Path | None:
         if not MOMENT_ID.match(moment_id):

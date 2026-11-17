@@ -55,6 +55,9 @@ def test_state_snapshot_shape() -> None:
             # The rig's health line (#52): null on a bare server with no
             # vision feeding it.
             "health",
+            # The ball strip (#54): its switch, and the labels of the latest
+            # list with no arm over the table (null until `run` writes one).
+            "ball_strip",
         }
         assert snap["mode"] == "match"
         assert snap["base"] == 30

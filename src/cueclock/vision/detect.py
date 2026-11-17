@@ -337,7 +337,7 @@ class ChromaReference:
         )
 
 
-def _chroma_binary(
+def chroma_binary(
     bayer: npt.NDArray[np.uint8],
     chroma: ChromaReference,
     roi: tuple[int, int, int, int],
@@ -390,7 +390,7 @@ def _chroma_rescues(
     non-balls the rescue produced. What remains is a ball the gray path saw
     nothing of, or only crumbs below the area floor.
 
-    ``binary`` is :func:`_chroma_binary` and ``edge`` the table edge at the
+    ``binary`` is :func:`chroma_binary` and ``edge`` the table edge at the
     same quads; ``labels`` is the gray path's full-resolution crop of the
     ``roi`` window. Returns ``(cx, cy, area, bbox, whole, over_fragment)`` in
     frame pixels, through the same geometry gates and border rule as a gray
@@ -460,7 +460,7 @@ def _patch_rgb_means(
     return r, g, b
 
 
-def _ring_whiteness(
+def ring_whiteness(
     bayer: npt.NDArray[np.uint8],
     cx: float,
     cy: float,
@@ -586,7 +586,7 @@ def _split_touching(
     blob stays one merged detection, as before.
 
     ``labels`` and ``bbox`` are in the ``roi`` crop's coordinates;
-    ``chroma_binary`` is :func:`_chroma_binary` of the same crop, or None;
+    ``chroma_binary`` is :func:`chroma_binary` of the same crop, or None;
     ``sizable`` the gray labels of at least ``min_area_px``.
     """
     x, y, w, h = bbox
@@ -806,7 +806,7 @@ def detect_frame(
     if table_mask is not None:
         border_ids = set(np.unique(labels[edge]).tolist())
     roi = (ox, oy, rw, rh)
-    chroma_binary = None if chroma is None else _chroma_binary(bayer, chroma, roi, cfg)
+    colour_binary = None if chroma is None else chroma_binary(bayer, chroma, roi, cfg)
     sizable = {i for i in range(1, n) if stats[i, cv2.CC_STAT_AREA] >= cfg.min_area_px}
     detections: list[Detection] = []
     intrusions: list[Intrusion] = []
@@ -823,7 +823,7 @@ def detect_frame(
             cy=cy,
             area=area,
             bbox=bbox,
-            whiteness=_ring_whiteness(bayer, cx, cy, radius_at(cx, cy), cfg),
+            whiteness=ring_whiteness(bayer, cx, cy, radius_at(cx, cy), cfg),
             merged=area > cfg.merged_area_px or max(bbox[2], bbox[3]) > cfg.merged_extent_px,
         )
 
@@ -867,7 +867,7 @@ def detect_frame(
         merged = area > cfg.merged_area_px or max(bw, bh) > cfg.merged_extent_px
         parts = (
             _split_touching(
-                labels, i, (lx, ly, bw, bh), roi, chroma_binary, sizable, radius_at, cfg
+                labels, i, (lx, ly, bw, bh), roi, colour_binary, sizable, radius_at, cfg
             )
             if merged
             else None
@@ -891,7 +891,7 @@ def detect_frame(
                     rejects.append(Reject(bbox=bbox, area=area, reason=REJECT_SHADOW))
                 continue
         detections.append(ball(cx, cy, area, bbox))
-    if chroma is not None and chroma_binary is not None:
+    if chroma is not None and colour_binary is not None:
         edge_quads = chroma.edge[oy // 2 : oy // 2 + rh // 2, ox // 2 : ox // 2 + rw // 2]
         # The rescue defers to gray blobs of a whole ball's size or more: a
         # ball, or a hand / stick / cluster verdict. A smaller one is at most
@@ -905,7 +905,7 @@ def detect_frame(
             * radius_at(centroids[i, 0] + ox, centroids[i, 1] + oy) ** 2
         }
         rescues = _chroma_rescues(
-            chroma_binary, edge_quads, roi, labels, ball_sized, sizable - ball_sized, radius_at, cfg
+            colour_binary, edge_quads, roi, labels, ball_sized, sizable - ball_sized, radius_at, cfg
         )
         for rcx, rcy, rarea, rbbox, whole, over_fragment in rescues:
             radius = radius_at(rcx, rcy)

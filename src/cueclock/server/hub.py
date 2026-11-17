@@ -500,6 +500,12 @@ class Hub:
         # they inherit detection accuracy) and when the mode was entered.
         self._drill_reps = 0
         self._mode_entered_mono = self._now()
+        # The ball list (#54) behind the bar's test strip: the labels of the
+        # latest *written* list that had no arm over the table (a list with
+        # one can show a ball is there, never that one is gone). Set by
+        # `cueclock run` through note_ball_list; the switch starts on.
+        self._ball_strip: list[str] | None = None
+        self.ball_strip_shown = True
         # Called after a *granted* extension has been broadcast, because the
         # overlay answers that broadcast by speaking "Extension called" out of
         # the TV. `cueclock run` points it at the mic listener's mute window:
@@ -576,6 +582,7 @@ class Hub:
             "solo": self._solo(),
             "bracket": self._bracket_summary(),
             "health": self.health(),
+            "ball_strip": {"shown": self.ball_strip_shown, "balls": self._ball_strip},
         }
 
     def live_scores(self) -> tuple[int, int]:
@@ -737,6 +744,20 @@ class Hub:
         if stages is not None:
             q, b, loop = self._stage_totals
             self._stage_totals = (q + stages[0], b + stages[1], loop + stages[2])
+
+    def note_ball_list(self, labels: list[str], arm: bool) -> None:
+        """Camera-thread stamp: a ball list (#54) was written to the session
+        log. ``labels`` are in strip order (cue, 1-15, then ``?``). A list
+        with an arm over the table never replaces the one shown. Attribute
+        rebinding only, like :meth:`note_frame`."""
+        if not arm:
+            self._ball_strip = list(labels)
+
+    def journal_ball_list(self, **detail: object) -> None:
+        """Journal one written ball list (asyncio loop only, like every
+        journal write), stamped with the clock's state and rack count so its
+        accuracy can be judged per rack (session-stats)."""
+        self._log("ball_list", **detail)
 
     def note_reference_drift(self, drift: float, stale: bool) -> None:
         """Camera-thread stamp: the launch-time reference check (#52).
@@ -953,6 +974,13 @@ class Hub:
     async def set_vision(self, enabled: bool) -> None:
         self.vision_enabled = enabled
         self._log("cmd_vision", enabled=enabled)
+        await self.broadcast(self.clock.snapshot())
+
+    @hub_input
+    async def set_ball_strip(self, shown: bool) -> None:
+        """Show or hide the bar's ball strip (#54's test graphic)."""
+        self.ball_strip_shown = shown
+        self._log("cmd_ball_strip", shown=shown)
         await self.broadcast(self.clock.snapshot())
 
     async def score_changed(self) -> None:

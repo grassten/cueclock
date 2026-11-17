@@ -32,6 +32,7 @@
         .scores,
         .stats,
         .cell-divider,
+        .ball-strip,
         .mode-eyebrow { display: none; }
 
         .clock-square {
@@ -518,6 +519,56 @@
         /* Same one-shot glow the score digits use, on the count stats only —
            a rep landing mid-drill should be visible from the table. */
         body.bar .stat-value.pulse { animation: bar-score-pulse 0.9s ease-out; }
+
+        /* ---- the ball strip (#54): a test graphic, refined later ----
+           Which balls the overhead reads on a still table, as read: the cue,
+           1 to 15, then a grey ? per ball with no number. No smoothing and no
+           memory, so its mistakes are visible. It floats just above the
+           plinth's left end, on its own ink pill, because what is behind it
+           is the side-angle video. 16 chips stay far inside the seam. */
+        body.bar .ball-strip {
+            display: flex;
+            position: absolute;
+            left: 36px;
+            bottom: calc(100% + 14px);
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 25px;
+            background: rgba(11, 14, 19, 0.82);
+        }
+        body.bar .ball-strip[hidden] { display: none; }
+        body.bar .ball {
+            --c: #888;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: var(--c);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+        }
+        body.bar .ball.stripe {
+            background: linear-gradient(to bottom,
+                #F4F1EA 0 24%, var(--c) 24% 76%, #F4F1EA 76% 100%);
+        }
+        body.bar .ball.cue { background: #F4F1EA; }
+        body.bar .ball .num {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: #fff;
+            color: var(--ink);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+        body.bar .ball.unknown { background: #4A525C; }
+        body.bar .ball.unknown .num { background: none; color: #fff; font-size: 18px; }
     </style>
 </head>
 <body>
@@ -555,6 +606,9 @@
         </div>
 
         <div class="cell-divider"></div>
+
+        <!-- The ball strip (#54): filled from `ball_strip` on every payload. -->
+        <div class="ball-strip" id="ball-strip" hidden></div>
 
         <div class="clock-square" id="clock">
             <svg class="clock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
@@ -811,7 +865,46 @@
             return true;
         }
 
+        // ---- the ball strip (#54) ----
+        // One colour per number, solids and stripes alike; 9-15 draw white
+        // caps above and below a band of the same colour as 1-7.
+        const BALL_COLOURS = {
+            1: '#F2C500', 2: '#1F4FC4', 3: '#D62A1E', 4: '#5E2B8C',
+            5: '#F2761B', 6: '#138A47', 7: '#7D1F22', 8: '#15171A',
+        };
+        const stripEl = document.getElementById('ball-strip');
+        let shownStrip = null;  // the labels drawn, so a repeat redraws nothing
+        function renderStrip(strip) {
+            const balls = strip && strip.shown && strip.balls && strip.balls.length
+                ? strip.balls : null;
+            stripEl.hidden = balls === null;
+            const key = balls ? balls.join(' ') : null;
+            if (balls === null || key === shownStrip) { shownStrip = key; return; }
+            shownStrip = key;
+            stripEl.replaceChildren(...balls.map(label => {
+                const chip = document.createElement('div');
+                chip.className = 'ball';
+                const num = document.createElement('span');
+                num.className = 'num';
+                if (label === 'cue') {
+                    chip.classList.add('cue');
+                } else if (label === '?') {
+                    chip.classList.add('unknown');
+                    num.innerText = '?';
+                    chip.append(num);
+                } else {
+                    const n = parseInt(label, 10);
+                    chip.style.setProperty('--c', BALL_COLOURS[n > 8 ? n - 8 : n] || '#888');
+                    if (n > 8) chip.classList.add('stripe');
+                    num.innerText = label;
+                    chip.append(num);
+                }
+                return chip;
+            }));
+        }
+
         function renderBar(state) {
+            renderStrip(state.ball_strip);
             plinthEl.className = 'plinth ' + barPhase(state) + (renderSolo(state) ? ' solo' : '');
             eyebrowEl.innerText = (state.mode ?? '').replace(/_/g, ' ').toUpperCase();
 

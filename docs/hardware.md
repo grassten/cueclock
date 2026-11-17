@@ -193,6 +193,12 @@ grab thread (BayerRG8 @ 156 fps)
   what gets *recorded* is the room, from Mic/Aux. Every other pairing of those
   two switches fails somewhere (Part D). 2668 is the seam where the overhead strip
   begins, so nothing it draws can reach the table.
+  Since 2026-11-17 (checkpoint 127, #54) the same page also draws the **ball
+  strip**: one chip per ball the overhead reads on a still table (cue, 1–15,
+  then a grey `?` for a ball with no number), on its own ink pill just above
+  the plinth's left end. It is a test graphic and shows the list as read,
+  mistakes included; the control page's Setup tab has the switch (it starts
+  on with every `run`). No source or scene changed for it.
   Clock and score come from one page because the drain runs the full width of
   the bar, crossing from the score area into the clock cell, and no overlay can
   span two OBS sources. It replaced two sources that were both defects: a

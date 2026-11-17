@@ -8,6 +8,8 @@
         inputs.jsonl         every non-vision hub input (`hub.hub_input`)
         stills/index.jsonl   one line per still trigger
         stills/*.png         raw Bayer frames, lossless
+        balls.jsonl          the ball list (#54) at each settle, and at rest
+                             whenever it changed, keyed by its frame
 
 The detection log is the seam `capture.detect_cache` already caches offline —
 the detector's output, before churn's state and everything after it — so a
@@ -57,6 +59,7 @@ INPUTS_NAME = "inputs.jsonl"
 DETECTIONS_DIR = "detections"
 STILLS_DIR = "stills"
 STILLS_INDEX = "index.jsonl"
+BALLS_NAME = "balls.jsonl"
 
 CHUNK_SECONDS = 10.0  # of camera time per detections chunk: what a crash can lose
 QUEUE_ITEMS = 32  # chunks and stills waiting for the writer — ~5 min of chunks
@@ -96,9 +99,11 @@ class WriterStats:
     chunks: int = 0
     stills: int = 0
     pngs: int = 0
+    ball_lists: int = 0
     bytes: int = 0
     dropped_frames: int = 0
     dropped_stills: int = 0
+    dropped_ball_lists: int = 0
     chunk_s: float = 0.0  # writer-thread seconds spent compressing + writing chunks
     png_s: float = 0.0  # ... encoding + writing PNGs
 
@@ -243,6 +248,17 @@ class SessionLogWriter:
             if self._on_drop is not None:
                 self._on_drop("still", 1)
 
+    def ball_list(self, record: dict[str, object]) -> bool:
+        """One ball list (#54), already keyed by its frame. False when the
+        queue was full and it was dropped: a caller that shows lists must
+        show only the ones that were written, so replay sees what live saw."""
+        if self._offer(("balls", json.dumps(record) + "\n")):
+            return True
+        self.stats.dropped_ball_lists += 1
+        if self._on_drop is not None:
+            self._on_drop("ball_list", 1)
+        return False
+
     def input(self, record: dict[str, object]) -> None:
         line = json.dumps(record, default=_jsonable) + "\n"
         with (self.root / INPUTS_NAME).open("a") as fh:
@@ -282,6 +298,8 @@ class SessionLogWriter:
             kind, payload = item
             if kind == "chunk":
                 self._write_chunk(*payload)
+            elif kind == "balls":
+                self._write_ball_list(payload)
             else:
                 self._write_still(*payload)
 
@@ -295,6 +313,12 @@ class SessionLogWriter:
         self.stats.chunk_s += time.perf_counter() - started
         self.stats.chunks += 1
         self.stats.frames += len(frames)
+
+    def _write_ball_list(self, line: str) -> None:
+        with (self.root / BALLS_NAME).open("a") as fh:
+            fh.write(line)
+        self.stats.bytes += len(line)
+        self.stats.ball_lists += 1
 
     def _write_still(self, entry: dict[str, object], frames: list[StillFrame]) -> None:
         started = time.perf_counter()
@@ -350,6 +374,10 @@ class SessionLog:
 
     def stills(self) -> list[dict[str, Any]]:
         return _read_jsonl(self.root / STILLS_DIR / STILLS_INDEX)
+
+    def ball_lists(self) -> list[dict[str, Any]]:
+        """Every written ball list, in frame order (empty before #54)."""
+        return _read_jsonl(self.root / BALLS_NAME)
 
     def still_frame(self, name: str) -> npt.NDArray[np.uint8]:
         bayer = cv2.imread(str(self.root / STILLS_DIR / name), cv2.IMREAD_UNCHANGED)

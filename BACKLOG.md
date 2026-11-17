@@ -46,6 +46,7 @@ gh issue list --label needs:table-time       # what needs a cue in hand
   strength of a hypothesis alone.
 - **v1 scope exclusions** — `docs/design.md` §5 holds the standing YAGNI list
   (replay export, break-speed measurement, match stats,
-  16-ball identity, config hot-reload, auto-switch to final-10, match timer).
+  config hot-reload, auto-switch to final-10, match timer). 16-ball identity
+  left the list on 2026-11-17: it was built as the ball list (#54, design §13).
   It is a decision record, not a queue.
 - **Landed work** — `CHANGELOG.md`, newest checkpoint first.

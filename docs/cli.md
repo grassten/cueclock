@@ -59,6 +59,7 @@ Ground rules that apply to every command:
 | `sidecam` | Side-angle camera settings: show, save the current ones, apply the saved ones | side camera only |
 | `session maintain` | After-session housekeeping: journal copy, parity check, moments, footage cuts, move to the T7, footage budget (refuses while a session is live) | no |
 | `session` | `replay` / `verify` a session log through current code against the live journal | no |
+| `balls` | The ball list (#54) offline: over a session's stills (beside what live wrote), or a clip every N s | no |
 
 ## Recipes
 
@@ -181,6 +182,11 @@ and the measured costs are in `design.md` §12. The writer runs on its own
 thread and drops rather than waits when it falls behind; a `session_log`
 journal line at exit carries its counters, and any drop journals a
 `session_log_drop` line as it happens.
+
+It also reads the **ball list** (#54, `design.md` §13) on a detect worker at
+every settle and about once a second while nothing moves: each settle's list,
+and each rest list that differs from the last, goes to `balls.jsonl` in the
+session log, a `ball_list` journal line, and the bar's ball strip.
 
 The stills come from a ~1 s ring of raw frames (~360 MB at 156 Hz). Until
 checkpoint 114 `run` held 20 s (~7.2 GB) for the deck's Flag key
@@ -522,6 +528,31 @@ with the live record's `wall`/`mono`, a one-line `summary` and both records.
 the code that ran live, replay must reproduce the session. Under newer code a
 divergence is what the change did.
 
+
+### `balls`
+
+**The ball list (#54) offline**, from the same pure function `run` reads the
+table with (`design.md` §13). One line per frame: time, reason, `arm` when a
+hand was over the table, and the labels in strip order (`cue`, `1`–`15`, `?`).
+
+| Target | What |
+|---|---|
+| a session (stamp or directory) | every still, read against the reference and calibration the session's header names; a still with a list written live gets `= live`, or `live: <labels>` where they differ |
+| a clip directory | a frame every `--every` seconds; needs `--reference` |
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--reference` | the session's own | the empty-table clip; required for a clip |
+| `--calibration` | `config/table_calibration.json` | for a clip whose reference carries no `table_calibration.json` |
+| `--every` | `1.0` | seconds between a clip's frames |
+
+```bash
+uv run python -m cueclock.cli balls 20261117-001351
+uv run python -m cueclock.cli balls tests/clips/pickup_snatch_0801 --reference tests/clips/empty_table_0801 --every 2
+```
+
+Reads only; safe beside a live session apart from the CPU it takes (~20 ms a
+frame).
 ### Shared display args (`run`, `replay`, `live`)
 
 | Flag | Default | Notes |

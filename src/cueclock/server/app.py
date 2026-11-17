@@ -442,6 +442,17 @@ def create_app(
             return JSONResponse({"ok": True, "url": None, "qr": None})
         return JSONResponse({"ok": True, "url": url, "qr": lan.qr_data_uri(url)})
 
+    @app.post("/api/ball_strip/on")
+    async def api_ball_strip_on() -> dict[str, bool]:
+        """Show the bar's ball strip (#54's test graphic)."""
+        await hub.set_ball_strip(True)
+        return {"ok": True}
+
+    @app.post("/api/ball_strip/off")
+    async def api_ball_strip_off() -> dict[str, bool]:
+        await hub.set_ball_strip(False)
+        return {"ok": True}
+
     @app.post("/api/vision/on")
     async def api_vision_on() -> dict[str, object]:
         await hub.set_vision(True)

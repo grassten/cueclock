@@ -40,6 +40,15 @@ class Tiers:
     scratches_journaled: int = 0
     mid_rack_appeared: int = 0  # mid-rack settles reporting a ball that was not there
     mid_rack_settles: int = 0  # eligible: rack_shots >= 2 on a 3+ ball baseline
+    # The ball list (#54), from its `ball_list` journal lines (checkpoint 127+).
+    lists: int = 0
+    lists_arm: int = 0
+    settle_lists: int = 0  # settle lists with the tracker's count beside them
+    settle_lists_agree: int = 0  # ... whose ball count equals the tracker's
+    lists_duplicate: int = 0  # arm-free lists giving one number to two balls
+    numbers_returned: int = 0  # a number back after it left, within one rack
+    listed_balls: int = 0  # object balls on arm-free lists
+    unnumbered: int = 0  # ... listed with no number
 
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
@@ -79,6 +88,43 @@ class Tiers:
                 last_settle_i = i
             if rack is not None:
                 prev_rack = rack
+        self.add_ball_lists([r for r in rows if r.get("kind") == "ball_list"])
+
+    def add_ball_lists(self, rows: list[dict[str, object]]) -> None:
+        """The ball list's checks. Duplicates and returns are always errors.
+
+        A return is judged on arm-free lists from the break on (`rack_shots`
+        >= 1), so racking by hand does not count; the scope resets when
+        `rack_shots` falls back (a new rack). A list with an arm can show a
+        ball is there, never that one is gone, so it is never judged.
+        """
+        seen: set[str] = set()
+        gone: set[str] = set()
+        prev_rack = 0
+        for r in rows:
+            labels = str(r.get("balls") or "").split()
+            self.lists += 1
+            rack = r.get("rack_shots")
+            rack = rack if isinstance(rack, int) else 0
+            if rack < prev_rack:
+                seen, gone = set(), set()
+            prev_rack = rack
+            tracker = r.get("tracker")
+            if r.get("reason") == "settle" and isinstance(tracker, int):
+                self.settle_lists += 1
+                self.settle_lists_agree += len(labels) == tracker
+            if r.get("arm"):
+                self.lists_arm += 1
+                continue
+            numbers = [n for n in labels if n.isdigit()]
+            self.listed_balls += sum(n != "cue" for n in labels)
+            self.unnumbered += labels.count("?")
+            self.lists_duplicate += len(numbers) != len(set(numbers))
+            now = set(numbers)
+            if rack >= 1:  # racking moves balls on and off by hand: not judged
+                self.numbers_returned += len(now & gone)
+                gone = (gone | (seen - now)) - now
+            seen |= now
 
 
 def pct(num: float, den: float) -> str:
@@ -146,6 +192,35 @@ def table(label: str, t: Tiers) -> str:
             "settles past the break reporting a ball that was not there — lower is better",
         ),
     ]
+    if t.lists:
+        rows += [
+            (
+                "Ball lists written",
+                f"{t.lists}  ({t.lists_arm} with an arm over the table)",
+                "#54: each settle, and at rest whenever the list changed",
+            ),
+            (
+                "List count = tracker's at a settle",
+                f"{t.settle_lists_agree} / {t.settle_lists}  "
+                f"({pct(t.settle_lists_agree, t.settle_lists)})",
+                "disagreement says one of them is wrong, not which",
+            ),
+            (
+                "Lists with a number twice",
+                f"{t.lists_duplicate}  ({pct(t.lists_duplicate, t.lists - t.lists_arm)})",
+                "arm-free lists; always an error",
+            ),
+            (
+                "Numbers back after leaving",
+                str(t.numbers_returned),
+                "within one rack, from the break on; always an error",
+            ),
+            (
+                "Balls with no number",
+                f"{t.unnumbered} / {t.listed_balls}  ({pct(t.unnumbered, t.listed_balls)})",
+                "mostly a stripe resting white cap up (the known open case)",
+            ),
+        ]
     if t.dark_candidates:
         rows.append(
             (

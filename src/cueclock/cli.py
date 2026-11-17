@@ -63,6 +63,12 @@ DETECT_INFLIGHT = 2 * DETECT_WORKERS  # ~38 ms of queue at 156 Hz before the gra
 # ~1 s at 156 Hz is ~360 MB.
 STILL_RING_S = 1.0
 STILL_PRE_SHOT_S = 0.5
+# The ball list (#54) is read at every settle and this often while the table
+# is still, so it follows balls racked, lifted or put down by hand, which
+# often raise no settle (`pickup_newborn_0801`: the cue picked up and put back
+# with no event at all). One read costs p50 18 / p95 28 / max ~100 ms on the
+# corpus settles, on a detect worker.
+BALL_LIST_REST_S = 1.0
 
 
 def _unique_dir(root: Path, label: str) -> Path:
@@ -496,6 +502,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.display.syphon_out import DisplayWorker
     from cueclock.server.app import create_app
     from cueclock.server.hub import Hub
+    from cueclock.vision.ball_list import BallList, read_ball_list, same_table
     from cueclock.vision.calibration import TableCalibration
     from cueclock.vision.detect import DetectConfig
     from cueclock.vision.events import BallsSettled, ShotTaken
@@ -686,12 +693,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     inflight: deque[tuple[int, float, float, Future[TimedBlobs]]] = deque()
     ring: deque[StillFrame] = deque(maxlen=math.ceil(STILL_RING_S * cadence_hz))
 
+    def ring_index(t_target: float) -> int:
+        """The newest ring frame at or before ``t_target`` (the ring is non-empty)."""
+        return next((k for k in range(len(ring) - 1, -1, -1) if ring[k].t <= t_target), 0)
+
     def take_still(reason: str, t_target: float) -> None:
         """Hand the newest ring frame at or before ``t_target`` to the session
         log, with its churn-lag predecessor so churn can be recomputed."""
         if not ring:
             return
-        i = next((k for k in range(len(ring) - 1, -1, -1) if ring[k].t <= t_target), 0)
+        i = ring_index(t_target)
         frames = [ring[i - vision.churn_lag], ring[i]] if i >= vision.churn_lag else [ring[i]]
         slog.still(
             reason,
@@ -701,6 +712,57 @@ def _cmd_run(args: argparse.Namespace) -> int:
             frame_i=ring[i].frame_i,
             frames=frames,
         )
+
+    # The ball list (#54): read on the detect pool, consumed here in the order
+    # the reads were asked for, so whether a list counts as changed depends
+    # only on the frames, never on which worker finished first. Only lists
+    # the session log accepted reach the hub, so a replay sees what live saw.
+    list_jobs: deque[tuple[StillFrame, str, int | None, Future[BallList]]] = deque()
+    last_list: BallList | None = None
+    next_rest_list = 0.0
+
+    def read_list(reason: str, t_target: float, tracker: int | None = None) -> None:
+        nonlocal next_rest_list
+        if not ring:
+            return
+        frame = ring[ring_index(t_target)]
+        job = pool.submit(read_ball_list, frame.bayer, vision.reference)
+        list_jobs.append((frame, reason, tracker, job))
+        next_rest_list = t_target + BALL_LIST_REST_S
+
+    def drain_lists() -> None:
+        """Write each finished list that is a settle's or differs from the last."""
+        nonlocal last_list
+        while list_jobs and list_jobs[0][3].done():
+            frame, reason, tracker, job = list_jobs.popleft()
+            try:
+                found = job.result()
+            except Exception as exc:  # a fit bug must never take the clock down
+                print(f"ball list failed at {frame.t:.3f}s: {exc!r}", file=sys.stderr)
+                continue
+            if reason == "rest" and last_list is not None and same_table(last_list, found):
+                continue  # a still table repeats itself
+            record = {
+                "frame_i": frame.frame_i,
+                "t": round(frame.t, 4),
+                "reason": reason,
+                "tracker": tracker,
+                **found.as_dict(),
+            }
+            if not slog.ball_list(record):
+                continue
+            last_list = found
+            hub.note_ball_list(found.labels, found.arm)
+            loop.call_soon_threadsafe(
+                partial(
+                    hub.journal_ball_list,
+                    frame_t=round(frame.t, 3),
+                    reason=reason,
+                    arm=found.arm,
+                    balls=" ".join(found.labels),
+                    tracker=tracker,
+                )
+            )
 
     detects = 0
     detect_s = 0.0
@@ -734,6 +796,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 take_still("pre_shot", t - STILL_PRE_SHOT_S)
             elif isinstance(event, BallsSettled):
                 take_still("settle", t)
+                read_list("settle", t, tracker=sum(b.present for b in vision.last_balls))
+        if t >= next_rest_list and not vision.episode_active and not vision.last_motion:
+            read_list("rest", t)
         calls, episode_prev = hub_calls(hub, vision, t, events, episode_prev)
         for call in calls:
             asyncio.run_coroutine_threadsafe(call, loop).add_done_callback(_surface)
@@ -800,6 +865,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     take_still(f"cmd_{still_requests.popleft()}", t)
                                 while inflight and inflight[0][3].done():
                                     finish(*inflight.popleft())
+                                drain_lists()
                             frame_i += 1
                             if t >= next_display:
                                 next_display = t + display_period
@@ -1100,6 +1166,83 @@ def _cmd_session(args: argparse.Namespace) -> int:
     return 0 if verdict["ok"] else 1
 
 
+def _cmd_balls(args: argparse.Namespace) -> int:
+    """The ball list (#54) offline: over a session's stills, or over a clip.
+
+    A session is read against the reference and calibration its header
+    names, and each still's list is set beside the one live wrote for that
+    frame, when it wrote one. A clip needs ``--reference``.
+    """
+    import tempfile
+
+    from cueclock.capture.session_log import SessionLog, resolve_session
+    from cueclock.vision.ball_list import BallList, read_ball_list, same_table
+    from cueclock.vision.calibration import TableCalibration
+    from cueclock.vision.pipeline import ReferenceModel
+
+    def model(ref_dir: Path, calibration: TableCalibration) -> ReferenceModel:
+        reader = ClipReader(ref_dir)
+        idx = np.linspace(0, len(reader) - 1, num=min(15, len(reader)), dtype=int)
+        return ReferenceModel.build([reader.frame(int(i)) for i in idx], calibration)
+
+    def show(t: float, reason: str, found: BallList, note: str = "") -> None:
+        arm = "arm" if found.arm else "   "
+        print(f"{t:8.2f}s  {reason:16s} {arm}  {' '.join(found.labels):44s} {note}".rstrip())
+
+    target = Path(args.target)
+    if (target / "timestamps.npy").exists():  # a clip
+        if args.reference is None:
+            print("a clip needs --reference <empty-table clip>", file=sys.stderr)
+            return 2
+        ref_dir = Path(args.reference)
+        own = ref_dir / "table_calibration.json"
+        ref = model(ref_dir, TableCalibration.load(own if own.exists() else Path(args.calibration)))
+        reader = ClipReader(target)
+        ts = np.asarray(reader.timestamps)
+        for t in np.arange(float(ts[0]), float(ts[-1]) + 1e-9, args.every):
+            i = min(len(reader) - 1, int(np.searchsorted(ts, t)))
+            show(float(ts[i]), "", read_ball_list(reader.frame(i), ref))
+        return 0
+
+    try:
+        log = SessionLog(resolve_session(args.target))
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    ref_dir = Path(args.reference or log.header["reference"]["path"])
+    if not ref_dir.is_dir():
+        print(f"reference clip not found: {ref_dir} (pass --reference)", file=sys.stderr)
+        return 2
+    with tempfile.TemporaryDirectory() as tmp:
+        cal_path = Path(tmp) / "calibration.json"
+        cal_path.write_text(json.dumps(log.header["calibration"]))
+        ref = model(ref_dir, TableCalibration.load(cal_path))
+    if ref.digest() != log.header["reference"]["digest"]:
+        print("warning: the reference differs from the one this session ran on", file=sys.stderr)
+    live = {int(r["frame_i"]): BallList.from_dict(r) for r in log.ball_lists()}
+    done: set[int] = set()
+    for entry in log.stills():
+        frame_i = int(entry["frame_i"])
+        if frame_i in done:
+            continue
+        done.add(frame_i)
+        try:
+            bayer = log.still_frame(str(entry["files"][-1]))
+        except FileNotFoundError:
+            continue  # pruned by retention
+        found = read_ball_list(bayer, ref)
+        logged = live.get(frame_i)
+        note = (
+            ""
+            if logged is None
+            else "= live"
+            if same_table(found, logged)
+            else f"live: {' '.join(logged.labels)}"
+        )
+        show(float(entry["t"]), str(entry["reason"]), found, note)
+    return 0
+
+
 def _cmd_sidecam(args: argparse.Namespace) -> int:
     """Side-angle camera settings: show them, save them, or put them back."""
     from cueclock.deck import sidecam
@@ -1338,6 +1481,22 @@ def main(argv: list[str] | None = None) -> int:
         help="live journal (default <session>/journal.jsonl, else logs/session-<stamp>.jsonl)",
     )
 
+    p_balls = sub.add_parser(
+        "balls", help="the ball list (#54) offline: a session's stills, or a clip every --every s"
+    )
+    p_balls.add_argument("target", help="session stamp or directory, or a clip directory")
+    p_balls.add_argument(
+        "--reference", help="empty-table clip (required for a clip; a session names its own)"
+    )
+    p_balls.add_argument(
+        "--calibration",
+        default="config/table_calibration.json",
+        help="for a clip whose reference has no calibration of its own",
+    )
+    p_balls.add_argument(
+        "--every", type=float, default=1.0, help="seconds between a clip's frames (default 1)"
+    )
+
     p_sidecam = sub.add_parser(
         "sidecam",
         help="side-angle camera settings: show, save the current ones, or apply the saved ones",
@@ -1455,6 +1614,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_review(args)
     if args.command == "session":
         return _cmd_session(args)
+    if args.command == "balls":
+        return _cmd_balls(args)
     return _cmd_run(args)
 
 

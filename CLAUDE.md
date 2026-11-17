@@ -119,7 +119,9 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
 - Principles Steven has named explicitly: **KISS, YAGNI, DRY.** This repo will be
   open-sourced — write for a stranger reading it. v1 scope is clock + events + overlays
   (clock + scoreboard) + API + match mode (rack context, scores) + voice "extension";
-  replay export, break speed, stats, and 16-ball identity are backlog until asked for.
+  replay export, break speed and stats are backlog until asked for. 16-ball identity was
+  asked for and is built as the ball list (#54, `docs/design.md` §13), a separate output
+  that never feeds the tracker.
 
 ## Hardware / environment facts
 

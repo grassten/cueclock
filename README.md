@@ -33,6 +33,7 @@ recorded clips that replay deterministically through the vision core.
 | Session modes: match · run out · no clock — orthogonal to the ruleset | live |
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
+| Ball list: which balls are on a still table, by number, drawn as a test strip on the bar (`docs/design.md` §13) | live, being judged |
 | Session toggle (one key powers the TV on, brings up `run` + OBS + the projector — and takes it all back down) | live |
 | Instant replay: one key cuts the TV to the last shot (seeked to 1.5 s before it), or held, to the whole rack from its break | live |
 | Replay stinger + slow-mo, music keys, drill tracking | planned — [work board](https://github.com/users/grassten/projects/3) |

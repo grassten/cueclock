@@ -23,7 +23,7 @@ from html import escape
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from cueclock import archive
 from cueclock.review import sessions as sess
@@ -32,7 +32,7 @@ from cueclock.review.moments import session_journal
 DEFAULT_PORT = 8001
 
 # Journal kinds that are bookkeeping, not something that happened at the table.
-_NOISE = {"detect_heartbeat", "reference_drift", "session_summary"}
+_NOISE = {"detect_heartbeat", "reference_drift", "session_summary", "ball_list"}
 
 _PHRASES = {
     "vision_shot_taken": "Strike seen",
@@ -112,6 +112,7 @@ a { color:inherit; }
 .badge { font-size:.8rem; padding:2px 8px; border-radius:99px; border:1px solid var(--line);
          white-space:nowrap; }
 video { width:100%; border-radius:8px; background:#000; margin:8px 0; }
+img { width:100%; border-radius:8px; margin:8px 0; display:block; }
 ol { padding-left:0; list-style:none; margin:8px 0; font-size:.9rem; }
 ol li { display:flex; gap:10px; padding:2px 0; }
 ol li .at { color:var(--dim); min-width:4.2em; text-align:right;
@@ -277,6 +278,11 @@ def create_app(
                 f'<a class="card row" href="/s/{s.stamp}/full">'
                 "<span>▶ Watch the full session</span></a>"
             )
+        if s.settle_lists():
+            head += (
+                f'<a class="card row" href="/s/{s.stamp}/balls">'
+                "<span>● Ball list at each settle</span></a>"
+            )
         cards = [_card(s, m, verdicts.get(str(m.get("id"))), records, available) for m in moments]
         judged = sum(1 for m in moments if str(m.get("id")) in verdicts)
         if moments:
@@ -328,6 +334,49 @@ def create_app(
                 f'<ol class="events">{"".join(items)}</ol>'
             )
         return _page(stamp, head + "".join(parts), script=True)
+
+    @app.get("/s/{stamp}/balls", response_class=HTMLResponse)
+    async def balls_page(stamp: str) -> HTMLResponse:
+        """Each settle's still with the ball list (#54) drawn on it."""
+        s = session(stamp)
+        head = f'<p><a href="/s/{s.stamp}">← Moments</a></p><h1>{_local(s.started)}</h1>'
+        cards = []
+        for still, record in s.settle_lists():
+            frame_i = int(still.get("frame_i", -1))
+            t = float(still.get("t", 0.0))
+            if record is None:
+                labels = "no list written yet"
+            else:
+                labels = " ".join(str(b.get("label")) for b in record.get("balls", []))
+                if record.get("arm"):
+                    labels += " (arm over the table)"
+                if int(record.get("frame_i", -1)) != frame_i:
+                    labels += f" · list from {float(record.get('t', 0.0)):.1f} s"
+            image = (
+                f'<img src="/balls/{s.stamp}/{frame_i}.jpg" loading="lazy" alt="settle">'
+                if s.still(frame_i) is not None
+                else '<p class="dim">Still pruned.</p>'
+            )
+            cards.append(
+                f'<section class="card"><div class="row"><strong>Settle</strong>'
+                f'<span class="dim">{_clock(t)}</span></div>'
+                f"<p>{escape(labels)}</p>{image}</section>"
+            )
+        body = "".join(cards) or '<p class="dim">No ball lists in this session.</p>'
+        return _page(stamp, head + body)
+
+    @app.get("/balls/{stamp}/{frame_i}.jpg")
+    async def balls_image(stamp: str, frame_i: int) -> Response:
+        from cueclock.review.balls import render
+
+        s = session(stamp)
+        path = s.still(frame_i)
+        if path is None:
+            raise HTTPException(404, "no such still")
+        lists = [r for _, r in s.settle_lists() if r is not None]
+        before = [r for r in lists if int(r.get("frame_i", -1)) <= frame_i]
+        record = max(before, key=lambda r: int(r.get("frame_i", -1)), default=None)
+        return Response(render(path, record), media_type="image/jpeg")
 
     @app.get("/full/{stamp}/{index}")
     async def full_file(stamp: str, index: int) -> FileResponse:
