@@ -9,6 +9,10 @@ Three files land in assets/obs/:
                             OBS's Apply LUT "amount" slider tempers it live.
   cueclock-sidecam.cube   — the side camera's colour fix, on the Video Capture
                             Device source (hardware.md Part F, 2026-11-15).
+  cueclock-overhead.cube  — the overhead's grade, on the Syphon source at
+                            amount 1.0: the tone map at its dialed-in strength
+                            plus a hue/saturation fix for the warm balls
+                            (hardware.md §B3, 2026-11-16).
 
 The tone math is a port of scripts/live_view.py: black/white point + gamma +
 contrast S-curve applied to LUMINANCE, all channels scaled by one factor
@@ -122,15 +126,64 @@ def _circular_interp(h: np.ndarray, anchors: list[tuple[int, int]]) -> np.ndarra
     return np.interp(h, xs, ys) % 360
 
 
+def _hue_sat(
+    rgb: np.ndarray,
+    hue: list[tuple[int, int]],
+    sat: list[tuple[int, float]],
+    fade_lo: float,
+    fade_hi: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Hue-to-hue curve + saturation gain by hue, faded in over saturation
+    `fade_lo`..`fade_hi` so near-neutrals keep their (noisy) hue. -> (h, s, v)."""
+    h, s, v = _rgb_to_hsv(rgb)
+    fade = np.clip((s - fade_lo) / (fade_hi - fade_lo), 0, 1)
+    dh = (_circular_interp(h, hue) - h + 180) % 360 - 180
+    gain = np.interp(h, [a for a, _ in sat], [g for _, g in sat])
+    return (h + fade * dh) % 360, s * (1 + fade * (gain - 1)), v
+
+
 def sidecam(rgb: np.ndarray, _ccm: np.ndarray | None = None) -> np.ndarray:
     """(N, 3) float RGB in [0, 1] -> the side camera's corrected RGB."""
-    h, s, v = _rgb_to_hsv(rgb)
-    fade = np.clip(s / 0.10, 0, 1)  # near-neutrals keep their (noisy) hue
-    dh = (_circular_interp(h, SIDECAM_HUE) - h + 180) % 360 - 180
-    gain = np.interp(h, [a for a, _ in SIDECAM_SAT], [g for _, g in SIDECAM_SAT])
+    h, s, v = _hue_sat(rgb, SIDECAM_HUE, SIDECAM_SAT, 0.0, 0.10)
     dark = np.clip((v - 0.10) / 0.25, 0.3, 1)  # the cloth's teal spill on blacks
-    s2 = np.clip(s * (1 + fade * (gain - 1)) * dark, 0, 1)
-    return np.clip(_hsv_to_rgb((h + fade * dh) % 360, s2, v), 0, 1)
+    return np.clip(_hsv_to_rgb(h, np.clip(s * dark, 0, 1), v), 0, 1)
+
+
+# The overhead (Basler, no colour matrix) has the opposite fault to the side
+# camera: channel overlap pulls the warm balls together and washes them out.
+# The red 3 reads orange (15), the maroon 7 a brown-orange (10), the yellow 1
+# an orange-yellow (38), all at saturation ~0.65 where the corrected side
+# camera shows ~1.0. The banked CCM fixes that but triples the cloth's chroma
+# noise; a hue curve leaves the cloth (205, gain 1.0) untouched. Anchors are
+# (hue after the tone grade -> true hue), measured on staged balls through OBS
+# 2026-11-16: maroon 7 10 -> 348, red 3 15 -> 0, orange 5 27 -> 26, yellow 1
+# 38 -> 48. Green (166), cloth (205), blue 2 (214) and purple 4 (251) already
+# read true and only gain saturation, ramping up either side of the cloth.
+OVERHEAD_TONE = 0.459  # the tone grade's Apply LUT amount Steven dialed in
+OVERHEAD_HUE = [(10, 348), (15, 0), (27, 26), (38, 48), (120, 120), (260, 260)]
+OVERHEAD_SAT = [
+    (0, 1.45),
+    (40, 1.45),
+    (120, 1.4),
+    (175, 1.4),
+    (195, 1.0),
+    (210, 1.0),
+    (222, 1.25),
+    (260, 1.4),
+    (360, 1.45),
+]
+
+
+def overhead(rgb: np.ndarray, _ccm: np.ndarray | None = None) -> np.ndarray:
+    """(N, 3) float RGB in [0, 1] -> the overhead's graded RGB: the tone grade
+    at its dialed-in amount, then the hue/saturation correction."""
+    rgb = rgb + OVERHEAD_TONE * (grade(rgb, None) - rgb)
+    # Balls sit at saturation >= 0.42 and the cue ball / black 8 at ~0.12, so
+    # the correction fades in between; below that the tint is halved (the cue
+    # ball reads cream at 0.10, where the side camera shows it white).
+    h, s, v = _hue_sat(rgb, OVERHEAD_HUE, OVERHEAD_SAT, 0.15, 0.35)
+    s = s * np.interp(s, [0.10, 0.25], [0.5, 1.0])
+    return np.clip(_hsv_to_rgb(h, np.clip(s, 0, 1), v), 0, 1)
 
 
 def write_cube(path: Path, title: str, ccm: np.ndarray | None, fn: Grade = grade) -> None:
@@ -152,3 +205,4 @@ if __name__ == "__main__":
     write_cube(out_dir / "cueclock-tone.cube", "cueclock tone map", None)
     write_cube(out_dir / "cueclock-tone-ccm.cube", "cueclock tone map + CCM", CCM_RGB)
     write_cube(out_dir / "cueclock-sidecam.cube", "cueclock side camera", None, sidecam)
+    write_cube(out_dir / "cueclock-overhead.cube", "cueclock overhead", None, overhead)
