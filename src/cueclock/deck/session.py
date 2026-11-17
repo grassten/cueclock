@@ -19,6 +19,7 @@ nothing but a lock.
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import subprocess  # nosec B404: fixed argv lists, no shell, no user input
@@ -57,6 +58,13 @@ OBS_QUIT_GRACE_S = 5.0
 # setup (TV on, Syphon rebind, TV projector, side-camera settings) is retried
 # on the poll rather than assumed. 20 ticks ~= 40 s.
 PREP_ATTEMPTS = 20
+# A session with no shot for this long has been forgotten, and is stopped as if
+# the Session key had been held (#60). Shots are the one activity signal worth
+# keying on: every rack, drill and match produces them, and a forgotten session
+# otherwise records ~4.4 GB/hour with the camera and TV left on. Steven's call
+# (2026-11-16); the journals' longest real mid-session pause since September is
+# 9.5 min (2026-11-12). A session never played counts from its start.
+IDLE_STOP_S = 600.0
 
 
 class SessionState(Enum):
@@ -276,6 +284,21 @@ def _clear_match() -> bool:
     return client.post("http://127.0.0.1:8000", "/api/match/clear", timeout=3.0).ok
 
 
+def _shot_age() -> float | None:
+    """Seconds since the session's last ShotTaken over the CLI's default server
+    URL (`--server` in `run_deck` swaps in the real base): `math.inf` if the
+    session has had none, None if the server did not answer."""
+    return shot_age_of(client.get_json("http://127.0.0.1:8000", "/api/replay_anchors"))
+
+
+def shot_age_of(anchors: dict[str, object] | None) -> float | None:
+    """Read `GET /api/replay_anchors` for the idle stop; see `_shot_age`."""
+    if anchors is None:
+        return None
+    age = anchors.get("shot_age_s")
+    return float(age) if isinstance(age, (int, float)) else math.inf
+
+
 def _call(cmd: Sequence[str]) -> int:
     """Run a short command to completion; never raise into the deck loop."""
     try:
@@ -313,6 +336,7 @@ class SessionManager:
     sidecam_ready: Callable[[], bool] = sidecam.ensure
     tv_off: Callable[[], bool] = tv.power_off
     clear_match: Callable[[], bool] = _clear_match
+    shot_age: Callable[[], float | None] = _shot_age
     start_record: Callable[[], float | None] = obsws.start_record
     stop_record: Callable[[], str | None] = obsws.stop_record
     log_recording: Callable[[dict[str, str]], None] = _log_recording
@@ -336,6 +360,9 @@ class SessionManager:
     _prep_tries: int = 0
     # A start that failed, held on the key until the next press retries it.
     _failure: SessionState | None = None
+    # When this session last showed it was in use (`now` clock): its start or
+    # adoption, then its newest shot. Only ever moves forward.
+    _active_at: float = 0.0
 
     @property
     def owns_session(self) -> bool:
@@ -365,6 +392,7 @@ class SessionManager:
         self._run = self.spawn(run_command(self.reference))
         self._caffeinate = self.spawn(CAFFEINATE)
         self._started_at = self.now()
+        self._active_at = self._started_at
         self._stopping_since = None
         self._escalated = False
         self._obs_launched = False
@@ -430,6 +458,10 @@ class SessionManager:
             return self._fail()
         if self._obs_launched:
             self._prepare_once()
+            if self._forgotten():
+                print(f"session: no shot in {IDLE_STOP_S / 60:.0f} min — stopping", flush=True)
+                self.stop()  # exactly what holding the key does
+                return SessionState.STOPPING
             return SessionState.ON
         if server_up:
             self.call(OBS_OPEN)  # server first, or the overlay loads blank
@@ -441,6 +473,22 @@ class SessionManager:
             self._signal_run(signal.SIGINT)
             return self._fail()
         return SessionState.STARTING
+
+    def _forgotten(self) -> bool:
+        """Has this session gone `IDLE_STOP_S` without a shot?
+
+        The server is only asked once the session's own clock says it might
+        be — about once per `IDLE_STOP_S` of play, not every poll — and only
+        an answer stops it: a server that misses one poll cannot end a session
+        whose last shot it simply failed to report.
+        """
+        if self.now() - self._active_at < IDLE_STOP_S:
+            return False
+        age = self.shot_age()
+        if age is None:
+            return False
+        self._active_at = max(self._active_at, self.now() - age)
+        return self.now() - self._active_at >= IDLE_STOP_S
 
     def _fail(self) -> SessionState:
         """Tear a dead start all the way down, then name it for the key.
@@ -522,6 +570,9 @@ class SessionManager:
             caffeinate = self.process_for_pid(caffeinate_pid)
             self._caffeinate = caffeinate if caffeinate.poll() is None else None
         self._started_at = self.now()
+        # The idle clock restarts with the daemon: an adopted session is given
+        # a fresh `IDLE_STOP_S` before its last shot is even asked about.
+        self._active_at = self._started_at
         self._obs_launched = True  # OBS came up with the session we're adopting
         self._syphon_bound = False  # cheap to redo, and it may have been missed
         self._projector_open = False

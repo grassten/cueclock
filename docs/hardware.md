@@ -428,7 +428,7 @@ exactly when every other key but Session is dark, and the two never meet.
 
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
-| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Refused (flashes `RECAL…`) while a recalibration has the camera. **Dot** = server answering: green, or **amber when the server's health line warns** (#52): the reference drift at launch crossed the warn level (> 8), or detection is below 78 Hz, the cadence every event constant was tuned at. The numbers are on the control page (bottom of the Play tab) | **always**, incl. server down |
+| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. **Stops itself after 10 min with no shot** (same sequence, no warning; §C4). Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Refused (flashes `RECAL…`) while a recalibration has the camera. **Dot** = server answering: green, or **amber when the server's health line warns** (#52): the reference drift at launch crossed the warn level (> 8), or detection is below 78 Hz, the cadence every event constant was tuned at. The numbers are on the control page (bottom of the Play tab) | **always**, incl. server down |
 | 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → match | current over next: `MATCH`/`RUN OUT` | always |
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; timed rulesets |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
@@ -655,6 +655,19 @@ is released. Measured after the fix: five cycles across the race window
 time with the backstop never firing. A wedged `run` gets one escalation
 to SIGTERM after 20 s (`cli.py` maps it to KeyboardInterrupt, so it takes the
 same shutdown path) — never SIGKILL.
+
+**A forgotten session stops itself** (#60, checkpoint 126): **10 min with no
+shot** (`IDLE_STOP_S`) runs the same stop as the hold, steps 1–5, with no
+warning. A session never played counts from its start, and one re-adopted
+after a daemon restart counts from the restart. The deck asks
+`GET /api/replay_anchors` for the last shot's age only once its own clock says
+the limit may have passed (about once per 10 min of play), and only an answer
+stops it, so a server that misses a poll can't end a live session. Every
+ShotTaken counts, before every gate (phantoms, `no_clock` drills and the
+vision kill switch included). DEV sessions are never touched. The deck log
+(`~/Library/Logs/cueclock-deck.log`) says `session: no shot in 10 min —
+stopping`. Releasing `caffeinate` is enough after that: `pmset sleep 1` puts
+the Mac to sleep on its own.
 
 **`DEV`**: the API answers but this daemon has no handle on it — a terminal
 `run`. The key refuses to touch it and flashes `DEV`; it only ever signals

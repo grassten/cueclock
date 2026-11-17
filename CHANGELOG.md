@@ -277,6 +277,23 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-16 (checkpoint 126 — a forgotten session stops itself; #60.)**
+  Walking away without holding Session left `run`, OBS recording (~4.4 GB/h),
+  the TV and `caffeinate` up all night.
+  - **Rule (Steven's call, kept simple):** 10 min with no shot
+    (`deck/session.py` `IDLE_STOP_S`), and the deck runs the same `stop()` the
+    held key does, with no warning. A session never played counts from its
+    start; an adopted one counts from the daemon restart. Terminal (DEV)
+    sessions are never touched.
+  - **Source:** `GET /api/replay_anchors` `shot_age_s`, which is stamped before
+    every gate. The deck asks only once its own clock says the limit may be up,
+    and an unanswered poll never stops a session.
+  - **Measured over 107 journals:** the longest mid-session pause since
+    September is 9.5 min (2026-11-12). Three August sessions paused 10.5–34.4
+    min and would have been stopped. A false stop costs one Session press.
+  - No journal record. The deck log names the stop. Unit tests only (no
+    detection change): 7 new in `test_deck_session.py`.
+
 - **2026-11-16 (checkpoint 125 — the overhead's balls match the side view.)**
   Once the side camera's colour was fixed (2026-11-15, hardware.md Part F),
   the overhead was the odd one out: its red 3 read orange.

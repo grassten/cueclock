@@ -196,6 +196,8 @@ def create_app(
         `shot_age_s` is the last ShotTaken (a tapped Replay key), `rack_age_s`
         is where this rack began (a held one) — either may be null, which the
         deck reads as "play as far back as the buffer goes".
+        The deck's idle stop reads `shot_age_s` too (#60): a session with no
+        shot for 10 min is stopped as if the Session key had been held.
 
         Its own endpoint rather than fields of `/api/state` because the deck
         polls state every 2 s and these answers are only worth having at the

@@ -43,7 +43,7 @@ from cueclock.deck.layout import (
     cycle_path,
 )
 from cueclock.deck.recal import Recalibrator
-from cueclock.deck.session import SessionManager, SessionState
+from cueclock.deck.session import SessionManager, SessionState, shot_age_of
 
 POLL_S = 2.0  # server/state poll cadence
 FLASH_S = 1.2  # how long a press outcome stays on the key
@@ -571,6 +571,7 @@ def run_deck(base: str, brightness: int, reference: str | None) -> int:
         # The daemon's --server base, not session.py's default — the one deck
         # talking to a non-default port must clear the match on that port too.
         clear_match=lambda: client.post(base, "/api/match/clear", timeout=3.0).ok,
+        shot_age=lambda: shot_age_of(client.get_json(base, "/api/replay_anchors")),
     )
 
     while True:

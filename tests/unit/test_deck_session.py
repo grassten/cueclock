@@ -8,6 +8,7 @@ records the fire-and-forget commands (OBS open/quit) in order.
 
 from __future__ import annotations
 
+import math
 import signal
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ import pytest
 from cueclock.deck.session import (
     CAFFEINATE,
     CAMERA_PROBE,
+    IDLE_STOP_S,
     OBS_ALIVE,
     OBS_DISMISS,
     OBS_OPEN,
@@ -31,6 +33,7 @@ from cueclock.deck.session import (
     SessionManager,
     SessionState,
     run_command,
+    shot_age_of,
 )
 
 TV_ON = ("tv", "EnsureOn")
@@ -96,6 +99,9 @@ class Harness:
         self.record_path = record_path
         self.recordings: list[dict[str, str]] = []
         self.adoptable: dict[int, FakeProcess] = {}
+        # What `GET /api/replay_anchors` says: no shot yet, until a test sets one.
+        self.shot_age: float | None = math.inf
+        self.shot_age_asks = 0
         self.manager = SessionManager(
             pidfile=pidfile or Path(mkdtemp()) / "session.json",
             process_for_pid=self._process_for_pid,
@@ -112,6 +118,7 @@ class Harness:
             start_record=self._start_record,
             stop_record=self._stop_record,
             log_recording=self.recordings.append,
+            shot_age=self._shot_age,
             wall=lambda: WALL0 + timedelta(seconds=self.clock),
         )
 
@@ -122,6 +129,10 @@ class Harness:
     def _stop_record(self) -> str | None:
         self.called.append(STOP_RECORD)
         return self.record_path
+
+    def _shot_age(self) -> float | None:
+        self.shot_age_asks += 1
+        return self.shot_age
 
     def _clear_match(self) -> bool:
         self.called.append(("api", "MatchClear"))
@@ -771,3 +782,110 @@ def test_a_failed_start_still_logs_what_it_recorded() -> None:
     assert h.manager.tick(server_up=False) is SessionState.FAILED
     assert h.called[:2] == [STOP_RECORD, ("obsws", "StopOutputs")]
     assert len(h.recordings) == 1
+
+
+# ---------- #60: a forgotten session stops itself ----------
+
+
+def _running() -> Harness:
+    """A session that is up, with OBS launched and its setup done."""
+    h = Harness()
+    h.manager.start()
+    h.manager.tick(server_up=True)  # launches OBS
+    h.manager.tick(server_up=True)  # setup
+    h.called.clear()
+    return h
+
+
+def test_a_session_never_played_stops_itself_after_the_idle_limit() -> None:
+    h = _running()
+    h.clock = IDLE_STOP_S - 1
+    assert h.manager.tick(server_up=True) is SessionState.ON
+
+    h.clock = IDLE_STOP_S
+    assert h.manager.tick(server_up=True) is SessionState.STOPPING
+    # The same sequence the held key runs, nothing more and nothing less.
+    assert h.called == [
+        ("api", "MatchClear"),
+        ("signal", "SIGINT"),
+        STOP_RECORD,
+        ("obsws", "StopOutputs"),
+        OBS_QUIT,
+    ]
+    assert len(h.recordings) == 1  # the recording is closed and listed
+
+    h.run_proc.exit_code = 0
+    assert h.manager.tick(server_up=False) is SessionState.OFF
+    assert h.called[-1] == TV_OFF
+    assert h.caffeinate_proc.terminated
+
+
+def test_a_recent_shot_keeps_the_session_up_until_it_too_is_old() -> None:
+    h = _running()
+    h.clock = IDLE_STOP_S + 10
+    h.shot_age = 30.0  # a shot 30 s ago, 580 s into the session
+    assert h.manager.tick(server_up=True) is SessionState.ON
+
+    h.clock = 580 + IDLE_STOP_S - 1
+    assert h.manager.tick(server_up=True) is SessionState.ON
+
+    h.clock = 580 + IDLE_STOP_S
+    h.shot_age = IDLE_STOP_S  # no shot since
+    assert h.manager.tick(server_up=True) is SessionState.STOPPING
+
+
+def test_the_server_is_only_asked_once_the_session_might_be_idle() -> None:
+    # Playing, the question is asked about once per idle limit — not on every
+    # 2 s poll.
+    h = _running()
+    for second in range(0, int(IDLE_STOP_S), 2):
+        h.clock = second
+        h.manager.tick(server_up=True)
+    assert h.shot_age_asks == 0
+
+    h.shot_age = 5.0
+    for second in range(int(IDLE_STOP_S), int(IDLE_STOP_S) + 60, 2):
+        h.clock = second
+        h.manager.tick(server_up=True)
+    assert h.shot_age_asks == 1
+
+
+def test_an_unanswered_question_never_stops_the_session() -> None:
+    # The server missing a poll says nothing about shots; stopping on it could
+    # end a session whose last shot simply went unreported.
+    h = _running()
+    h.shot_age = None
+    h.clock = IDLE_STOP_S * 3
+    assert h.manager.tick(server_up=True) is SessionState.ON
+    assert h.run_proc.signals == []
+
+
+def test_a_terminal_session_is_never_stopped_for_idling() -> None:
+    h = Harness()
+    h.clock = IDLE_STOP_S * 3
+    assert h.manager.tick(server_up=True) is SessionState.DEV
+    assert h.shot_age_asks == 0
+
+
+def test_an_adopted_session_gets_a_fresh_idle_limit() -> None:
+    pidfile = Path(mkdtemp()) / "session.json"
+    first = Harness(pidfile=pidfile)
+    first.manager.start()
+    run_pid = first.run_proc.pid
+
+    reborn = Harness(pidfile=pidfile)
+    reborn.adoptable = {run_pid: FakeProcess(pid=run_pid)}
+    reborn.clock = 5000.0
+    reborn.shot_age = 4000.0  # long idle before the daemon came back
+    assert reborn.manager.tick(server_up=True) is SessionState.ON
+
+    reborn.clock = 5000.0 + IDLE_STOP_S - 1
+    assert reborn.manager.tick(server_up=True) is SessionState.ON
+    reborn.clock = 5000.0 + IDLE_STOP_S
+    assert reborn.manager.tick(server_up=True) is SessionState.STOPPING
+
+
+def test_the_idle_stop_reads_the_replay_anchors_endpoint() -> None:
+    assert shot_age_of(None) is None  # server down
+    assert shot_age_of({"shot_age_s": None, "rack_age_s": None}) == math.inf
+    assert shot_age_of({"shot_age_s": 12.5, "rack_age_s": 40.0}) == 12.5
