@@ -1,4 +1,5 @@
-"""The ball list's say in the scratch hold (#63, docs/design.md §14).
+"""The ball list's say in the scratch hold (#63, docs/design.md §14) and in
+ball in hand after a scratch (#64, §15).
 
 Today's logic raises a scratch candidate only when the tracker loses the cue
 while it is moving inside a pocket zone. The ball list asks a different
@@ -94,6 +95,18 @@ class RestLists:
     def add(self, t: float, found: BallList) -> None:
         self._reads.append((t, found))
 
+    def arm_free(self, since: float | None, before: float | None) -> BallList | None:
+        """The newest arm-free list read at or after ``since`` and before
+        ``before`` (None: no bound on that side)."""
+        for read_t, found in reversed(self._reads):
+            if before is not None and read_t >= before:
+                continue
+            if since is not None and read_t < since:
+                return None
+            if not found.arm:
+                return found
+        return None
+
     def before(self, t: float | None) -> tuple[BallList | None, bool]:
         """``rest`` — the newest arm-free list read before ``t`` — and whether
         the cue was on the table then: ``rest`` holds exactly one cue, or a
@@ -133,3 +146,54 @@ def judge(
     else:
         call = "lifted"
     return Verdict(says=says, before=before, object_moved=moved, call=call)
+
+
+def only_cue_changed(now: BallList, rest: BallList | None, facts: SettleFacts) -> bool:
+    """Ball in hand (#64, §15): did this settle move nothing but the cue?
+
+    Every object ball on ``rest`` (the newest arm-free list since the
+    scratch) has one within OBJECT_MOVED_PX on ``now`` and the reverse, and
+    nothing travelled TRAVEL_MIN_MM or more. The cue itself is not looked at:
+    placed, lifted, or moved spot to spot, it is all placing. An arm over the
+    table is allowed — a hand on the cue hides the cue, not the object balls;
+    one hiding an object ball reads as moved, and the settle counts.
+    """
+    if rest is None or (facts.travel_mm or 0.0) >= TRAVEL_MIN_MM:
+        return False
+    return not object_moved(rest, now)
+
+
+def _cue(found: BallList) -> ListedBall | None:
+    cues = [b for b in found.balls if b.cue]
+    return cues[0] if len(cues) == 1 else None
+
+
+def table_row(
+    now: BallList, rest: BallList | None, cue_before: bool, placing: bool, call: str
+) -> str:
+    """What a settle was, for the journal.
+
+    ``ball_in_hand`` (a settle during ball in hand that moved only the cue),
+    ``shot`` (the cue before and now, an object ball moved), ``scratch`` and
+    ``lifted`` (the list's calls, §14), ``cue_moved`` (only the cue moved,
+    outside ball in hand: a hand or a stick that touched nothing), ``still``
+    (nothing moved). ``arm`` (a hand over the table and no cue seen) and
+    ``no_rest`` (nothing to compare with) cannot be read; ``other`` is
+    anything else (no cue before or after, a cue the tracker still holds).
+    """
+    if placing:
+        return "ball_in_hand"
+    if call in ("scratch", "lifted"):
+        return call
+    if rest is None:
+        return "no_rest"
+    if now.arm and not _cues(now):
+        return "arm"
+    if not cue_before or not _cues(now):
+        return "other"
+    if object_moved(rest, now):
+        return "shot"
+    a, b = _cue(rest), _cue(now)
+    if a is None or b is None:
+        return "other"
+    return "cue_moved" if math.hypot(a.cx - b.cx, a.cy - b.cy) > OBJECT_MOVED_PX else "still"

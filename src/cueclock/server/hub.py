@@ -36,7 +36,14 @@ from cueclock.server import bracket as bracket_mod
 from cueclock.server.bracket import Bracket, BracketError, Match, Player
 from cueclock.server.journal import SessionJournal
 from cueclock.server.score import MatchScore
-from cueclock.server.scratch import RestLists, SettleFacts, judge
+from cueclock.server.scratch import (
+    TRAVEL_MIN_MM,
+    RestLists,
+    SettleFacts,
+    judge,
+    only_cue_changed,
+    table_row,
+)
 
 if TYPE_CHECKING:
     # Type-only: importing the vision stack at runtime would drag cv2/numpy
@@ -152,6 +159,12 @@ BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
 # clock.
 SCRATCH_HOLD_SECONDS = 5.0
 
+# Ball in hand (#64, §15): how long a settle during ball in hand waits for its
+# ball list before it is decided as today.
+# The list arrives 20-75 ms after its settle; this is twice the slowest fit
+# measured (#63's brief), and inside `session_replay.REMAINING_TOL_S`.
+SETTLE_LIST_WAIT_S = 0.15
+
 
 @dataclass
 class _ShotScratch:
@@ -178,6 +191,30 @@ class _ShotScratch:
     @property
     def owed(self) -> bool:
         return (self.candidate or self.listed) and not self.granted and self.closed is None
+
+
+@dataclass
+class _BallInHand:
+    """Ball in hand after a scratch (#64, §15): from the scratch's shot until
+    a settle that moves an object ball. Every settle in between that moves
+    only the cue is placing, not a shot."""
+
+    since: float | None  # the scratch settle's frame time: lists before it are the old table
+    scratch: _ShotScratch  # the scratch's question: a refutation ends ball in hand
+    placed: int = 0  # settles kept off the clock so far
+
+
+@dataclass
+class _HeldSettle:
+    """A settle whose clock decision waits for its ball list (#64): during
+    ball in hand the list says whether it moved only the cue. Everything the
+    decision needs, as it stood when the settle arrived."""
+
+    now: float  # the hub's clock at the settle: the decision is made as of then
+    t: float | None
+    detail: dict[str, object]
+    rearrange: "RearrangeSummary | None"
+    backstop: bool
 
 
 # #37 phantom rejection: how many balls the pre-episode quiet layout must have
@@ -391,6 +428,9 @@ def hub_input(
     @functools.wraps(method)
     async def wrapper(hub: "Hub", /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
         if _IN_INPUT.get() or hub.on_input is None:
+            # A settle waiting for its ball list (#64) is decided as today
+            # before any command touches the clock.
+            hub._decide_held_settle("input")
             return await method(hub, *args, **kwargs)
         bound = signature.bind(hub, *args, **kwargs)
         hub.on_input(
@@ -403,6 +443,7 @@ def hub_input(
         )
         token = _IN_INPUT.set(True)
         try:
+            hub._decide_held_settle("input")
             return await method(hub, *args, **kwargs)
         finally:
             _IN_INPUT.reset(token)
@@ -515,6 +556,12 @@ class Hub:
         self._rest_lists = RestLists()
         self._settle_facts: SettleFacts | None = None
         self._settle_listed = True  # the last settle got its list (or none was due)
+        # #64: ball in hand after a scratch, a settle whose clock decision
+        # waits for its list (at most SETTLE_LIST_WAIT_S), and whether the
+        # last settle was held at all.
+        self._ball_in_hand: _BallInHand | None = None
+        self._held_settle: _HeldSettle | None = None
+        self._settle_was_held = False
         # #33 Part B: when the current provisional episode froze the clock
         # (mono). Doubles as the episode anchor for the scratch guard — a
         # candidate stamped at or after it was born inside this episode, so
@@ -705,6 +752,7 @@ class Hub:
         """One beat of the tick loop, synchronous so a replay can drive it at
         the live cadence on its virtual clock (#57)."""
         now = self._now()
+        self._decide_overdue_settle(now)
         snapshot = self.clock.tick(now, motion=self._table_motion)
         if snapshot.state != self._journal_state:
             # GRACE/EXPIRED/auto-restart transitions happen inside tick.
@@ -904,6 +952,7 @@ class Hub:
         self.clock.new_rack(now)
         self._idle_fire = None
         self._abandon_provisional()
+        self._end_ball_in_hand("new_rack")
         # New Rack *arms* the next shot to become the replay anchor; it does not
         # retire the old one. Until the break lands there is nothing on the
         # table to watch, so the rack worth replaying is still the one that
@@ -1398,6 +1447,7 @@ class Hub:
         speed_mms: float | None = None,
         newborn: bool = False,
     ) -> None:
+        self._decide_held_settle("shot")
         detail: dict[str, object] = {"t": t, "frame_t": t, "ball": ball_id, "newborn": newborn}
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
@@ -1473,6 +1523,7 @@ class Hub:
         tracker_cue: bool = False,
     ) -> None:
         detail: dict[str, object] = {"t": t, "frame_t": t}
+        self._decide_held_settle("settle")
         # #63: what this settle's ball list will be judged against, kept until
         # the list arrives (20-75 ms later live). Before every gate, so a
         # killed or untimed settle still journals what the list said.
@@ -1488,6 +1539,7 @@ class Hub:
         )
         self._settle_facts = facts
         self._settle_listed = False
+        self._settle_was_held = False
         if backstop:
             # The pipeline's quiet-rearrangement backstop emitted this settle
             # because the event engine slept through the whole episode
@@ -1515,6 +1567,39 @@ class Hub:
             self._log("vision_balls_settled_no_clock", **detail)
             return  # journaled, not clocked — as above
         now = self._now()
+        # #64: during ball in hand a settle waits for its list before it
+        # touches the clock — at most SETTLE_LIST_WAIT_S — because only the
+        # list can say whether it moved nothing but the cue. The clock stays
+        # as it is meanwhile: frozen through a provisional, running otherwise.
+        # Waiting beats counting and undoing: a fresh countdown would flash on
+        # the wall and the shot count, pace and rack would have to un-happen.
+        # Only settles that could be placing wait: an arm-free list since the
+        # scratch to compare with, and travel under the hand bound. IDLE
+        # settles are the clock's no-op and E8's business, never held.
+        if (
+            self.clock.state is not State.IDLE
+            and not self._settle_is_phantom(rearrange, backstop)
+            and self._may_be_placing(facts)
+        ):
+            self._held_settle = _HeldSettle(now, t, detail, rearrange, backstop)
+            self._settle_was_held = True
+            return
+        self._decide_settle(now, t, detail, rearrange, backstop)
+        await self.broadcast(self.clock.snapshot())
+
+    def _decide_settle(
+        self,
+        now: float,
+        t: float | None,
+        detail: dict[str, object],
+        rearrange: "RearrangeSummary | None",
+        backstop: bool = False,
+        hand: str | None = None,
+    ) -> bool:
+        """The clock half of a settle, as of ``now`` (the settle's own hub
+        time, also when it waited for its list). ``hand`` is #64's verdict
+        (``ball_in_hand``: this settle moved only the cue): not a shot. True
+        when the settle counted a shot."""
         # Both settle-time refusals are decided here, before anything touches
         # the clock, and against the state the settle ARRIVED in. That is what
         # keeps them disjoint from the break adjudication below: E8 acts only
@@ -1533,8 +1618,10 @@ class Hub:
             if self._rack_pending or self._rack_break_mono is None:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
-        moved_clock = self.clock.balls_settled(now, suppress=phantom)
-        self._settle_facts = dataclasses.replace(facts, counted=moved_clock)
+        reverting = self._provisional_open_mono is not None
+        moved_clock = self.clock.balls_settled(now, suppress=phantom or hand is not None)
+        if self._settle_facts is not None and self._settle_facts.t == t:
+            self._settle_facts = dataclasses.replace(self._settle_facts, counted=moved_clock)
         if phantom:
             # The provisional freeze is undone: no shot counted, the countdown
             # resumes with exactly the remaining it froze at, and the pace
@@ -1554,7 +1641,29 @@ class Hub:
                 movers_alive=detail.get("movers_alive"),
                 mover_max_mm=detail.get("mover_max_mm"),
             )
+        elif hand is not None and not moved_clock:
+            # #64: placing the cue during ball in hand. Same resolution as a
+            # phantom: nothing counted, a frozen countdown resumes at the
+            # remaining it froze with, a running one (and a scratch hold in
+            # progress) is left alone. Two kinds, as #41 journaled them, so
+            # `report` tells a reverted freeze from a refused compensation.
+            reason = hand
+            self._revert_pace()
+            self._provisional_open_mono = None
+            detail["rejected"] = reason
+            self._log(
+                "shot_provisional_reverted" if reverting else "compensation_suppressed",
+                t=t,
+                frame_t=t,
+                reason=reason,
+                mover_max_mm=detail.get("mover_max_mm"),
+            )
+        elif hand is not None:
+            # The clock refused: a GRACE or IDLE fire already committed a shot
+            # this cycle, and committed counts do not un-happen. Left counted.
+            detail["hand_refused"] = hand
         if moved_clock:
+            self._end_ball_in_hand("shot")
             # The settle counted this episode's one shot (fired or
             # compensated): commit the pace measurement the provisional was
             # holding, if any, and close the episode.
@@ -1572,7 +1681,55 @@ class Hub:
         # (#39): the hold belongs to the *cue ball*, not to the shot, so no
         # verdict about what this settle was may swallow it.
         self._maybe_hold_for_scratch()
-        await self.broadcast(self.clock.snapshot())
+        return moved_clock
+
+    def _decide_held_settle(self, why: str) -> bool:
+        """Decide a settle that is waiting for its list as today, because
+        something else reached the hub first (``why``: the next vision call,
+        a command) or the wait ran out (``timeout``). True when one was
+        waiting. The caller broadcasts."""
+        held, self._held_settle = self._held_settle, None
+        if held is None:
+            return False
+        held.detail["held"] = why
+        self._decide_settle(held.now, held.t, held.detail, held.rearrange, held.backstop)
+        return True
+
+    def _decide_overdue_settle(self, now: float) -> None:
+        """The tick loop's half of the wait: a settle whose list has not come
+        within SETTLE_LIST_WAIT_S is decided as today."""
+        held = self._held_settle
+        if held is not None and now - held.now >= SETTLE_LIST_WAIT_S:
+            self._decide_held_settle("timeout")
+
+    def _placing_rest(self, facts: SettleFacts) -> "BallList | None":
+        """During ball in hand: the newest arm-free list since the scratch and
+        before this settle's motion, the table placing is compared with."""
+        bih = self._ball_in_hand
+        if bih is None:
+            return None
+        return self._rest_lists.arm_free(since=bih.since, before=facts.motion_t)
+
+    def _may_be_placing(self, facts: SettleFacts) -> bool:
+        """Could this settle's list make it placing? Ball in hand, a list to
+        compare with, and travel under the hand bound (§15)."""
+        return self._placing_rest(facts) is not None and (facts.travel_mm or 0.0) < TRAVEL_MIN_MM
+
+    def _begin_ball_in_hand(self, state: _ShotScratch) -> None:
+        """A shot with a scratch standing (called, not refuted or cleared)
+        ended in a counted settle: ball in hand, until an object ball moves."""
+        facts = self._settle_facts
+        if facts is None or not facts.counted or facts.epoch != self._episode_epoch:
+            return  # the scratch's shot never counted a settle: nothing to anchor on
+        self._ball_in_hand = _BallInHand(since=facts.t, scratch=state)
+        self._log("ball_in_hand", frame_t=facts.t, by=state.by)
+
+    def _end_ball_in_hand(self, reason: str) -> None:
+        """Ball in hand is over: an object ball moved (``shot``), the rack was
+        reset (``new_rack``), or the scratch was refuted (``refuted``)."""
+        bih, self._ball_in_hand = self._ball_in_hand, None
+        if bih is not None:
+            self._log("ball_in_hand_ended", reason=reason, placed=bih.placed)
 
     async def ball_list(
         self, t: float, reason: str, found: "BallList", tracker: int | None = None
@@ -1604,7 +1761,9 @@ class Hub:
 
     async def _judge_settle_list(self, t: float, found: "BallList") -> None:
         """#63: the list's say at the settle it was read at — call the
-        scratch, clear it, or leave today's logic to decide alone."""
+        scratch, clear it, or leave today's logic to decide alone. #64: a
+        settle held for this list is decided here: during ball in hand, one
+        that moved only the cue is kept off the clock."""
         facts = self._settle_facts
         if facts is None or self._settle_listed:
             return  # no settle waiting, or the next motion began first (journaled)
@@ -1615,16 +1774,42 @@ class Hub:
         state = self._scratch if self._scratch is not None else _ShotScratch()
         self._scratch = state
         candidate = state.candidate and state.closed is None
+        placing = only_cue_changed(found, self._placing_rest(facts), facts)
+        hand = "ball_in_hand" if placing and self._ball_in_hand is not None else None
+        held = self._held_settle
+        moved_clock = False
+        if held is not None and held.t == facts.t:
+            self._held_settle = None
+            held.detail["held"] = "list"
+            moved_clock = self._decide_settle(
+                held.now, held.t, held.detail, held.rearrange, held.backstop, hand
+            )
+            facts = dataclasses.replace(facts, counted=moved_clock)
+            # "applied": kept off the clock. "refused": the clock had already
+            # committed a shot this cycle, so the settle counted anyway.
+            applied = None if hand is None else "refused" if moved_clock else "applied"
+            if applied == "applied" and self._ball_in_hand is not None:
+                self._ball_in_hand.placed += 1
+        else:
+            # Not held: the clock was idle or off, or something else decided
+            # the settle before its list came (``late``). Journaled as a row.
+            applied = None if hand is None else "late" if self._settle_was_held else "not_held"
         verdict = judge(found, rest, cue_before, facts, candidate)
         state.says = verdict.says
         released = False
         call = verdict.call
-        if verdict.says == "cue" and state.closed is None:
+        if hand is not None:
+            # Placing during ball in hand: a cue seen is a cue put back, which
+            # clears nothing (the scratch hold it may run under keeps going),
+            # and a cue gone is a cue in the hand, not a scratch.
+            call = "none"
+        elif verdict.says == "cue" and state.closed is None:
             # The cue counts as present if either the list or today's logic
-            # sees it: no hold for this shot, and a running one is released.
-            # A candidate arriving later for the same shot finds it cleared.
+            # sees it: no hold for this shot, and one this shot was granted is
+            # released. A candidate arriving later for the same shot finds it
+            # cleared.
             state.closed = "cleared"
-            released = self.clock.release_hold(self._now())
+            released = state.granted and self.clock.release_hold(self._now())
             if candidate:
                 call = "cleared"
         elif call == "scratch" and state.closed is None:
@@ -1634,6 +1819,8 @@ class Hub:
             frame_t=round(t, 3),
             **verdict.journal(),
             verdict=call,
+            row=table_row(found, rest, cue_before, hand is not None, call),
+            hand=applied,
             counted=facts.counted,
             tracker_cue=facts.tracker_cue,
             travel_mm=None if facts.travel_mm is None else round(facts.travel_mm),
@@ -1641,7 +1828,7 @@ class Hub:
         )
         if released:
             self._log("scratch_hold_released", reason="cleared")
-        if self._maybe_hold_for_scratch() or released:
+        if self._maybe_hold_for_scratch() or released or held is not None:
             await self.broadcast(self.clock.snapshot())
 
     def _note_settle_unlisted(self) -> None:
@@ -1672,6 +1859,8 @@ class Hub:
         state, self._scratch = self._scratch, None
         if state is None or not (state.candidate or state.listed):
             return
+        if state.closed is None:
+            self._begin_ball_in_hand(state)  # #64: the scratch stands
         detail: dict[str, object] = {
             "by": state.by,
             "held": state.granted,
@@ -1846,6 +2035,7 @@ class Hub:
         optimize it (#33): the 0.2 s displacement window dominates, stride 1
         is a measured null (plan §3.1 item 4).
         """
+        self._decide_held_settle("motion")
         if not self._episode_open:
             self._begin_episode(t)
         if not self.vision_enabled or not self.clock_live:
@@ -1870,6 +2060,7 @@ class Hub:
         A scratch hold owed through the freeze is granted on the way out
         (#63: lost once, 2026-08-13, when the verdict came during the freeze).
         """
+        self._decide_held_settle("discard")
         self._episode_open = False
         if not self.vision_enabled or not self.clock_live:
             return
@@ -1932,7 +2123,10 @@ class Hub:
         color_age_s: float | None,
     ) -> None:
         # Two-stage scratch verdict (#26), evidence half — always journaled,
-        # so a live candidate is auditable from the journal alone.
+        # so a live candidate is auditable from the journal alone. A settle
+        # still waiting for its list is decided first: with a candidate open
+        # it is no pick-up (#64), and the hold needs the countdown it starts.
+        decided = self._decide_held_settle("candidate")
         state = self._scratch if self._scratch is not None else _ShotScratch()
         self._scratch = state
         if state.closed == "refuted" and not state.granted:
@@ -1957,7 +2151,7 @@ class Hub:
         # already started the next countdown (scratch_shot_0801: settle 5.73,
         # candidate 6.37) — hold that countdown now. The other order (candidate
         # during MOTION, shot_debug's shape) is covered in balls_settled.
-        if self._maybe_hold_for_scratch():
+        if self._maybe_hold_for_scratch() or decided:
             await self.broadcast(self.clock.snapshot())
 
     async def scratch_refuted(
@@ -1965,6 +2159,7 @@ class Hub:
     ) -> None:
         # The witness's position and reading ride along so any refutation
         # can be spot-audited against footage later.
+        self._decide_held_settle("refuted")
         self._log(
             "vision_scratch_refuted",
             t=t,
@@ -1980,6 +2175,13 @@ class Hub:
         # A refutation stands even when the list called the scratch too
         # (#63: the cue counts as present if either one sees it).
         state = self._scratch
+        bih = self._ball_in_hand
+        if (state is None or not state.candidate) and bih is not None:
+            # #64: the scratch that began ball in hand was not one after all.
+            if bih.scratch.candidate and bih.scratch.closed is None:
+                bih.scratch.closed = "refuted"
+                self._end_ball_in_hand("refuted")
+            return
         if state is None or not state.candidate or state.closed is not None:
             return  # a candidate of an earlier shot: nothing of this one to release
         state.closed = "refuted"

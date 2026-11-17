@@ -254,6 +254,9 @@ REJECTION_BLURBS = {
     # from 2026-08-13 to 2026-08-25 carry 10 of these and the report reads
     # history as readily as today.
     "hand_placement": "ball-in-hand (every arrival hand-delivered)",
+    # #64 (checkpoint 133): ball in hand after a scratch, and the settle's
+    # ball list saw nothing but the cue move.
+    "ball_in_hand": "ball in hand (only the cue moved since the scratch)",
 }
 
 
@@ -304,8 +307,9 @@ class SessionReport:
     # refusing real shots they come back as misses and frozen clocks, not as
     # a quieter phantom count.
     #
-    # One reason emitted today: `phantom` (#37), the table provably unchanged
-    # against a real quiet baseline *and* no tracked mover having travelled.
+    # Reasons emitted today: `phantom` (#37), the table provably unchanged
+    # against a real quiet baseline *and* no tracked mover having travelled;
+    # `ball_in_hand` (#64), a placing after a scratch.
     # `hand_placement` (#41) was removed in checkpoint 104 and survives only
     # in journals recorded before it; both are still tallied separately here,
     # because the whole point of the breakdown is to catch a predicate that

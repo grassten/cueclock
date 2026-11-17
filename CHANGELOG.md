@@ -283,8 +283,76 @@ survive unchanged in `design.md`.
   countdown for those milliseconds, and a list-called hold starts that much
   after the settle. Replay order is exact anyway: lists are posted from the
   run loop's thread, and `balls.jsonl` records the frame they landed behind.
+- **2026-11-17** **#64: ball in hand is a state after a scratch, not a
+  per-settle guess.** The brief's rows (picked up: cue seen gone with nothing
+  else moved; put down: cue back on a table seen without it) were built first
+  and never pushed: they need the camera to see the table with the cue off it
+  and no hand in view between moves, and a hand placing a ball defeats that
+  (the settle fires with the fingers still on it). Steven, on a coin-flip
+  rule: "unpredictable is worse than not supported". Built instead: from a
+  standing scratch until an object ball moves, every settle that moves only
+  the cue is placing. This changes his "cue moved spot to spot stays as
+  today" call inside ball in hand only (agreed 2026-11-17); open play is as
+  before.
+- **2026-11-17** **#64: during ball in hand a settle waits for its list.** #63
+  decides every settle at once and lets the list follow; placing cannot,
+  short of counting the shot and undoing it (a fresh countdown flashing on the
+  wall, the count, pace and rack un-happening). Only ball-in-hand settles
+  wait, at most 0.15 s, decided as of the settle's own time; anything else
+  reaching the hub first decides them as before.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-11-17 (checkpoint 133 — ball in hand after a scratch keeps the
+  clock running; #64):** placing the cue ball by hand after a scratch is no
+  longer a shot. Hub policy (`server/scratch.py`, `design.md` §15):
+  detection, the tracker and the event engine are unchanged and no golden
+  moved.
+  - **The rule** (build decisions above): ball in hand begins when the shot
+    whose scratch stands (called, not refuted or cleared, §14) has counted its
+    settle and the next motion starts. Until a settle moves an object ball (3
+    px between the settle's list and the newest arm-free list since the
+    scratch) or travels 400 mm, every settle is placing: nothing counted, a
+    frozen countdown resumes where it froze, a running one and the scratch
+    hold keep going. Place, pick up, place again: the cue is never looked at.
+    New Rack and a refutation of the scratch also end it. Open play is
+    unchanged.
+  - **Journal**: `ball_in_hand` / `ball_in_hand_ended` (`reason`, `placed`);
+    `row` on every `scratch_list` and `hand` (`applied` / `refused` / `late`
+    / `not_held`) on placings; an applied one journals
+    `shot_provisional_reverted` or `compensation_suppressed` with reason
+    `ball_in_hand` and `rejected` on the settle; `held` says what decided a
+    held settle. `row` joins the replay's compared fields. A list seeing the
+    cue now releases only a hold granted for its own shot (#63 released any;
+    they differ only at a suppressed settle).
+  - **Judging it**: three `session-stats` rows (ball in hand periods and how
+    they ended, placings kept off the clock, cue-only moves in open play);
+    `placing` and `in_hand_shot` review moments — the second is the counted
+    settle that ended ball in hand, i.e. Steven's shot or a missed placing;
+    and `cue_only` for counted open-play settles that moved only the cue, to
+    label hand versus stick at the desk.
+  - **Gates, corpus**: `scratch_replace` 10.00 s is placing, not counted, its
+    hold from 8.45 s unreleased; against checkpoint 132 that count is the only
+    clock mark that changed in all 71 clips (`HAND_ROWS`; open-play carries
+    and stick shots that touched nothing count as before).
+    `PLACEMENT_SETTLES` is gone with its one entry. No clip holds place → lift
+    → place; unit tests carry it.
+  - **Last night's session replayed under this code** (20261117-201731): the
+    one scratch (settle 320.18 s) was followed at 340.85 s by a settle with a
+    strike fire that moved only the cue; live it reset the countdown from
+    14.9 s to 30 and counted rack shot 11. Now it is placing, and the shot at
+    349.85 s counts and ends ball in hand. Every other settle unchanged.
+  - **Known limits** (§15): only from a scratch the hub recognised; an arm or
+    a hand phantom changing the object balls at the settle counts the placing
+    (restart); a ball-in-hand shot touching nothing under 400 mm is not
+    counted; no arm-free list since the scratch means placing counts as
+    before; ball in hand after other fouls is not covered.
+  - **First live session to check**: `session verify` zero diffs; the review
+    page's `placing` and `in_hand_shot` moments. What would send this back: a
+    placing that was a real shot, or an `in_hand_shot` that was still
+    placing. Checkpoints 131 and 132 have not had a live session yet either.
+  - Verified: unit tests 742 passed; corpus battery with `--detect-cache` 845
+    passed in 37 s. `detect.py` and `events.py` untouched.
 
 - **2026-11-17 (checkpoint 132 — every scratch gets its hold; #63):** the
   ball list now has a say in the 5 s post-scratch hold. Hub policy plus its

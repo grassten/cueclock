@@ -60,6 +60,12 @@ class Tiers:
     scratch_missed: dict[str, int] = field(default_factory=dict)  # not granted: why
     cleared_by_list: int = 0  # candidates the list saw the cue against
     refuted_list_no_cue: int = 0  # refuted by today's logic while the list held no cue
+    # Ball in hand (#64), from `scratch_list` rows and `ball_in_hand*` lines (checkpoint 133+).
+    rows_judged: int = 0  # settles whose list said what they were
+    placing: dict[str, int] = field(default_factory=dict)  # hand -> n, row ball_in_hand
+    in_hand: int = 0  # ball in hand periods begun (a scratch stood)
+    in_hand_ended: dict[str, int] = field(default_factory=dict)  # why each one ended
+    cue_moved: int = 0  # outside ball in hand: only the cue moved, restarted as before
 
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
@@ -114,6 +120,18 @@ class Tiers:
                 self.settles_judged += 1
                 self.settles_no_list += r.get("verdict") == "no_list"
                 self.settles_arm += r.get("says") == "arm"
+                row = r.get("row")
+                if row is not None:
+                    self.rows_judged += 1
+                    self.cue_moved += row == "cue_moved"
+                    if row == "ball_in_hand":
+                        how = str(r.get("hand"))
+                        self.placing[how] = self.placing.get(how, 0) + 1
+            elif kind == "ball_in_hand":
+                self.in_hand += 1
+            elif kind == "ball_in_hand_ended":
+                why = str(r.get("reason"))
+                self.in_hand_ended[why] = self.in_hand_ended.get(why, 0) + 1
             elif kind == "scratch_call":
                 closed = r.get("closed")
                 if closed == "cleared":
@@ -295,6 +313,27 @@ def table(label: str, t: Tiers) -> str:
                 "Settles with no list / with an arm",
                 f"{t.settles_no_list} / {t.settles_arm} of {t.settles_judged}",
                 "today's logic decided those alone",
+            ),
+        ]
+    if t.rows_judged:
+        other = ", ".join(f"{n} {k}" for k, n in sorted(t.placing.items()) if k != "applied")
+        ended = ", ".join(f"{n} {k}" for k, n in sorted(t.in_hand_ended.items()))
+        rows += [
+            (
+                "Ball in hand (after a scratch)",
+                f"{t.in_hand}" + (f"  (ended: {ended})" if ended else ""),
+                "#64: from a standing scratch to the first settle that moves an object ball",
+            ),
+            (
+                "Placings kept off the clock",
+                f"{t.placing.get('applied', 0)}" + (f"  (also {other})" if other else ""),
+                "settles in ball in hand that moved only the cue; refused = a shot "
+                "already counted, late = decided before its list",
+            ),
+            (
+                "Only the cue moved, open play",
+                f"{t.cue_moved} of {t.rows_judged}",
+                "no scratch before it: restarted as before, a hand or a stick",
             ),
         ]
     if t.dark_candidates:

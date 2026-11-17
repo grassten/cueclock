@@ -154,6 +154,10 @@ class ClockTimeline:
     # (and by whom), and the ball list's verdict at each settle it judged.
     holds: list[tuple[float, str]] = field(default_factory=list)
     list_verdicts: list[tuple[float, str]] = field(default_factory=list)
+    # #64: which row of the ball-in-hand table each judged settle fell in,
+    # and when a scratch hold was released early.
+    rows: list[tuple[float, str]] = field(default_factory=list)
+    releases: list[float] = field(default_factory=list)
 
     @property
     def rearrangement_is_anchored(self) -> bool:
@@ -285,6 +289,7 @@ def replay_clock(
             hub.note_motion(pipeline.last_motion)
 
             # The clock-affecting half of `Hub.tick_loop`, minus broadcast.
+            hub._decide_overdue_settle(t)
             hub.clock.tick(t, motion=hub._table_motion)
             hub._watch_frozen_clock(t)
 
@@ -328,5 +333,13 @@ def replay_clock(
             (float(r["frame_t"]), str(r["verdict"]))
             for r in records
             if r["kind"] == "scratch_list" and r.get("frame_t") is not None
+        ]
+        timeline.rows = [
+            (float(r["frame_t"]), str(r["row"]))
+            for r in records
+            if r["kind"] == "scratch_list" and r.get("row") is not None
+        ]
+        timeline.releases = [
+            float(r["mono"]) for r in records if r["kind"] == "scratch_hold_released"
         ]
     return timeline

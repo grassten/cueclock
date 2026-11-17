@@ -780,7 +780,8 @@ same-label ball within a quarter radius both ways). Written means
 `balls.jsonl` in the session log, keyed by frame (§12), plus a `ball_list`
 journal line. Only written lists reach the hub, which keeps the latest one
 with no arm for the strip — so a session and its replay see the same lists.
-Since #63 (§14) a settle's list also has a say in the scratch hold.
+Since #63 (§14) a settle's list also has a say in the scratch hold, and
+since #64 (§15) in ball in hand after a scratch.
 
 **The strip.** A row of chips above the bar's left end in
 `/shotclock?view=bar`: the cue, 1–15 in order, then a grey `?` per ball with
@@ -937,3 +938,90 @@ the reason for each one not, candidates cleared by the list, refutations
 while the list held no cue, and settles with no list or with an arm. The
 review page shows a `list_scratch` moment for every scratch the list called
 alone and a `list_cleared` moment for every candidate it cleared.
+
+## 15. Ball in hand after a scratch keeps the clock running (issue #64, 2026-11-17)
+
+Steven, from real play: "if I pick up the cue ball with my hand and it leaves
+the table, how do we keep the clock running, differentiate this from a shot
+and differentiate it from a scratch". Until now every settle of a hand move
+could count as a shot and restart the countdown: `scratch_replace` gave a
+fresh 30 s with no hold when the cue went back down after its scratch.
+
+**Ball in hand is a state, not a per-settle guess.** It begins when a shot
+whose scratch stands (called by a candidate or the list, §14, and neither
+refuted nor cleared) has counted its settle, and the next motion starts.
+While it lasts, a settle that moved **only the cue** is placing: nothing
+counted, a frozen countdown resumes at the remaining it froze with, a running
+one and the scratch hold keep going. Placed, picked up, placed somewhere
+else, nudged: the cue itself is never looked at. The first settle that moves
+an object ball (or travels 400 mm or more, the engine's hand bound) counts as
+the shot and ends it; so do New Rack and a refutation of the scratch.
+
+"Only the cue" is #63's `object_moved` (3 px, measured there) between the
+settle's list and the newest arm-free list read since the scratch. An arm
+over the table at the settle is allowed: a hand on the cue hides the cue, not
+the object balls. An arm hiding an object ball reads as moved and the settle
+counts, which is the safe side.
+
+**Why not judge each settle alone** (the first build of this issue, never
+pushed): it needed the camera to see the table with the cue off it and no
+hand in view between moves, and placing a ball by hand defeats exactly that
+— the settle fires while the fingers are still on the ball. Steven: a rule
+that works half the time is worse than none ("unpredictable is worse than
+not supported"). The state needs only the object balls to stay put while he
+places, which they do.
+
+**The settle waits for its list during ball in hand.** §14 lets a settle
+decide at once and its list follow 20–75 ms later; placing cannot work that
+way without counting and then undoing (a fresh countdown flashing on the
+wall, the count, pace and rack un-happening). So during ball in hand a settle
+with an arm-free list since the scratch and travel under 400 mm holds its
+clock decision until its list arrives. The clock meanwhile stays as it was.
+Anything else reaching the hub first (the next motion or strike, a
+candidate, a refutation, any command) or `SETTLE_LIST_WAIT_S` (0.15 s, twice
+the slowest fit) decides it as before. The decision is made as of the
+settle's own time, so a countdown it starts runs from the settle. Outside
+ball in hand no settle waits. The clock refuses the suppression when a GRACE
+or IDLE fire already committed a shot this cycle; the settle then counts
+(`hand: refused`).
+
+**Open play is unchanged** (Steven, 2026-11-17: "Last row is behavioral, the
+rule is you wait for everything to settle before picking up the cue ball").
+A cue lifted or moved by hand without a scratch before it counts as before.
+Ball in hand after other fouls is not covered: nothing on the table says a
+foul happened.
+
+**The corpus**: `scratch_replace` 10.00 s is placing (no count, the hold from
+8.45 s unreleased); every other clip's clock marks are identical to
+checkpoint 132 (`HAND_ROWS` in `test_corpus_events.py`). No corpus clip holds
+place → lift → place; the unit tests carry it. Session 20261117-201731
+replayed: its one scratch was followed by a settle that moved only the cue
+(it restarted the countdown live), now placing; the shot 9 s later counted.
+
+**Journal.** `ball_in_hand` when it begins (with who called the scratch),
+`ball_in_hand_ended` with `reason` (`shot`, `new_rack`, `refuted`) and how
+many settles were `placed`. Every judged settle's `scratch_list` line carries
+`row` (`ball_in_hand`, `shot`, `scratch`, `lifted`, `cue_moved`, `still`,
+`arm`, `no_rest`, `other`) and, on `ball_in_hand`, `hand`: `applied`,
+`refused`, `late` (decided before its list came) or `not_held` (clock idle
+or off). An applied one journals `shot_provisional_reverted` (a freeze open)
+or `compensation_suppressed` (none) with reason `ball_in_hand`, and
+`rejected` on the settle record; a held settle's record says what decided it
+(`held`).
+
+**Known limits.** It starts only from a scratch the hub recognised (§14); a
+missed scratch leaves placing counting as before. An arm or a hand-blob
+phantom changing the object balls at the settle counts the placing as a shot
+(restart). A ball-in-hand shot that touches nothing and travels under 400 mm
+is placing (not counted). With no arm-free list since the scratch (an arm in
+every read), placing counts as before.
+
+**Judging it.** `session-stats` rows: ball in hand periods (and how each
+ended), placings kept off the clock (with refused / late), and settles where
+only the cue moved in open play. The review page shows a `placing` moment
+for every one kept off the clock and an `in_hand_shot` moment where ball in
+hand ended on a counted settle — Steven's shot, or a placing the list missed —
+and a `cue_only` moment for every counted open-play settle that moved only
+the cue, so the open-play case can be labelled hand or stick at the desk.
+What would send this back: a placing that was a real shot (the worst
+outcome), or an `in_hand_shot` that was still placing.

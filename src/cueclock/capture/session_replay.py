@@ -69,6 +69,7 @@ VERDICT_FIELDS = (
     "reason",
     "tier",
     "verdict",  # #63's scratch_list
+    "row",  # #64's scratch_list: which row of the ball-in-hand table
     "by",  # #63's scratch_hold / scratch_call
 )
 MAX_DIFFS = 50

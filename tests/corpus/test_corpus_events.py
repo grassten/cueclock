@@ -646,22 +646,6 @@ CARRY_CLIPS: dict[str, list[float]] = {
     "ball_in_hand_triple_0811": [12.455],
 }
 
-# Settles that are a hand placing the cue ball back after a scratch. Since
-# checkpoint 104 ball-in-hand resets the clock (Steven's call; the hub's
-# removal note has the measurement), so a count there is the product working,
-# not a phantom, and the phantom-count check skips it. Everything else in the
-# clip stays graded: the stroke's freeze and its own count.
-#
-#   scratch_replace  §9 checklist: "scratch, fetch the cue ball from the ball
-#                    return". Stroke 3.264 settles 8.449 with the scratch;
-#                    the placement settles 9.998. Ungraded for counts until
-#                    checkpoint 110: with the shadow gate rejecting the blue 2
-#                    the 8.449 settle had no quiet baseline, so the clip read
-#                    as unanchored and the check never ran.
-PLACEMENT_SETTLES: dict[str, list[float]] = {
-    "scratch_replace": [9.998],
-}
-
 # Clips pair with the empty-table reference from the same camera position:
 # post-TV-install clips use empty_table_0729, everything earlier the original;
 # clips from 2026-08-01 midday onward use empty_table_0801 (the §E2 refresh
@@ -856,7 +840,7 @@ LIST_VERDICTS: dict[str, list[tuple[float, set[str]]]] = {
     "scratch_shot_0801": [(5.73, {"scratch"})],
     "scratch_replace": [(8.45, {"scratch"})],  # candidate already open (5.02 s)
     "shot_debug": [(11.90, {"scratch"})],  # candidate already open (9.52 s)
-    # The cue lifted by hand (159 mm, nothing else moved): #64's, not a scratch.
+    # The cue lifted by hand (159 mm, nothing else moved): picked up (#64).
     "ball_in_hand_carry_b_0811": [(13.35, {"lifted"})],
     "break_0801b": [(17.16, {"none"})],  # a hand on the cue: the list cannot say
     # The list holds the cue (0.93) where the tracker holds none.
@@ -864,6 +848,51 @@ LIST_VERDICTS: dict[str, list[tuple[float, set[str]]]] = {
 }
 # Each of the five scratches gets exactly one hold (mid-rack, a countdown live).
 SCRATCH_HOLD_CLIPS = frozenset(n for n, v in LIST_VERDICTS.items() if v[0][1] == {"scratch"})
+
+
+# #64's gates: what each named settle was, and whether it counted. After a
+# scratch, ball in hand lasts until an object ball moves, and a settle that
+# moves only the cue in between is placing and counts nothing. Outside ball
+# in hand nothing changed: a cue lifted or moved by hand counts as before
+# (Steven, 2026-11-17: open-play carries are behavioural). Every other judged
+# settle in the corpus must not be placing.
+HAND_ROWS: dict[str, list[tuple[float, str, bool]]] = {
+    # The cue back after the scratch at 8.45 s: no count, and its hold runs on.
+    "scratch_replace": [(8.45, "scratch", True), (10.00, "ball_in_hand", False)],
+    "kick_scratch_0811": [(15.37, "scratch", True)],  # 1711 mm: still a scratch (#63)
+    # Open play, no scratch before: as before #64.
+    "ball_in_hand_carry_b_0811": [(13.35, "lifted", True)],  # 159 mm, no candidate
+    "ball_in_hand_carry_0811": [(15.43, "cue_moved", True)],
+    "ball_in_hand_triple_0811": [
+        (12.46, "cue_moved", True),  # a stick shot that touched nothing
+        (14.74, "cue_moved", True),
+        (16.04, "cue_moved", True),
+    ],
+    "pickup_newborn_0801": [(8.60, "cue_moved", True)],  # a stick, touching nothing
+    "tip_bump": [(3.87, "cue_moved", True)],  # a stick bump, 34.5 px
+}
+
+
+def _assert_hand_rows(name: str, timeline: "ClockTimeline") -> None:
+    """#64: placing during ball in hand counts nothing; nothing else moved."""
+    expected = HAND_ROWS.get(name, [])
+    for settle_t, row, counted in expected:
+        near = [r for t, r in timeline.rows if abs(t - settle_t) <= 0.1]
+        assert near == [row], f"{name}: row at {settle_t:.2f} s was {near}, expected {row}"
+        count = any(abs(c - settle_t) <= 0.1 for c in timeline.counts)
+        assert count == counted, (
+            f"{name}: the {settle_t:.2f} s settle {'did not count' if counted else 'counted'} "
+            f"(counts {[round(c, 2) for c in timeline.counts]})"
+        )
+        if row == "ball_in_hand":
+            assert not timeline.releases, f"{name}: the hold was released at {timeline.releases}"
+    named = [t for t, _, _ in expected]
+    stray = [
+        round(t, 2)
+        for t, r in timeline.rows
+        if r == "ball_in_hand" and not any(abs(t - n) <= 0.1 for n in named)
+    ]
+    assert not stray, f"{name}: placing the corpus does not hold, at {stray}"
 
 
 def _assert_list_verdicts(name: str, timeline: "ClockTimeline") -> None:
@@ -941,6 +970,7 @@ def test_corpus_clip(name: str) -> None:
     if truth is not None:
         _assert_clock_outcome(name, truth, timeline)
     _assert_list_verdicts(name, timeline)
+    _assert_hand_rows(name, timeline)
 
     # ---- the golden: the record, and the gate only where nothing else is ----
     #
@@ -1042,12 +1072,7 @@ def _assert_clock_outcome(name: str, truth: list[float], timeline: "ClockTimelin
     if not timeline.rearrangement_is_anchored:
         return
     lo = (truth[0] - FREEZE_EARLY_S) if truth else float("-inf")
-    placements = PLACEMENT_SETTLES.get(name, [])
-    counts = [
-        c
-        for c in timeline.counts
-        if c >= lo and not any(abs(c - p) <= FREEZE_LATE_S for p in placements)
-    ]
+    counts = [c for c in timeline.counts if c >= lo]
     assert len(counts) == len(truth), (
         f"{name}: clock counted {len(counts)} shots at {[round(c, 2) for c in counts]}, "
         f"ground truth has {len(truth)} at {[round(s, 3) for s in truth]}. Extra counts "

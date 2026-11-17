@@ -64,6 +64,16 @@ very last shot can be missing from them.
 | **Refuted while the list held no cue** | Today's refutation stands even when the list misses the cue (either one seeing it counts). How often the two disagree that way. |
 | **Settles with no list / with an arm** | Settles whose list never arrived before the next motion, and settles whose list had an arm over the table and no cue: today's logic decided those alone. Nonzero no-list counts are worth a look (a list takes 20–75 ms). |
 
+**Ball in hand (#64, checkpoint 133+)** adds three rows, shown only for
+journals whose `scratch_list` lines carry a `row`. Ball in hand runs from a
+standing scratch to the first settle that moves an object ball.
+
+| Row | Definition |
+|---|---|
+| **Ball in hand (after a scratch)** | Periods begun (`ball_in_hand` lines), and how each ended (`ball_in_hand_ended`: `shot`, `new_rack`, `refuted`). |
+| **Placings kept off the clock** | Settles during ball in hand that moved only the cue, so they counted nothing and the clock kept running (`row` `ball_in_hand`, `hand` `applied`). In parentheses: `refused` (a GRACE/IDLE fire had already counted a shot), `late` (decided before its list came, or the 0.15 s wait ran out), `not_held` (clock idle or off). **A placing that was a real shot sends #64 back**; each is a `placing` moment on the review page, and each counted settle that ended ball in hand an `in_hand_shot` moment (Steven's shot, or a placing missed). |
+| **Only the cue moved, open play** | Settles with no scratch before them where the cue moved and no object ball did, out of settles with a row. They restart the countdown as before (Steven's call: open-play carries are behavioural). |
+
 Rows that appear only when nonzero: **dark break candidates** (E8's no-fire
 tier while it was shadow-only, checkpoint 75 → #36 — **historical, pre-2026-08-11
 journals only**; the tier went live in #36 keying on `appeared >= 5`, so a dark

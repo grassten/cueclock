@@ -92,6 +92,26 @@ def test_the_ball_lists_scratch_calls_are_moments(tmp_path: Path) -> None:
     assert "held 5 s" in found[0].summary
 
 
+def test_ball_in_hand_placing_and_its_end_are_moments(tmp_path: Path) -> None:
+    """#64: every placing kept off the clock is shown once, at its list,
+    whether a freeze was reverted or a compensation suppressed; so is the
+    counted settle that ended ball in hand (the shot, or a missed placing)."""
+    calls = [
+        run(10, "shot_provisional_reverted", reason="ball_in_hand"),
+        run(10, "scratch_list", frame_t=10.0, row="ball_in_hand", hand="applied"),
+        run(20, "compensation_suppressed", reason="ball_in_hand"),
+        run(20, "scratch_list", frame_t=20.0, row="ball_in_hand", hand="applied"),
+        run(30, "scratch_list", frame_t=30.0, row="ball_in_hand", hand="refused"),
+        run(40, "ball_in_hand_ended", reason="shot", placed=2),
+        run(50, "scratch_list", frame_t=50.0, row="cue_moved", hand=None, counted=True),
+        run(55, "scratch_list", frame_t=55.0, row="still", hand=None, counted=True),
+        run(60, "ball_in_hand_ended", reason="new_rack", placed=0),
+    ]
+    found = moments.find(write_journal(tmp_path / "j.jsonl", calls))
+    assert kinds(found) == ["placing", "placing", "in_hand_shot", "cue_only"]
+    assert "after 2 placing(s)" in found[2].summary
+
+
 def test_clean_session_has_no_moments(tmp_path: Path) -> None:
     clean = [
         run(0, "vision_shot_taken", state="MOTION", t=0.0),
