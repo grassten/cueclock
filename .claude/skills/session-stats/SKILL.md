@@ -38,7 +38,7 @@ computes it identically.
 | **Balls appeared mid-rack** | Mid-rack settles (`rack_shots >= 2`, `baseline >= 3`) whose rearrangement reports `appeared >= 1`, over all such settles (`report.mid_rack_appearances`). Past the break balls only leave the table, so every appearance is a ball the tracker lost and found again, or a shadow it took for one. **Lower is better.** 88 / 711 (12.4%) all-time at the 2026-11-15 audit (#48/#52); the shadow-filter work is judged on this row. |
 | **Scratches journaled** | Journals **with `vision_scratch_candidate` records** (checkpoint 77+, #26): `vision_scratch` is an adjudicated verdict — present it as a count, with candidates/refuted beside it (`report` prints all three). Journals **without** candidate records predate the two-stage verdict: **upper bound only**, over-counted ~6x (potted object balls mis-crowned as the cue; Steven ground truth 2026-08-06) — never present those as a real count. The adjudicator's one known leak keeps even new counts a slight over-bound: a real cue at rest in deep rail shade (0.53 whiteness vs the 0.72 witness floor) cannot refute its false candidate. |
 
-**The ball list (#54, checkpoint 127+)** adds five rows, shown only for
+**The ball list (#54, checkpoint 127+)** adds six rows, shown only for
 journals that hold `ball_list` lines. They judge the list, not the clock:
 the list never moves the clock until #63/#64 build on it.
 
@@ -46,8 +46,9 @@ the list never moves the clock until #63/#64 build on it.
 |---|---|
 | **Ball lists written** | Every settle's list plus each list read at rest that differed from the last, and how many had an arm over the table (an arm list can show a ball is there, never that one is gone, so it is left out of the three checks below). |
 | **List count = tracker's at a settle** | Settle lists whose ball count equals the tracker's present tracks at that frame. A disagreement says one of the two is wrong, not which. |
-| **Lists with a number twice** | Arm-free lists giving one number to two balls. **Always an error.** The corpus had 2 in 162 rests. |
+| **Lists with a number twice** | Arm-free lists giving one number to two balls. **Always an error.** The corpus had 2 in 162 rests. From checkpoint 131 (#65) it is 0 by construction: each number goes to one ball per list, so read the next row instead. |
 | **Numbers back after leaving** | Within one rack, from the break on (`rack_shots >= 1`): a number missing from an arm-free list that turns up again later. **Always an error** (balls only leave the table past the break). |
+| **Numbers given up** | Object balls on arm-free lists that read a number another ball matched better, and took their next best (`reassigned` on the `ball_list` line, checkpoint 131+; `own` in `balls.jsonl` says what each read). Not an error by itself: each one is a duplicate the list resolved, and only a by-eye look at its frame (`cueclock balls <session>`) says which way. Corpus: 2 in 1,482 readings at 162 rests, both a hand read as a ball. |
 | **Balls with no number** | `?` on arm-free lists over all object balls listed: mostly a stripe resting with its white cap straight up, the known open case. |
 
 Rows that appear only when nonzero: **dark break candidates** (E8's no-fire

@@ -71,7 +71,11 @@ DEFAULT_BUDGET_GB = 10.0
 # judged moment, which is all `review check` needs to replay it — and pinned
 # sessions have a budget of their own. Journals in logs/ get one too.
 DEFAULT_KEEP_FULL = 10
-DEFAULT_ARCHIVE_GB = 100.0  # ~60 hours of play at ~1.7 GB/hour of log + stills
+# ~40 hours of play: ~2.4 GB/hour of log + stills. 1.6 measured on session
+# 20261117-201731 (364 MB in 13.4 min), plus ~0.8 for the ball list's rest
+# stills (#65): that session wrote 55 rest lists, 2 PNGs of 1.61 MB each.
+# Re-measure on the first session that writes them.
+DEFAULT_ARCHIVE_GB = 100.0
 DEFAULT_PINNED_GB = 5.0  # ~50 hours of detection log, if every session had a verdict
 DEFAULT_JOURNALS_GB = 1.0  # ~1 MB per session journal: decades, but bounded
 VERDICTS_FILE = "verdicts.json"  # written by the review page

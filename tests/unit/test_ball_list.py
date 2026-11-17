@@ -2,6 +2,7 @@
 what counts as a changed list, the strip the hub serves, the switch and the
 session-log record. No camera, no clips."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -13,7 +14,15 @@ from fastapi.testclient import TestClient
 from cueclock.capture.session_log import SessionLog, SessionLogWriter
 from cueclock.server import create_app
 from cueclock.server.hub import Hub
-from cueclock.vision.ball_list import BallList, ListedBall, read_ball_list, same_table
+from cueclock.vision.ball_list import (
+    CENTROIDS,
+    BallList,
+    ListedBall,
+    assign_numbers,
+    read_ball_list,
+    same_table,
+    stripe_evidence,
+)
 from cueclock.vision.detect import ChromaReference, build_reference
 from cueclock.vision.pipeline import ReferenceModel
 
@@ -81,6 +90,47 @@ def test_an_empty_table_lists_nothing() -> None:
     assert read_ball_list(_mosaic(_cloth()), _reference()) == BallList(balls=(), arm=False)
 
 
+def _reading(colour: int, white: float, wrap: int = 0, off: float = 0.0) -> tuple:
+    """A ball's (centroid distances, stripe evidence), ``off`` Lab units from
+    centroid ``colour`` towards nothing in particular."""
+    point = CENTROIDS[colour] + np.array([off, 0.0, 0.0])
+    return np.linalg.norm(CENTROIDS - point, axis=1), stripe_evidence(white, wrap)
+
+
+def test_no_duplicate_means_every_ball_keeps_its_own_number() -> None:
+    yellow, blue, black = 0, 1, 7
+    readings = [_reading(yellow, 0.05), _reading(blue, 0.6), _reading(black, 0.9, wrap=30)]
+    assert assign_numbers(readings) == [1, 10, 8]  # the 8 is the 8, whatever its white
+
+
+def test_a_duplicate_goes_to_the_better_match_and_the_other_takes_its_next_best() -> None:
+    """The 2026-11-17 settle: a solid 1 reading 0.21 white (its number circle
+    plus the lamp's reflection) beside the real 9 at 0.57. Both read 9."""
+    yellow = 0
+    one, nine = _reading(yellow, 0.21, wrap=4), _reading(yellow, 0.57, wrap=24)
+    assert assign_numbers([one, nine]) == [1, 9]
+    assert assign_numbers([nine, one]) == [9, 1]  # order does not decide it
+
+
+def test_a_loser_whose_twin_is_taken_falls_to_the_next_colour() -> None:
+    """Three yellows: the 1 and the 9 go to the clearest solid and stripe; the
+    third, the weakest stripe, falls to the next-nearest colour (orange)."""
+    yellow, orange = 0, 4
+    solid = _reading(yellow, 0.02)
+    stripe = _reading(yellow, 0.7, wrap=30)
+    faint = _reading(yellow, 0.25, wrap=10, off=4.0)
+    numbers = assign_numbers([faint, solid, stripe])
+    assert numbers[1:] == [1, 9]
+    assert numbers[0] == orange + 9  # the 13: orange, still a stripe
+
+
+def test_more_numbered_balls_than_numbers_leaves_the_rest_unnumbered() -> None:
+    readings = [_reading(k % 8, 0.05 + 0.4 * (k % 2)) for k in range(16)]
+    numbers = assign_numbers(readings)
+    assert sorted(n for n in numbers if n is not None) == list(range(1, 16))
+    assert numbers.count(None) == 1
+
+
 def _ball(label: str, x: float, y: float = 100.0) -> ListedBall:
     return ListedBall(
         cx=x,
@@ -110,10 +160,20 @@ def test_what_counts_as_a_changed_list() -> None:
 
 
 def test_a_list_survives_its_record() -> None:
-    found = BallList(balls=(_ball("cue", 100), _ball("11", 200), _ball("?", 300)), arm=True)
-    again = BallList.from_dict(json.loads(json.dumps(found.as_dict())))
-    assert again.labels == ["cue", "11", "?"] and again.arm
+    reassigned = dataclasses.replace(_ball("1", 400), wrap=7, own=9)
+    found = BallList(
+        balls=(_ball("cue", 100), _ball("11", 200), _ball("?", 300), reassigned), arm=True
+    )
+    record = json.loads(json.dumps(found.as_dict()))
+    assert record["balls"][3]["own"] == "9" and "own" not in record["balls"][1]
+    again = BallList.from_dict(record)
+    assert again.labels == ["cue", "11", "?", "1"] and again.arm
+    assert again.balls[3].own == 9 and again.balls[3].wrap == 7
     assert same_table(found, again)
+    for ball in record["balls"]:  # a record from before #65
+        del ball["wrap"]
+        ball.pop("own", None)
+    assert BallList.from_dict(record).labels == again.labels
 
 
 def test_the_strip_shows_the_latest_list_without_an_arm() -> None:

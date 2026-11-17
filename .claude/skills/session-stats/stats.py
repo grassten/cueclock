@@ -49,6 +49,7 @@ class Tiers:
     numbers_returned: int = 0  # a number back after it left, within one rack
     listed_balls: int = 0  # object balls on arm-free lists
     unnumbered: int = 0  # ... listed with no number
+    reassigned: int = 0  # ... that read another ball's number and took their next best (#65)
 
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
@@ -119,6 +120,8 @@ class Tiers:
             numbers = [n for n in labels if n.isdigit()]
             self.listed_balls += sum(n != "cue" for n in labels)
             self.unnumbered += labels.count("?")
+            reassigned = r.get("reassigned")
+            self.reassigned += reassigned if isinstance(reassigned, int) else 0
             self.lists_duplicate += len(numbers) != len(set(numbers))
             now = set(numbers)
             if rack >= 1:  # racking moves balls on and off by hand: not judged
@@ -214,6 +217,11 @@ def table(label: str, t: Tiers) -> str:
                 "Numbers back after leaving",
                 str(t.numbers_returned),
                 "within one rack, from the break on; always an error",
+            ),
+            (
+                "Numbers given up",
+                f"{t.reassigned} / {t.listed_balls}  ({pct(t.reassigned, t.listed_balls)})",
+                "read a number a better match had; took their next best (#65)",
             ),
             (
                 "Balls with no number",

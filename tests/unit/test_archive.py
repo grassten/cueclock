@@ -9,10 +9,12 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from cueclock import archive, cli
 from cueclock.archive import Footage, Maintainer, Recording, plan_cut, prune_plan
+from cueclock.capture.session_log import SessionLog, SessionLogWriter, StillFrame
 
 T0 = datetime(2026, 11, 16, 22, 0, tzinfo=UTC)
 STAMP = "20261116-220000"
@@ -418,6 +420,61 @@ def test_pinned_sessions_have_their_own_budget(tmp_path: Path) -> None:
     t.maintainer.fit_archive()
     assert not (t.t7 / STAMPS[0]).exists()
     assert (t.t7 / STAMPS[1] / archive.PINNED_MARK).is_file()
+
+
+def _with_rest_stills(
+    t7: Path, stamp: str, at: Sequence[float], *, judged: bool = False
+) -> tuple[Path, int]:
+    """A session as `run` writes it, with a ball list's `rest` still at each
+    of ``at`` seconds (#65); moment m1 spans 90-110 s. Returns (dir, bytes of
+    one rest still)."""
+    d = t7 / stamp
+    writer = SessionLogWriter(d, {"stamp": stamp})
+    rng = np.random.default_rng(int(stamp[-6:]))
+    for n, s in enumerate(at):
+        frame = StillFrame(1000 + n, s, rng.integers(0, 255, (64, 64), dtype=np.uint8))
+        writer.still("rest", mono=s, wall=_iso(s), t=s, frame_i=frame.frame_i, frames=[frame])
+    writer.close()
+    moments = [{"id": "m1", "wall": _iso(100), "start_wall": _iso(90), "end_wall": _iso(110)}]
+    (d / "moments.json").write_text(json.dumps(moments))
+    if judged:
+        (d / archive.VERDICTS_FILE).write_text(json.dumps({"m1": {"verdict": "right"}}))
+    return d, (d / "stills" / "000001000.png").stat().st_size
+
+
+def test_rest_stills_are_in_the_session_budget_oldest_session_first(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    old, _ = _with_rest_stills(t.t7, STAMPS[0], (10, 20))
+    new, one = _with_rest_stills(t.t7, STAMPS[1], (10, 20, 30))
+    # Over by less than one rest still: the stills are what break the budget.
+    t.maintainer.archive_bytes = archive._size(old) + archive._size(new) - one // 2
+    t.maintainer.fit_archive()
+    assert not old.exists()
+    assert [e["reason"] for e in SessionLog(new).stills()] == ["rest"] * 3
+
+
+def test_pinning_keeps_rest_stills_only_inside_judged_moments(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    d, _ = _with_rest_stills(t.t7, STAMPS[0], (10, 95, 105, 300), judged=True)
+    t.maintainer.pin(d)
+    kept = SessionLog(d).stills()
+    assert [(e["reason"], e["t"]) for e in kept] == [("rest", 95), ("rest", 105)]
+    assert sorted(p.name for p in (d / "stills").glob("*.png")) == [
+        "000001001.png",
+        "000001002.png",
+    ]
+
+
+def test_rest_stills_kept_by_a_pin_are_in_the_pinned_budget(tmp_path: Path) -> None:
+    t = Tree(tmp_path)
+    old, _ = _with_rest_stills(t.t7, STAMPS[0], (95,), judged=True)
+    new, one = _with_rest_stills(t.t7, STAMPS[1], (95, 105), judged=True)
+    for d in (old, new):
+        t.maintainer.pin(d)
+    t.maintainer.pinned_bytes = archive._size(old) + archive._size(new) - one // 2
+    t.maintainer.fit_archive()
+    assert not old.exists()
+    assert len(SessionLog(new).stills()) == 2
 
 
 def test_journals_are_held_to_their_budget_oldest_first(tmp_path: Path) -> None:

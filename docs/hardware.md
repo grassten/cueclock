@@ -993,6 +993,15 @@ key's saves — §C4a notes nothing pruned those before). It refuses to do
 anything while a session is live, because a multi-GB T7 copy mid-session is the
 USB stall in §C5.
 
+**What the T7 holds.** Session logs + stills share a 100 GB budget, oldest
+session first (`--archive-gb`); pinned sessions get 5 GB of their own. From
+checkpoint 131 (#65) each ball list written at rest keeps its frame, so the
+weight is ~2.4 GB per hour of play (1.6 measured on `20261117-201731`, ~0.8
+projected for its 55 rest lists), and 100 GB is ~40 hours, down from ~60.
+**With the T7 unplugged nothing is capped**: a session stays in
+`sessions.nosync/` until a pass finds the drive (the internal disk had 40 GB
+free on 2026-11-17, ~16 hours at that rate).
+
 It runs as its own launchd agent, `com.cueclock.maintain`
 (`scripts/com.cueclock.maintain.plist.template`): every 900 s plus at load,
 `ProcessType Background` + `LowPriorityIO`, logging to

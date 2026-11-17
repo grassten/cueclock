@@ -63,12 +63,12 @@ DETECT_INFLIGHT = 2 * DETECT_WORKERS  # ~38 ms of queue at 156 Hz before the gra
 # ~1 s at 156 Hz is ~360 MB.
 STILL_RING_S = 1.0
 STILL_PRE_SHOT_S = 0.5
-# The ball list (#54) is read at every settle and this often while the table
-# is still, so it follows balls racked, lifted or put down by hand, which
-# often raise no settle (`pickup_newborn_0801`: the cue picked up and put back
-# with no event at all). One read costs p50 18 / p95 28 / max ~100 ms on the
-# corpus settles, on a detect worker.
-BALL_LIST_REST_S = 1.0
+# The ball list (#54) is read at every settle and about once a second
+# (`list_reads.REST_S`) while the table is still, so it follows balls racked,
+# lifted or put down by hand, which often raise no settle
+# (`pickup_newborn_0801`: the cue picked up and put back with no event at all).
+# One read costs p50 18 / p95 28 / max ~100 ms on the corpus settles, on a
+# detect worker.
 
 
 def _unique_dir(root: Path, label: str) -> Path:
@@ -492,6 +492,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.audio.spotter import Final
     from cueclock.bridge import hub_calls
     from cueclock.capture.camera import open_camera
+    from cueclock.capture.list_reads import ListReads, quiet, still_frames
     from cueclock.capture.session_log import (
         SESSIONS_DIR,
         LoggedFrame,
@@ -502,7 +503,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.display.syphon_out import DisplayWorker
     from cueclock.server.app import create_app
     from cueclock.server.hub import Hub
-    from cueclock.vision.ball_list import BallList, read_ball_list, same_table
+    from cueclock.vision.ball_list import BallList, read_ball_list
     from cueclock.vision.calibration import TableCalibration
     from cueclock.vision.detect import DetectConfig
     from cueclock.vision.events import BallsSettled, ShotTaken
@@ -703,7 +704,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if not ring:
             return
         i = ring_index(t_target)
-        frames = [ring[i - vision.churn_lag], ring[i]] if i >= vision.churn_lag else [ring[i]]
+        frames = still_frames(ring, i, vision.churn_lag)
         slog.still(
             reason,
             mono=time.monotonic(),
@@ -713,56 +714,32 @@ def _cmd_run(args: argparse.Namespace) -> int:
             frames=frames,
         )
 
-    # The ball list (#54): read on the detect pool, consumed here in the order
-    # the reads were asked for, so whether a list counts as changed depends
-    # only on the frames, never on which worker finished first. Only lists
-    # the session log accepted reach the hub, so a replay sees what live saw.
-    list_jobs: deque[tuple[StillFrame, str, int | None, Future[BallList]]] = deque()
-    last_list: BallList | None = None
-    next_rest_list = 0.0
+    def on_list(found: BallList, frame: StillFrame, reason: str, tracker: int | None) -> None:
+        hub.note_ball_list(found.labels, found.arm)
+        loop.call_soon_threadsafe(
+            partial(
+                hub.journal_ball_list,
+                frame_t=round(frame.t, 3),
+                reason=reason,
+                arm=found.arm,
+                balls=" ".join(found.labels),
+                tracker=tracker,
+                reassigned=sum(b.own is not None for b in found.balls),
+            )
+        )
+
+    # The ball list (#54, #65): see `capture.list_reads` for what is written.
+    lists = ListReads(
+        slog,
+        ring,
+        vision.churn_lag,
+        lambda frame: pool.submit(read_ball_list, frame.bayer, vision.reference),
+        on_list,
+    )
 
     def read_list(reason: str, t_target: float, tracker: int | None = None) -> None:
-        nonlocal next_rest_list
-        if not ring:
-            return
-        frame = ring[ring_index(t_target)]
-        job = pool.submit(read_ball_list, frame.bayer, vision.reference)
-        list_jobs.append((frame, reason, tracker, job))
-        next_rest_list = t_target + BALL_LIST_REST_S
-
-    def drain_lists() -> None:
-        """Write each finished list that is a settle's or differs from the last."""
-        nonlocal last_list
-        while list_jobs and list_jobs[0][3].done():
-            frame, reason, tracker, job = list_jobs.popleft()
-            try:
-                found = job.result()
-            except Exception as exc:  # a fit bug must never take the clock down
-                print(f"ball list failed at {frame.t:.3f}s: {exc!r}", file=sys.stderr)
-                continue
-            if reason == "rest" and last_list is not None and same_table(last_list, found):
-                continue  # a still table repeats itself
-            record = {
-                "frame_i": frame.frame_i,
-                "t": round(frame.t, 4),
-                "reason": reason,
-                "tracker": tracker,
-                **found.as_dict(),
-            }
-            if not slog.ball_list(record):
-                continue
-            last_list = found
-            hub.note_ball_list(found.labels, found.arm)
-            loop.call_soon_threadsafe(
-                partial(
-                    hub.journal_ball_list,
-                    frame_t=round(frame.t, 3),
-                    reason=reason,
-                    arm=found.arm,
-                    balls=" ".join(found.labels),
-                    tracker=tracker,
-                )
-            )
+        if ring:
+            lists.read(reason, ring[ring_index(t_target)], tracker)
 
     detects = 0
     detect_s = 0.0
@@ -797,7 +774,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
             elif isinstance(event, BallsSettled):
                 take_still("settle", t)
                 read_list("settle", t, tracker=sum(b.present for b in vision.last_balls))
-        if t >= next_rest_list and not vision.episode_active and not vision.last_motion:
+        if (
+            t >= lists.next_rest
+            and not vision.episode_active
+            and not vision.last_motion
+            and quiet(churn, vision.event_config.spin_churn_max)
+        ):
             read_list("rest", t)
         calls, episode_prev = hub_calls(hub, vision, t, events, episode_prev)
         for call in calls:
@@ -865,7 +847,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     take_still(f"cmd_{still_requests.popleft()}", t)
                                 while inflight and inflight[0][3].done():
                                     finish(*inflight.popleft())
-                                drain_lists()
+                                lists.drain()
                             frame_i += 1
                             if t >= next_display:
                                 next_display = t + display_period

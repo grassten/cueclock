@@ -20,6 +20,10 @@ GOLDENS = Path(__file__).parent.parent / "goldens"
 # 13 stills of a real 9-ball game, session 20261117-001351 (1115 mount),
 # copied into the corpus so archive retention cannot take this check away.
 GAME_STILLS = CLIPS / "stills_20261117-001351"
+# The 33 settle stills of session 20261117-201731 (1115 mount, two racks of
+# 9-ball), with truth.json: which balls are on the table at each, checked
+# ball by ball by eye on 2026-11-17 (#65).
+TRUTH_STILLS = CLIPS / "stills_20261117-201731"
 
 
 def _need(*names: str) -> None:
@@ -55,6 +59,23 @@ def test_real_game_stills() -> None:
     # Consecutive duplicates are settles where nothing dropped.
     distinct = [s for k, s in enumerate(seen) if k == 0 or s != seen[k - 1]]
     assert distinct == [" ".join(s) for s in expected_sets]
+
+
+def test_truth_stills_read_exactly() -> None:
+    """Every settle of a live session, each number once (#65): the solid 1
+    that read as a second 9 at 159.7 s now reads 1, and says what it read."""
+    _need("stills_20261117-201731", "empty_table_1115")
+    ref = _reference_model("empty_table_1115")
+    truth = json.loads((TRUTH_STILLS / "truth.json").read_text())["settles"]
+    assert len(truth) == 33
+    for settle in truth:
+        bayer = cv2.imread(str(TRUTH_STILLS / f"{settle['frame_i']:09d}.png"), cv2.IMREAD_UNCHANGED)
+        found = read_ball_list(bayer, ref)
+        assert sorted(found.labels) == sorted(settle["expected"]), settle["t"]
+        assert not found.arm
+        if settle["frame_i"] == 24953:
+            (one,) = [b for b in found.balls if b.number == 1]
+            assert one.own == 9 and (one.cx, one.cy) == (640.0, 330.0)
 
 
 def _largest_cluster(balls: tuple[ListedBall, ...], link: float = 2.0) -> int:

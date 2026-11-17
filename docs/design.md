@@ -675,7 +675,7 @@ replaces Flag's raw ring (checkpoint 114) with evidence that needs no button:
 | `header.json` | git sha + dirty, cadence, stride, churn lag, `DetectConfig`, reference path + digest, the calibration's JSON, the hub's starting ruleset / mode / score / bracket, and a `started_mono`/`started_wall` pair that maps the two clocks | — |
 | `detections/NNNNNN.npz` | per detect frame: camera `frame_i` (BlockID, so gaps are camera drops), `t`, `mono` (when the frame's stateful half ran, which is the hub's clock), balls + churn + intrusions in `detect_cache`'s array layout (`pack_frames`), and every rejected blob (`detect.Reject`: bbox, area, reason bits). ~10 s chunks, `savez_compressed`, each landing by rename | **189 B/frame, ~106 MB/hour** at 156 Hz; 17 µs/frame of writer time (6 corpus clips, 1800 frames) |
 | `inputs.jsonl` | every non-vision hub input, `{"mono","wall","method","kwargs"}` | a few KB |
-| `stills/` | raw Bayer PNGs (lossless), each with its churn-lag predecessor: at every ShotTaken its own frame and the one 0.5 s earlier (the table before the stroke; for a break, the racked pack, #59), at every BallsSettled, at every input | **1.62 MB, 40 ms per PNG** at compression 1; ~1.5 GB/hour |
+| `stills/` | raw Bayer PNGs (lossless), each with its churn-lag predecessor: at every ShotTaken its own frame and the one 0.5 s earlier (the table before the stroke; for a break, the racked pack, #59), at every BallsSettled, at every input, and (`rest`, #65) at every ball list written at rest | **1.62 MB, 40 ms per PNG** at compression 1; ~1.5 GB/hour, ~2.3 with rest stills |
 
 **Rejected blobs** are the one detector change (`DetectConfig.export_rejects`,
 off by default so corpus output is untouched, on in `run`). The gates already
@@ -767,8 +767,8 @@ white cap up shows no colour, and calling it anything doubles a number.
 can show a ball is present, never that one is absent.
 
 **When it is read.** In `cueclock run`, at every `BallsSettled` and about
-once a second (`BALL_LIST_REST_S`) while the engine reports no episode and no
-motion — balls racked, lifted or put down by hand often raise no settle. The
+once a second (`list_reads.REST_S`) while the engine reports no episode and no
+motion and (#65) no detection churns over `spin_churn_max` — balls racked, lifted or put down by hand often raise no settle. The
 read runs on the detect pool (corpus settles: p50 18 ms, p95 28 ms), and the
 loop consumes results in the order they were asked for, so whether a list
 counts as changed depends only on frames, never on which worker finished
@@ -783,8 +783,8 @@ with no arm for the strip — so a session and its replay see the same lists.
 
 **The strip.** A row of chips above the bar's left end in
 `/shotclock?view=bar`: the cue, 1–15 in order, then a grey `?` per ball with
-no number. A number read twice is drawn twice; there is no memory and no
-smoothing, so the strip's mistakes are visible. It is a test graphic, to be
+no number. Each number is on a list at most once (#65); there is no memory
+across lists and no smoothing, so the strip's mistakes are visible. It is a test graphic, to be
 refined once sessions show how often it is wrong; a switch on the control
 page's Setup tab hides it.
 
@@ -801,3 +801,54 @@ measured almost entirely on older mounts read with the 1115 colour
 references. A cue in a pocket jaw reads 0.75–0.84 against the 0.65 floor. The
 arm test misses some hands, and a hand holding the cue on the cloth can read
 "no cue, no arm". A ball under a hand is unknown until the next list.
+
+**Amended 2026-11-17 (checkpoint 131, #65): fewer wrong lists.** Measured
+against ground truth: the 33 settle stills of `20261117-201731` (checked ball
+by ball by eye), the 13 of `20261117-001351`, `all_balls_still_1115`, and the
+162 corpus rests scored with no human (duplicates, unmoved balls changing
+number, 15-ball frames reading exactly 1–15), all through `read_ball_list`
+itself. Three changes, each in for a measured reason:
+
+- *Each number once per list* (Steven's decision 3). `_label` read each ball
+  alone; now every (ball, number) pair has a cost in typical margins —
+  colour distance over the corpus's median colour margin (19.6 Lab), plus or
+  minus half the stripe evidence (white fraction and rim wrap past their
+  thresholds, over their median distances from them, 0.175 and 11 sectors) —
+  and pairs are taken cheapest first. A ball with no rival keeps exactly the
+  number it reads alone; the loser of a clash takes its next best, and the
+  record keeps what it read as `own`. It fixed the one wrong settle of the
+  live session (the solid 1 with the lamp's reflection, which read 0.21 white
+  beside the real 9 at 0.57) and changed two corpus labels, both a hand read
+  as a 14, where the real 14 now keeps its number. Still no memory across
+  lists.
+- *Rest reads wait for a quiet cloth.* The extra 10 at 604.5 s was Steven's
+  bridge hand: for 0.2 s it came loose from the rail in the segmentation and
+  passed as one ball-shaped blob, and a rest read landed inside it. Its churn
+  read 3.9–14.5; no ball at any other rest read or settle of the session read
+  over 2.3, under the engine's own still-ball ceiling (`spin_churn_max`, 2.5).
+  A rest read now waits for every detection to be at or under it.
+- *Rest stills* (Steven's decision 1): every list written at rest keeps its
+  frame and churn-lag predecessor as a `rest` still (§12), so a wrong one can
+  be re-read with `cueclock balls`. They live under the session log's
+  existing rules: the shared 100 GB budget, pinning, the pinned budget, the
+  writer's bounded queue.
+
+The missing 8 at 710.6 s has a cause but no fix yet. It was under Steven's
+arm and body as he shot (recording 11:46.5), inside a 57,000 px blob reaching
+in from the rail that the hand test passed over (a blob that size can only be
+dropped by the shadow test at its thickest point), so the list said no arm.
+Calling every hand-sized blob from the rail an arm was measured and rejected:
+over the session's strip it removes 11 s of wrong lists and adds 62, because
+the player's shadow at the rail also qualifies and a stale list then stays up
+(9 s with no cue after a scratch; 53 s of just `cue` from racking to the
+break). The rest stills will hold the next one's pixels.
+
+Not changed, with the reason: a coverage floor against the hands (all three
+read 0.569, but a real 10 reads 0.597 and a wrist 0.653); colour fit (hands
+16–17 Lab from the nearest centroid, real balls up to 30); the 5 read as 13
+(#54's stricter rim test has no instance in either truth set to be confirmed
+on); a stripe white cap up (0 of 259 live readings). Scores, before → after:
+truth stills 32/33 → 33/33 lists exact; game sequence and all-balls
+unchanged; corpus rests 2 → 0 duplicates, 3/615 unmoved flips and 8/8 full
+tables unchanged. Measurements and scripts: issue #65 and
+`~/cueclock-research/65-labels/`.

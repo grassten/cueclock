@@ -176,17 +176,19 @@ the drift reading and whether it crossed the warn level.
 Every session also writes a **session log** (#57) to
 `sessions.nosync/<stamp>/`, `<stamp>` being the journal's: the detector's
 output for every frame (rejected blobs included), every non-vision hub input,
-and raw stills at each strike, half a second before it, each settle and each
-operator command. `session replay` / `session verify` read it back; the layout
+and raw stills at each strike, half a second before it, each settle, each
+operator command and each ball list written at rest (`rest`, #65). `session replay` / `session verify` read it back; the layout
 and the measured costs are in `design.md` §12. The writer runs on its own
 thread and drops rather than waits when it falls behind; a `session_log`
 journal line at exit carries its counters, and any drop journals a
 `session_log_drop` line as it happens.
 
 It also reads the **ball list** (#54, `design.md` §13) on a detect worker at
-every settle and about once a second while nothing moves: each settle's list,
-and each rest list that differs from the last, goes to `balls.jsonl` in the
-session log, a `ball_list` journal line, and the bar's ball strip.
+every settle and about once a second while nothing moves and nothing on the
+cloth churns: each settle's list, and each rest list that differs from the
+last, goes to `balls.jsonl` in the session log, a `ball_list` journal line
+(with `reassigned`, the balls that gave a number up to a better match, #65),
+and the bar's ball strip.
 
 The stills come from a ~1 s ring of raw frames (~360 MB at 156 Hz). Until
 checkpoint 114 `run` held 20 s (~7.2 GB) for the deck's Flag key
@@ -482,7 +484,7 @@ nothing grows without bound:
 | `--dry-run` | off | print every action, change nothing (hooks and ffmpeg aren't run) |
 | `--budget-gb` | `10` | footage kept on the internal disk, in GB (10⁹ bytes); ~3 GB per hour of recording |
 | `--keep-full` | `10` | archived sessions that keep any footage (full recording, unjudged cuts), newest first |
-| `--archive-gb` | `100` | session logs + stills on the T7 (~1.7 GB per hour of play) |
+| `--archive-gb` | `100` | session logs + stills on the T7 (~2.4 GB per hour of play since the rest stills, #65: ~40 hours) |
 | `--pinned-gb` | `5` | pinned sessions (judged, stripped to their detection log) |
 | `--journals-gb` | `1` | session journals in `logs/` (~1 MB each) |
 | `--root` | `sessions.nosync/` | local session root |

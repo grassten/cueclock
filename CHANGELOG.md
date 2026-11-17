@@ -277,6 +277,86 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 131 — fewer wrong ball lists, measured; #65):**
+  Labels and logging only: what the list finds, the cue test, the tracker,
+  the events and the clock are unchanged (`detect.py` untouched, no golden
+  moved). Scored before and after through `read_ball_list` itself
+  (`~/cueclock-research/65-labels/score.py`, `sheet.py`):
+
+  | Set | Before | After |
+  |---|---|---|
+  | `stills_20261117-201731`, 33 live settles (checked ball by ball by eye) | 32/33 lists exact (the 1 read as a 9) | **33/33** |
+  | `stills_20261117-001351`, 13 game stills | sequence right | sequence right |
+  | `all_balls_still_1115`, 5 frames | 5/5 exactly cue 1-15 | 5/5 |
+  | 162 corpus rests: duplicate numbers | 2 | **0** |
+  | ... unmoved ball changes number | 3 / 615 (5↔13 twice, 5↔3) | 3 / 615 |
+  | ... 15-ball frames reading 1-15 | 8/8 | 8/8 |
+  | By eye: every changed label | — | 3 changed, 3 right (sheet below) |
+
+  - **Each number once per list** (Steven's decision 3). Each (ball, number)
+    pair now has a cost: colour distance in units of the corpus's median
+    colour margin (19.6 Lab), plus or minus half the stripe evidence, which
+    is white fraction and rim wrap past their thresholds in units of their
+    median distances from them (0.175, 11 sectors). Pairs are taken
+    cheapest first. All three spreads were measured on the 1,327 numbered
+    readings at the corpus rests and confirmed on the two live sets. A ball
+    with no rival gets exactly what it read alone; `own` in `balls.jsonl`
+    and `reassigned` on the `ball_list` journal line record each one that
+    gave up a number; session-stats gains a "Numbers given up" row. The
+    three labels it changed, by eye: the solid 1 at 159.7 s (now 1; the
+    real 9 keeps 9), and two corpus hands that read as a 14 beside the real
+    14 (`power_shot` 4.33, `shot_debug` 5.86), which kept its number. Still
+    no memory across lists.
+  - **The extra 10 (604.5 s): fixed.** It was Steven's bridge hand. For
+    0.2 s it came loose from the rail in the segmentation and passed the
+    ball gates as one 4,469 px blob, so the hand test saw nothing, and a
+    rest read landed inside it. The blob's churn read 3.9–14.5 (9.8 at the
+    read); no ball at any other rest read or settle of the session read
+    over 2.3. Rest reads now wait until every detection is at or under
+    the engine's own still-ball ceiling, `spin_churn_max` (2.5). In the
+    0.5–5 s after this session's settles, 2.2% of frames fail that test
+    (p95 2.32), so a read waits a few frames at most.
+  - **The missing 8 (710.6 s): cause found, no fix shipped.** The 8 never
+    moved (675, 256 at the next settle). The recording at 11:46.5 shows it
+    under Steven's arm and body as he shot the 6. From 708.8 s the detection
+    log holds a 57,000 px blob reaching in from the rail over it, and the
+    list's hand test called the 710.6 s read arm-free. For a blob that size
+    the only way out of `_as_intrusion` is its shadow test. I measured
+    calling every hand-sized blob from the rail an arm and took it out
+    again. The session's strip would lose 11 s of wrong lists (this 8 and
+    two mid-rack lists missing the 2, 7 and 8) but gain 62 s of stale ones,
+    because the player's shadow at the rail also qualifies: 9 s with no
+    cue after the 320 s scratch, and 53 s of just `cue` from racking to the
+    break. At the corpus rests the same rule flagged 28 real arms and 2
+    cushion shadows. Next time it happens the rest still keeps the frame.
+    Look for a ball missing beside a blob from the rail, and check that
+    blob's core radius and shadow verdict.
+  - **Rest stills** (Steven's decision 1): every list written at rest keeps
+    its frame and churn-lag predecessor as a `rest` still. The list job's
+    own `StillFrame` is used, not a search of the ring by time. The list
+    plumbing moved out of `run`'s closure into `capture/list_reads.py`, so
+    it has tests. Unit tests: a written rest list leaves a `rest` still at
+    its frame and an unwritten one leaves none; with one queue slot the
+    list is written and its still dropped and counted. Archive: rest stills
+    count toward the 100 GB budget (the oldest session goes); pinning keeps
+    only those inside judged windows and rewrites the index; kept ones
+    count toward the 5 GB pinned budget. **Weight:** session 201731 logged
+    1.6 GB/hour (364 MB in 13.4 min). Its 55 rest lists at 2 × 1.61 MB
+    would add ~0.8, so ~2.4 GB/hour and ~40 hours in 100 GB, down from ~60.
+    That is a projection: re-measure on the first session that writes them.
+    **Gap, for Steven:** with the T7 unplugged nothing caps
+    `sessions.nosync/` (`retain()` only walks the T7). The internal disk had
+    40 GB free, ~16 hours at that rate.
+  - **Not changed, measured:** a coverage floor against hands (all three
+    hand phantoms read 0.569, but a real 10 reads 0.597 and a wrist 0.653);
+    colour fit (hands 16–17 Lab from the nearest centroid, real balls up to
+    30); the 5 read as 13 (#54's stricter rim test has no instance in either
+    truth set to confirm it on); a stripe white cap up (0 of 259 live
+    readings).
+  - `truth.json` checked ball by ball by eye (all 33 expected sets right)
+    and noted as such. Gates: `test_corpus_ball_list.py` 10 passed (new:
+    the truth stills read exactly); unit 721 passed; ruff, mypy clean.
+
 - **2026-11-17 (checkpoint 130 — the ball list leaves the review page):**
   Steven: the settle stills with their lists drawn on them are debugging
   logs, not something he reviews. He asks for timestamps when he wants to

@@ -17,7 +17,8 @@ session replays through the tracker, the event engine and the hub without a
 single pixel. Stills are the pixels for the moments that matter (each strike,
 the table half a second before it, each settle, each operator command), each
 with its churn-lag predecessor so churn can be recomputed when the detector is
-re-run on them.
+re-run on them. Each ball list written at rest keeps its frame as a `rest`
+still too (#65, `capture.list_reads`): a settle's list already has one.
 
 **The detect loop never waits on this.** :meth:`SessionLogWriter.frame` and
 :meth:`~SessionLogWriter.still` append to memory and hand finished work to one

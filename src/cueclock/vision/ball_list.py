@@ -19,9 +19,17 @@ How it works (measured in issue #54, prototype in its research folder):
    enclosed by at least four strong balls of its own component (vote >= 1.2,
    fill >= 0.9): that second rule is what finds the black 8 in the middle of a
    15-ball rack.
-4. **Labelled**: cue by white at the rim (:data:`CUE_RIM_FLOOR`); otherwise
-   colour by the nearest of eight Lab centroids over the inner disc, and
-   stripe by the disc's white fraction or by white wrapping the rim.
+4. **Read**: cue by white at the rim (:data:`CUE_RIM_FLOOR`); otherwise the
+   Lab distance to each of eight colour centroids over the inner disc, and
+   the stripe evidence: the disc's white fraction and white wrapping the rim.
+5. **Numbered, each number once per list** (#65): every (ball, number) pair
+   has a cost from those readings and the pairs are taken cheapest first, so
+   of two balls that read the same number the better match keeps it and the
+   other takes its next best (:func:`assign_numbers`). A ball with no
+   duplicate gets exactly the number it reads on its own. Still no memory
+   across lists: a list is a pure function of its frame.
+6. **Arm**: the detector's hand test on the same frame. A list with an arm
+   can show a ball is there, never that one is gone.
 
 Everything the fit reads is in distorted pixels, like the detector; centres are
 whole pixels (the accumulator's argmax), which is what the cue floor was
@@ -110,6 +118,14 @@ CENTROIDS = np.array(
     dtype=np.float64,
 )
 
+# Each number once per list (#65): what a number costs a ball, in typical
+# margins. Each spread is a median over the 1,327 numbered readings at the 162
+# corpus rests (2026-11-17), so a cost of 1 is how far a typical ball sits from
+# that decision's boundary: the colour margin (second-nearest centroid minus
+# nearest, Lab), |white - STRIPE_WHITE| and |wrap - RIM_WRAP_STRIPE|. Measured
+# on the corpus, confirmed on the two real sessions' truth sets.
+COLOUR_SPREAD, WHITE_SPREAD, WRAP_SPREAD = 19.6, 0.175, 11.0
+
 ARM_CONFIG = DetectConfig(export_intrusions=True)  # the detector's hand test, this frame only
 
 # Two lists are the same table when every ball has a same-label ball within
@@ -147,6 +163,8 @@ class ListedBall:
     colour_px: int  # non-white pixels in the inner disc
     vote: float
     coverage: float
+    wrap: int = 0  # rim-wrap sectors, the stripe test's second reading
+    own: int | None = None  # the number it read on its own, when the list gave it another
 
     @property
     def label(self) -> str:
@@ -187,6 +205,8 @@ class BallList:
                     "colour_px": b.colour_px,
                     "vote": round(b.vote, 2),
                     "coverage": round(b.coverage, 3),
+                    "wrap": b.wrap,
+                    **({"own": str(b.own)} if b.own is not None else {}),
                 }
                 for b in self.balls
             ],
@@ -210,6 +230,8 @@ class BallList:
                     colour_px=int(b["colour_px"]),
                     vote=float(b["vote"]),
                     coverage=float(b["coverage"]),
+                    wrap=int(b.get("wrap", 0)),  # absent before #65
+                    own=int(b["own"]) if "own" in b else None,
                 )
             )
         return cls(balls=tuple(balls), arm=bool(data["arm"]))
@@ -405,13 +427,26 @@ def _disc(
     return bgr[y - half : y + half + 1, x - half : x + half + 1], yy, xx
 
 
-def _label(
+@dataclass(frozen=True)
+class _Reading:
+    """One accepted circle's measurements, before numbers are assigned."""
+
+    c: _Candidate
+    cue: bool
+    rim: float
+    white: float
+    wrap: int  # rim-wrap sectors (0 when not read: the cue, or no colour)
+    colour_px: int
+    dist: npt.NDArray[np.float64] | None  # Lab distance to each centroid; None: no number
+
+
+def _read(
     bgr: npt.NDArray[np.uint8],
     origin: tuple[int, int],
     bayer: npt.NDArray[np.uint8],
     c: _Candidate,
-) -> ListedBall | None:
-    """Label one accepted circle; ``bgr`` is the demosaiced window at ``origin``."""
+) -> _Reading | None:
+    """Measure one accepted circle; ``bgr`` is the demosaiced window at ``origin``."""
     e = edge_radius(c.r_pred)
     disc = _disc(bgr, c.cx - origin[0], c.cy - origin[1], e)
     if disc is None:
@@ -424,35 +459,114 @@ def _label(
     colour = pixels[~is_white]
     rim = ring_whiteness(bayer, c.cx, c.cy, e, CUE_RING)
     cue = rim >= CUE_RIM_FLOOR
-    number: int | None = None
-    margin = 0.0
-    if not cue and len(colour) >= MIN_COLOUR_PX:
-        lab = cv2.cvtColor(colour.reshape(-1, 1, 3), cv2.COLOR_BGR2LAB).reshape(-1, 3)
-        med = np.median(lab.astype(np.float64), axis=0)
-        point = np.array([med[0] * 100.0 / 255.0, med[1] - 128.0, med[2] - 128.0])
-        dist = np.linalg.norm(CENTROIDS - point, axis=1)
-        order = np.argsort(dist)
-        k = int(order[0])
-        margin = float(dist[order[1]] - dist[order[0]])
-        lo, hi = RIM_WRAP_RING
-        rim_white = (patch.min(axis=2) >= RIM_WRAP_FLOOR) & (rr >= lo * e) & (rr <= hi * e)
-        sector = ((np.degrees(np.arctan2(yy, xx)) + 360.0) % 360.0 // 10).astype(int)
-        wrap = int((np.bincount(sector[rim_white], minlength=36) >= RIM_WRAP_NEED).sum())
-        stripe = white >= STRIPE_WHITE or wrap >= RIM_WRAP_STRIPE
-        number = k + 9 if stripe and k < 7 else k + 1
-    return ListedBall(
-        cx=float(c.cx),
-        cy=float(c.cy),
-        r_pred=c.r_pred,
-        cue=cue,
-        number=number,
-        rim=rim,
-        white=white,
-        margin=margin,
-        colour_px=len(colour),
-        vote=c.vote,
-        coverage=c.coverage,
-    )
+    if cue or len(colour) < MIN_COLOUR_PX:
+        return _Reading(c, cue, rim, white, 0, len(colour), None)
+    lab = cv2.cvtColor(colour.reshape(-1, 1, 3), cv2.COLOR_BGR2LAB).reshape(-1, 3)
+    med = np.median(lab.astype(np.float64), axis=0)
+    point = np.array([med[0] * 100.0 / 255.0, med[1] - 128.0, med[2] - 128.0])
+    lo, hi = RIM_WRAP_RING
+    rim_white = (patch.min(axis=2) >= RIM_WRAP_FLOOR) & (rr >= lo * e) & (rr <= hi * e)
+    sector = ((np.degrees(np.arctan2(yy, xx)) + 360.0) % 360.0 // 10).astype(int)
+    wrap = int((np.bincount(sector[rim_white], minlength=36) >= RIM_WRAP_NEED).sum())
+    dist = np.linalg.norm(CENTROIDS - point, axis=1)
+    return _Reading(c, cue, rim, white, wrap, len(colour), dist)
+
+
+def stripe_evidence(white: float, wrap: int) -> float:
+    """How striped a ball reads, in typical margins: >= 0 is a stripe.
+
+    The stripe test is ``white >= STRIPE_WHITE or wrap >= RIM_WRAP_STRIPE``;
+    each reading's distance past its own threshold is divided by that
+    reading's typical distance (:data:`WHITE_SPREAD`, :data:`WRAP_SPREAD`), and
+    the larger counts, so the sign is exactly the test's verdict."""
+    return max((white - STRIPE_WHITE) / WHITE_SPREAD, (wrap - RIM_WRAP_STRIPE) / WRAP_SPREAD)
+
+
+def number_costs(dist: npt.NDArray[np.float64], stripe: float) -> npt.NDArray[np.float64]:
+    """What each number 1-15 costs one ball (index n-1), in typical margins.
+
+    Colour: the distance to the number's centroid over :data:`COLOUR_SPREAD`.
+    Half: a number whose half agrees with the stripe evidence earns half its
+    size, one that disagrees pays it, so a ball's twin costs exactly its
+    evidence more (the 8 has no twin and always agrees). A ball's cheapest
+    number is the one it reads on its own; between two balls wanting one
+    number, the nearer colour and the clearer half win."""
+    costs = np.empty(15)
+    for n in range(1, 16):
+        k = n - 1 if n <= 8 else n - 9
+        agree = n == 8 or (n >= 9) == (stripe >= 0.0)
+        costs[n - 1] = dist[k] / COLOUR_SPREAD + (-0.5 if agree else 0.5) * abs(stripe)
+    return costs
+
+
+def _own_number(dist: npt.NDArray[np.float64], stripe: float) -> int:
+    k = int(np.argmin(dist))
+    return k + 9 if stripe >= 0.0 and k < 7 else k + 1
+
+
+def assign_numbers(readings: Sequence[tuple[npt.NDArray[np.float64], float]]) -> list[int | None]:
+    """Each number at most once per list (#65, Steven's decision 3).
+
+    ``readings`` are each ball's (centroid distances, stripe evidence). Every
+    (ball, number) pair is taken cheapest first; a ball takes its number when
+    neither is taken yet, so of two balls that read the same number the
+    better match keeps it and the other falls to its next best, and so on.
+    Ties go to the number whose half agrees with the evidence, then to the
+    earlier ball. A ball left with no number would get None (``?``); with 15
+    numbers and at most 15 object balls on a table it cannot happen unless a
+    list holds more than 15 numbered circles, i.e. junk."""
+    pairs = []
+    for i, (dist, stripe) in enumerate(readings):
+        for n, cost in enumerate(number_costs(dist, stripe), start=1):
+            agree = n == 8 or (n >= 9) == (stripe >= 0.0)
+            pairs.append((float(cost), not agree, i, n))
+    pairs.sort()
+    numbers: list[int | None] = [None] * len(readings)
+    taken: set[int] = set()
+    for _, _, i, n in pairs:
+        if numbers[i] is None and n not in taken:
+            numbers[i] = n
+            taken.add(n)
+    return numbers
+
+
+def _listed(readings: Sequence[_Reading]) -> list[ListedBall]:
+    """The readings as balls, numbered list-wide."""
+    numbered = [
+        (r, r.dist, stripe_evidence(r.white, r.wrap)) for r in readings if r.dist is not None
+    ]
+    assigned = assign_numbers([(dist, stripe) for _, dist, stripe in numbered])
+    by_id = {
+        id(r): (n, _own_number(dist, stripe), dist)
+        for (r, dist, stripe), n in zip(numbered, assigned, strict=True)
+    }
+    out = []
+    for r in readings:
+        number = own = None
+        margin = 0.0
+        if id(r) in by_id:
+            number, mine, dist = by_id[id(r)]
+            own = None if mine == number else mine
+            first, second = np.sort(dist)[:2]
+            margin = float(second - first)
+        out.append(
+            ListedBall(
+                cx=float(r.c.cx),
+                cy=float(r.c.cy),
+                r_pred=r.c.r_pred,
+                cue=r.cue,
+                number=number,
+                rim=r.rim,
+                white=r.white,
+                margin=margin,
+                colour_px=r.colour_px,
+                vote=r.c.vote,
+                coverage=r.c.coverage,
+                wrap=r.wrap,
+                own=own,
+            )
+        )
+    return out
 
 
 def read_ball_list(bayer: npt.NDArray[np.uint8], reference: ReferenceModel) -> BallList:
@@ -465,7 +579,8 @@ def read_ball_list(bayer: npt.NDArray[np.uint8], reference: ReferenceModel) -> B
         cv2.cvtColor(bayer[oy : oy + rh, ox : ox + rw], cv2.COLOR_BayerBG2BGR), dtype=np.uint8
     )
     accepted = _accept(_candidates(bgr, binary, (ox, oy), reference.radius_px))
-    balls = [b for c in accepted if (b := _label(bgr, (ox, oy), bayer, c)) is not None]
+    readings = [r for c in accepted if (r := _read(bgr, (ox, oy), bayer, c)) is not None]
+    balls = _listed(readings)
     _, intrusions, _ = detect_frame(
         bayer,
         reference.gray,
