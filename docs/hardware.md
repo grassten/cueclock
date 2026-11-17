@@ -666,8 +666,10 @@ stops it, so a server that misses a poll can't end a live session. Every
 ShotTaken counts, before every gate (phantoms, `no_clock` drills and the
 vision kill switch included). DEV sessions are never touched. The deck log
 (`~/Library/Logs/cueclock-deck.log`) says `session: no shot in 10 min —
-stopping`. Releasing `caffeinate` is enough after that: `pmset sleep 1` puts
-the Mac to sleep on its own.
+stopping`. The Mac stays awake afterwards, deliberately: it is also the Plex
+server. Releasing the session's `caffeinate -d` changes nothing there,
+because Amphetamine and `displaysleep 0` each hold off system sleep on their
+own (`pmset -g`, 2026-11-16). The auto-stop never sleeps the Mac.
 
 **`DEV`**: the API answers but this daemon has no handle on it — a terminal
 `run`. The key refuses to touch it and flashes `DEV`; it only ever signals
