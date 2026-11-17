@@ -57,6 +57,7 @@ def hub_calls(
                     rearrange=vision.last_settle_rearrange,
                     backstop=vision.last_settle_backstop,
                     movers=vision.last_settle_movers,
+                    tracker_cue=vision.last_settle_cue_seen,
                 )
             )
         elif isinstance(event, ScratchCandidate):

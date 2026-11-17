@@ -23,22 +23,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
+from cueclock.bridge import hub_calls
+from cueclock.capture.list_reads import REST_S, rest_due
 from cueclock.clock.state import State
 from cueclock.server import hub as hub_module
 from cueclock.server.hub import Hub
-from cueclock.vision.events import (
-    BallsSettled,
-    ScratchCandidate,
-    ScratchRefuted,
-    ShotTaken,
-)
+from cueclock.vision.ball_list import BallList, same_table
+from cueclock.vision.events import BallsSettled, ShotTaken
 
 if TYPE_CHECKING:
     from cueclock.vision.pipeline import VisionPipeline
@@ -152,6 +150,10 @@ class ClockTimeline:
     # Balls resolved by the quiet layout each settle was diffed against.
     # `None` means there was no quiet layout at all.
     baselines: list[int | None] = field(default_factory=list)
+    # #63, read off the hub's own journal: when a scratch hold was granted
+    # (and by whom), and the ball list's verdict at each settle it judged.
+    holds: list[tuple[float, str]] = field(default_factory=list)
+    list_verdicts: list[tuple[float, str]] = field(default_factory=list)
 
     @property
     def rearrangement_is_anchored(self) -> bool:
@@ -200,42 +202,6 @@ def _hub_time(cell: list[float]) -> Iterator[None]:
         hub_module.time = original  # type: ignore[assignment]
 
 
-def _dispatch(hub: Hub, event: Any, t: float, vision: VisionPipeline) -> None:
-    """Exactly ``cli.py``'s ``dispatch`` — kept in the same order, minus I/O."""
-    if isinstance(event, ShotTaken):
-        coro = hub.shot_taken(
-            t, ball_id=event.ball_id, speed_mms=event.speed_mms, newborn=event.newborn
-        )
-    elif isinstance(event, BallsSettled):
-        coro = hub.balls_settled(
-            t,
-            rearrange=vision.last_settle_rearrange,
-            backstop=vision.last_settle_backstop,
-            movers=vision.last_settle_movers,
-        )
-    elif isinstance(event, ScratchCandidate):
-        coro = hub.scratch_candidate(
-            t,
-            x_mm=event.x_mm,
-            y_mm=event.y_mm,
-            pocket_x_mm=event.pocket_x_mm,
-            pocket_y_mm=event.pocket_y_mm,
-            whiteness=event.whiteness,
-            color_age_s=event.color_age_s,
-        )
-    elif isinstance(event, ScratchRefuted):
-        coro = hub.scratch_refuted(
-            t,
-            witness_id=event.witness_id,
-            x_mm=event.x_mm,
-            y_mm=event.y_mm,
-            whiteness=event.whiteness,
-        )
-    else:
-        coro = hub.scratch_seen(t)
-    asyncio.run(coro)
-
-
 def replay_clock(
     scenario: str,
     pipeline: VisionPipeline,
@@ -244,6 +210,7 @@ def replay_clock(
     indices: list[int],
     *,
     mid_rack: bool = True,
+    lists: Callable[[int], BallList] | None = None,
 ) -> ClockTimeline:
     """Replay one clip's detections through a real ``Hub``; return the timeline.
 
@@ -253,6 +220,12 @@ def replay_clock(
     no-op by design and there is no freeze to grade at all. The break clips
     are the exception and pass ``mid_rack=False`` so the IDLE break path
     (E8's two tiers) is the thing under test.
+
+    ``lists`` reads the ball list of frame ``i`` (#63). Given, the harness
+    reads one at every settle and on the frames `cueclock run` reads one at
+    rest (`list_reads.rest_due`), writes the same ones it would, and hands
+    each to the hub right behind its frame's calls — live's order with no
+    latency. Without it the hub hears no lists, which is today's logic alone.
     """
     timeline = ClockTimeline(scenario=scenario)
     cell = [0.0]
@@ -266,6 +239,8 @@ def replay_clock(
         prev_state = hub.clock.state
         prev_rack_shots = hub.clock.rack_shots
         episode_prev = pipeline.episode_active
+        next_rest = 0.0
+        last_written: BallList | None = None
 
         for i, (detections, churn, intrusions) in zip(indices, frames, strict=True):
             t = float(timestamps[i])
@@ -273,6 +248,7 @@ def replay_clock(
 
             events = pipeline.advance(t, detections, churn, intrusions)
             timeline.events += events
+            reads: list[tuple[str, BallList]] = []
             for event in events:
                 if isinstance(event, ShotTaken):
                     timeline.shots_fired.append(t)
@@ -286,18 +262,24 @@ def replay_clock(
                     # one the live verdict reads.
                     summary = pipeline.last_settle_rearrange
                     timeline.baselines.append(None if summary is None else summary.baseline_balls)
-                _dispatch(hub, event, t, pipeline)
+                    if lists is not None:
+                        reads.append(("settle", lists(i)))
+                        next_rest = t + REST_S
+            if lists is not None and rest_due(t, next_rest, pipeline, churn):
+                next_rest = t + REST_S
+                found = lists(i)
+                if last_written is None or not same_table(last_written, found):
+                    reads.append(("rest", found))  # a still table repeats itself
 
-            # #33 Part B: latch edges AFTER this frame's events, so a
-            # same-frame fire opens the provisional and a same-frame settle
-            # resolves it. Same ordering as the run loop.
-            episode = pipeline.episode_active
-            if episode != episode_prev:
-                episode_prev = episode
-                if episode:
-                    asyncio.run(hub.episode_started(t))
-                elif not any(isinstance(e, BallsSettled) for e in events):
-                    asyncio.run(hub.episode_discarded(t))
+            # The run loop's own translation (`bridge.hub_calls`): events,
+            # then the #33 latch edges, so a same-frame fire opens the
+            # provisional and a same-frame settle resolves it.
+            calls, episode_prev = hub_calls(hub, pipeline, t, events, episode_prev)
+            for call in calls:
+                asyncio.run(call)
+            for reason, found in reads:
+                last_written = found
+                asyncio.run(hub.ball_list(t, reason, found))
 
             hub.note_frame(t)
             hub.note_motion(pipeline.last_motion)
@@ -332,9 +314,19 @@ def replay_clock(
             prev_state = state
             prev_rack_shots = hub.clock.rack_shots
 
+        records = hub.journal.tail(10_000.0)
         timeline.provisional_opens = [
             float(r["t"])
-            for r in hub.journal.tail(10_000.0)
+            for r in records
             if r["kind"] == "shot_provisional" and r.get("t") is not None
+        ]
+        # The hub's clock is clip time here, so a record's mono is its t.
+        timeline.holds = [
+            (float(r["mono"]), str(r["by"])) for r in records if r["kind"] == "scratch_hold"
+        ]
+        timeline.list_verdicts = [
+            (float(r["frame_t"]), str(r["verdict"]))
+            for r in records
+            if r["kind"] == "scratch_list" and r.get("frame_t") is not None
         ]
     return timeline

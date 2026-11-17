@@ -492,7 +492,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     from cueclock.audio.spotter import Final
     from cueclock.bridge import hub_calls
     from cueclock.capture.camera import open_camera
-    from cueclock.capture.list_reads import ListReads, quiet, still_frames
+    from cueclock.capture.list_reads import ListReads, rest_due, still_frames
     from cueclock.capture.session_log import (
         SESSIONS_DIR,
         LoggedFrame,
@@ -715,18 +715,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
 
     def on_list(found: BallList, frame: StillFrame, reason: str, tracker: int | None) -> None:
-        hub.note_ball_list(found.labels, found.arm)
-        loop.call_soon_threadsafe(
-            partial(
-                hub.journal_ball_list,
-                frame_t=round(frame.t, 3),
-                reason=reason,
-                arm=found.arm,
-                balls=" ".join(found.labels),
-                tracker=tracker,
-                reassigned=sum(b.own is not None for b in found.balls),
-            )
-        )
+        # Posted from this thread like every frame's hub calls, so it lands
+        # behind the calls already dispatched and ahead of the next frame's:
+        # the order `balls.jsonl`'s `after` records for replay (#63).
+        asyncio.run_coroutine_threadsafe(
+            hub.ball_list(frame.t, reason, found, tracker), loop
+        ).add_done_callback(_surface)
 
     # The ball list (#54, #65): see `capture.list_reads` for what is written.
     lists = ListReads(
@@ -745,6 +739,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     detect_s = 0.0
     detect_max_s = 0.0
     episode_prev = False  # #33: the latch's last exported state
+    dispatched = -1  # camera block of the last frame whose hub calls were posted
 
     def timed_find_blobs(frame: npt.NDArray[np.uint8]) -> "TimedBlobs":
         """`find_blobs` on a worker, stamped so the heartbeat can split the time."""
@@ -754,7 +749,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     def finish(block: int, t: float, t_submit: float, job: "Future[TimedBlobs]") -> None:
         """One frame's stateful half, in frame order."""
-        nonlocal detects, detect_s, detect_max_s, episode_prev
+        nonlocal detects, detect_s, detect_max_s, episode_prev, dispatched
         (detections, intrusions, rejects, gray), blobs_start, blobs_end = job.result()
         loop_start = time.perf_counter()
         mono = time.monotonic()  # the hub's clock for this frame: replay's too (#57)
@@ -774,16 +769,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
             elif isinstance(event, BallsSettled):
                 take_still("settle", t)
                 read_list("settle", t, tracker=sum(b.present for b in vision.last_balls))
-        if (
-            t >= lists.next_rest
-            and not vision.episode_active
-            and not vision.last_motion
-            and quiet(churn, vision.event_config.spin_churn_max)
-        ):
+        if rest_due(t, lists.next_rest, vision, churn):
             read_list("rest", t)
         calls, episode_prev = hub_calls(hub, vision, t, events, episode_prev)
         for call in calls:
             asyncio.run_coroutine_threadsafe(call, loop).add_done_callback(_surface)
+        dispatched = block
         # Detect-loop heartbeat stamp (attribute-only; the Hub's tick loop
         # journals it every ~5 s). The three stages are where a frame's time
         # goes (#52): waiting for a worker, inside find_blobs, and this
@@ -847,7 +838,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     take_still(f"cmd_{still_requests.popleft()}", t)
                                 while inflight and inflight[0][3].done():
                                     finish(*inflight.popleft())
-                                lists.drain()
+                                lists.drain(after=dispatched)
                             frame_i += 1
                             if t >= next_display:
                                 next_display = t + display_period

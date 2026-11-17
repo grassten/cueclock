@@ -25,8 +25,10 @@ from cueclock.capture.session_replay import (
     verify,
 )
 from cueclock.server.hub import BROADCAST_INTERVAL_SECONDS, Hub
+from cueclock.vision.ball_list import BallList, ListedBall
 from cueclock.vision.calibration import TableCalibration, UndistortParams
 from cueclock.vision.detect import REJECT_LARGE, DetectConfig, Detection, Reject
+from cueclock.vision.events import BallsSettled
 from cueclock.vision.pipeline import VisionPipeline
 
 STARTED_MONO = 5000.0
@@ -192,6 +194,29 @@ def _scene(t: float) -> list[Detection]:
     return [_ball(x, 640.0, 0.9), still]
 
 
+LIST_LAG = 7  # frames between a list's frame and its arrival at the hub
+
+
+def _listed(label: str, x: float) -> ListedBall:
+    return ListedBall(
+        cx=x,
+        cy=600.0,
+        r_pred=24.0,
+        cue=label == "cue",
+        number=None if label == "cue" else 3,
+        rim=0.9 if label == "cue" else 0.3,
+        white=0.1,
+        margin=12.0,
+        colour_px=200,
+        vote=5.0,
+        coverage=0.9,
+    )
+
+
+_LIST_AT_REST = BallList(balls=(_listed("cue", 500.0), _listed("3", 1500.0)), arm=False)
+_LIST_SETTLED = BallList(balls=(_listed("3", 1500.0),), arm=False)  # the list misses the cue
+
+
 def _record_live_session(tmp_path: Path) -> Path:
     """What `cueclock run` does, on a virtual clock: frames, inputs, ticks.
 
@@ -207,6 +232,9 @@ def _record_live_session(tmp_path: Path) -> Path:
     commands = {1.0: hub.start, 20.0: hub.extension, 70.0: hub.new_rack}
     next_tick = STARTED_MONO + 0.037
     episode = False
+    # The ball lists (#63): read at rest at frame 200 and at the settle, each
+    # reaching the hub a few frames late, as the detect pool returns them.
+    lists_due: dict[int, tuple[int, str]] = {200 + LIST_LAG: (200, "rest")}
 
     async def drive() -> None:
         nonlocal next_tick, episode
@@ -230,6 +258,14 @@ def _record_live_session(tmp_path: Path) -> Path:
             clock.now = mono + 0.002  # the hop to the asyncio loop
             for call in calls:
                 await call
+            if any(isinstance(e, BallsSettled) for e in events):
+                lists_due[i + LIST_LAG] = (i, "settle")
+            if i in lists_due:
+                frame_i, reason = lists_due.pop(i)
+                found = _LIST_AT_REST if reason == "rest" else _LIST_SETTLED
+                record = {"frame_i": frame_i, "t": frame_i / CADENCE, "reason": reason}
+                assert writer.ball_list({**record, "after": i, **found.as_dict()})
+                await hub.ball_list(frame_i / CADENCE, reason, found)
 
     asyncio.run(drive())
     writer.close()
@@ -249,6 +285,22 @@ def test_replay_reproduces_the_live_journal(
     assert verdict["ok"], verdict["diffs"]
     assert verdict["live_decisions"] == verdict["replay_decisions"] > 5
     assert json.loads((root / "replay.json").read_text())["ok"]
+
+
+def test_ball_lists_are_a_replayed_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#63: the settle's list is judged live and in replay alike, fed back
+    behind the frame it reached the hub after; a log without it diverges."""
+    root = _record_live_session(tmp_path)
+    (verdict,) = [r for r in read_journal(tmp_path / "live.jsonl") if r["kind"] == "scratch_list"]
+    # The tracker still holds the resting cue, so the list's miss calls nothing.
+    assert verdict["says"] == "no_cue" and verdict["tracker_cue"] is True
+    assert verdict["verdict"] == "none" and verdict["before"] == "cue"
+    monkeypatch.setattr("cueclock.capture.session_replay.git_state", lambda: (None, False))
+    assert verify(SessionLog(root), tmp_path / "live.jsonl", tmp_path / "replay.jsonl")["ok"]
+    (root / "balls.jsonl").unlink()
+    lost = verify(SessionLog(root), tmp_path / "live.jsonl", tmp_path / "replay.jsonl")
+    assert not lost["ok"]
+    assert "scratch_list" in lost["diffs"][0]["summary"]
 
 
 def test_a_missing_input_is_a_divergence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

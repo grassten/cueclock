@@ -274,8 +274,84 @@ survive unchanged in `design.md`.
   - **Vendor claims still to check on arrival.** Uncropped 1080p60, and whether
     "Original" really turns suppression off: Insta360's own page says both that
     it does and that it isn't supported.
+- **2026-11-17** **#63: the settle's hub call is not held for its ball list.**
+  The brief asked to hold every hub call up to 0.15 s until the settle's list
+  arrived. Built instead: the settle runs today's logic at once, and the list
+  calls, clears or leaves the scratch 20–75 ms later. No settle reacts later
+  than before, "no list" is today's behaviour by construction, and there is
+  no timeout to tune. The price: a candidate the list clears holds the
+  countdown for those milliseconds, and a list-called hold starts that much
+  after the settle. Replay order is exact anyway: lists are posted from the
+  run loop's thread, and `balls.jsonl` records the frame they landed behind.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-11-17 (checkpoint 132 — every scratch gets its hold; #63):** the
+  ball list now has a say in the 5 s post-scratch hold. Hub policy plus its
+  wiring (`server/scratch.py`, `design.md` §14): detection, the tracker and
+  the event engine are unchanged and no golden moved.
+  - **The list calls a scratch** at a counted settle when the cue was on the
+    table before the shot, the settle's list (no arm) and the tracker
+    (`EventEngine.cue_witnessed`, the adjudicator's witness test minus its
+    birth gate) both miss it, and an object ball moved (3 px), something
+    travelled 400 mm or more, or a candidate is open. Without that last part
+    it journals `lifted` (#64's case). **It clears** a candidate when it sees
+    the cue. A refutation by today's logic still stands.
+  - **A hold that is owed is never dropped.** Each shot (motion episode) has
+    one scratch question; a call by either side makes the hold owed until it
+    is granted, refuted, cleared, or the next episode begins. The confirmed
+    verdict no longer closes it, and a reverted freeze now grants it (the
+    2026-08-13 loss). One hold per shot.
+  - **Journal.** `scratch_list` at every settle (what the list said, the cue
+    before, object moved, travel, tracker, candidate, verdict, or `no_list`);
+    `scratch_call` per shot with a scratch called (by `candidate` / `list` /
+    `both`, held, closed, and why it was not held); `scratch_hold` carries
+    `by`, `scratch_hold_released` a `reason`. All of them are replay
+    decision records.
+  - **Wiring.** Lists reach the hub as `Hub.ball_list` (replacing the
+    camera-thread `note_ball_list` stamp and its separate journal call),
+    posted behind the frame calls already dispatched; `balls.jsonl` records
+    which (`after`) and `session replay` feeds each list back right there
+    (pre-132 logs: behind the list's own frame). The settle call is not held
+    for its list (build decision above). The corpus harness now dispatches
+    through `bridge.hub_calls` instead of its own copy, reads lists on the
+    frames `run` would (`list_reads.rest_due`, shared), and caches them with
+    `--detect-cache` (`BallListCache`).
+  - **Judging it:** five `session-stats` rows (scratches by who called them,
+    holds granted with reasons, candidates cleared, refutations while the
+    list held no cue, settles with no list / an arm); `list_scratch` and
+    `list_cleared` review-page moments.
+  - **Gates, corpus (71 clips, 65 settles):** the list calls exactly the five
+    recorded scratches, `lifted` at `ball_in_hand_carry_b_0811` 13.35 s, and
+    nothing at the other 59, `break_0801b` and `cluster_shot_0801` included
+    (`LIST_VERDICTS` in `test_corpus_events.py`); each scratch gets exactly
+    one hold. The only clock change in the corpus: the holds of
+    `kick_scratch_0811`, `pot_scratch_nohold_0811` and `scratch_shot_0801`
+    start at the settle instead of when the candidate arrived, 0.63–0.64 s
+    later. Every clip's clock marks are identical with and without lists.
+  - **Last night's session, replayed under this code** (20261117-201731, 33
+    settles): every settle got its list; the one real scratch was called by
+    both sides and held; the other 32 lists saw the cue and called nothing.
+    Against the replay without #63 the only decision changes are the new
+    records (plus `by` on the one hold).
+  - **Known limits** (§14): no hold with the clock idle; an arm over the
+    table at the settle leaves today's logic alone; a refutation stands when
+    the list holds no cue; a cue rolling under 400 mm into a pocket touching
+    nothing reads as lifted; a cue slid 400 mm or more by hand then lifted
+    reads as a scratch; a hand holding the cue on the cloth can read "no cue,
+    no arm".
+  - **First live session to check:** detect rate unchanged (p50 was 155.2
+    Hz) with no dropped frames; `session verify` zero diffs; then the new
+    `session-stats` rows and the review page. What would send this back: a
+    list-only scratch that wasn't one, a cleared candidate that was a real
+    scratch, a scratch with a live countdown and no hold, settles with no
+    list. Checkpoint 131 has not had a live session yet either, so the
+    first session checks both.
+  - Verified: unit tests 726 passed; corpus battery with `--detect-cache`
+    829 passed in 37 s with the lists cached (the first run, reading and
+    caching every list, took 5:37).
+    `detect.py` is untouched; `events.py` changed only by moving the witness
+    test into a shared helper, which the cached battery grades.
 
 - **2026-11-17 (checkpoint 131 — fewer wrong ball lists, measured; #65):**
   Labels and logging only: what the list finds, the cue test, the tracker,

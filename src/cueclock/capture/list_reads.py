@@ -23,9 +23,13 @@ from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from cueclock.capture.session_log import SessionLogWriter, StillFrame
 from cueclock.vision.ball_list import BallList, same_table
+
+if TYPE_CHECKING:
+    from cueclock.vision.pipeline import VisionPipeline
 
 REST_S = 1.0  # between lists read at rest
 
@@ -34,6 +38,20 @@ def still_frames(ring: Sequence[StillFrame], i: int, churn_lag: int) -> list[Sti
     """Ring frame ``i`` with its churn-lag predecessor, when the ring still
     holds it, so churn can be recomputed from a still."""
     return [ring[i - churn_lag], ring[i]] if i >= churn_lag else [ring[i]]
+
+
+def rest_due(
+    t: float, next_rest: float, vision: VisionPipeline, churn: Sequence[float | None]
+) -> bool:
+    """Is a rest read due at the frame just advanced? REST_S since the last
+    read, no episode, no motion, and a quiet cloth. Shared by `cueclock run`
+    and the corpus clock harness (#63), so both read lists on the same frames."""
+    return (
+        t >= next_rest
+        and not vision.episode_active
+        and not vision.last_motion
+        and quiet(churn, vision.event_config.spin_churn_max)
+    )
 
 
 def quiet(churn: Sequence[float | None], ceiling: float) -> bool:
@@ -76,8 +94,12 @@ class ListReads:
         self._jobs.append((frame, reason, tracker, self._submit(frame)))
         self.next_rest = frame.t + REST_S
 
-    def drain(self) -> None:
-        """Write each finished list that is a settle's or differs from the last."""
+    def drain(self, after: int) -> None:
+        """Write each finished list that is a settle's or differs from the last.
+
+        ``after`` is the camera block of the last frame whose hub calls have
+        been dispatched: the list reaches the hub right behind them, and the
+        record says so, so a replay can feed it at the same point (#63)."""
         while self._jobs and self._jobs[0][3].done():
             frame, reason, tracker, job = self._jobs.popleft()
             try:
@@ -92,6 +114,7 @@ class ListReads:
                 "t": round(frame.t, 4),
                 "reason": reason,
                 "tracker": tracker,
+                "after": after,
                 **found.as_dict(),
             }
             if not self._slog.ball_list(record):

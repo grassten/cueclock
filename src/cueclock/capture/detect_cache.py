@@ -252,3 +252,57 @@ def unpack_frames(data: Mapping[str, npt.NDArray[Any]], name: str) -> list[Frame
 
 def _box(row: npt.NDArray[Any]) -> tuple[int, int, int, int]:
     return int(row[0]), int(row[1]), int(row[2]), int(row[3])
+
+
+# ---------------------------------------------------------------- ball lists
+
+LIST_SCHEMA = 1
+
+
+def ball_list_key(clip_dir: Path, reference: ReferenceModel) -> str:
+    """Everything that can change what `read_ball_list` returns on a clip's
+    frames (#63): `ball_list.py` and `detect.py` (its foreground and arm test
+    are the detector's), the reference digest, the clip's identity and the
+    OpenCV/NumPy versions. Not the read schedule: entries are per frame, so
+    an `events.py` change that moves a settle only adds frames."""
+    from cueclock.vision import ball_list as ball_list_module
+    from cueclock.vision import detect as detect_module
+
+    digest = hashlib.sha256()
+    digest.update(f"lists={LIST_SCHEMA}".encode())
+    for module in (ball_list_module, detect_module):
+        digest.update(Path(str(module.__file__)).read_bytes())
+    digest.update(reference.digest().encode())
+    digest.update(_clip_identity(clip_dir).encode())
+    digest.update(f"cv2={cv2.__version__} np={np.__version__}".encode())
+    return digest.hexdigest()[:32]
+
+
+class BallListCache:
+    """Ball lists read off a clip's frames, by frame index, one JSON file per
+    clip+key. Offline grading only, like `DetectionCache`; the corpus clock
+    harness reads a list at every settle and about once a second at rest."""
+
+    def __init__(self, root: Path = DEFAULT_CACHE_DIR) -> None:
+        self.root = root
+
+    def _path(self, clip_dir: Path, key: str) -> Path:
+        return self.root / f"{clip_dir.name}-lists-{key[:16]}.json"
+
+    def load(self, clip_dir: Path, key: str) -> dict[int, dict[str, Any]]:
+        path = self._path(clip_dir, key)
+        if not path.exists():
+            return {}
+        return {int(k): v for k, v in json.loads(path.read_text()).items()}
+
+    def store(self, clip_dir: Path, key: str, lists: Mapping[int, dict[str, Any]]) -> None:
+        """Atomically, like `DetectionCache.store`: two workers may race to it."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        path = self._path(clip_dir, key)
+        tmp = path.with_suffix(f".{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(json.dumps({str(k): v for k, v in sorted(lists.items())}))
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise

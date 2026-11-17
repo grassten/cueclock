@@ -39,8 +39,8 @@ computes it identically.
 | **Scratches journaled** | Journals **with `vision_scratch_candidate` records** (checkpoint 77+, #26): `vision_scratch` is an adjudicated verdict — present it as a count, with candidates/refuted beside it (`report` prints all three). Journals **without** candidate records predate the two-stage verdict: **upper bound only**, over-counted ~6x (potted object balls mis-crowned as the cue; Steven ground truth 2026-08-06) — never present those as a real count. The adjudicator's one known leak keeps even new counts a slight over-bound: a real cue at rest in deep rail shade (0.53 whiteness vs the 0.72 witness floor) cannot refute its false candidate. |
 
 **The ball list (#54, checkpoint 127+)** adds six rows, shown only for
-journals that hold `ball_list` lines. They judge the list, not the clock:
-the list never moves the clock until #63/#64 build on it.
+journals that hold `ball_list` lines. They judge the list, not the clock;
+since #63 a settle's list also has a say in the scratch hold (rows below).
 
 | Row | Definition |
 |---|---|
@@ -50,6 +50,19 @@ the list never moves the clock until #63/#64 build on it.
 | **Numbers back after leaving** | Within one rack, from the break on (`rack_shots >= 1`): a number missing from an arm-free list that turns up again later. **Always an error** (balls only leave the table past the break). |
 | **Numbers given up** | Object balls on arm-free lists that read a number another ball matched better, and took their next best (`reassigned` on the `ball_list` line, checkpoint 131+; `own` in `balls.jsonl` says what each read). Not an error by itself: each one is a duplicate the list resolved, and only a by-eye look at its frame (`cueclock balls <session>`) says which way. Corpus: 2 in 1,482 readings at 162 rests, both a hand read as a ball. |
 | **Balls with no number** | `?` on arm-free lists over all object balls listed: mostly a stripe resting with its white cap straight up, the known open case. |
+
+**The scratch hold (#63, checkpoint 132+)** adds five rows, shown only for
+journals that hold `scratch_list` lines. A `scratch_call` line closes each
+shot that had a scratch called, at the next shot's motion, so the session's
+very last shot can be missing from them.
+
+| Row | Definition |
+|---|---|
+| **Scratches, by who called them** | Scratches that stood (not refuted, not cleared): today's logic only (a `ScratchCandidate`), the ball list only, or both. **The list-only count is the number nobody had before #63: scratches the tracker never noticed.** A list-only call that was not a scratch is a wrong call; check it on the review page (`list_scratch` moments). |
+| **Scratch holds granted** | Holds granted out of the scratches above, with the reason for each one not granted: the clock's state when the shot's question closed (`IDLE`, `MOTION`, …), or `no_clock` / `vision_off`. A scratch with a live countdown and no hold is a defect. |
+| **Candidates cleared by the list** | Today's logic raised a candidate and the settle's list saw the cue, so no hold (`list_cleared` moments on the review page). A real scratch here is a wrong clear. |
+| **Refuted while the list held no cue** | Today's refutation stands even when the list misses the cue (either one seeing it counts). How often the two disagree that way. |
+| **Settles with no list / with an arm** | Settles whose list never arrived before the next motion, and settles whose list had an arm over the table and no cue: today's logic decided those alone. Nonzero no-list counts are worth a look (a list takes 20–75 ms). |
 
 Rows that appear only when nonzero: **dark break candidates** (E8's no-fire
 tier while it was shadow-only, checkpoint 75 → #36 — **historical, pre-2026-08-11

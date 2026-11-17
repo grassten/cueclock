@@ -36,6 +36,7 @@ from .clock_replay import (
 
 if TYPE_CHECKING:
     from cueclock.capture.clip import ClipReader
+    from cueclock.vision.ball_list import BallList
     from cueclock.vision.calibration import TableCalibration
     from cueclock.vision.detect import Detection, Intrusion
     from cueclock.vision.pipeline import ReferenceModel, VisionPipeline
@@ -811,6 +812,80 @@ def _detections(
     return computed
 
 
+class _BallLists:
+    """The ball list of a clip's frame ``i`` (#63), through the same JSON a
+    session replay reads `balls.jsonl` with, so cold and cached runs hand the
+    hub identical lists. With `--detect-cache` the lists are cached too
+    (`BallListCache`): a settle that moves only reads the frames it lands on.
+    """
+
+    def __init__(self, reader: "ClipReader", clip_dir: Path, pipeline: "VisionPipeline") -> None:
+        self._reader, self._clip_dir, self._reference = reader, clip_dir, pipeline.reference
+        self._known: dict[int, dict[str, object]] = {}
+        self._added = False
+        self._store = None
+        cache_dir = os.environ.get("CUECLOCK_DETECT_CACHE")
+        if cache_dir:
+            from cueclock.capture.detect_cache import BallListCache, ball_list_key
+
+            self._store = BallListCache(Path(cache_dir))
+            self._key = ball_list_key(clip_dir, self._reference)
+            self._known = self._store.load(clip_dir, self._key)
+
+    def __call__(self, i: int) -> "BallList":
+        from cueclock.vision.ball_list import BallList, read_ball_list
+
+        if i not in self._known:
+            self._known[i] = read_ball_list(self._reader.frame(i), self._reference).as_dict()
+            self._added = True
+        return BallList.from_dict(self._known[i])
+
+    def save(self) -> None:
+        if self._store is not None and self._added:
+            self._store.store(self._clip_dir, self._key, self._known)
+
+
+# #63's gates: the ball list's verdict at named settles (golden settle times).
+# Every other settle in the corpus must call no scratch. Measured in the
+# issue's settle table (`settle_table.py`, `settle_movers.py`,
+# `tracker_witness.py` in its research folder).
+LIST_VERDICTS: dict[str, list[tuple[float, set[str]]]] = {
+    # The scratch that touched nothing: travel 1711 mm. Candidate at 16.00 s.
+    "kick_scratch_0811": [(15.37, {"scratch"})],
+    "pot_scratch_nohold_0811": [(8.35, {"scratch"})],  # one ball moved 8.6 px
+    "scratch_shot_0801": [(5.73, {"scratch"})],
+    "scratch_replace": [(8.45, {"scratch"})],  # candidate already open (5.02 s)
+    "shot_debug": [(11.90, {"scratch"})],  # candidate already open (9.52 s)
+    # The cue lifted by hand (159 mm, nothing else moved): #64's, not a scratch.
+    "ball_in_hand_carry_b_0811": [(13.35, {"lifted"})],
+    "break_0801b": [(17.16, {"none"})],  # a hand on the cue: the list cannot say
+    # The list holds the cue (0.93) where the tracker holds none.
+    "cluster_shot_0801": [(18.43, {"none", "cleared"})],
+}
+# Each of the five scratches gets exactly one hold (mid-rack, a countdown live).
+SCRATCH_HOLD_CLIPS = frozenset(n for n, v in LIST_VERDICTS.items() if v[0][1] == {"scratch"})
+
+
+def _assert_list_verdicts(name: str, timeline: "ClockTimeline") -> None:
+    """#63: the list called exactly the scratches the corpus holds."""
+    expected = LIST_VERDICTS.get(name, [])
+    for settle_t, allowed in expected:
+        near = [v for t, v in timeline.list_verdicts if abs(t - settle_t) <= 0.1]
+        assert len(near) == 1 and near[0] in allowed, (
+            f"{name}: list verdict at the {settle_t:.2f} s settle was {near}, expected "
+            f"{sorted(allowed)} (all: {timeline.list_verdicts})"
+        )
+    named = [t for t, _ in expected]
+    stray = [
+        (round(t, 2), v)
+        for t, v in timeline.list_verdicts
+        if v == "scratch" and not any(abs(t - n) <= 0.1 for n in named)
+    ]
+    assert not stray, f"{name}: the list called a scratch the corpus does not hold: {stray}"
+    if name in SCRATCH_HOLD_CLIPS:
+        assert len(timeline.holds) == 1, f"{name}: holds {timeline.holds}, expected one"
+
+
 # Known defects, kept visible instead of loosening the expectation.
 # (spin_in_place's false Scratch lived here until the observed-position fix:
 # scratch now reads where the cue was last *observed*, not where the coasting
@@ -837,6 +912,7 @@ def test_corpus_clip(name: str) -> None:
     reader = ClipReader(CLIPS / name)
     pipeline = _pipeline(ref_name, reader)
     indices = reader.detect_indices()
+    lists = _BallLists(reader, CLIPS / name, pipeline)
     timeline = replay_clock(
         name,
         pipeline,
@@ -844,7 +920,9 @@ def test_corpus_clip(name: str) -> None:
         _detections(reader, CLIPS / name, pipeline, indices),
         indices,
         mid_rack=name not in BREAK_CLIPS,
+        lists=lists,
     )
+    lists.save()
     events = timeline.events
     shots = sum(isinstance(e, ShotTaken) for e in events)
     scratches = sum(isinstance(e, Scratch) for e in events)
@@ -862,6 +940,7 @@ def test_corpus_clip(name: str) -> None:
     # graded on the clock, and the event stream below is diagnostics.
     if truth is not None:
         _assert_clock_outcome(name, truth, timeline)
+    _assert_list_verdicts(name, timeline)
 
     # ---- the golden: the record, and the gate only where nothing else is ----
     #

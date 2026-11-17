@@ -2,6 +2,7 @@
 what counts as a changed list, the strip the hub serves, the switch and the
 session-log record. No camera, no clips."""
 
+import asyncio
 import dataclasses
 import json
 from pathlib import Path
@@ -179,9 +180,11 @@ def test_a_list_survives_its_record() -> None:
 def test_the_strip_shows_the_latest_list_without_an_arm() -> None:
     hub = Hub()
     assert hub.payload()["ball_strip"] == {"shown": True, "balls": None}
-    hub.note_ball_list(["cue", "3", "3", "?"], arm=False)  # a duplicate is drawn twice
-    hub.note_ball_list(["3"], arm=True)  # a hand over the table proves no absence
-    assert hub.payload()["ball_strip"] == {"shown": True, "balls": ["cue", "3", "3", "?"]}
+    shown = BallList(balls=(_ball("cue", 100), _ball("3", 200), _ball("?", 300)), arm=False)
+    asyncio.run(hub.ball_list(1.0, "rest", shown))
+    # a hand over the table proves no absence
+    asyncio.run(hub.ball_list(2.0, "rest", BallList(balls=(_ball("3", 200),), arm=True)))
+    assert hub.payload()["ball_strip"] == {"shown": True, "balls": ["cue", "3", "?"]}
 
 
 def test_the_control_page_switch_hides_the_strip() -> None:

@@ -12,6 +12,8 @@ have gone wrong, so this module reads the journal and lists those:
     idle_strike  vision saw a strike while the clock was IDLE (a missed break
                  looks exactly like this)
     synthesized  the frozen-clock watchdog had to invent a settle
+    list_scratch the ball list called a scratch today's logic never noticed (#63)
+    list_cleared the ball list saw the cue and cleared today's scratch candidate
     quiet        the clock ran longer than any legal turn with nothing seen
     replay       the offline replay disagreed with the live session
 
@@ -185,10 +187,19 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
     quiet_flagged = False
     corrections: list[dict[str, object]] = []
     idle_strikes: list[dict[str, object]] = []
+    list_settle: dict[str, object] | None = None  # the last settle the list judged
     for record in records:
         kind = str(record.get("kind"))
         state = record.get("state")
-        if kind == report.PROVISIONAL_REVERTED_KIND:
+        if kind == "scratch_list":
+            list_settle = record
+        elif kind == "scratch_call":
+            # One line per shot with a scratch called, closed at the next
+            # shot's motion: the cut belongs at the settle the list judged.
+            moment = _list_moment(record, list_settle or record)
+            if moment is not None:
+                moments.append(moment)
+        elif kind == report.PROVISIONAL_REVERTED_KIND:
             remaining = record.get("remaining")
             back = f"{remaining:.0f}" if isinstance(remaining, int | float) else "?"
             moments.append(
@@ -255,6 +266,27 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
     if replay is not None and replay.exists():
         moments += _replay_moments(replay, records)
     return sorted(moments, key=lambda m: m.wall)
+
+
+def _list_moment(call: dict[str, object], settle: dict[str, object]) -> Moment | None:
+    """#63: the two ways the ball list can be wrong in front of Steven — a
+    scratch it called alone, and a candidate it cleared."""
+    if call.get("by") == "list":
+        held = "held 5 s" if call.get("held") else f"not held ({call.get('missed', '?')})"
+        return _moment(
+            "list_scratch",
+            settle,
+            f"The ball list called a scratch the tracker never noticed; the clock was "
+            f"{held} ({_rack(settle)}).",
+        )
+    if call.get("closed") == "cleared":
+        return _moment(
+            "list_cleared",
+            settle,
+            f"Today's logic suspected a scratch; the ball list saw the cue and cleared it, "
+            f"so the clock was not held ({_rack(settle)}).",
+        )
+    return None
 
 
 def _replay_moments(path: Path, records: list[dict[str, object]]) -> list[Moment]:

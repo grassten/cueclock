@@ -2508,6 +2508,26 @@ class EventEngine:
             ]
         return []
 
+    def _cue_grade(self, b: BallState) -> bool:
+        """The scratch witness test without its birth gate: an observed,
+        still, judgeable roster ball reading cue-grade whiteness."""
+        cfg = self._cfg
+        return (
+            b.observed
+            and b.ball_id in self._roster
+            and b.speed_mms < cfg.settle_floor_mms
+            and self._judgeable(b)
+            and b.whiteness is not None
+            and b.whiteness >= cfg.scratch_witness_whiteness
+        )
+
+    def cue_witnessed(self, balls: list[BallState]) -> bool:
+        """Does the tracker hold a cue-grade ball right now (#63)? The
+        adjudicator's own witness test minus the birth gate, read at a settle
+        beside the rearrangement summary; nothing in the vision core acts on
+        it."""
+        return any(self._cue_grade(b) for b in balls)
+
     def _adjudicate_scratch(self, t: float, balls: list[BallState]) -> list[Event]:
         """Resolve an open ScratchCandidate: refute, confirm, or keep waiting.
 
@@ -2527,13 +2547,11 @@ class EventEngine:
         cfg = self._cfg
         latch_t, cutoff_t = open_
         for b in balls:
-            if not b.observed or b.ball_id not in self._roster:
+            if not self._cue_grade(b) or b.whiteness is None:
                 continue
-            if self._first_seen.get(b.ball_id, float("inf")) >= cutoff_t:
-                continue  # born after the cue died: could be the replacement
-            if b.speed_mms >= cfg.settle_floor_mms or not self._judgeable(b):
-                continue
-            if b.whiteness is not None and b.whiteness >= cfg.scratch_witness_whiteness:
+            # The birth gate: a ball born after the cue died could be its
+            # hand-placed replacement, so it never refutes.
+            if self._first_seen.get(b.ball_id, float("inf")) < cutoff_t:
                 self._scratch_open = None
                 return [
                     ScratchRefuted(

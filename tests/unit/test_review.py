@@ -75,6 +75,23 @@ def test_finds_each_kind_once(tmp_path: Path) -> None:
     assert quiet.start_wall == SESSION[13]["wall"]  # the last thing seen
 
 
+def test_the_ball_lists_scratch_calls_are_moments(tmp_path: Path) -> None:
+    """#63: a scratch the list called alone and a candidate it cleared are
+    shown at the settle the list judged; a scratch both saw is not."""
+    calls = [
+        run(10, "scratch_list", t=10.0, frame_t=10.0, verdict="scratch"),
+        run(30, "scratch_call", by="list", held=True, closed=None),
+        run(40, "scratch_list", t=40.0, frame_t=40.0, verdict="cleared"),
+        run(60, "scratch_call", by="candidate", held=False, closed="cleared"),
+        run(70, "scratch_list", t=70.0, frame_t=70.0, verdict="scratch"),
+        run(90, "scratch_call", by="both", held=True, closed=None),
+    ]
+    found = moments.find(write_journal(tmp_path / "j.jsonl", calls))
+    assert kinds(found) == ["list_scratch", "list_cleared"]
+    assert [m.wall for m in found] == [calls[0]["wall"], calls[2]["wall"]]
+    assert "held 5 s" in found[0].summary
+
+
 def test_clean_session_has_no_moments(tmp_path: Path) -> None:
     clean = [
         run(0, "vision_shot_taken", state="MOTION", t=0.0),

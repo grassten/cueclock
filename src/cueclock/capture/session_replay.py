@@ -3,7 +3,8 @@ journal (#57).
 
 `replay` rebuilds what `cueclock run` did after the detector: the logged
 detections go through `VisionPipeline.advance` (churn was logged, so the
-pixel half is not needed), the events through `bridge.hub_calls`, and the
+pixel half is not needed), the events through `bridge.hub_calls`, each logged
+ball list right behind the frame it reached the hub after (#63), and the
 hub runs on a virtual clock — each frame at the ``mono`` its stateful half
 ran at live, each logged input at its own ``mono``, and the tick loop on a
 `BROADCAST_INTERVAL_SECONDS` grid. The result is a journal in the live
@@ -24,6 +25,7 @@ import asyncio
 import difflib
 import json
 import tempfile
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -35,6 +37,7 @@ from cueclock.capture.session_log import SessionLog, git_state
 from cueclock.clock import get_mode, get_ruleset
 from cueclock.server.bracket import BracketError
 from cueclock.server.hub import BROADCAST_INTERVAL_SECONDS, Hub
+from cueclock.vision.ball_list import BallList
 from cueclock.vision.calibration import TableCalibration
 from cueclock.vision.detect import DetectConfig
 from cueclock.vision.pipeline import VisionPipeline
@@ -52,12 +55,22 @@ DECISION_PREFIXES = (
     "shot_provisional",
     "break_adjudicated",
     "settle_synthesized",
-    "scratch_hold",
+    "scratch_",
     "tick_transition",
     "cmd_",
 )
 # Compared exactly on every decision record that carries them.
-VERDICT_FIELDS = ("state", "rack_shots", "provisional", "rejected", "accepted", "reason", "tier")
+VERDICT_FIELDS = (
+    "state",
+    "rack_shots",
+    "provisional",
+    "rejected",
+    "accepted",
+    "reason",
+    "tier",
+    "verdict",  # #63's scratch_list
+    "by",  # #63's scratch_hold / scratch_call
+)
 MAX_DIFFS = 50
 
 
@@ -151,6 +164,7 @@ async def _replay(log: SessionLog, out: Path, tmp: Path, mono_to: float | None) 
         cadence_hz=float(header["cadence_hz"]),
     )
     timeline = _Timeline(hub, clock, log.inputs())
+    lists = deque(log.ball_lists())  # in the order they were written
     episode = False
     fed = 0
     for frame in log.frames():
@@ -164,9 +178,26 @@ async def _replay(log: SessionLog, out: Path, tmp: Path, mono_to: float | None) 
         hub.note_motion(vision.last_motion)
         for call in calls:
             await call
+        # The ball lists (#54) are a replayed input (#63): each reached the
+        # hub right behind the hub calls of the frame its record names
+        # (`after`). Lists logged before `after` existed (checkpoints
+        # 127-131) go in behind their own frame.
+        while lists and _due(lists[0], frame.frame_i, frame.t):
+            record = lists.popleft()
+            await hub.ball_list(
+                float(record["t"]),
+                str(record["reason"]),
+                BallList.from_dict(record),
+                record.get("tracker"),
+            )
         fed += 1
     await timeline.run_until(timeline.last_input_mono if mono_to is None else mono_to)
     return fed
+
+
+def _due(record: dict[str, Any], frame_i: int, t: float) -> bool:
+    after = record.get("after")
+    return int(after) <= frame_i if after is not None else float(record["t"]) <= t + 1e-6
 
 
 class _Timeline:

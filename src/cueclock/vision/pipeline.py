@@ -364,6 +364,10 @@ class VisionPipeline:
         # for the most recent settle (empty for a backstop settle — the
         # engine slept through that episode, there is no mover evidence).
         self.last_settle_movers: list[SettleMover] = []
+        # #63 settle evidence: did the tracker hold a cue-grade ball at the
+        # most recent settle (`EventEngine.cue_witnessed`)? The hub reads it
+        # beside the ball list to call a scratch the tracker never suspected.
+        self.last_settle_cue_seen = False
 
     @property
     def reference(self) -> ReferenceModel:
@@ -500,6 +504,7 @@ class VisionPipeline:
             )
             self.last_settle_backstop = False
             self.last_settle_movers = list(self._engine.last_settle_movers)
+            self.last_settle_cue_seen = self._engine.cue_witnessed(balls)
         # Quiet needs two things, because speed alone lies here (the
         # flag_missed_4 lesson): a breaking pack's tracks die at impact and
         # coast at their remembered ~0 speed while the in-flight balls are
@@ -548,6 +553,7 @@ class VisionPipeline:
                 self.last_settle_rearrange = summary
                 self.last_settle_backstop = True
                 self.last_settle_movers = []
+                self.last_settle_cue_seen = self._engine.cue_witnessed(balls)
                 events = [*events, BallsSettled(t)]
             settled = True
         if settled:

@@ -780,6 +780,7 @@ same-label ball within a quarter radius both ways). Written means
 `balls.jsonl` in the session log, keyed by frame (§12), plus a `ball_list`
 journal line. Only written lists reach the hub, which keeps the latest one
 with no arm for the strip — so a session and its replay see the same lists.
+Since #63 (§14) a settle's list also has a say in the scratch hold.
 
 **The strip.** A row of chips above the bar's left end in
 `/shotclock?view=bar`: the cue, 1–15 in order, then a grey `?` per ball with
@@ -852,3 +853,87 @@ truth stills 32/33 → 33/33 lists exact; game sequence and all-balls
 unchanged; corpus rests 2 → 0 duplicates, 3/615 unmoved flips and 8/8 full
 tables unchanged. Measurements and scripts: issue #65 and
 `~/cueclock-research/65-labels/`.
+
+## 14. The ball list's say in the scratch hold (issue #63, 2026-11-17)
+
+Steven: the 5 s post-scratch hold "almost never works". When today's logic
+notices a scratch the hold is nearly always granted (16 of the 18 confirmed
+scratches with a countdown live, over 50 sessions); what nobody could see is
+how many scratches it never notices. A `ScratchCandidate` needs the tracked
+cue lost *while moving* inside a pocket zone. The ball list (§13) asks a
+second, independent question at every settle — was the cue on the table
+before the shot, and is it gone now? — and both answers now decide the hold.
+The policy is `server/scratch.py` (pure) plus the hub; detection, the tracker
+and the event engine are unchanged, and no golden moved.
+
+**Terms.** `now` is the list read at the settle. `rest` is the newest list
+read at rest with no arm over the table, before the motion this settle ends
+(its frame time is earlier than the episode's first frame). The cue was on
+the table before the shot when `rest` holds exactly one cue, or a later
+at-rest list with an arm over the table holds one. An object ball moved when
+one on either list has none within 3 px on the other (9 unchanged corpus
+settles shift at most 1.4 px; the smallest real move to catch is 8.6 px).
+
+**The list calls a scratch** at a settle that counted a shot when (1) the
+cue was on the table before it, (2) `now` holds no cue and no arm, (3) the
+tracker holds no cue-grade ball (the adjudicator's witness test without its
+birth gate, `EventEngine.cue_witnessed`, exported as
+`VisionPipeline.last_settle_cue_seen`), and (4) it was not lifted by hand: an
+object ball moved, or something travelled 400 mm or more (the engine's
+`pickup_travel_max_mm`; scratches 474–1711 mm, hand moves 18–288 mm), or a
+candidate is open for this shot. (1)–(3) without (4) journals `lifted`: #64's
+case, handled as before. **The list clears**: when it sees the cue, no hold
+is granted for this shot and a running one is released, and a candidate that
+arrives later for the same shot finds it cleared. **A refutation by today's
+logic still stands** when the list holds no cue: the cue counts as present
+if either one sees it. An arm over the table, a settle that counted no shot,
+or no list: today's logic decides alone.
+
+**A shot's scratch question** (`hub._ShotScratch`) lives for one motion
+episode: from the latch rising (or a strike firing with no episode open) to
+the next one. Either call makes the hold *owed*; it is granted the moment the
+countdown is RUNNING — at the candidate, the settle, the settle's list, or a
+reverted freeze — and stays owed through a confirmed verdict (on 2026-08-13
+the verdict came 0.14 s into a freeze that was then reverted, and the
+countdown resumed with no hold). One hold per shot. The next episode retires
+the question with a `scratch_call` journal line: who called it (`candidate`,
+`list`, `both`), whether it was held, and if not, why.
+
+**Wiring.** The settle's hub call is not held for its list (my call on the
+brief, which asked to hold every hub call up to 0.15 s): the settle runs
+today's logic unchanged, and the list, 20–75 ms later, calls, clears or
+leaves it. So no settle reacts later than before, and "no list" is today's
+behaviour by construction. The cost is that a candidate the list clears
+holds the countdown for those 20–75 ms, and a list-called hold starts that
+much after the settle. A list that arrives after the next motion began is
+journaled `no_list` and judges nothing. Lists reach the hub from the run
+loop's own thread, posted behind the frame calls already dispatched;
+`balls.jsonl` records that frame (`after`), and `session replay` feeds each
+list back right behind it, so replay reproduces live's order exactly. The
+corpus clock harness now dispatches through `bridge.hub_calls` (one copy of
+the translation, not two), reads lists on the frames `cueclock run` would
+(`list_reads.rest_due`), and caches them beside the detections
+(`BallListCache`, keyed on `ball_list.py`, `detect.py` and the reference).
+
+**The corpus, settle by settle**: the list calls exactly the five recorded
+scratches (`kick_scratch_0811`, `pot_scratch_nohold_0811`,
+`scratch_shot_0801`, `scratch_replace`, `shot_debug`), journals the hand lift
+in `ball_in_hand_carry_b_0811` as `lifted`, and calls nothing at the other 59
+of the corpus's 65 settles (71 clips). Three holds now start at the settle
+instead of 0.63–0.64 s later when the candidate arrived; no other clock
+outcome changed.
+
+**Known limits.** A scratch with the clock idle gets no hold (all 7 journaled
+no-clock scratches). An arm over the table at the settle leaves today's logic
+alone (the `session-stats` row counts it). A cue that rolls under 400 mm into
+a pocket touching nothing reads as lifted (none in the corpus); a cue slid
+400 mm or more by hand and then lifted reads as a scratch. A hand holding the
+cue on the cloth can read "no cue, no arm" (`ball_in_hand_nudge`), so after a
+real shot that is a scratch call unless the tracker still holds the cue.
+
+**Judging it.** `session-stats` rows: scratches by who called them (the
+list-only row is the scratches the tracker never noticed), holds granted with
+the reason for each one not, candidates cleared by the list, refutations
+while the list held no cue, and settles with no list or with an arm. The
+review page shows a `list_scratch` moment for every scratch the list called
+alone and a `list_cleared` moment for every candidate it cleared.

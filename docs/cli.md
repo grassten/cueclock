@@ -188,7 +188,12 @@ every settle and about once a second while nothing moves and nothing on the
 cloth churns: each settle's list, and each rest list that differs from the
 last, goes to `balls.jsonl` in the session log, a `ball_list` journal line
 (with `reassigned`, the balls that gave a number up to a better match, #65),
-and the bar's ball strip.
+and the bar's ball strip. Since #63 each written list also reaches the hub
+right behind the frame calls already dispatched (`after` in `balls.jsonl`, so
+`session replay` feeds it back at the same point), and a settle's list has a
+say in the 5 s scratch hold: a `scratch_list` journal line at every settle,
+and a `scratch_call` line for every shot that had a scratch called
+(`design.md` §14).
 
 The stills come from a ~1 s ring of raw frames (~360 MB at 156 Hz). Until
 checkpoint 114 `run` held 20 s (~7.2 GB) for the deck's Flag key
@@ -509,7 +514,7 @@ T7 archive `/Volumes/T7/cueclock_sessions/`, or a session directory.
 
 | Subcommand | What |
 |---|---|
-| `replay <session>` | logged detections → tracker → events → hub on a virtual clock, inputs re-applied at their logged times, ticks at 10 Hz; writes a journal in the live format |
+| `replay <session>` | logged detections → tracker → events → hub on a virtual clock, inputs re-applied at their logged times, ball lists fed behind the frame they reached the hub after (#63), ticks at 10 Hz; writes a journal in the live format |
 | `verify <session>` | replay, then compare its decision records (vision verdicts, provisionals, commands, tick transitions: kind, state, rack_shots, verdict fields, remaining within 0.2 s) with the live journal; writes `<session>/replay.json`. Exit 0 = reproduced, 1 = diverged, 2 = nothing to compare |
 
 | Flag | Default | Notes |

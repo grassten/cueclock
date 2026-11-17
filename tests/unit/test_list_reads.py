@@ -64,7 +64,7 @@ class Loop:
     def read(self, reason: str, frame_i: int) -> None:
         frame = next(f for f in self.ring if f.frame_i == frame_i)
         self.reads.read(reason, frame)
-        self.reads.drain()
+        self.reads.drain(after=frame_i + 3)  # a few frames dispatched since
 
 
 def test_a_written_rest_list_keeps_its_frame_and_an_unwritten_one_none(tmp_path: Path) -> None:
@@ -81,6 +81,8 @@ def test_a_written_rest_list_keeps_its_frame_and_an_unwritten_one_none(tmp_path:
     assert loop.written == [(105, "settle"), (120, "rest")]
     log = SessionLog(tmp_path / "s")
     assert [r["frame_i"] for r in log.ball_lists()] == [105, 120]
+    # Where each reached the hub, so a replay feeds it at the same point (#63).
+    assert [r["after"] for r in log.ball_lists()] == [108, 123]
     (still,) = log.stills()
     assert still["reason"] == "rest" and still["frame_i"] == 120
     # The list's own frame, with its churn-lag predecessor, as every still has.

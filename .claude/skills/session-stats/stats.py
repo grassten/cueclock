@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, "src")
@@ -50,6 +51,15 @@ class Tiers:
     listed_balls: int = 0  # object balls on arm-free lists
     unnumbered: int = 0  # ... listed with no number
     reassigned: int = 0  # ... that read another ball's number and took their next best (#65)
+    # The scratch hold (#63), from `scratch_list` / `scratch_call` lines (checkpoint 132+).
+    settles_judged: int = 0  # settles whose list the hub judged, or journaled missing
+    settles_no_list: int = 0
+    settles_arm: int = 0  # ... whose list had an arm over the table and no cue
+    scratch_by: dict[str, int] = field(default_factory=dict)  # stood: candidate / list / both
+    scratch_held: int = 0  # ... of those, the hold was granted
+    scratch_missed: dict[str, int] = field(default_factory=dict)  # not granted: why
+    cleared_by_list: int = 0  # candidates the list saw the cue against
+    refuted_list_no_cue: int = 0  # refuted by today's logic while the list held no cue
 
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
@@ -90,6 +100,33 @@ class Tiers:
             if rack is not None:
                 prev_rack = rack
         self.add_ball_lists([r for r in rows if r.get("kind") == "ball_list"])
+        self.add_scratch_calls(rows)
+
+    def add_scratch_calls(self, rows: list[dict[str, object]]) -> None:
+        """#63: who called each scratch, whether it was held, and the list's
+        side of every settle. A ``scratch_call`` line closes each shot that
+        had a scratch called, at the next shot's motion."""
+        by: Counter[str] = Counter(self.scratch_by)
+        missed: Counter[str] = Counter(self.scratch_missed)
+        for r in rows:
+            kind = r.get("kind")
+            if kind == "scratch_list":
+                self.settles_judged += 1
+                self.settles_no_list += r.get("verdict") == "no_list"
+                self.settles_arm += r.get("says") == "arm"
+            elif kind == "scratch_call":
+                closed = r.get("closed")
+                if closed == "cleared":
+                    self.cleared_by_list += 1
+                elif closed == "refuted":
+                    self.refuted_list_no_cue += r.get("says") == "no_cue"
+                else:
+                    by[str(r.get("by"))] += 1
+                    if r.get("held"):
+                        self.scratch_held += 1
+                    else:
+                        missed[str(r.get("missed", "?"))] += 1
+        self.scratch_by, self.scratch_missed = dict(by), dict(missed)
 
     def add_ball_lists(self, rows: list[dict[str, object]]) -> None:
         """The ball list's checks. Duplicates and returns are always errors.
@@ -227,6 +264,37 @@ def table(label: str, t: Tiers) -> str:
                 "Balls with no number",
                 f"{t.unnumbered} / {t.listed_balls}  ({pct(t.unnumbered, t.listed_balls)})",
                 "mostly a stripe resting white cap up (the known open case)",
+            ),
+        ]
+    if t.settles_judged:
+        called = sum(t.scratch_by.values())
+        why = ", ".join(f"{n} {k}" for k, n in sorted(t.scratch_missed.items()))
+        rows += [
+            (
+                "Scratches, by who called them",
+                f"{called}  ({t.scratch_by.get('candidate', 0)} today's logic only, "
+                f"{t.scratch_by.get('list', 0)} the list only, {t.scratch_by.get('both', 0)} both)",
+                "#63: the list-only count is the scratches the tracker never noticed",
+            ),
+            (
+                "Scratch holds granted",
+                f"{t.scratch_held} / {called}" + (f"  (not granted: {why})" if why else ""),
+                "the reason is the clock's state, or no_clock / vision_off",
+            ),
+            (
+                "Candidates cleared by the list",
+                str(t.cleared_by_list),
+                "the list saw the cue at the settle: no hold",
+            ),
+            (
+                "Refuted while the list held no cue",
+                str(t.refuted_list_no_cue),
+                "today's refutation stands (either one seeing the cue counts)",
+            ),
+            (
+                "Settles with no list / with an arm",
+                f"{t.settles_no_list} / {t.settles_arm} of {t.settles_judged}",
+                "today's logic decided those alone",
             ),
         ]
     if t.dark_candidates:
