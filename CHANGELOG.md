@@ -304,6 +304,18 @@ survive unchanged in `design.md`.
   it (the 2026-08-02 decision above). Open work is the open issues on
   `grassten/cueclock`, sorted by the same `area:*` / `needs:*` labels;
   `BACKLOG.md`, `CLAUDE.md` and `README.md` point there now.
+- **2026-11-18** **Audio is disqualified for detection, permanently.** Steven:
+  "OK let's permanently disqualify audio for detection on this evidence
+  then". The acoustic click was rejected on 2026-08-02 and reopened for #67
+  on 2026-11-18, after a quiet-room measurement through the side camera's
+  own mic looked promising: 41 of 41 strokes heard at the strike. Real songs
+  mixed into the same recordings: 16 % heard at an estimated ordinary
+  listening volume, 4 % of the slower third; talking not tested. The clock is
+  built for real matches ("where there would be talking and music"), so a
+  reading that works in practice and stands down in a match is out.
+  `docs/design.md` §8 and `docs/hardware.md` Part D item 2 carry it; the
+  measurements are in #67. The voice "extension" is a command, not
+  detection, and is unaffected. No code changed.
 
 ## Checkpoint log (append-only, newest first)
 

@@ -1044,12 +1044,25 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.
    floor is v1's and gets re-anchored to those records (#58). A separate
    `listen` started while `run` is live heard nothing on 2026-11-16, so
    measure from the session journal rather than a second listener.
-2. **Rejected 2026-08-02 — acoustic strike-click corroborator.** A broadband
-   transient detector coincident with the cue-ball velocity impulse was the
-   long-standing designed answer for slow tip-nudge vs. soft shot. Steven is
-   not committing to a mic for shot detection, so it is not backlog — it is
-   off the table. The cases it covered (issues #5, #8, #11) now stand on
-   vision levers or, for #5, on no known path at all.
+2. **Disqualified for good 2026-11-18 — audio for detection.** A broadband
+   transient detector coincident with the cue-ball velocity impulse (the
+   acoustic strike-click corroborator) was the long-standing designed answer
+   for slow tip-nudge vs. soft shot. Steven rejected it on 2026-08-02,
+   doubting a click across tips, stroke power and room noise, and reopened
+   it for #67 on 2026-11-18 after a quiet-room measurement looked promising.
+   Room noise decided it.
+   Through the side camera's own mic, in the quiet practice room, all 41
+   strokes of two sessions had a sharp onset at the strike. With real songs
+   mixed into the same recordings, 16 % of those strokes were still heard at
+   an estimated ordinary listening volume, and 4 % of the slower third (a
+   mixing test: no recording has music in it, and talking was not tested).
+   The clock is built for real matches, "where there would be talking and
+   music", so it would work in practice and stand down in a match. Steven:
+   "OK let's permanently disqualify audio for detection on this evidence
+   then". It is not backlog and not a candidate: detection is the camera
+   alone (`design.md` §8, 2026-11-18; the measurements are in issue #67).
+   The issues that once waited on it (#5, #8, #11) are all closed without
+   it. Item 1 is a spoken command, not detection, and is unaffected.
 3. **v1 — spoken "Extension called"** (built 2026-08-03). A ref says it out
    loud, so every *granted* extension announces itself whoever called it —
    deck key, `/api/extension` or voice. It rides the clock's existing one-shot

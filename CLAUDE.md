@@ -48,6 +48,10 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   no threads — so recorded-clip replay tests stay deterministic.
 - **No blind threshold tuning** — every constant is anchored to a measurement from the
   corpus; that discipline is how the old app's plateau gets avoided.
+- **No audio in detection** — permanently disqualified 2026-11-18 (`docs/design.md` §8):
+  a stroke's sound is clear in a quiet room and mostly lost under music, and matches
+  have talking and music. Do not propose it or bring it up again (Steven: "I don't
+  wanna hear about it again"). The mic is for the spoken "extension" only.
 
 ## Dev workflow
 
