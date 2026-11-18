@@ -1,48 +1,35 @@
-# Backlog → the work board
+# Backlog → the issue list
 
-Open work lives on the GitHub project board, not in this file:
+Open work lives in the GitHub issues, not in this file:
 
-### **https://github.com/users/grassten/projects/3**
+### **https://github.com/grassten/cueclock/issues**
 
-Cards are issues on `grassten/cueclock`, so a checkpoint commit closes its own
-backlog item — put `Closes #12` in the commit message and the card moves to Done
-on push. That link is the whole reason the board beats a markdown list: there is
-no second place to remember to update.
+A checkpoint commit closes its own backlog item: put `Closes #12` in the commit
+message and the issue closes on push. That link is the whole reason issues beat
+a markdown list: there is no second place to remember to update.
 
-## How the board is organised
+## How it is organised
 
-**Columns** (the `Status` field) — drag a card to transition it:
-
-| Column | Means |
-|---|---|
-| Backlog | Not started, not next |
-| Next | Short-term punch list |
-| In progress | Being worked now |
-| Awaiting live validation | Built and corpus-pinned; needs judgment at the table |
-| Done | Landed — the detail lives in `CHANGELOG.md` |
-
-**Labels** carry the categorisation, and they work everywhere the board doesn't
-(issue list, `gh issue list --label`, the GitHub mobile app). Two orthogonal
-axes, because "needs Steven at the table" is not a subject area:
+**Labels** carry the categorisation. Two orthogonal axes, because "needs Steven
+at the table" is not a subject area:
 
 - `area:accuracy` · `area:corpus` · `area:deck-ui` · `area:obs-display` ·
   `area:hardware` · `area:docs-infra`
 - `needs:table-time` · `needs:purchase` · `needs:code-only`
-
-**Saved views** — *Board* is everything; *At the table* is the
-`needs:table-time` cut (the phone view: what can only be done standing at the
-table); *Code only* is its complement.
 
 ```
 gh issue list --label area:accuracy          # what's open on detection
 gh issue list --label needs:table-time       # what needs a cue in hand
 ```
 
-## What is not on the board
+The GitHub project board this file used to point at is no longer used
+(2026-11-17).
+
+## What is not in the issues
 
 - **Speculative accuracy ideas.** Retired 2026-08-02 with
   `docs/accuracy-ideas.md`. Accuracy work is now derived from evidence:
-  a session journal or a recorded clip implicates a specific failure, and that becomes a card. Nothing gets worked on the
+  a session journal or a recorded clip implicates a specific failure, and that becomes an issue. Nothing gets worked on the
   strength of a hypothesis alone.
 - **v1 scope exclusions** — `docs/design.md` §5 holds the standing YAGNI list
   (replay export, break-speed measurement, match stats,

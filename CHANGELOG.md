@@ -300,6 +300,10 @@ survive unchanged in `design.md`.
   wall, the count, pace and rack un-happening). Only ball-in-hand settles
   wait, at most 0.15 s, decided as of the settle's own time; anything else
   reaching the hub first decides them as before.
+- **2026-11-17** **The project board is no longer used.** Steven is not using
+  it (the 2026-08-02 decision above). Open work is the open issues on
+  `grassten/cueclock`, sorted by the same `area:*` / `needs:*` labels;
+  `BACKLOG.md`, `CLAUDE.md` and `README.md` point there now.
 
 ## Checkpoint log (append-only, newest first)
 

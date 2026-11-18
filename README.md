@@ -36,7 +36,7 @@ recorded clips that replay deterministically through the vision core.
 | Ball list: which balls are on a still table, by number, drawn as a test strip on the bar (`docs/design.md` §13) | live, being judged |
 | Session toggle (one key powers the TV on, brings up `run` + OBS + the projector — and takes it all back down) | live |
 | Instant replay: one key cuts the TV to the last shot (seeked to 1.5 s before it), or held, to the whole rack from its break | live |
-| Replay stinger + slow-mo, music keys, drill tracking | planned — [work board](https://github.com/users/grassten/projects/3) |
+| Replay stinger + slow-mo, music keys, drill tracking | planned — [open issues](https://github.com/grassten/cueclock/issues) |
 
 ## How it works
 
@@ -149,7 +149,7 @@ uv run ruff check . && uv run mypy
 | `docs/design.md` | Architecture, detection design, event logic, engineering standards, corpus checklist — the plan of record (§ numbers are cited from code) |
 | `docs/hardware.md` | Camera settings & bring-up · video path to OBS/TV · Stream Deck (living button map) · mic plan · TV & recalibration recipes |
 | `docs/cli.md` | CLI reference — every command, flag, and the common recipes |
-| `BACKLOG.md` | Pointer to the work board, and how it's organised |
+| `BACKLOG.md` | Pointer to the issue list, and how it's organised |
 | `CHANGELOG.md` | Dated checkpoint log + build decisions (append-only) |
 
 This project supersedes an iPhone-based prototype
