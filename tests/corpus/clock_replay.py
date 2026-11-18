@@ -290,7 +290,7 @@ def replay_clock(
 
             # The clock-affecting half of `Hub.tick_loop`, minus broadcast.
             hub._decide_overdue_settle(t)
-            hub.clock.tick(t, motion=hub._table_motion)
+            hub.clock.tick(t)
             hub._watch_frozen_clock(t)
 
             state = hub.clock.state

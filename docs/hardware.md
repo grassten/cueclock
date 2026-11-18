@@ -1055,7 +1055,7 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.
    deck key, `/api/extension` or voice. It rides the clock's existing one-shot
    `cue` field: `hub.extension()` broadcasts `cue="extension"`, or
    `"extension_denied"` when the rules refuse, and `shotclock.html` plays it
-   beside `cueTen`/`cueExpired`. Refusals sound too (a falling tone pair):
+   beside `cueTen`/`cueBuzzer`. Refusals sound too (a falling tone pair):
    silence there is indistinguishable from a mic that never heard the shout,
    which is the one thing it must not be confusable with.
 
@@ -1064,7 +1064,12 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.
    **"Control audio via OBS" on** (`reroute_audio: true`) and its monitoring at
    **"Monitor Only (mute output)"** — page audio goes into the OBS mixer, and
    from there only down the monitoring path to the HDMI output. Settings →
-   Audio → Monitoring Device stays `Default` = HDMI.
+   Audio → Monitoring Device is **`HISENSE`, by name** (since 2026-11-17,
+   #68). It was `Default`, which follows the macOS default output, and that
+   was found on the Jump Desktop virtual device: every cue would go there and
+   none to the TV. The mic input follows the same never-the-default rule
+   (below). The setting lives in the profile's `basic.ini` (`[Audio]
+   MonitoringDeviceId`, the TV's CoreAudio UID).
 
    ⚠️ The two switches are easy to get backwards, and each wrong pairing fails
    in a way you notice at a different time:

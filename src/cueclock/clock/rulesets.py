@@ -21,8 +21,8 @@ been taken in the rack (the break is shot 1). The Ultimate Pool sources give
 no first-shot allowance, so both 8-ball rulesets set it equal to
 ``base_seconds`` — preserving the behavior validated 2026-07-27.
 
-``grace_seconds`` / ``post_expiry_seconds`` are app behavior (overlay timing),
-not rulebook values. Rulesets are hardcoded rather than loaded from config —
+``grace_seconds`` / ``post_expiry_seconds`` are app behavior (detection latency
+and overlay timing), not rulebook values. Rulesets are hardcoded rather than loaded from config —
 hot-reload was never implemented in the old app and stays backlog.
 """
 
@@ -35,6 +35,15 @@ from dataclasses import dataclass
 # grant costs nothing instead of burning a real one mid-rack. Flip back on
 # when the microphone earns enforcement.
 ENFORCE_EXTENSION_LIMIT = False
+
+# How long after the buzzer at zero a detected shot still saves the countdown
+# (#68, checkpoint 134). The buzzer sounds the instant the clock reads 0, and a
+# stroke made just before it is not confirmed until later: the motion latch
+# rises ~0.25 s after the stroke and the strike confirm lands a median 0.02 s
+# after the latch (p99 0.22 s, max 1.18 s; 872 strikes over every journal to
+# 2026-11-17). So stroke-to-confirm is ~0.5 s at p99, and 1 s is about twice
+# that. It was 2 s, which also let a stroke made ~1.5 s after zero count.
+GRACE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -66,7 +75,7 @@ RULESETS: dict[str, Ruleset] = {
             # until 2026-08-03, which silently enforced one per *rack* and left
             # the second player with none.
             extensions_per_frame=2,
-            grace_seconds=2.0,
+            grace_seconds=GRACE_SECONDS,
             post_expiry_seconds=2.0,
         ),
         Ruleset(
@@ -75,7 +84,7 @@ RULESETS: dict[str, Ruleset] = {
             first_shot_seconds=15,  # == base, as above
             extension_seconds=15,
             extensions_per_frame=2,  # per player, as above
-            grace_seconds=2.0,
+            grace_seconds=GRACE_SECONDS,
             post_expiry_seconds=2.0,
         ),
         Ruleset(
@@ -84,7 +93,7 @@ RULESETS: dict[str, Ruleset] = {
             first_shot_seconds=60,  # WNT §5: 60 s after the break-off / a push out
             extension_seconds=30,  # WNT §5: one per player per rack
             extensions_per_frame=2,
-            grace_seconds=2.0,
+            grace_seconds=GRACE_SECONDS,
             post_expiry_seconds=2.0,
         ),
         # Match play with no shot clock (2026-08-13). A ruleset rather than a
@@ -100,7 +109,7 @@ RULESETS: dict[str, Ruleset] = {
             first_shot_seconds=30,
             extension_seconds=0,
             extensions_per_frame=0,
-            grace_seconds=2.0,
+            grace_seconds=GRACE_SECONDS,
             post_expiry_seconds=2.0,
             timed=False,
         ),

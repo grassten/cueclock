@@ -57,23 +57,57 @@ def test_urgency_cues_edge_triggered_once() -> None:
     assert clock.tick(now=26.0).cue is None
 
 
-def test_zero_to_grace_to_expired_to_auto_restart() -> None:
+def test_buzzer_at_zero_then_grace_expired_auto_restart() -> None:
     clock = make_clock()
     clock.start(now=0.0)
     clock.tick(now=15.0)
-    clock.tick(now=25.0)  # fire "five" so the expiry path is isolated below
+    clock.tick(now=25.0)  # fire "five" so the zero path is isolated below
     snap = clock.tick(now=30.0)
+    # #68: time is up the instant the wall reads 0, and that is when it sounds.
     assert snap.state == "GRACE"
     assert snap.display == 0
-    snap = clock.tick(now=32.0)  # grace_seconds elapsed
+    assert snap.cue == "buzzer"
+    assert clock.tick(now=30.5).cue is None  # once per zero
+    snap = clock.tick(now=31.0)  # grace_seconds elapsed
     assert snap.state == "EXPIRED"
-    assert snap.cue == "expired"
+    assert snap.cue is None  # the buzzer already said it
     assert snap.display == 0
-    assert clock.tick(now=33.0).cue is None  # expired cue fires once
-    snap = clock.tick(now=34.0)  # post_expiry_seconds elapsed → next player
+    snap = clock.tick(now=33.0)  # post_expiry_seconds elapsed → next player
     assert snap.state == "RUNNING"
     assert snap.time == 30
     assert snap.extensions_used == 0
+
+
+def test_buzzer_outranks_an_urgency_cue_crossed_in_the_same_tick() -> None:
+    clock = make_clock()
+    clock.start(now=0.0)
+    assert clock.tick(now=31.0).cue == "buzzer"  # crossed 10, 5 and 0 at once
+
+
+def test_grace_is_the_measured_strike_window() -> None:
+    # 1 s (#68): stroke-to-confirm is ~0.5 s at p99 (rulesets.GRACE_SECONDS).
+    assert {r.grace_seconds for r in RULESETS.values()} == {1.0}
+
+
+def test_shot_confirmed_inside_grace_saves_the_countdown() -> None:
+    # A stroke made just before zero is confirmed just after the buzzer.
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.tick(now=30.0)
+    clock.tick(now=30.6)
+    assert clock.state is State.GRACE
+    clock.shot_taken()
+    assert clock.state is State.MOTION
+    clock.balls_settled(now=35.0)
+    assert clock.snapshot().time == 30
+
+
+def test_extension_after_the_buzzer_rearms_it() -> None:
+    clock = make_clock()
+    clock.start(now=0.0)
+    assert clock.tick(now=30.0).cue == "buzzer"
+    assert clock.extension()  # called inside the window
+    assert clock.tick(now=45.0).cue == "buzzer"  # the extended zero sounds too
 
 
 def test_extension_accepted_only_in_running_and_grace() -> None:
@@ -200,16 +234,16 @@ def test_rulesets_validated_values() -> None:
     }
     default = RULESETS["ultimate_pool_8ball"]
     # extensions_per_frame is the whole-rack pool: one per player, two players.
-    assert default == Ruleset("ultimate_pool_8ball", 30, 30, 15, 2, 2.0, 2.0)
+    assert default == Ruleset("ultimate_pool_8ball", 30, 30, 15, 2, 1.0, 2.0)
     assert RULESETS["ultimate_pool_8ball_final10"] == Ruleset(
-        "ultimate_pool_8ball_final10", 15, 15, 15, 2, 2.0, 2.0
+        "ultimate_pool_8ball_final10", 15, 15, 15, 2, 1.0, 2.0
     )
     # WNT Event Rules §5: 30 s shot, 60 s first shot, 30 s extension;
     # the pool of 2 is one-per-player, self-policed (no turn tracking).
-    assert RULESETS["wnt_9ball"] == Ruleset("wnt_9ball", 30, 60, 30, 2, 2.0, 2.0)
+    assert RULESETS["wnt_9ball"] == Ruleset("wnt_9ball", 30, 60, 30, 2, 1.0, 2.0)
     # Freestyle (2026-08-13): match play with no shot clock. The clock fields
     # are inert while `timed` is False.
-    assert RULESETS["freestyle"] == Ruleset("freestyle", 30, 30, 0, 0, 2.0, 2.0, timed=False)
+    assert RULESETS["freestyle"] == Ruleset("freestyle", 30, 30, 0, 0, 1.0, 2.0, timed=False)
 
 
 def test_ruleset_aliases_resolve() -> None:
@@ -658,44 +692,23 @@ def test_next_mode_cycles_and_wraps() -> None:
     assert next_mode("garbage") == "match"
 
 
-def test_grace_holds_while_table_motion_then_expires_clean() -> None:
-    """E9 expiry hold (accuracy plan §13.3): no buzzer through live flight.
+def test_time_on_zero_is_fixed() -> None:
+    """#68: nothing holds the clock on zero past the strike window.
 
-    A missed strike lets the countdown run to zero mid-shot; the false foul
-    at the end of GRACE was the worst felt failure on record (2 of 30
-    sessions, and live on 2026-08-06 19:20 the clock reached EXPIRED through
-    a real roll-out — flag_missed_6). While the vision motion bit is set the
-    grace window re-arms to full, so the buzzer only ever sounds after a
-    complete, motion-free grace period. RUNNING is deliberately unaffected:
-    a countdown that pauses whenever something rolls is a different clock.
+    The E9 expiry hold (2026-08-06) re-armed GRACE while the vision
+    motion bit was set. It saved none of 50 zeros in the journals and held the
+    clock on zero for 3.7 to 40.6 s eleven times, so it is gone: at the 10 Hz
+    tick cadence, EXPIRED lands exactly one grace window after zero.
     """
     clock = make_clock()
     clock.start(now=0.0)
-    clock.tick(31.0)  # zero crossed -> GRACE
+    clock.tick(30.0)
     assert clock.state is State.GRACE
-    grace = clock.ruleset.grace_seconds
-    # Motion holds it open far past the grace window (10 Hz tick cadence)...
-    t = 31.0
-    for _ in range(int(20 * grace * 10)):
-        t += 0.1
-        clock.tick(t, motion=True)
-    assert clock.state is State.GRACE
-    # ...and once motion clears, expiry needs one full quiet grace window,
-    # counted from the last moving tick — not the remnant of the old one.
-    quiet_start = t
+    t = 30.0
     while clock.state is State.GRACE:
-        t += 0.1
-        clock.tick(t, motion=False)
-    assert clock.state is State.EXPIRED
-    assert t - quiet_start >= grace
-
-
-def test_running_still_reaches_zero_during_motion() -> None:
-    # The hold is GRACE-scoped: motion must not freeze the countdown itself.
-    clock = make_clock()
-    clock.start(now=0.0)
-    clock.tick(31.0, motion=True)
-    assert clock.state is State.GRACE
+        t = round(t + 0.1, 1)
+        clock.tick(t)
+    assert t == 30.0 + clock.ruleset.grace_seconds
 
 
 # ---------- post-scratch grace (#25, checkpoint 78) ----------

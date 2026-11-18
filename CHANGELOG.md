@@ -307,6 +307,46 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-17 (checkpoint 134 — the clock buzzes at zero; #68):** time-up
+  is a sound at the moment of zero, and the time on zero is fixed. Clock and
+  overlay; detection is unchanged.
+  - **What it fixes** (journals, all 50 zeros to 2026-11-15): nothing
+    sounded at zero. The only time-up sound was a soft two-note chime at
+    least 2 s later, and the E9 motion hold could push it out to 40.6 s.
+    Eleven zeros sat 3.7 to 40.6 s; twice a shot made about 20 s after zero
+    was then accepted as in time. No zero ever ended in a settle, so the
+    hold saved nothing.
+  - **The rule** (Steven's three calls, all as recommended): the `buzzer`
+    cue fires as RUNNING reaches 0. A shot detected within **1 s** after it
+    still saves the countdown, because it was struck before zero
+    (`rulesets.GRACE_SECONDS`; the strike confirm lands a median 0.02 s after
+    the motion latch, p99 0.22 s, max 1.18 s, over 872 strikes; the latch is
+    ~0.25 s after the stroke). It was 2 s. **The motion hold is removed**:
+    `ShotClock.tick` no longer takes `motion`, and the bit now feeds only the
+    frozen-clock watchdog. A fresh countdown still starts 2 s after expiry.
+    The cost: a shot that flies dark through zero (12 of 1060 counted settles
+    since checkpoint 83 had no latch and no strike) gets the buzzer, then its
+    fresh countdown when it settles.
+  - **The sound**: `cueBuzzer` in `shotclock.html` replaces `cueExpired`.
+    Two sawtooths 3 Hz apart at G3, low-passed at 2.4 kHz, held flat 1.1 s
+    at gain 0.35: ~14 dB RMS above a blip, peaking at ~0.9 (0.45 clipped). Loudness and character
+    still need judging at the table.
+  - **No sound check.** The issue proposed playing the buzzer once from the
+    Session key to catch a muted TV. It was built, and dropped before
+    pushing: Steven did not want it.
+  - **Audio path**: OBS's Monitoring Device is now `HISENSE` by name, not
+    `Default` (profile `basic.ini`, backup beside it as
+    `basic.ini.bak-20261117-68`). With OBS closed, the macOS default output
+    was the Jump Desktop virtual device, so every cue could have been going
+    there. That is still unconfirmed as the reason the 5..1 beeps went
+    unheard.
+  - Tests: clock (buzzer at zero, once, outranks an urgency cue, fixed time on
+    zero, 1 s window, extension re-arms it); the corpus clock replay drops
+    its `motion=` argument. 853 passed (detect cache; `detect.py`
+    untouched, so cached detections are the cold ones), no golden moved.
+  - Closed on push; Steven reopens it if the buzzer is not heard at the
+    table.
+
 - **2026-11-17 (checkpoint 133 — ball in hand after a scratch keeps the
   clock running; #64):** placing the cue ball by hand after a scratch is no
   longer a shot. Hub policy (`server/scratch.py`, `design.md` §15):

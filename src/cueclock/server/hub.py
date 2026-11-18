@@ -514,7 +514,7 @@ class Hub:
         # E9: the vision motion bit (note_motion, camera thread) and the two
         # monotonic stamps its policies compare against — when the bit was
         # last high, and when the clock last entered MOTION. Both feed the
-        # frozen-clock watchdog; the bit itself also holds GRACE open.
+        # frozen-clock watchdog. (It also held GRACE open until #68.)
         self._table_motion = False
         self._motion_high_mono: float | None = None
         self._motion_entered_mono: float | None = None
@@ -753,7 +753,7 @@ class Hub:
         the live cadence on its virtual clock (#57)."""
         now = self._now()
         self._decide_overdue_settle(now)
-        snapshot = self.clock.tick(now, motion=self._table_motion)
+        snapshot = self.clock.tick(now)
         if snapshot.state != self._journal_state:
             # GRACE/EXPIRED/auto-restart transitions happen inside tick.
             self._log("tick_transition")

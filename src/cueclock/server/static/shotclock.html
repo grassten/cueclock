@@ -691,10 +691,36 @@
         }
         function cueTen()  { playTone(659.25, 0.9, 0.18, 'sine'); }      // E5 — soft
         function cueBeep() { playTone(880.00, 0.16, 0.26, 'triangle'); } // A5 — short blip
-        function cueExpired() {
-            // Two-note resonant cadence: low then high.
-            playTone(392.00, 0.6, 0.30, 'sine', 0.00);   // G4
-            playTone(587.33, 1.1, 0.32, 'triangle', 0.35); // D5
+        // The buzzer (#68): time is up, sounded the instant the clock reads 0.
+        // Everything about
+        // it is the opposite of the 5..1 blips, so it cannot be mistaken for
+        // one more of them: low where they are high, buzzy where they are
+        // pure, held flat for a second where they decay in a sixth of one,
+        // and the loudest thing the page plays. Two sawtooths 3 Hz apart beat
+        // like a horn; the low-pass takes the edge off the top harmonics.
+        // Gain 0.35 peaks at ~0.9 after the filter's overshoot (0.45 clipped
+        // at 1.14) and still sits ~14 dB RMS above a blip.
+        const BUZZER_SECONDS = 1.1;
+        function cueBuzzer() {
+            const ctx = ensureAudio();
+            const now = ctx.currentTime;
+            const filter = ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 2400;
+            const gain = ctx.createGain();
+            gain.gain.setValueAtTime(0.0001, now);
+            gain.gain.exponentialRampToValueAtTime(0.35, now + 0.01);
+            gain.gain.setValueAtTime(0.35, now + BUZZER_SECONDS);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + BUZZER_SECONDS + 0.06);
+            filter.connect(gain).connect(ctx.destination);
+            for (const freq of [196.0, 199.0]) {  // G3, and its beating twin
+                const osc = ctx.createOscillator();
+                osc.type = 'sawtooth';
+                osc.frequency.value = freq;
+                osc.connect(filter);
+                osc.start(now);
+                osc.stop(now + BUZZER_SECONDS + 0.1);
+            }
         }
 
         // ---------------- Spoken cue: "Extension called" ----------------
@@ -996,7 +1022,7 @@
                 lastBeeped = null;
             }
             if (state.cue === 'ten')     cueTen();
-            if (state.cue === 'expired') cueExpired();
+            if (state.cue === 'buzzer')  cueBuzzer();
             if (state.cue === 'extension')        cueExtension();
             if (state.cue === 'extension_denied') cueExtensionDenied();
         }

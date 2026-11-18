@@ -4,7 +4,7 @@ Semantics are the spec recovered from the old app (``docs/design.md``
 §2.1)::
 
     IDLE → RUNNING → MOTION (shot in progress) → RUNNING (reset to full)
-                   → GRACE (2 s after 0) → EXPIRED (flash) → auto-restart
+                   → GRACE (buzzer at 0, 1 s) → EXPIRED (flash) → auto-restart
 
 One deliberate change from the old implementation: no internal clock. Every
 time-dependent method takes ``now`` (monotonic seconds), so the machine is
@@ -39,7 +39,7 @@ class State(Enum):
     IDLE = "IDLE"  # not counting; display shows remaining
     RUNNING = "RUNNING"  # counting down
     MOTION = "MOTION"  # balls in motion, clock frozen
-    GRACE = "GRACE"  # hit zero; short window still accepting extension/shot
+    GRACE = "GRACE"  # hit zero, buzzer sounded; 1 s for a stroke made before it
     EXPIRED = "EXPIRED"  # time's up; flashes, then auto-restarts for next player
 
 
@@ -412,18 +412,23 @@ class ShotClock:
 
     # ---------- time ----------
 
-    def tick(self, now: float, motion: bool = False) -> Snapshot:
+    def tick(self, now: float) -> Snapshot:
         """Advance to ``now``; returns the broadcast payload.
 
-        ``motion`` is the vision layer's identity-free table-motion bit
-        (accuracy plan §13.3). Its one power is refusing the GRACE→EXPIRED
-        transition: a buzzer through live ball flight is a false foul — the
-        worst felt failure, 2 in 30 sessions — while a false ``motion`` only
-        delays the buzzer by however long the flicker lasts. So while it is
-        set, the grace window holds at full; the settle that follows rescues
-        the shot through the existing compensation in :meth:`balls_settled`.
-        It deliberately cannot stop RUNNING from reaching zero (a countdown
-        that pauses whenever something rolls is a different, wrong clock).
+        Reaching zero sounds the ``buzzer`` cue that instant (#68): time is up
+        the moment the wall reads 0, and a player down on a shot must hear it
+        then, not some seconds later. GRACE is only the window in which a
+        stroke made *before* zero is still being confirmed (``grace_seconds``);
+        nothing extends it, so the time on zero is fixed.
+
+        Until checkpoint 134 the vision motion bit re-armed GRACE while the
+        table moved, so no buzzer could sound through a shot whose strike was
+        missed. Since checkpoint 83 the engine's motion latch freezes the
+        countdown before zero on such a shot, and the journals showed the hold
+        saving none of 50 zeros while holding the clock on zero for 3.7 to
+        40.6 s eleven times. A shot that does fly dark through zero still gets
+        its fresh countdown: its settle lands in EXPIRED or in the restarted
+        countdown and counts like any other.
         """
         dt = now - self._last_tick
         self._last_tick = now
@@ -447,20 +452,14 @@ class ShotClock:
             if self.remaining <= 0.0:
                 self.state = State.GRACE
                 self._grace_left = self.ruleset.grace_seconds
+                # The buzzer outranks an urgency cue crossed in the same tick:
+                # zero is the one that must be heard.
+                cue = "buzzer"
         elif self.state is State.GRACE:
-            if motion:
-                # Balls are moving: the missed strike's settle is coming.
-                # Re-arm rather than merely pause so the buzzer always gets a
-                # full, motion-free grace window before it sounds.
-                self._grace_left = self.ruleset.grace_seconds
-            else:
-                self._grace_left -= dt
+            self._grace_left -= dt
             if self._grace_left <= 0.0:
                 self.state = State.EXPIRED
                 self._expired_for = 0.0
-                if "expired" not in self._cues_fired:
-                    cue = "expired"
-                    self._cues_fired.add("expired")
         elif self.state is State.EXPIRED:
             # Loss of turn — flash EXPIRED briefly, then auto-restart the
             # clock for the next player's shot.
