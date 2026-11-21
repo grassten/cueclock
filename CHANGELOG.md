@@ -319,6 +319,34 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-21 (checkpoint 139 — the cue ball once per list):** Steven,
+  on checkpoint 138 leaving the list to call a glove a cue: "There should
+  never be two cue balls detected." `detect.py`, `events.py`, `track.py` and
+  the hub's rules are untouched.
+  - **What the second cue was** (`design.md` §20): 21 of the 549 lists in
+    the four sessions with `balls.jsonl` held two cues, not the 2 the issue
+    counted (it looked at lists with no arm flagged). Read off their stills:
+    19 are the white logo on his black sleeve, 2 the gloved hand. None is a
+    ball.
+  - **No floor separates them.** The cue ball in his hand reads rim
+    0.65-0.97 and inner white 0.85-1.00 (10 lists); the logo reads 0.66-0.89
+    and 0.86-0.93. A higher floor would drop the cue ball during placing.
+  - **The rule** (`vision/ball_list.py`, `_one_cue`): when more than one
+    circle passes the cue test, the whitest inner disc is the cue and the
+    others are left off the list. In all 21 the cue ball is whiter by 0.046
+    or more. `BallList.cues_dropped` counts what was left off (in
+    `balls.jsonl` and on the `ball_list` journal line when not zero).
+  - **Re-read** from their own frames, 472 of the 494 logged lists with a
+    still are identical, the 21 hold one cue at the cue ball's pixel with
+    every other label as it was, and one differs for #65's reason. Four of
+    the stills went into the corpus as `stills_two_cues`.
+  - **`session-stats`**: "Lists with two cue balls" becomes "Lists with a
+    second cue ball", counted on every list (21 of 549 all-time), from
+    `cues_dropped` in new journals.
+  - Not covered: a non-ball passing the cue test alone, with the cue ball
+    out of sight (none on record), and the glove read as a numbered ball.
+  - Verified: unit tests 807 passed; the ball-list corpus gates and the
+    cached battery, 912 passed; ruff, mypy --strict clean.
 - **2026-11-21 (checkpoint 138 — the cue ball on its spot means no shot
   was played; #73):** in session `20261121-153046` the countdown restarted
   twice with no shot played (699.4 s: 8.75 s became 30; 1565.2 s: 23.66 s

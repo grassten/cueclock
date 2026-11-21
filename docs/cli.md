@@ -187,7 +187,9 @@ It also reads the **ball list** (#54, `design.md` §13) on a detect worker at
 every settle and about once a second while nothing moves and nothing on the
 cloth churns: each settle's list, and each rest list that differs from the
 last, goes to `balls.jsonl` in the session log, a `ball_list` journal line
-(with `reassigned`, the balls that gave a number up to a better match, #65),
+(with `reassigned`, the balls that gave a number up to a better match, #65,
+and `cues_dropped` when a second circle passed the cue test and was left
+off, `design.md` §20),
 and the bar's ball strip. Since #63 each written list also reaches the hub
 right behind the frame calls already dispatched (`after` in `balls.jsonl`, so
 `session replay` feeds it back at the same point), and a settle's list has a

@@ -1960,6 +1960,7 @@ class Hub:
             reason=reason,
             arm=found.arm,
             **({"pack": True} if found.pack else {}),
+            **({"cues_dropped": found.cues_dropped} if found.cues_dropped else {}),
             balls=" ".join(found.labels),
             tracker=tracker,
             reassigned=sum(b.own is not None for b in found.balls),

@@ -1377,7 +1377,8 @@ countdown instead of restarting it; that was never a shot either.
 (white 0.61-0.64 against 0.92 or more for every real cue on 257 arm-free
 lists). That is two samples, unchecked against the corpus, and this rule
 does not need it. `session-stats` counts such lists so the misread stays
-visible.
+visible. (Done the same day as §20: the list keeps one cue. No floor was
+needed, and none would have worked.)
 
 **Replayed** through this rule, session 20261121-153046 journals
 `shot_provisional_reverted` with `reason: nothing_moved` at 699.402 s and
@@ -1418,3 +1419,53 @@ counts, and shows as `no_change` and in the stats row. A list later than
 0.3 s still loses to the timeout. A journal written before checkpoint 138
 has no `cue_px`, so the stats row there sees only the stricter old
 `row: still`.
+
+## 20. The cue ball once per list (2026-11-21)
+
+Steven, on reading that §19 left the ball list calling a glove a cue:
+"There should never be two cue balls detected." A table has one.
+
+**What the second cue is.** 21 of the 549 lists in the four sessions with
+`balls.jsonl` hold two. The issue counted the 2 with no arm flagged; the
+other 19 are in session 20261119-020755, on lists with an arm in frame.
+Read off their stills, none is a ball:
+
+| Second "cue" | Lists | Rim whiteness | Inner white | Outline coverage |
+|---|---|---|---|---|
+| The white logo on a black sleeve | 19 | 0.66-0.89 | 0.86-0.93 | 0.74-0.93 |
+| A gloved hand on the cloth | 2 | 0.71-0.75 | 0.61-0.64 | 0.67 |
+| The cue ball beside them | 21 | 0.905-1.00 | 0.968-0.992 | 1.0 |
+
+**Why not a higher floor.** The cue ball held in a hand, which the list
+must keep reading as the cue (§14, §15), reads no better than the logo: rim
+0.65-0.97, inner white 0.85-1.00, coverage 0.57-0.89 over the 10 such lists
+in the same sessions. Any floor that drops the logo drops those.
+
+**The rule** (`ball_list._one_cue`). When more than one circle passes the
+cue test, the one with the whitest inner disc is the cue (rim whiteness
+breaks a tie) and the others are left off the list. In all 21 the cue ball
+is the whiter by 0.046 or more; the rim reading orders them the same way
+but by as little as 0.012. The others are dropped, not read as object
+balls: none was a ball, and the highest rim reading of any object ball in
+the corpus is 0.57, under the cue floor. A list is still a pure function of
+its frame.
+
+**What it does not do.** One circle that is not a ball and passes the cue
+test alone (the logo with the cue ball out of sight) is still listed as the
+cue; none is on record. The same glove read as a numbered ball (`10` at
+699.4 s) is untouched. The rule in §19 does not depend on any of this and
+stays as it is: logged sessions replay from their `balls.jsonl`, two cues
+and all.
+
+**Evidence.** Each of the 494 logged lists that still has its frame was
+read again from that frame: 472 identical, the 21 two-cue lists now hold one
+cue at the cue ball's pixel with every other label unchanged, and one
+differs for #65's reason (a list logged before that fix). Four of the stills
+are in the corpus (`stills_two_cues`, two of each kind) with the cue ball's
+position as truth.
+
+**Journal.** `BallList.cues_dropped` counts the circles left off; it is in
+the `balls.jsonl` record and on the hub's `ball_list` line when not zero.
+`session-stats` reads it as "Lists with a second cue ball" (two `cue` labels
+in journals before this): the row §19 added as "Lists with two cue balls",
+now counted on every list, an arm in frame or not.

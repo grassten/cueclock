@@ -22,6 +22,8 @@ How it works (measured in issue #54, prototype in its research folder):
 4. **Read**: cue by white at the rim (:data:`CUE_RIM_FLOOR`); otherwise the
    Lab distance to each of eight colour centroids over the inner disc, and
    the stripe evidence: the disc's white fraction and white wrapping the rim.
+   **The cue once per list**: when more than one circle passes the cue test,
+   the whitest is the cue and the others are left off (:func:`_one_cue`).
 5. **Numbered, each number once per list** (#65): every (ball, number) pair
    has a cost from those readings and the pairs are taken cheapest first, so
    of two balls that read the same number the better match keeps it and the
@@ -93,6 +95,14 @@ ENCLOSED_GAP, ENCLOSED_REACH, ENCLOSED_NEIGHBOURS = 1.5, 2.4, 4  # x r_pred
 # highest pole-up stripe 0.57, every other white-looking ball 0.53 or less.
 # The floor is the midpoint of 0.57 and 0.72. Inner-disc white fraction must
 # not be used: a pole-up stripe reads 0.85-1.00 there.
+#
+# The floor alone lets things through that are not balls: a table has one cue
+# ball, and 21 of the 549 lists of the first four logged sessions held two.
+# Read off their stills, every second one was the white logo on a black
+# sleeve (19) or a gloved hand on the cloth (2). No floor separates them from
+# the cue: the logo reads rim 0.66-0.89 and inner white 0.86-0.93, and the
+# real cue ball held in a hand reads rim 0.65-0.97 and white 0.85-1.00 (10
+# lists). So the list keeps one, by rank (`_one_cue`).
 CUE_RING = dataclasses.replace(DetectConfig(), whiteness_ring_lo=0.70, whiteness_ring_hi=0.97)
 CUE_RIM_FLOOR = 0.65
 
@@ -205,6 +215,7 @@ class BallList:
     balls: tuple[ListedBall, ...]
     arm: bool
     pack: bool = False
+    cues_dropped: int = 0  # circles that passed the cue test and were not the cue
 
     @property
     def labels(self) -> list[str]:
@@ -214,6 +225,7 @@ class BallList:
         return {
             "arm": self.arm,
             **({"pack": True} if self.pack else {}),
+            **({"cues_dropped": self.cues_dropped} if self.cues_dropped else {}),
             "balls": [
                 {
                     "label": b.label,
@@ -255,7 +267,12 @@ class BallList:
                     own=int(b["own"]) if "own" in b else None,
                 )
             )
-        return cls(balls=tuple(balls), arm=bool(data["arm"]), pack=bool(data.get("pack", False)))
+        return cls(
+            balls=tuple(balls),
+            arm=bool(data["arm"]),
+            pack=bool(data.get("pack", False)),
+            cues_dropped=int(data.get("cues_dropped", 0)),
+        )
 
 
 def same_table(a: BallList, b: BallList) -> bool:
@@ -494,6 +511,25 @@ def _read(
     return _Reading(c, cue, rim, white, wrap, len(colour), dist)
 
 
+def _one_cue(readings: Sequence[_Reading]) -> tuple[list[_Reading], int]:
+    """The cue once per list: ``readings`` with at most one cue, and how many
+    circles that passed the cue test were left off.
+
+    The cue is the one whose inner disc is whitest (rim whiteness breaks a
+    tie). In each of the 21 two-cue lists on record the real cue ball read
+    white 0.968-0.992 and the other circle 0.613-0.927, the smallest gap
+    0.046; the rim reading orders all 21 the same way, but by as little as
+    0.012. The others are left off the list, not read as object balls: none
+    of the 21 was a ball, and the highest rim reading of any object ball in
+    the corpus is 0.57 (a stripe pole up), under the floor.
+    """
+    cues = [r for r in readings if r.cue]
+    if len(cues) < 2:
+        return list(readings), 0
+    cue = max(cues, key=lambda r: (r.white, r.rim))
+    return [r for r in readings if not r.cue or r is cue], len(cues) - 1
+
+
 def stripe_evidence(white: float, wrap: int) -> float:
     """How striped a ball reads, in typical margins: >= 0 is a stripe.
 
@@ -630,7 +666,9 @@ def read_ball_list(bayer: npt.NDArray[np.uint8], reference: ReferenceModel) -> B
         cv2.cvtColor(bayer[oy : oy + rh, ox : ox + rw], cv2.COLOR_BayerBG2BGR), dtype=np.uint8
     )
     accepted = _accept(_candidates(bgr, binary, (ox, oy), reference.radius_px))
-    readings = [r for c in accepted if (r := _read(bgr, (ox, oy), bayer, c)) is not None]
+    readings, cues_dropped = _one_cue(
+        [r for c in accepted if (r := _read(bgr, (ox, oy), bayer, c)) is not None]
+    )
     balls = _listed(readings)
     _, intrusions, _ = detect_frame(
         bayer,
@@ -648,4 +686,5 @@ def read_ball_list(bayer: npt.NDArray[np.uint8], reference: ReferenceModel) -> B
         balls=tuple(sorted(balls, key=_strip_key)),
         arm=bool(intrusions),
         pack=_is_pack(intrusions, readings, binary, (ox, oy)),
+        cues_dropped=cues_dropped,
     )

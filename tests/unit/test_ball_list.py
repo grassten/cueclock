@@ -87,6 +87,31 @@ def test_reads_cue_solid_stripe_and_a_white_cap_with_no_number() -> None:
         assert abs(b.cx - round(b.cx / 100) * 100) <= 1 and abs(b.cy - 300) <= 1
 
 
+def test_the_cue_is_listed_once() -> None:
+    """Two circles pass the cue test: the cue ball, and a white disc with a
+    dark notch in it (the logo on a sleeve, sessions 20261119-020755 and
+    20261121-153046). The whitest is the cue; the other is not a ball."""
+    img = _cloth()
+    cv2.circle(img, (600, 300), 20, WHITE, -1)  # a logo: white at the rim ...
+    cv2.rectangle(img, (594, 294), (606, 306), (20, 20, 20), -1)  # ... dark inside
+    cv2.circle(img, (200, 300), 20, WHITE, -1)  # the cue
+    cv2.circle(img, (400, 300), 20, YELLOW, -1)  # the 1
+    found = read_ball_list(_mosaic(img), _reference())
+    assert found.labels == ["cue", "1"] and found.cues_dropped == 1
+    assert abs(found.balls[0].cx - 200) <= 1
+    assert BallList.from_dict(json.loads(json.dumps(found.as_dict()))).cues_dropped == 1
+    hub = Hub()
+    asyncio.run(hub.ball_list(1.0, "rest", found))
+    (line,) = [r for r in hub.journal.tail(10_000.0) if r["kind"] == "ball_list"]
+    assert line["balls"] == "cue 1" and line["cues_dropped"] == 1
+    # Alone, the same disc is still a cue: a cue ball in a hand reads no whiter.
+    alone = _cloth()
+    cv2.circle(alone, (600, 300), 20, WHITE, -1)
+    cv2.rectangle(alone, (594, 294), (606, 306), (20, 20, 20), -1)
+    found = read_ball_list(_mosaic(alone), _reference())
+    assert found.labels == ["cue"] and found.cues_dropped == 0
+
+
 def test_an_empty_table_lists_nothing() -> None:
     assert read_ball_list(_mosaic(_cloth()), _reference()) == BallList(balls=(), arm=False)
 

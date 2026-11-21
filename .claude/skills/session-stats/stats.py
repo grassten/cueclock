@@ -60,7 +60,7 @@ class Tiers:
     settle_lists: int = 0  # settle lists with the tracker's count beside them
     settle_lists_agree: int = 0  # ... whose ball count equals the tracker's
     lists_duplicate: int = 0  # arm-free lists giving one number to two balls
-    lists_two_cues: int = 0  # arm-free lists holding more than one cue ball (#73)
+    lists_two_cues: int = 0  # lists where a second circle passed the cue test (#73)
     numbers_returned: int = 0  # a number back after it left, within one rack
     listed_balls: int = 0  # object balls on arm-free lists
     unnumbered: int = 0  # ... listed with no number
@@ -209,6 +209,9 @@ class Tiers:
             if r.get("reason") == "settle" and isinstance(tracker, int):
                 self.settle_lists += 1
                 self.settle_lists_agree += len(labels) == tracker
+            # Two `cue` labels before checkpoint 139; since then the list keeps
+            # one and journals how many it left off.
+            self.lists_two_cues += labels.count("cue") > 1 or bool(r.get("cues_dropped"))
             if r.get("arm"):
                 self.lists_arm += 1
                 continue
@@ -218,7 +221,6 @@ class Tiers:
             reassigned = r.get("reassigned")
             self.reassigned += reassigned if isinstance(reassigned, int) else 0
             self.lists_duplicate += len(numbers) != len(set(numbers))
-            self.lists_two_cues += labels.count("cue") > 1
             self.numbers_returned += racking.feed(r)
 
 
@@ -319,9 +321,9 @@ def table(label: str, t: Tiers, internals: bool = False) -> str:
                 "arm-free lists; always an error",
             ),
             (
-                "Lists with two cue balls",
-                f"{t.lists_two_cues}  ({pct(t.lists_two_cues, t.lists - t.lists_arm)})",
-                "arm-free lists; always an error (a hand read as a ball, #73)",
+                "Lists with a second cue ball",
+                f"{t.lists_two_cues}  ({pct(t.lists_two_cues, t.lists)})",
+                "not a ball: a sleeve logo, a glove; left off the list since checkpoint 139",
             ),
             (
                 "Numbers back after leaving",

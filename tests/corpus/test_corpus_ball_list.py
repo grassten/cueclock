@@ -101,6 +101,29 @@ def test_a_standing_rack_is_a_pack_and_a_hand_is_not() -> None:
             assert sorted(found.labels) == sorted(frame["expected"]), frame["what"]
 
 
+# Four stills of sessions 20261119-020755 and 20261121-153046 (1115 mount)
+# whose list held two cue balls, with truth.json: which circle is the cue
+# ball and what the other one is, checked by eye on 2026-11-21.
+TWO_CUE_STILLS = CLIPS / "stills_two_cues"
+
+
+def test_the_cue_is_listed_once_on_the_stills_that_held_two() -> None:
+    """A white logo on a black sleeve and a gloved hand on the cloth both
+    pass the cue test. The list keeps the cue ball, leaves the other circle
+    off, and reads every other ball as it did."""
+    _need("stills_two_cues", "empty_table_1115")
+    ref = _reference_model("empty_table_1115")
+    lists = json.loads((TWO_CUE_STILLS / "truth.json").read_text())["lists"]
+    assert len(lists) == 4
+    for truth in lists:
+        bayer = cv2.imread(str(TWO_CUE_STILLS / truth["file"]), cv2.IMREAD_UNCHANGED)
+        found = read_ball_list(bayer, ref)
+        assert sorted(found.labels) == sorted(truth["expected"]), truth["what"]
+        (cue,) = [b for b in found.balls if b.cue]
+        assert [cue.cx, cue.cy] == truth["cue"], truth["what"]
+        assert found.cues_dropped == 1 and found.arm == truth["arm"]
+
+
 def _largest_cluster(balls: tuple[ListedBall, ...], link: float = 2.0) -> int:
     """Balls chained by centre gaps under ``link`` predicted radii: the rack."""
     best, seen = 0, set()
