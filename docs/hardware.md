@@ -434,7 +434,7 @@ exactly when every other key but Session is dark, and the two never meet.
 
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
-| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. **Stops itself after 10 min with no shot** (same sequence, no warning; §C4). Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Refused (flashes `RECAL…`) while a recalibration has the camera. **Dot** = server answering: green, or **amber when the server's health line warns** (#52): the reference drift at launch crossed the warn level (> 8), or detection is below 78 Hz, the cadence every event constant was tuned at. The numbers are on the control page (bottom of the Play tab) | **always**, incl. server down |
+| 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. **Stops itself after 10 min with no shot** (same sequence, no warning; §C4). Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Refused (flashes `RECAL…`) while a recalibration has the camera. **A press counts only for the face it was made on** (checkpoint 135): the stop takes about 5 s on the deck's own loop, the key says `STOPPING…` from the moment the hold lands, and presses made while it works are dropped instead of being read later against `START` (on 2026-11-18 they started a second session). **Dot** = server answering: green, or **amber when the server's health line warns** (#52): the reference drift at launch crossed the warn level (> 8), or detection is below 78 Hz, the cadence every event constant was tuned at. The numbers are on the control page (bottom of the Play tab) | **always**, incl. server down |
 | 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → match | current over next: `MATCH`/`RUN OUT` | always |
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; timed rulesets |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
@@ -996,16 +996,23 @@ USB stall in §C5.
 **What the T7 holds.** Session logs + stills share a 100 GB budget, oldest
 session first (`--archive-gb`); pinned sessions get 5 GB of their own. From
 checkpoint 131 (#65) each ball list written at rest keeps its frame, so the
-weight is ~2.4 GB per hour of play (1.6 measured on `20261117-201731`, ~0.8
-projected for its 55 rest lists), and 100 GB is ~40 hours, down from ~60.
+weight is **3.3 GB per hour of play**, measured on the first session that
+wrote them (`20261119-020755`: 955 MB in 17.4 minutes, 459 MB of it the 142
+rest lists' frames, 63 of those written while racking), and 100 GB is ~30
+hours. The projection had been 2.4 GB and ~40 hours.
 **With the T7 unplugged nothing is capped**: a session stays in
 `sessions.nosync/` until a pass finds the drive (the internal disk had 40 GB
-free on 2026-11-17, ~16 hours at that rate).
+free on 2026-11-17, ~12 hours at that rate).
 
 It runs as its own launchd agent, `com.cueclock.maintain`
 (`scripts/com.cueclock.maintain.plist.template`): every 900 s plus at load,
 `ProcessType Background` + `LowPriorityIO`, logging to
-`~/Library/Logs/cueclock-maintain.log`. It reads only the repo (pinned Keep
+`~/Library/Logs/cueclock-maintain.log`. Background scheduling is slow on
+purpose: the parity check took 384 s there on a 17-minute session that
+replays in about a minute from a terminal. Each hook may therefore run for
+10 minutes or the session's own length, whichever is longer
+(`archive.hook_timeout`, checkpoint 135); at a fixed 10 minutes no session
+past ~27 minutes could have been archived. It reads only the repo (pinned Keep
 Downloaded), `logs/`, `sessions.nosync/` and `~/Movies` — nothing iCloud can
 evict out from under a launchd job (see CLAUDE.md on EDEADLK). Install once:
 
@@ -1044,6 +1051,32 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.
    floor is v1's and gets re-anchored to those records (#58). A separate
    `listen` started while `run` is live heard nothing on 2026-11-16, so
    measure from the session journal rather than a second listener.
+   **Gain** (checkpoint 135, 2026-11-18): the samples are amplified 40 dB
+   on their way to the recognizer (`listener.MIC_GAIN_DB`), because "I still
+   have to shout" was a level problem and not a recognition one. The
+   camera's input volume is already at its maximum (CoreAudio scalar 1.0)
+   and a voice from the table still peaks under −55 dBFS: in session
+   20261119-020755 Steven's first "extension" peaked at −59.2 dBFS and went
+   unheard, and the shouted repeat 2.4 s later at −56.2 dBFS was accepted.
+   Replaying that recording through the same recognizer, the unheard call is
+   accepted at confidence 1.00 from +6 dB of gain up, and with more gain it
+   could have been quieter still: 3 dB quieter at +20 dB, 6 dB at +30, 7.5 dB
+   at +40, 9 dB at +46 and no further (the room's noise is the limit from
+   there). Across all six session recordings on disk (55 minutes of breaks,
+   ball impacts and the TV's own cues) nothing but those two calls was
+   accepted at any gain up to +46 dB; what rises is stray noises decoded as
+   `[unk]` (0 finals at +20 dB, 5 at +40, 12 at +46), and an `[unk]` in the
+   same final as a real call rejects it. The journal's `peak_dbfs` stays the
+   mic's own level, before the gain.
+   Two things the same test showed and gain does not change: **the word
+   has to be said by itself** (at this gain a synthesized "I need an
+   extension" is heard as `[unk] extension` and rejected), and
+   **words that sound like it are it**: synthesized "attention",
+   "intention", "expansion" and "tension" all come back as `extension` at
+   confidence 1.00 once they are loud enough to be heard at all, because the
+   grammar holds one word. That was always so; the gain moves how far away
+   someone can stand and do it. Practice-room evidence only: no recording
+   has talking or music in it.
 2. **Disqualified for good 2026-11-18 — audio for detection.** A broadband
    transient detector coincident with the cue-ball velocity impulse (the
    acoustic strike-click corroborator) was the long-standing designed answer

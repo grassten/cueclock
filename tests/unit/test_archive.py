@@ -224,6 +224,26 @@ def test_a_failing_hook_keeps_the_session_local_and_fails_the_pass(tmp_path: Pat
     assert any("RuntimeError: boom" in line for line in t.lines)
 
 
+def test_a_long_session_gets_a_longer_hook_timeout(tmp_path: Path) -> None:
+    """The parity check replays the whole session, so its time limit grows
+    with the session: at the fixed 10 minutes, an hour-long one could never
+    be archived (measured 0.37 s per second of play under launchd)."""
+    t = Tree(tmp_path)
+    assert archive.hook_timeout(t.session) == archive.HOOK_TIMEOUT_S  # no journal yet
+    hour = {"kind": "x", "wall": _iso(3600)}
+    (t.logs / f"session-{STAMP}.jsonl").write_text(json.dumps(hour) + "\n")
+    seen: dict[str, float] = {}
+    real = t.maintainer.run
+
+    def timed(argv: list[str], timeout: float) -> tuple[int, str]:
+        seen[" ".join(argv[3:5])] = timeout
+        return real(argv, timeout)
+
+    t.maintainer.run = timed
+    assert t.maintainer.pass_() == 0
+    assert seen["session verify"] == seen["review moments"] == 3600.0
+
+
 def test_a_diverged_verify_still_counts_as_done(tmp_path: Path) -> None:
     """`session verify` exits 1 on a divergence after writing replay.json — a
     finding for the review page, not a reason to hold the session back."""

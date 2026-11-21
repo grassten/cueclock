@@ -20,6 +20,9 @@ have gone wrong, so this module reads the journal and lists those:
                  placing the ball list missed
     cue_only     open play: a counted settle that moved only the cue — a hand,
                  or a stick shot that touched nothing (the table cannot tell)
+    no_change    a shot was counted at a settle whose ball list read every
+                 ball where it stood before: the clock restarted and nothing
+                 moved (§16 refuses these when it can; this is the rest)
     quiet        the clock ran longer than any legal turn with nothing seen
     replay       the offline replay disagreed with the live session
 
@@ -208,6 +211,16 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
                         f"clock kept running ({_rack(record)}).",
                     )
                 )
+            elif record.get("row") == "still" and record.get("counted"):
+                moments.append(
+                    _moment(
+                        "no_change",
+                        record,
+                        f"A shot was counted, and the ball list read every ball where it "
+                        f"stood before: the clock restarted with nothing moved "
+                        f"({_rack(record)}).",
+                    )
+                )
             elif record.get("row") in ("cue_moved", "lifted") and record.get("counted"):
                 # Labels for the open-play case #64 left alone: only Steven
                 # knows whether a hand or a stick moved the cue.
@@ -240,14 +253,18 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
             # A placing's revert is its own moment, at its list.
             remaining = record.get("remaining")
             back = f"{remaining:.0f}" if isinstance(remaining, int | float) else "?"
-            moments.append(
-                _moment(
-                    "reverted",
-                    record,
-                    f"A freeze was released as not-a-shot; the clock went back to "
-                    f"{back} s ({_rack(record)}).",
+            if record.get("reason") == "rack_standing":
+                # §17: not a freeze at all, the break itself was taken back.
+                what = (
+                    "A strike started the clock before the break, the rack never moved, "
+                    "and the clock went back to waiting for the break."
                 )
-            )
+            else:
+                what = (
+                    f"A freeze was released as not-a-shot; the clock went back to "
+                    f"{back} s ({_rack(record)})."
+                )
+            moments.append(_moment("reverted", record, what))
         elif kind == report.SETTLE_SYNTHESIZED_KIND:
             quiet = record.get("quiet_s")
             moments.append(

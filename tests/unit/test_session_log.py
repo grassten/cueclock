@@ -327,6 +327,25 @@ def test_compare_tolerates_timing_but_not_verdicts() -> None:
     assert compare([*live, {"kind": "detect_heartbeat"}], live) == []
 
 
+def test_a_record_kind_the_live_code_never_wrote_is_not_a_difference() -> None:
+    """Newer code journals more: a `scratch_list` line at every settle since
+    checkpoint 132. Replaying an older session must not call that a changed
+    decision, and what the newer logic did to the clock must still show."""
+
+    def rec(kind: str, remaining: float, **extra: object) -> dict[str, object]:
+        return {"kind": kind, "state": "RUNNING", "rack_shots": 1, "remaining": remaining, **extra}
+
+    live = [rec("vision_balls_settled", 30.0), rec("vision_shot_taken", 12.0)]
+    listed = rec("scratch_list", 30.0, verdict="none", row="shot")
+    assert compare(live, [live[0], listed, live[1]]) == []
+    refused = rec("vision_balls_settled", 21.0, rejected="nothing_moved")
+    (diff,) = compare(live, [refused, listed, live[1]])
+    assert diff["op"] == "changed" and diff["replay"]["rejected"] == "nothing_moved"
+    # A session that wrote the kind itself is compared on it as before.
+    newer = [live[0], listed, live[1]]
+    assert compare(newer, [live[0], {**listed, "row": "still"}, live[1]])[0]["op"] == "changed"
+
+
 def test_review_check_grades_verdicts_against_a_replay(tmp_path: Path) -> None:
     """`review check`: a right verdict holds while the replay agrees with live,
     and regresses once it doesn't (here: the log loses the Start press)."""

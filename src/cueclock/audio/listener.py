@@ -53,6 +53,31 @@ ANNOUNCE_MUTE_SECONDS = 2.5
 # closed (measured 2026-11-12). Silence here therefore means "camera never
 # initialised", not "nobody spoke" — Part D's peak/rms snippet tells them apart.
 DEFAULT_DEVICE = "Insta360 Link 2C Pro"
+# How much the mic is amplified before the recognizer hears it. The camera's
+# input volume is already at its maximum (CoreAudio scalar 1.0, 0 dB), and a
+# voice from the table still peaks under -55 dBFS: on 2026-11-18 Steven's
+# "extension" peaked at -59.2 dBFS and went unheard, and three seconds later,
+# shouted, at -56.2 dBFS and was accepted. That session's recording replayed
+# through this recognizer at each gain (`quieter` = the word scaled down with
+# the room's own noise added back, so the floor stays where it was):
+#
+#   gain    of the 2 calls    the unheard call may be    the shout may be
+#           accepted          this much quieter          this much quieter
+#    0 dB        1                    -                        -
+#  +20 dB        2                   3 dB                     3 dB
+#  +30 dB        2                   6 dB                     7.5 dB
+#  +40 dB        2                   7.5 dB                   10.5 dB
+#  +46 dB        2                   9 dB                     12 dB
+#  +52 dB        2                   9 dB                     12 dB
+#
+# Past +46 dB nothing more is gained: the room's noise is the limit then, not
+# the level. Over all six session recordings on disk (55 minutes: breaks, ball
+# impacts, the TV's cues) no gain up to +46 dB accepted anything but those two
+# calls. What grows with gain is the recognizer hearing stray noises as
+# `[unk]` (0 finals at +20 dB, 5 at +40, 12 at +46), and an `[unk]` beside a
+# real call makes it "not the keyword". +40 dB keeps most of the reach under
+# that rise. Practice-room evidence only: no recording has talking or music.
+MIC_GAIN_DB = 40.0
 DEFAULT_MODEL = Path("models/vosk-model-small-en-us-0.15")  # scripts/fetch_vosk_model.sh
 
 
@@ -98,11 +123,13 @@ class ExtensionListener:
         model_path: Path = DEFAULT_MODEL,
         device_name: str = DEFAULT_DEVICE,
         on_final: Callable[[Final], None] | None = None,
+        gain_db: float = MIC_GAIN_DB,
     ) -> None:
         self.on_accept = on_accept
         self.model_path = model_path
         self.device_name = device_name
         self.on_final = on_final
+        self.gain_db = gain_db
         self._stop = False
         self._thread: threading.Thread | None = None
         self._muted_until = 0.0  # monotonic; see mute()
@@ -150,7 +177,7 @@ class ExtensionListener:
         # ever appear in a result; SetWords gives per-word confidence.
         rec = KaldiRecognizer(model, SAMPLE_RATE, json.dumps(["extension", "[unk]"]))
         rec.SetWords(True)
-        spotter = ExtensionSpotter(rec)
+        spotter = ExtensionSpotter(rec, gain_db=self.gain_db)
         chunks: queue.Queue[bytes] = queue.Queue()
 
         def _callback(indata: Any, frames: int, t: Any, status: Any) -> None:

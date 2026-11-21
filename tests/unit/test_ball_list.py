@@ -187,6 +187,30 @@ def test_the_strip_shows_the_latest_list_without_an_arm() -> None:
     assert hub.payload()["ball_strip"] == {"shown": True, "balls": ["cue", "3", "?"]}
 
 
+def test_the_strip_shows_a_standing_rack() -> None:
+    """A rack is one hand-sized blob, so its list comes back `arm`; `pack`
+    says the blob is the list's own balls, and the strip shows it. On
+    2026-11-18 it showed 8 of 15 balls for 75 s, until the break."""
+    hub = Hub()
+    partial = BallList(balls=(_ball("cue", 100), _ball("3", 200)), arm=False)
+    rack = BallList(balls=tuple(_ball(str(n), 300 + 40 * n) for n in range(1, 16)), arm=True)
+    asyncio.run(hub.ball_list(1.0, "rest", partial))
+    asyncio.run(hub.ball_list(2.0, "rest", rack))  # hands still on it
+    assert hub.payload()["ball_strip"]["balls"] == ["cue", "3"]
+    asyncio.run(hub.ball_list(3.0, "rest", BallList(balls=rack.balls, arm=True, pack=True)))
+    assert hub.payload()["ball_strip"]["balls"] == [str(n) for n in range(1, 16)]
+
+
+def test_a_pack_survives_its_record_and_counts_as_a_change() -> None:
+    rack = BallList(balls=(_ball("1", 100), _ball("2", 140)), arm=True, pack=True)
+    again = BallList.from_dict(json.loads(json.dumps(rack.as_dict())))
+    assert again.pack and again.arm
+    handled = BallList(balls=rack.balls, arm=True)
+    assert "pack" not in handled.as_dict()  # older logs read back unchanged
+    assert not BallList.from_dict(handled.as_dict()).pack
+    assert not same_table(rack, handled)  # the hands coming off the rack is news
+
+
 def test_the_control_page_switch_hides_the_strip() -> None:
     client = TestClient(create_app())
     client.post("/api/ball_strip/off")

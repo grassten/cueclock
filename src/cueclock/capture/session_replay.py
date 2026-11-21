@@ -116,8 +116,10 @@ def replay(
     """Replay ``log`` into the journal ``out``; returns the frames fed.
 
     Always runs from the top — tracker and clock state need the whole history,
-    and a whole session replays in well under a minute — but stops after
-    ``mono_to`` and keeps only the records from ``mono_from`` on.
+    and a session replays in about a thirtieth of its length from a terminal
+    (36 s for 17 minutes of play; several times slower under the archive
+    agent's background scheduling) — but stops after ``mono_to`` and keeps
+    only the records from ``mono_from`` on.
     """
     out.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="cueclock-replay-") as tmp:
@@ -287,8 +289,19 @@ def _diff(op: str, live: dict[str, Any] | None, replayed: dict[str, Any] | None)
 
 
 def compare(live: list[dict[str, Any]], replayed: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Decision-record differences between two journals, in session order."""
-    a, b = decisions(live), decisions(replayed)
+    """Decision-record differences between two journals, in session order.
+
+    A record kind the live journal never wrote is left out of the replay's
+    side. The code that ran live had no such record, so finding one in the
+    replay is newer reporting, not a different decision: checkpoint 132 began
+    journaling a `scratch_list` line at every settle, and `review check` then
+    called every older "right" verdict regressed for holding one. What newer
+    logic *did* to the clock still shows in the kinds both journals hold: a
+    refused settle, a reverted freeze, a different ``remaining``.
+    """
+    a = decisions(live)
+    written = {r["kind"] for r in a}
+    b = [r for r in decisions(replayed) if r["kind"] in written]
     diffs: list[dict[str, Any]] = []
     matcher = difflib.SequenceMatcher(
         a=[_key(r) for r in a], b=[_key(r) for r in b], autojunk=False

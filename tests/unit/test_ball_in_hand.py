@@ -199,7 +199,7 @@ def test_a_placing_whose_list_never_comes_counts_as_today() -> None:
     _scratch(hub, clock)
     _move(hub, clock, 8.0, None)
     assert hub.clock.state is State.MOTION  # waiting for the list
-    clock.now += SETTLE_LIST_WAIT_S
+    clock.now += SETTLE_LIST_WAIT_S + 0.01
     hub.tick()
     assert hub.clock.state is State.RUNNING and hub.clock.rack_shots == 2
     assert _kinds(hub, "vision_balls_settled")[-1]["held"] == "timeout"
@@ -210,11 +210,11 @@ def test_the_countdown_a_late_decision_starts_runs_from_the_settle() -> None:
     _scratch(hub, clock)
     clock.now += SCRATCH_HOLD_SECONDS  # the hold is over
     _move(hub, clock, 8.0, None)
-    clock.now += 0.3
+    clock.now += SETTLE_LIST_WAIT_S + 0.01
     hub.tick()  # decided at the timeout, as of the settle
     clock.now += 1.0
     hub.tick()
-    assert abs(hub.clock.remaining - (30.0 - 1.3)) < 1e-6
+    assert abs(hub.clock.remaining - (30.0 - SETTLE_LIST_WAIT_S - 1.01)) < 1e-6
 
 
 def test_anything_else_first_decides_the_settle_as_today() -> None:

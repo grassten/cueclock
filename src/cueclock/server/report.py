@@ -257,6 +257,12 @@ REJECTION_BLURBS = {
     # #64 (checkpoint 133): ball in hand after a scratch, and the settle's
     # ball list saw nothing but the cue move.
     "ball_in_hand": "ball in hand (only the cue moved since the scratch)",
+    # §16 (checkpoint 135): a freeze the tracker saw no ball move in, and the
+    # settle's ball list read every ball where it stood before.
+    "nothing_moved": "nothing moved (the ball list read every ball in place)",
+    # §17 (checkpoint 135): a strike out of an armed rack, and the settle's
+    # ball list read the rack standing where it stood. Not the break.
+    "rack_standing": "false start (the rack never moved)",
 }
 
 
@@ -702,14 +708,17 @@ def format_session(report: SessionReport) -> str:
             f"  scratches          {report.scratches}   "
             f"({report.scratch_candidates} candidates, {report.scratch_refuted} refuted)"
         )
-    else:
-        # No candidate records: a pre-#26 journal, where every vision_scratch
-        # confirmed unadjudicated — an upper bound (~6x live), not a count.
+    elif report.scratches:
+        # Scratches with no candidate records: a pre-#26 journal, where every
+        # vision_scratch confirmed unadjudicated — an upper bound (~6x live),
+        # not a count.
         out.append(f"  scratches          {report.scratches}   (upper bound: pre-#26 journal)")
-    if report.total:
-        out.append(
-            f"    rate             1 per {report.total / max(report.scratches, 1):.0f} shots"
-        )
+    else:
+        # Neither: a session with no scratch in it, of any vintage (session
+        # 20261119-020755 read "0 (upper bound: pre-#26 journal), 1 per 46 shots").
+        out.append("  scratches          0")
+    if report.total and report.scratches:
+        out.append(f"    rate             1 per {report.total / report.scratches:.0f} shots")
     if report.racking_settles:
         out.append(f"  racking settles    {report.racking_settles}   (ignored in IDLE, not shots)")
     for label, count in sorted(report.gated.items()):

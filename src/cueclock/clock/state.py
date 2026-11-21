@@ -316,6 +316,26 @@ class ShotClock:
         if self.state in (State.GRACE, State.IDLE):
             self.state = State.MOTION
 
+    def break_reverted(self, now: float) -> bool:
+        """The strike that left IDLE was not the break: back to the armed rack.
+
+        The hub's settle-time verdict (design §17: the rack never moved, so
+        what fired was the cue ball being set down or carried). Everything the
+        fire did is undone: the shot it counted, the MOTION it entered. Only
+        the break can be taken back, and only before its settle: by then
+        nothing else in the rack has happened that this could erase.
+
+        Returns True when the clock went back to IDLE.
+        """
+        if not (self.state is State.MOTION and self._rack_shots == 1 and self._shot_since_settle):
+            return False
+        self._rack_shots = 0
+        self._shot_since_settle = False
+        self.state = State.IDLE
+        self.remaining = float(self.current_base())
+        self._last_tick = now
+        return True
+
     def motion_started(self, now: float) -> bool:
         """#33 Part B: freeze a RUNNING countdown at the motion-episode latch.
 

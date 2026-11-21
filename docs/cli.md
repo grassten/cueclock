@@ -358,8 +358,11 @@ camera or needs `run`:
   of a frozen clock; presses within 10 s are one moment), `idle_strike`
   (strikes seen with the clock IDLE, burst-merged), `synthesized` (the
   frozen-clock watchdog's settle), `quiet` (90 s of a running clock with
-  nothing seen — longer than any legal turn) and `replay` (the parity check's
-  diffs, when `replay.json` has any). About one per ten shots over the
+  nothing seen — longer than any legal turn), `replay` (the parity check's
+  diffs, when `replay.json` has any), and the ball list's: `list_scratch` /
+  `list_cleared` (#63), `placing` / `in_hand_shot` / `cue_only` (#64) and
+  `no_change` (a shot counted at a settle whose list read every ball where
+  it stood, `design.md` §16). About one per ten shots over the
   history. Ids are `<kind>-<mono ms>`, so re-running keeps verdicts attached.
   `cueclock session maintain` runs it on every session it archives.
 - `review check [stamp ...]` replays every judged session (or just those
@@ -540,7 +543,9 @@ divergence is what the change did.
 
 **The ball list (#54) offline**, from the same pure function `run` reads the
 table with (`design.md` §13). One line per frame: time, reason, `arm` when a
-hand was over the table, and the labels in strip order (`cue`, `1`–`15`, `?`).
+hand was over the table (`pack` when the only hand-sized thing on it is a
+rack of the list's own balls), and the labels in strip order (`cue`, `1`–`15`,
+`?`).
 
 | Target | What |
 |---|---|

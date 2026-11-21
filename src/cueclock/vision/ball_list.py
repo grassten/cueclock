@@ -29,7 +29,10 @@ How it works (measured in issue #54, prototype in its research folder):
    duplicate gets exactly the number it reads on its own. Still no memory
    across lists: a list is a pure function of its frame.
 6. **Arm**: the detector's hand test on the same frame. A list with an arm
-   can show a ball is there, never that one is gone.
+   can show a ball is there, never that one is gone. The test fires on any
+   solid blob too fat to be a cue stick, a standing rack included, so a list
+   also says when every such blob is just the balls fitted in it
+   (``pack``, :data:`PACK_COVER`): nothing is hiding anything there.
 
 Everything the fit reads is in distorted pixels, like the detector; centres are
 whole pixels (the accumulator's argmax), which is what the cue floor was
@@ -50,6 +53,7 @@ import numpy.typing as npt
 
 from cueclock.vision.detect import (
     DetectConfig,
+    Intrusion,
     bayer_to_gray,
     chroma_binary,
     detect_frame,
@@ -127,6 +131,14 @@ CENTROIDS = np.array(
 COLOUR_SPREAD, WHITE_SPREAD, WRAP_SPREAD = 19.6, 0.175, 11.0
 
 ARM_CONFIG = DetectConfig(export_intrusions=True)  # the detector's hand test, this frame only
+# A hand-scale blob is a pack of balls when the discs of the balls fitted in
+# it cover at least this share of its area. Measured on every hand-scale blob
+# in the stills of four sessions (218 blobs, 204 frames): a rack standing
+# alone reads 1.02-1.10 (19 blobs, 14-15 balls each); a rack with hands or the
+# triangle on it 0.50-0.62; any other arm or hand, with or without a ball
+# under it, at most 0.43. Nothing falls between 0.62 and 1.02, and 0.8 is the
+# geometric middle of that gap.
+PACK_COVER = 0.8
 
 # Two lists are the same table when every ball has a same-label ball within
 # this share of its predicted radius in the other (~5 px; whole-pixel centres
@@ -180,11 +192,19 @@ def _strip_key(ball: ListedBall) -> tuple[int, int, float, float]:
 @dataclass(frozen=True)
 class BallList:
     """The balls on one frame, in strip order: the cue, 1 to 15, then the
-    balls with no number. ``arm``: an arm or hand was over the table, so the
-    list can show that a ball is present, never that one is absent."""
+    balls with no number. ``arm``: the hand test found something hand-sized
+    over the table, so the list can show that a ball is present, never that
+    one is absent. ``pack``: everything it found is balls this list fitted (a
+    standing rack, a tight cluster), so the list is as good to *show* as one
+    with no arm. What the clock may conclude from it is unchanged: the hand
+    test also misses real arms (a bare forearm is too thin for it), and
+    before a break that miss used to hide behind the rack's own flag
+    (`break_0801b`: a hand on the cue ball, a rack standing, no cue listed).
+    """
 
     balls: tuple[ListedBall, ...]
     arm: bool
+    pack: bool = False
 
     @property
     def labels(self) -> list[str]:
@@ -193,6 +213,7 @@ class BallList:
     def as_dict(self) -> dict[str, Any]:
         return {
             "arm": self.arm,
+            **({"pack": True} if self.pack else {}),
             "balls": [
                 {
                     "label": b.label,
@@ -234,13 +255,14 @@ class BallList:
                     own=int(b["own"]) if "own" in b else None,
                 )
             )
-        return cls(balls=tuple(balls), arm=bool(data["arm"]))
+        return cls(balls=tuple(balls), arm=bool(data["arm"]), pack=bool(data.get("pack", False)))
 
 
 def same_table(a: BallList, b: BallList) -> bool:
-    """Do two lists say the same thing? Same ``arm``, and every ball has a
-    ball with the same label at the same spot in the other, both ways."""
-    if a.arm != b.arm or sorted(a.labels) != sorted(b.labels):
+    """Do two lists say the same thing? Same ``arm`` and ``pack``, and every
+    ball has a ball with the same label at the same spot in the other, both
+    ways."""
+    if (a.arm, a.pack) != (b.arm, b.pack) or sorted(a.labels) != sorted(b.labels):
         return False
 
     def covered(xs: Sequence[ListedBall], ys: Sequence[ListedBall]) -> bool:
@@ -569,6 +591,35 @@ def _listed(readings: Sequence[_Reading]) -> list[ListedBall]:
     return out
 
 
+def _is_pack(
+    intrusions: Sequence[Intrusion],
+    readings: Sequence[_Reading],
+    binary: npt.NDArray[np.uint8],
+    origin: tuple[int, int],
+) -> bool:
+    """Is every hand-scale blob on the frame accounted for by the balls
+    fitted in it (:data:`PACK_COVER`)?
+
+    ``binary`` is the list's own foreground, the one `_candidates` labelled,
+    so a reading's ``component`` names the same blob here."""
+    if not intrusions:
+        return False
+    ox, oy = origin
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary)
+    for blob in intrusions:
+        x, y, w, h = blob.bbox
+        under = labels[max(0, y - oy) : y - oy + h, max(0, x - ox) : x - ox + w]
+        sizes = np.bincount(np.asarray(under, dtype=np.int64).ravel(), minlength=n)
+        sizes[0] = 0  # the cloth
+        component = int(sizes.argmax())
+        if not sizes[component]:
+            return False  # nothing of the list's under it
+        discs = sum(math.pi * r.c.r_pred**2 for r in readings if r.c.component == component)
+        if discs < PACK_COVER * float(stats[component, cv2.CC_STAT_AREA]):
+            return False
+    return True
+
+
 def read_ball_list(bayer: npt.NDArray[np.uint8], reference: ReferenceModel) -> BallList:
     """The ball list of one Bayer frame (BayerRG8, decoded as OpenCV's BG)."""
     gray = bayer_to_gray(bayer)
@@ -593,4 +644,8 @@ def read_ball_list(bayer: npt.NDArray[np.uint8], reference: ReferenceModel) -> B
         table_roi=reference.table_roi,
         chroma=reference.chroma,
     )
-    return BallList(balls=tuple(sorted(balls, key=_strip_key)), arm=bool(intrusions))
+    return BallList(
+        balls=tuple(sorted(balls, key=_strip_key)),
+        arm=bool(intrusions),
+        pack=_is_pack(intrusions, readings, binary, (ox, oy)),
+    )

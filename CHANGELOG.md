@@ -319,6 +319,119 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-18 (checkpoint 135 — the first #66 session; #66):** Steven
+  played two racks for #66 (session `20261119-020755`, 17 minutes, 46 shots)
+  and reported: ball in hand near the end behaved; "I still have to shout
+  extension"; the session restarted itself after he stopped it; the strip
+  does not show the rack until after the break; and the review page had
+  nothing to review. The session had no scratch, so checkpoints 132 and 133
+  were not exercised: 48 settles, no scratch called, no hold, no ball in
+  hand. `session verify`: 196 of 196 decisions reproduced. `detect.py`,
+  `events.py` and `track.py` are untouched.
+  - **"Extension" at a speaking voice** (`audio/`): the mic is amplified
+    40 dB before the recognizer (`listener.MIC_GAIN_DB`). His first call
+    reached the mic at −59.2 dBFS and went unheard; the shouted repeat 2.4 s
+    later, at −56.2 dBFS, was accepted. The camera's input volume is already
+    at maximum, so the level was the problem: the same recording replayed
+    through the recognizer accepts the unheard call at confidence 1.00 from
+    +6 dB up, and at +40 dB it could have been 7.5 dB quieter (9 dB at +46,
+    where the room's noise becomes the limit). All six session recordings on
+    disk, 55 minutes, accept nothing but those two calls at any gain to
+    +46 dB. `peak_dbfs` in the journal stays the mic's own level. Not changed
+    by this: the word must be said alone, and "attention" or "intention",
+    said loud enough, has always read as the keyword (`hardware.md` Part D).
+    No recording has talking or music in it.
+  - **A restart needs something to have moved** (`server/`, `design.md`
+    §16): at 176 s his sleeve rested beside the ball at the side pocket, the
+    tracker lost that ball and reported it vanished, and the clock went from
+    20.5 s to a fresh 30 with no shot. The settle's ball list had read all
+    thirteen balls in place. Now a settle on a frozen countdown in which the
+    tracker saw no ball displaced waits for its list, and if the list reads
+    every ball where it stood, the freeze is released with its time. Journals
+    since #33 hold 17 counted settles of this shape in 947; `report` had been
+    filing them as misses that healed. No real shot on record reads unchanged
+    (corpus: 3 `still` settles, none a stroke; session `20261117-201731`: 0 of
+    33). A settle that still counts while its list reads the table unchanged
+    is a `no_change` review moment, a `session-stats` row, and counts against
+    clock accuracy (this session: 97.83%, not 100%).
+  - **A strike that leaves the rack standing is not the break** (`clock/`,
+    `server/`, `design.md` §17): the clock started 19 s before the first
+    break. The cue ball rolled about 100 mm out of his hand as he set it
+    down, read 6,520 mm/s, and out of IDLE that was the break; he pressed New
+    Rack. Now the strike's settle waits for its list when a rack stood before
+    it, and if every numbered ball of that rack is read in place the count is
+    taken back and the clock waits for the break again.
+  - **`break_0801b` was never a break.** The corpus pinned it as "a clean
+    7104 mm/s break, exactly one shot". Its frames show the rack untouched
+    for 20.5 s and his hand carrying the cue ball: the flag of 2026-08-01 was
+    this same false start, and the battery had required it to count. Its
+    truth is corrected and it is §17's gate (`FALSE_STARTS`): it ends IDLE
+    with nothing counted, and no other clip may have a count taken back. All
+    six real break clips count once, as before.
+  - **Replayed with both rules, the session differs from live in exactly
+    those two decisions**: no clock start at 58 s, no restart at 176 s (rack
+    1 counts 20 shots, not 21; the next stroke fires at 17.45 s, not a
+    restarted 26.95 s), and `report` shows no missed strike in it.
+  - **The list wait is 0.3 s, was 0.15 s** (`SETTLE_LIST_WAIT_S`): measured
+    live, settle to list is 74 ms at the median and 71–174 ms with 13 or more
+    balls listed; 4 of 81 lists took longer than 0.15 s, the 176 s one among
+    them. This is #64's wait too: on a full table, where a break scratch
+    leaves ball in hand, 2 of 8 lists would have come too late and that
+    placing would have restarted the countdown.
+  - **The Session key answers the face it was pressed on** (`deck/daemon.py`,
+    `hardware.md` Part C; `layout.py` unchanged): stopping runs OBS's
+    teardown and the TV's power-off on the deck's own loop, about 4.5 s that
+    night, with the key left on `HOLD…`. The presses he made at a key that
+    looked dead were read afterwards, against `START`, and the first started
+    a second session. The key now says `STOPPING…` when the hold lands, and
+    a press older than the face it meets is dropped.
+  - **The strip shows a standing rack** (`vision/ball_list.py`, `design.md`
+    §13): a rack is one hand-sized blob, the hand test flagged it, and the
+    strip (arm-free lists only) sat on a mid-racking read until the break:
+    8 of 15 balls for 75 s, then 10 of 15 for 35 s. A list now also says when
+    every hand-sized blob is its own fitted balls (`pack`; 218 blobs
+    measured, racks 1.02–1.10 covered, hands at most 0.62), and the strip
+    shows those. `arm` and everything the clock reads from a list are
+    unchanged: `break_0801b` showed the rack's flag had been covering for a
+    hand the test misses.
+  - **The review page no longer waits for the archive pass**
+    (`review/app.py`): moments were written after the parity check, up to 15
+    minutes plus a whole-session replay after a stop; he opened the page 11
+    minutes after the session and found nothing. Until `moments.json` exists
+    the page finds them from the journal, same ids, so verdicts carry over.
+  - **The archive agent would have stranded a long session**
+    (`archive.py`): each hook was capped at 10 minutes, and under launchd's
+    Background scheduling the parity check took 384 s on this 17-minute
+    session (about a minute from a terminal). Past ~27 minutes of play it
+    would have been killed on every pass and the session never archived. The
+    cap is now the session's own length when that is longer. The log reader
+    also stopped decompressing three arrays per frame: a replay of this
+    session went from 62 s to 36 s, output byte-identical.
+  - **`review check` was red on main** for three verdicts Steven marked
+    right: checkpoint 132 added a `scratch_list` line per settle, and a kind
+    the live journal never wrote read as a changed decision. `compare` now
+    leaves such kinds out; what newer logic did to the clock still shows in
+    the kinds both journals hold. The check reads: 3 hold, 1 changed (the
+    2026-11-17 hand adjustment #64 fixed).
+  - **`report`:** a session with no scratch read "0 (upper bound: pre-#26
+    journal), 1 per 46 shots"; it reads "0".
+  - **Measured, not changed:** detect rate is unchanged at equal ball counts
+    (6–9 balls 154.4 Hz, was 140.9–153.3; 13 or more, a full rack, 129.5 Hz:
+    the low end of this session is its two full racks, which no earlier
+    logged session had), 0 dropped frames. The session log weighs 3.3 GB per
+    hour of play, not the projected 2.4: 459 MB of this session's 955 MB is
+    the frame kept with each of 142 rest lists, 63 of them written while
+    racking. Lists: no number given twice; the 14 flickered between `14` and
+    `?` at rest (5 of the 6 "numbers back"), and the 10 dropped off one list
+    for 12.7 s.
+  - **Ball in hand near the end** behaved because nothing fired, not because
+    anything recognised it: there was no scratch (a stick shot that touched
+    nothing), his hand covered the cue ball for the whole of both placings,
+    and a ball the tracker never sees moving cannot start a shot.
+  - Verified: unit + cached corpus battery 878 passed (36 s; the corpus is
+    graded; no cold run, the detector and its config are untouched, so every
+    cached detection is current); `session replay` of `20261119-020755` and
+    `20261117-201731`; `review check`; ruff, mypy --strict clean.
 - **2026-11-17 (checkpoint 134 — the clock buzzes at zero; #68):** time-up
   is a sound at the moment of zero, and the time on zero is fixed. Clock and
   overlay; detection is unchanged.

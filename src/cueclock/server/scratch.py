@@ -1,5 +1,6 @@
-"""The ball list's say in the scratch hold (#63, docs/design.md §14) and in
-ball in hand after a scratch (#64, §15).
+"""The ball list's say in the scratch hold (#63, docs/design.md §14), in
+ball in hand after a scratch (#64, §15), in whether a settle moved anything
+at all (§16) and in whether a break broke the rack (§17).
 
 Today's logic raises a scratch candidate only when the tracker loses the cue
 while it is moving inside a pocket zone. The ball list asks a different
@@ -34,6 +35,10 @@ OBJECT_MOVED_PX = 3.0
 # never imports the vision stack; a unit test keeps the two equal). The five
 # recorded hand moves of the cue travel 18-288 mm, the five scratches 474-1711.
 TRAVEL_MIN_MM = 400.0
+
+# The fewest numbered balls a list must hold to stand for a rack: nine-ball's,
+# the smallest rack in `clock/rulesets.py`.
+RACK_MIN_BALLS = 9
 
 # Written at-rest lists kept to find the one before a shot. Lists are written
 # only when they change, about one a second at most, so this is minutes of
@@ -107,6 +112,13 @@ class RestLists:
                 return found
         return None
 
+    def last_before(self, t: float | None) -> BallList | None:
+        """The newest list read before ``t``, an arm over the table or not."""
+        for read_t, found in reversed(self._reads):
+            if t is None or read_t < t:
+                return found
+        return None
+
     def before(self, t: float | None) -> tuple[BallList | None, bool]:
         """``rest`` — the newest arm-free list read before ``t`` — and whether
         the cue was on the table then: ``rest`` holds exactly one cue, or a
@@ -168,6 +180,55 @@ def _cue(found: BallList) -> ListedBall | None:
     return cues[0] if len(cues) == 1 else None
 
 
+def nothing_moved(now: BallList, rest: BallList | None, cue_before: bool) -> bool:
+    """Did this settle leave the table exactly as it was (§16)?
+
+    The cue stood on the table before the motion and stands within
+    OBJECT_MOVED_PX of the same spot now, and every object ball on ``rest``
+    (the newest arm-free list before the motion) has one within
+    OBJECT_MOVED_PX on ``now`` and the reverse. Every ball has to be read in
+    place: an arm hiding one, a hand read as a ball, a second cue or no list
+    to compare with all answer False, and the settle counts as before.
+
+    This is what the tracker cannot say. A sleeve beside a ball swallows its
+    blob, the track dies and the settle reports the ball vanished, the same
+    report a pot makes; the list reads the pixels of the settle's own frame
+    and finds the ball where it was (session 20261119-020755, 176 s).
+    """
+    if rest is None or not cue_before or object_moved(rest, now):
+        return False
+    a, b = _cue(rest), _cue(now)
+    if a is None or b is None:
+        return False
+    return math.hypot(a.cx - b.cx, a.cy - b.cy) <= OBJECT_MOVED_PX
+
+
+def holds_rack(found: BallList | None) -> bool:
+    """Does this list hold enough numbered balls to stand for a rack?"""
+    return found is not None and sum(b.number is not None for b in found.balls) >= RACK_MIN_BALLS
+
+
+def rack_stands(now: BallList, before: BallList | None) -> bool:
+    """Is the rack that stood before a strike still standing after it (§17)?
+
+    ``before`` (the newest list read before the strike, an arm in it or not)
+    holds a rack, and every numbered ball on it has a ball within
+    OBJECT_MOVED_PX on ``now``. One way only, and the cue is not looked at:
+    what is new on ``now`` (the cue put down somewhere else, a hand read as a
+    ball) says nothing about the rack. A break moves the rack; a cue ball set
+    down, rolled out of a hand or carried does not. Anything short of every
+    ball read in place answers False, and the strike stands as the break it
+    was taken for.
+    """
+    if before is None or not holds_rack(before):
+        return False
+    return all(
+        any(math.hypot(b.cx - n.cx, b.cy - n.cy) <= OBJECT_MOVED_PX for n in now.balls)
+        for b in before.balls
+        if b.number is not None
+    )
+
+
 def table_row(
     now: BallList, rest: BallList | None, cue_before: bool, placing: bool, call: str
 ) -> str:
@@ -193,7 +254,6 @@ def table_row(
         return "other"
     if object_moved(rest, now):
         return "shot"
-    a, b = _cue(rest), _cue(now)
-    if a is None or b is None:
+    if _cue(rest) is None or _cue(now) is None:
         return "other"
-    return "cue_moved" if math.hypot(a.cx - b.cx, a.cy - b.cy) > OBJECT_MOVED_PX else "still"
+    return "still" if nothing_moved(now, rest, cue_before) else "cue_moved"

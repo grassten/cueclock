@@ -196,6 +196,39 @@ def test_scratch_adjudication_records_are_tallied(tmp_path: Path) -> None:
     assert (report.scratch_candidates, report.scratch_refuted, report.scratches) == (2, 1, 1)
 
 
+def test_a_session_with_no_scratch_says_zero_and_nothing_else(tmp_path: Path) -> None:
+    """No scratch and no candidate is a clean session, not a pre-#26 journal:
+    session 20261119-020755 printed "0 (upper bound: pre-#26 journal)" and
+    "1 per 46 shots"."""
+    text = format_session(build(journal(tmp_path, shot(10.0, 1), settle(14.0, 1))))
+    assert "  scratches          0\n" in text + "\n"
+    assert "upper bound" not in text and "1 per" not in text
+    old = journal(
+        tmp_path,
+        shot(10.0, 1),
+        settle(14.0, 1),
+        {"kind": "vision_scratch", "t": 15.0, "rack_shots": 1},
+        name="session-old.jsonl",
+    )
+    text = format_session(build(old))
+    assert "upper bound: pre-#26 journal" in text and "1 per 1 shots" in text
+
+
+def test_a_freeze_released_because_nothing_moved_is_named(tmp_path: Path) -> None:
+    """§16's refusal reads in words, like the other two."""
+    path = journal(
+        tmp_path,
+        shot(10.0, 1),
+        settle(14.0, 1),
+        {"kind": "shot_provisional", "t": 20.0, "state": "MOTION", "rack_shots": 1},
+        {"kind": "shot_provisional_reverted", "t": 20.6, "reason": "nothing_moved"},
+        {**settle(20.6, 1), "rejected": "nothing_moved"},
+    )
+    report = build(path)
+    assert report.settles_rejected_by_reason == {"nothing_moved": 1}
+    assert "1 nothing moved (the ball list read every ball in place)" in format_session(report)
+
+
 # ---------- robustness: the journal is written by a process that gets killed ----------
 
 

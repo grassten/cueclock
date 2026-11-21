@@ -34,7 +34,7 @@ from cueclock.deck.layout import (
     SessionToggle,
 )
 from cueclock.deck.recal import Recalibrator
-from cueclock.deck.session import SessionManager
+from cueclock.deck.session import SessionManager, SessionState
 
 REPLAY_KEY = next(k for k in LAYOUT if isinstance(k.action, ReplayShow))
 HOLD_S = REPLAY_KEY.action.hold_s if isinstance(REPLAY_KEY.action, ReplayShow) else 0.6
@@ -503,3 +503,113 @@ def test_session_start_is_refused_while_the_camera_is_recalibrating(
     deck.release(SESSION_KEY.index)
     time.sleep(0.5)
     assert spawned == []  # not even the camera probe: the start never began
+
+
+# --- the Session key answers the face it was pressed on (2026-11-18) ---
+#
+# Stopping a session is seconds of work done on the loop itself (OBS's
+# recording, its outputs, its quit, then the TV). Presses made in that time
+# used to be read afterwards, against the key's new face: Steven held the key
+# to stop, saw it sit on HOLD… for 4.5 s, pressed again, and the deck started
+# a second session with the first of those presses.
+
+SESSION_HOLD_S = SESSION_KEY.action.hold_s if isinstance(SESSION_KEY.action, SessionToggle) else 1.0
+
+
+class SlowStopSession:
+    """A session whose stop holds the loop the way the real one does."""
+
+    def __init__(self, stop_s: float) -> None:
+        self.state = SessionState.ON
+        self.stop_s = stop_s
+        self.starts = 0
+        self.stopping = threading.Event()
+        self.stopped = threading.Event()
+
+    def tick(self, server_up: bool) -> SessionState:
+        return self.state
+
+    def stop(self) -> None:
+        self.stopping.set()
+        time.sleep(self.stop_s)
+        self.state = SessionState.OFF
+        self.stopped.set()
+
+    def start(self) -> None:
+        self.starts += 1
+        self.state = SessionState.STARTING
+
+
+@pytest.fixture
+def stopping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[FakeDeck, SlowStopSession, list[str]]]:
+    """A `_loop` on a running session, and every face the Session key was given."""
+    _STOP.clear()
+    monkeypatch.setattr(client, "get_json", _stoppable({"state": "RUNNING", "mode": "match"}))
+    painted: list[str] = []
+
+    def set_key(_deck: object, index: int, face: object) -> None:
+        if index == SESSION_KEY.index:
+            painted.append(getattr(face, "text", ""))
+
+    monkeypatch.setattr(daemon, "_set_key", set_key)
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)
+    session = SlowStopSession(stop_s=0.8)
+    deck = FakeDeck()
+    thread = _start_loop(deck, session)  # type: ignore[arg-type]
+    yield deck, session, painted
+    _stop(thread)
+
+
+def test_presses_made_while_a_stop_runs_do_not_start_a_session(
+    stopping: tuple[FakeDeck, SlowStopSession, list[str]],
+) -> None:
+    deck, session, painted = stopping
+    deck.press(SESSION_KEY.index)  # hold to stop
+    assert session.stopping.wait(SESSION_HOLD_S + SETTLE_S), "the hold never stopped it"
+    assert painted[-1] == SessionState.STOPPING.face  # it said so before it went quiet
+    deck.release(SESSION_KEY.index)
+    for _ in range(3):  # "is it stuck?"
+        deck.press(SESSION_KEY.index)
+        deck.release(SESSION_KEY.index)
+    assert session.stopped.wait(SETTLE_S)
+    time.sleep(0.6)  # the loop reads everything that queued up
+    assert session.starts == 0
+    assert session.state is SessionState.OFF
+
+    deck.press(SESSION_KEY.index)  # and a press on START still starts
+    deck.release(SESSION_KEY.index)
+    deadline = time.monotonic() + SETTLE_S
+    while session.starts == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert session.starts == 1
+
+
+def test_a_press_on_a_face_the_session_has_already_left_does_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The key is repainted on the poll. Between polls the session can move on
+    (a `run` that died): a press then meets START on a key still reading ON."""
+    _STOP.clear()
+    monkeypatch.setattr(client, "get_json", _stoppable({"state": "RUNNING", "mode": "match"}))
+    monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
+    monkeypatch.setattr(daemon, "POLL_S", 0.7)
+    session = SlowStopSession(stop_s=0.0)
+    deck = FakeDeck()
+    thread = _start_loop(deck, session)  # type: ignore[arg-type]
+    try:
+        session.state = SessionState.OFF  # the key still reads ON until the next poll
+        deck.press(SESSION_KEY.index)
+        deck.release(SESSION_KEY.index)
+        time.sleep(0.4)
+        assert session.starts == 0
+        time.sleep(0.8)  # a poll has painted START by now
+        deck.press(SESSION_KEY.index)
+        deck.release(SESSION_KEY.index)
+        deadline = time.monotonic() + SETTLE_S
+        while session.starts == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert session.starts == 1
+    finally:
+        _stop(thread)

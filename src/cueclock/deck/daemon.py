@@ -282,8 +282,13 @@ def _visible_key(index: int, state: DeckState) -> Key | None:
 def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | None = None) -> None:
     """Poll + dispatch forever; raises TransportError on unplug, KeyboardInterrupt on stop."""
     recal = recal if recal is not None else Recalibrator()
-    events: queue.Queue[tuple[int, bool]] = queue.Queue()
-    deck.set_key_callback(lambda _deck, k, pressed: events.put((int(k), bool(pressed))))
+    # Each key event with the moment it happened: the loop can be busy for
+    # seconds (a session stop), and a press must be judged against what the
+    # key said when the finger came down, not when the loop got to it.
+    events: queue.Queue[tuple[int, bool, float]] = queue.Queue()
+    deck.set_key_callback(
+        lambda _deck, k, pressed: events.put((int(k), bool(pressed), time.monotonic()))
+    )
 
     playing: replay.Playing | None = None  # a replay currently on the TV
     showing: bracket.Showing | None = None  # the bracket is on the TV
@@ -320,6 +325,8 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
     _draw_all(deck, state)
     flashes: dict[int, float] = {}
     holds: dict[int, tuple[float, str]] = {}  # index -> (deadline, kind)
+    # What the Session key says, and since when (see the Session branch below).
+    session_face, session_face_since = state.session_face, time.monotonic()
 
     def begin_replay(index: int, span: replay.Span) -> None:
         """Cue a replay and repaint what it changed — tap and hold share this."""
@@ -382,6 +389,11 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 continue
             del holds[index]
             if kind == "session":
+                # Say it before doing it. `stop()` returns only once OBS is
+                # down, and the poll behind it waits on the TV: seconds in
+                # which nothing here repaints. Left on HOLD… the key looked
+                # dead for 4.5 s on 2026-11-18, and got pressed again.
+                _set_key(deck, index, faces.Face(SessionState.STOPPING.face))
                 session.stop()
                 state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes))
@@ -411,8 +423,12 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 del flashes[index]
                 key = _visible_key(index, state)
                 _set_key(deck, index, key.face(state) if key else faces.Face())
+        if state.session_face != session_face:
+            # Stamped after everything above, so any press still waiting in
+            # the queue from a busy stretch is older than the face it met.
+            session_face, session_face_since = state.session_face, time.monotonic()
         try:
-            index, pressed = events.get(timeout=0.25)
+            index, pressed, pressed_at = events.get(timeout=0.25)
         except queue.Empty:
             continue
 
@@ -439,6 +455,19 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             if not pressed:
                 if holds.pop(index, None) is not None:
                     _set_key(deck, index, key.face(state))
+            elif pressed_at < session_face_since or sess_state.face != session_face:
+                # The finger came down on a face the key no longer shows: it
+                # was pressed while the loop was busy changing the session, or
+                # the session changed since the last poll painted it. Acting
+                # on it would do what the *new* face offers, which nobody
+                # asked for. On 2026-11-18 three presses made during a stop
+                # were read once the key said START, and the first of them
+                # started a second session. Show the truth and do nothing.
+                print(
+                    f"session: press ignored — the key had changed to {sess_state.name}", flush=True
+                )
+                state = poll()
+                _set_key(deck, index, key.face(state))
             elif sess_state is SessionState.ON:
                 holds[index] = (time.monotonic() + key.action.hold_s, "session")
                 _set_key(deck, index, faces.Face(HOLD_FACE))
@@ -446,6 +475,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 # A failed start is retried by pressing it again — `start()`
                 # clears the reason and re-runs the camera probe, so the press
                 # after the cable goes back in just works.
+                _set_key(deck, index, faces.Face(SessionState.STARTING.face))
                 session.start()
                 recal.result = None  # read by now; the next night starts clean
                 state = poll()

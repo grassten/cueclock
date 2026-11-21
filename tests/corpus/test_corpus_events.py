@@ -309,16 +309,19 @@ EXPECTED: dict[
     # 10.43 s remaining for 33 s, absorbing the next real shot. Pins
     # fire-latches-motion: exactly one shot AND its settle.
     "lone_roller_0801": (1, 0, 1, 1),
-    # break_0801b: a clean 7104 mm/s break. Live, a scatter ball reborn at
-    # 906 mm/s fired a newborn ShotTaken 2.2 s into the scatter — the
-    # roster movers had died in streak churn (mover clock stale, zero-ball
-    # frames vacuously satisfied the pickup guards and unlatched the
-    # episode). Pins the latched-table guard on the birth paths: exactly
-    # one shot. Settles unpinned: the in-window settle lands in a
-    # mid-scatter detection desert (balls still rolling, cold-only,
-    # harmless post-break) — deferring it further would drop it out of the
-    # window entirely.
-    "break_0801b": (1, 0, None),
+    # break_0801b: NOT a break, and filed as one for three months. The
+    # nine-ball rack stands untouched through all 20.5 s; at 14.6 s Steven
+    # picks the cue ball up from the head of the table, carries it round the
+    # left rail and sets it down again at 18.5 s. The 7104 mm/s "strike" is
+    # his hand taking the ball. He flagged it because the clock started
+    # before he broke; the triage read the journal line (a fire out of IDLE
+    # at break speed) and never looked at the frames. Frames read
+    # 2026-11-18, after the same false start in session 20261119-020755.
+    # The event stream is unasserted except through its golden: the fire
+    # itself is the tracker's and still happens (what it pinned, exactly one
+    # fire, the golden still pins). What the clock must do with it is in
+    # FALSE_STARTS below.
+    "break_0801b": (None, 0, None),
     # pair_strikes: two real strikes 9 s apart, each launched from a rest
     # against/near another ball. Shot 1's original track died mid-streak
     # while its continuation was untracked for a beat — the pickup discard
@@ -873,6 +876,29 @@ HAND_ROWS: dict[str, list[tuple[float, str, bool]]] = {
 }
 
 
+# §17's gate: a strike out of an armed rack that left the rack standing is
+# not the break. The clock takes the count back at the named settle and ends
+# the clip where it began: IDLE, nothing counted, waiting for the break.
+FALSE_STARTS: dict[str, float] = {
+    "break_0801b": 17.16,  # the cue ball carried by hand, the rack untouched
+}
+
+
+def _assert_false_starts(name: str, timeline: "ClockTimeline") -> None:
+    settle_t = FALSE_STARTS.get(name)
+    if settle_t is None:
+        # Everywhere else nothing is ever taken back: a real break stays counted.
+        taken_back = [round(m.t, 2) for m in timeline.marks if m.kind == "uncount"]
+        assert not taken_back, f"{name}: a counted break was taken back at {taken_back}"
+        return
+    back = [m.t for m in timeline.marks if m.kind == "uncount"]
+    assert len(back) == 1 and abs(back[0] - settle_t) <= 0.4, (
+        f"{name}: the false start was taken back at {[round(t, 2) for t in back]}, "
+        f"expected once at the {settle_t:.2f} s settle"
+    )
+    assert timeline.final == ("IDLE", 0), f"{name}: the clip left the clock at {timeline.final}"
+
+
 def _assert_hand_rows(name: str, timeline: "ClockTimeline") -> None:
     """#64: placing during ball in hand counts nothing; nothing else moved."""
     expected = HAND_ROWS.get(name, [])
@@ -971,6 +997,7 @@ def test_corpus_clip(name: str) -> None:
         _assert_clock_outcome(name, truth, timeline)
     _assert_list_verdicts(name, timeline)
     _assert_hand_rows(name, timeline)
+    _assert_false_starts(name, timeline)
 
     # ---- the golden: the record, and the gate only where nothing else is ----
     #

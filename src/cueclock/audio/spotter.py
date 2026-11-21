@@ -5,7 +5,10 @@ The recognizer is injected (any object with vosk's ``AcceptWaveform``/
 a scripted fake. The accept logic is the v1 prototype's proven listener,
 ported as-is (docs/hardware.md Part D): finals only, exact keyword match
 (a back-to-back repeat counts as one),
-per-word confidence >= 0.9, 2 s cooldown.
+per-word confidence >= 0.9, 2 s cooldown. One addition (2026-11-18): the
+samples are amplified before the recognizer hears them (``gain_db``), because
+the side camera's mic delivers speech far below the level the model was
+trained on — the number and its measurement live in `listener.MIC_GAIN_DB`.
 """
 
 from __future__ import annotations
@@ -52,11 +55,14 @@ class ExtensionSpotter:
         cooldown_seconds: float = 2.0,
         min_confidence: float = 0.9,
         keyword: str = "extension",
+        gain_db: float = 0.0,
     ) -> None:
         self._rec = recognizer
         self.cooldown_seconds = cooldown_seconds
         self.min_confidence = min_confidence
         self.keyword = keyword
+        # Linear factor applied to every sample on its way to the recognizer.
+        self._gain = 10.0 ** (gain_db / 20.0)
         # None (not 0.0) so the first fire is never suppressed regardless of
         # the caller's clock epoch — the only deliberate change from v1.
         self._last_fire: float | None = None
@@ -68,10 +74,12 @@ class ExtensionSpotter:
         self.last_final = None
         samples = np.frombuffer(chunk[: len(chunk) // 2 * 2], dtype=np.int16)
         if samples.size:
+            # The peak is the mic's own level, before the gain: it is what
+            # says whether a call was too quiet for the microphone.
             self._peak = max(self._peak, int(np.abs(samples.astype(np.int32)).max()))
         # Only act on finalized results — partials are noisy and misfire on
         # words that merely start like "extension" (v1 lesson).
-        if not self._rec.AcceptWaveform(chunk):
+        if not self._rec.AcceptWaveform(amplified(chunk, self._gain)):
             return False
         res = json.loads(self._rec.Result())
         text = str(res.get("text", "")).strip()
@@ -106,6 +114,20 @@ class ExtensionSpotter:
             self._last_fire = now
         self.last_final = Final(text, confidence, accepted, reason, peak_dbfs)
         return accepted
+
+
+def amplified(chunk: bytes, gain: float) -> bytes:
+    """An int16 PCM chunk made ``gain`` times louder, clipped at full scale.
+
+    Clipping is deliberate and harmless here: at the listener's gain the only
+    things loud enough to clip are ball impacts and the TV's own cues, never
+    a voice from across the table.
+    """
+    if gain == 1.0:
+        return chunk
+    even = len(chunk) // 2 * 2
+    samples = np.frombuffer(chunk[:even], dtype=np.int16).astype(np.float64) * gain
+    return np.clip(np.rint(samples), -32768, 32767).astype(np.int16).tobytes() + chunk[even:]
 
 
 def match_input_device(name: str, inputs: Sequence[tuple[int, str]]) -> int | None:

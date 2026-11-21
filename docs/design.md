@@ -889,6 +889,30 @@ unchanged; corpus rests 2 → 0 duplicates, 3/615 unmoved flips and 8/8 full
 tables unchanged. Measurements and scripts: issue #65 and
 `~/cueclock-research/65-labels/`.
 
+**A standing rack is not an arm (2026-11-18, checkpoint 135).** The hand
+test asks whether a solid blob too fat to be a cue stick is on the cloth,
+and a tight rack is one. So every list read with a rack standing came back
+`arm`, the strip (which shows only arm-free lists) never showed a rack, and
+before each break it sat on whatever it had read mid-racking: 8 of 15 balls
+for 75 s and 10 of 15 for 35 s in session 20261119-020755. A list now also
+says when every hand-sized blob on the frame is accounted for by the balls
+fitted in it: `pack`. The share of a blob's area covered by its fitted
+balls' discs, over all 218 hand-sized blobs in the stills of four sessions:
+a rack standing alone 1.02–1.10 (19 blobs), a rack with hands or the
+triangle on it 0.50–0.62, any other arm or hand at most 0.43; `PACK_COVER`
+is 0.8, the middle of the empty band. The strip shows a list that is
+arm-free or a pack.
+
+`arm` itself is unchanged, and so is everything the clock concludes from a
+list. The first build of this simply stopped calling a rack an arm, and the
+corpus refused it: in `break_0801b` a hand is on the cue ball beside a
+standing rack, the hand test misses the bare forearm (too thin for it), and
+the only thing that had kept that list from saying "no cue, no arm, so a
+scratch" was the rack's own flag. The hand test misses real arms; where a
+rack stands, its flag was covering for that. Known and left: fingers on the
+rail can still be read as one or two unnumbered balls for a second, which a
+pack list now shows on the strip (one such list in that session).
+
 ## 14. The ball list's say in the scratch hold (issue #63, 2026-11-17)
 
 Steven: the 5 s post-scratch hold "almost never works". When today's logic
@@ -940,7 +964,9 @@ today's logic unchanged, and the list, 20–75 ms later, calls, clears or
 leaves it. So no settle reacts later than before, and "no list" is today's
 behaviour by construction. The cost is that a candidate the list clears
 holds the countdown for those 20–75 ms, and a list-called hold starts that
-much after the settle. A list that arrives after the next motion began is
+much after the settle. (20–75 ms is the fit alone. Live, from the settle to
+its list reaching the hub, the first two logged sessions measured a median
+of 74 ms and up to 174 ms on a full table: §16.) A list that arrives after the next motion began is
 journaled `no_list` and judges nothing. Lists reach the hub from the run
 loop's own thread, posted behind the frame calls already dispatched;
 `balls.jsonl` records that frame (`after`), and `session replay` feeds each
@@ -1012,8 +1038,9 @@ wall, the count, pace and rack un-happening). So during ball in hand a settle
 with an arm-free list since the scratch and travel under 400 mm holds its
 clock decision until its list arrives. The clock meanwhile stays as it was.
 Anything else reaching the hub first (the next motion or strike, a
-candidate, a refutation, any command) or `SETTLE_LIST_WAIT_S` (0.15 s, twice
-the slowest fit) decides it as before. The decision is made as of the
+candidate, a refutation, any command) or `SETTLE_LIST_WAIT_S` (0.3 s since
+checkpoint 135; it was 0.15 s, which a quarter of the lists read on a full
+table missed, §16) decides it as before. The decision is made as of the
 settle's own time, so a countdown it starts runs from the settle. Outside
 ball in hand no settle waits. The clock refuses the suppression when a GRACE
 or IDLE fire already committed a shot this cycle; the settle then counts
@@ -1059,3 +1086,134 @@ and a `cue_only` moment for every counted open-play settle that moved only
 the cue, so the open-play case can be labelled hand or stick at the desk.
 What would send this back: a placing that was a real shot (the worst
 outcome), or an `in_hand_shot` that was still placing.
+
+## 16. A freeze on a table where nothing moved is not a shot (2026-11-18)
+
+The first session played for #66 (20261119-020755, 46 shots) held one
+restart with no shot behind it. At 176 s Steven got down over the bottom
+rail with 20.5 s left; his sleeve came to rest beside the ball standing at
+the side pocket. The ball's blob merged into the arm's and was thrown out as
+hand-scale, its last observation sat 30 mm off (enough to latch motion and
+freeze the countdown), the track died, and the settle reported one ball
+vanished beside a pocket. To the tracker that is a pot. The settle counted,
+and the clock showed a fresh 30 s. `report` has always filed these as a
+missed strike that healed itself: 48 of the 947 counted settles in the
+journals since #33 had no strike, and in 17 of those no ball was seen to move
+at all.
+
+**The ball list can tell the two apart, and the tracker cannot.** The list
+read at that settle (with his arm in the frame) found the cue and all twelve
+object balls within 3 px of where the last arm-free list had them: the
+journal already said `row: still`, 174 ms after the count.
+
+**The rule.** A settle waits for its list, exactly as a placing does in §15,
+when the countdown is frozen on a provisional (MOTION), the tracker's
+rearrangement shows no ball displaced (`moved == 0`: balls it lost or found
+are not evidence either way), it is not the pipeline's backstop settle, and
+an arm-free list from before the motion exists. If the list then reads the
+table unchanged (`scratch.nothing_moved`: the cue within `OBJECT_MOVED_PX` of
+its spot, every object ball matched both ways) the freeze is released with
+the time it froze at and nothing is counted. Anything else decides the
+settle as before: a ball gone or moved on the list, a cue that moved, an arm
+hiding a ball, a hand read as a ball, two cues, no list in
+`SETTLE_LIST_WAIT_S`, or any other hub call arriving first.
+
+It is #37's refusal ("the table is provably unchanged") with a witness that
+knows the balls apart, and it fails the same way: every doubt counts the
+shot. #37 itself is untouched and still decides at once when the tracker's
+own layout is unchanged.
+
+**The wait is now 0.3 s** (it was 0.15 s). 0.15 s was twice the slowest fit
+in #63's brief, which left out the wait for a detect worker. Hub time from
+settle to list over the 81 settles of the two logged sessions: median 74 ms,
+90th percentile 128 ms, 71–174 ms with 13 or more balls listed (median 142).
+Four lists took longer than 0.15 s, all with nine or more balls listed, the
+176 s one among them. That matters most for §15: a break scratch leaves ball
+in hand on a full table, where two of the eight lists measured came later
+than 0.15 s, and a placing whose list is late is decided without it and
+restarts the countdown (`late`). 0.3 s is 1.7 times the slowest list of a
+healthy session (the one slower list, 537 ms, came in a stretch of session
+20261117-201731 where the detect rate had fallen to 68–89 Hz). Waiting costs
+no clock time: the decision is made as of the settle's own instant.
+
+**Evidence.** No real shot on record reads unchanged. The corpus has three
+settles whose list reads `still`: two are the phantoms #37 already refuses
+(`parked_vote_strike_0801`, `phantom_still_down_0811`) and the third is the
+settle that opens `settle_stall_0801` before its one stroke. Session
+20261117-201731 has none in 33 settles. Replayed through this rule,
+20261119-020755 differs from its live journal in one decision: the 176 s
+settle is refused, the countdown resumes at 20.44 s, the stroke three
+seconds later fires at 17.45 s instead of a restarted 26.95 s, and rack 1
+counts 20 shots instead of 21. Every stroke of that session then has its
+own strike: the "missed strike" was never a stroke.
+
+**Journal.** The settle record carries `held` and `rejected:
+nothing_moved`; a `shot_provisional_reverted` line carries the same reason;
+the `scratch_list` line reads `row: still`, `counted: false`.
+
+**Known limits.** A settle the tracker saw a ball move in is not held (a
+sleeve can also drag a merged blob without killing the track; none is on
+record). A list later than the wait counts as before. Both leave a
+`scratch_list` line with `row: still` and `counted: true`, which is its own
+review moment (`no_change`) and its own `session-stats` row ("Restarted with
+nothing moved", counted against clock accuracy), so the next one is seen
+rather than filed as a healed miss.
+
+## 17. A strike that leaves the rack standing is not the break (2026-11-18)
+
+In the same session the clock started 19 s before the first break. Steven
+set the cue ball down for the break and it rolled about 100 mm out of his
+hand in view of the camera; the tracker read a strike at 6,520 mm/s; and out
+of IDLE any strike over the 2,500 mm/s floor is the break
+(`clock/modes.py`). He pressed New Rack. One more start in the 49 racks
+journaled since mid-August reads the same way (2026-08-25: a strike just
+over the floor, nothing rearranged, New Rack 15 s later).
+
+The corpus already held one, filed as its opposite. `break_0801b` was
+flagged on 2026-08-01 and pinned as "a clean 7104 mm/s break, exactly one
+shot". Its frames show a nine-ball rack standing untouched for all 20.5 s
+while he picks the cue ball up at 14.6 s, carries it round the rail and sets
+it down at 18.5 s. The 7,104 mm/s was his hand taking the ball, he pressed
+Flag 13 s after the clock had started on it, and for three months the
+battery required the false start to count. Read the frames before pinning a
+flag.
+
+**The rule.** The strike still takes the clock out of IDLE at once, as it
+must for a real break. Its settle then waits for its ball list (the wait of
+§16) when the newest list read before the strike holds a rack: at least
+nine numbered balls, the smallest rack in the rulesets, with or without an
+arm in that frame. If every numbered ball of that list has a ball within
+`OBJECT_MOVED_PX` on the settle's list (`scratch.rack_stands`), the rack did
+not move and the strike was not the break: `ShotClock.break_reverted` puts
+the clock back to IDLE with nothing counted, and the real break anchors the
+rack when it comes. The comparison runs one way and ignores the cue, so the
+cue ball put down somewhere else, a hand on it, or a hand read as a ball
+changes nothing; a rack ball hidden or moved by 3 px or more, no rack on
+the list before, or a list later than the wait, and the strike stands as
+the break exactly as before.
+
+**Why speed and timing cannot do this.** Both false starts read break
+speed. A real break's settle has come as early as 1.4 s after its strike
+(#59) and a false start's as late as 2.6 s (`break_0801b`). The tracker has
+nothing to offer at these settles: a standing rack is one rejected blob, so
+its baseline is empty (`baseline 0`, `involved 0`, the same reading a real
+break gives when every pack track dies at impact).
+
+**Evidence.** Every one of the six real break clips still counts once; the
+corpus gate (`FALSE_STARTS`, `test_corpus_events.py`) requires `break_0801b`
+to end IDLE with nothing counted and requires that no other clip ever has a
+count taken back. Session 20261119-020755 replayed: the 58 s strike is
+taken back 0.56 s later, the clock never starts, and the real break 19 s
+later counts as the break with its 60 s window. With §16 that is the whole
+difference from the live journal, two decisions.
+
+**Journal.** `shot_provisional_reverted` with reason `rack_standing` (the
+same record every other not-a-shot verdict writes, so `report` and the
+review page need nothing new), and `rejected: rack_standing` on the settle
+record, logged with the clock already back in IDLE.
+
+**Known limits.** It needs the rack on a written list before the strike; a
+strike in the first second after the hands leave a rack that no list has
+read yet stands as today. A break that leaves all nine or more rack balls
+within 3 px of where they stood would be taken back; that is a cue ball
+that never reached the rack.

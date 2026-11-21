@@ -14,7 +14,7 @@ import time
 import numpy as np
 import pytest
 
-from cueclock.audio.listener import ExtensionListener
+from cueclock.audio.listener import MIC_GAIN_DB, ExtensionListener
 from cueclock.audio.spotter import ExtensionSpotter, match_input_device
 
 
@@ -131,6 +131,52 @@ def test_empty_final_is_reported_with_its_peak_level() -> None:
     assert spotter.feed(bytes(6), now=0.5)  # the peak resets at each final
     assert spotter.last_final is not None
     assert spotter.last_final.peak_dbfs == -math.inf
+
+
+# --- gain ---
+#
+# The side camera's mic delivers a voice from the table far below the level
+# the recognizer needs (`listener.MIC_GAIN_DB` has the measurement), so the
+# samples are amplified on their way in. The reported peak stays the mic's.
+
+
+class RecordingRecognizer(FakeRecognizer):
+    """A fake that keeps what it was fed."""
+
+    def __init__(self, script: list[str | None]) -> None:
+        super().__init__(script)
+        self.fed: list[bytes] = []
+
+    def AcceptWaveform(self, data: bytes) -> bool:  # noqa: N802 - vosk API name
+        self.fed.append(data)
+        return super().AcceptWaveform(data)
+
+
+def test_gain_amplifies_what_the_recognizer_hears_and_clips_at_full_scale() -> None:
+    rec = RecordingRecognizer([None])
+    spotter = ExtensionSpotter(rec, gain_db=40.0)  # x100
+    chunk = np.array([0, 50, -50, 400, -400], dtype=np.int16).tobytes()
+    spotter.feed(chunk, now=0.0)
+    heard = np.frombuffer(rec.fed[0], dtype=np.int16)
+    assert heard.tolist() == [0, 5000, -5000, 32767, -32768]
+
+
+def test_the_reported_peak_is_the_mic_level_before_the_gain() -> None:
+    rec = RecordingRecognizer([json.dumps({"text": ""})])
+    spotter = ExtensionSpotter(rec, gain_db=40.0)
+    spotter.feed(np.array([0, -16384, 100], dtype=np.int16).tobytes(), now=0.0)
+    assert spotter.last_final is not None
+    assert spotter.last_final.peak_dbfs == pytest.approx(-6.02, abs=0.01)
+
+
+def test_no_gain_feeds_the_chunk_untouched() -> None:
+    rec = RecordingRecognizer([None])
+    ExtensionSpotter(rec).feed(b"pcm", now=0.0)
+    assert rec.fed == [b"pcm"]
+
+
+def test_the_listener_amplifies_by_the_measured_gain() -> None:
+    assert ExtensionListener(lambda: None).gain_db == MIC_GAIN_DB == 40.0
 
 
 # --- cooldown ---

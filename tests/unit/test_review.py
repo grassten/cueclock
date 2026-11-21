@@ -108,8 +108,23 @@ def test_ball_in_hand_placing_and_its_end_are_moments(tmp_path: Path) -> None:
         run(60, "ball_in_hand_ended", reason="new_rack", placed=0),
     ]
     found = moments.find(write_journal(tmp_path / "j.jsonl", calls))
-    assert kinds(found) == ["placing", "placing", "in_hand_shot", "cue_only"]
+    assert kinds(found) == ["placing", "placing", "in_hand_shot", "cue_only", "no_change"]
     assert "after 2 placing(s)" in found[2].summary
+
+
+def test_a_shot_counted_with_nothing_moved_is_a_moment(tmp_path: Path) -> None:
+    """§16: the list read every ball where it stood and the settle counted
+    anyway (its list came late, or the tracker saw a ball move). Refused ones
+    show as the freeze they released; a still table nobody counted is nothing."""
+    calls = [
+        run(10, "scratch_list", frame_t=10.0, row="still", counted=True),
+        run(20, "shot_provisional_reverted", reason="nothing_moved"),
+        run(20, "scratch_list", frame_t=20.0, row="still", counted=False),
+        run(30, "scratch_list", frame_t=30.0, row="shot", counted=True),
+    ]
+    found = moments.find(write_journal(tmp_path / "j.jsonl", calls))
+    assert kinds(found) == ["no_change", "reverted"]
+    assert "nothing moved" in found[0].summary
 
 
 def test_clean_session_has_no_moments(tmp_path: Path) -> None:
@@ -209,6 +224,30 @@ def test_discovery_without_the_t7(roots: tuple[Path, Path], tmp_path: Path) -> N
     assert page.status_code == 200
     assert "7 of 7 to review" in page.text
     assert "Not reachable" in page.text
+
+
+def test_a_session_can_be_reviewed_before_the_archive_pass_reaches_it(tmp_path: Path) -> None:
+    """The archive pass writes `moments.json` after its parity check, minutes
+    after a stop. Until then the page finds the moments from the journal
+    itself, and a verdict given meanwhile stays on its moment afterwards."""
+    local, logs = tmp_path / "local", tmp_path / "logs"
+    write_journal(logs / f"session-{STAMP}.jsonl", SESSION)
+    (local / STAMP).mkdir(parents=True)  # a session directory, nothing scanned yet
+    app = TestClient(create_app([local], local_root=local, logs_dir=logs))
+
+    assert "7 of 7 to review" in app.get("/").text
+    page = app.get(f"/s/{STAMP}")
+    assert "has not run" not in page.text and "Clock right" in page.text
+    mid = moments.find(logs / f"session-{STAMP}.jsonl")[0].id
+    assert app.post(f"/api/verdict/{STAMP}/{mid}", json={"verdict": "right"}).status_code == 200
+    assert not (local / STAMP / "moments.json").exists()  # reading it wrote nothing
+
+    moments.write(local / STAMP, logs)  # the archive pass arrives
+    assert first_id(local / STAMP) == mid
+    assert "6 of 7 to review" in app.get("/").text
+
+    (local / "20200101-000000").mkdir()  # no journal anywhere
+    assert "no journal to read" in app.get("/s/20200101-000000").text
 
 
 def test_verdicts_round_trip(roots: tuple[Path, Path], tmp_path: Path) -> None:

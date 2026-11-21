@@ -162,6 +162,9 @@ def unpack_logged(data: Any, name: str) -> list[LoggedFrame]:
     if int(counts.sum()) != len(area):
         raise ValueError(f"{name}: reject counts sum to {counts.sum()} but hold {len(area)} rows")
     offsets = np.concatenate([[0], np.cumsum(counts)])
+    # Read once: indexing an open .npz decompresses the whole array each time,
+    # and doing it per frame was two thirds of a replay's time on a quiet table.
+    frame_i, t, mono = data["frame_i"], data["t"], data["mono"]
     out = []
     for f, (dets, churn, intrusions) in enumerate(detected):
         rejects = [
@@ -174,9 +177,9 @@ def unpack_logged(data: Any, name: str) -> list[LoggedFrame]:
         ]
         out.append(
             LoggedFrame(
-                frame_i=int(data["frame_i"][f]),
-                t=float(data["t"][f]),
-                mono=float(data["mono"][f]),
+                frame_i=int(frame_i[f]),
+                t=float(t[f]),
+                mono=float(mono[f]),
                 detections=dets,
                 churn=churn,
                 intrusions=intrusions,

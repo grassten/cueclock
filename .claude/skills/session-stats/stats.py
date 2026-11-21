@@ -32,6 +32,7 @@ class Tiers:
     expired_through: int = 0  # confessed misses that hit EXPIRED before the rescue
     racks: int = 0  # cmd_new_rack presses
     breaks_fired: int = 0  # vision fire counted the break (rack_shots 0 -> 1)
+    false_starts: int = 0  # ... taken back: the rack never moved (design §17)
     breaks_adjudicated: int = 0  # E8 hub adjudication (checkpoint 75+)
     break_presses: int = 0  # cmd_restart counted the break (valid from 2026-08-05)
     dark_candidates: int = 0
@@ -39,6 +40,9 @@ class Tiers:
     left_frozen: int = 0
     phantom_candidates: int = 0
     scratches_journaled: int = 0
+    scratches_unadjudicated: int = 0  # ... of those, from journals with no candidate records
+    scratch_candidates: int = 0
+    scratch_refuted: int = 0
     mid_rack_appeared: int = 0  # mid-rack settles reporting a ball that was not there
     mid_rack_settles: int = 0  # eligible: rack_shots >= 2 on a 3+ ball baseline
     # The ball list (#54), from its `ball_list` journal lines (checkpoint 127+).
@@ -66,6 +70,9 @@ class Tiers:
     in_hand: int = 0  # ball in hand periods begun (a scratch stood)
     in_hand_ended: dict[str, int] = field(default_factory=dict)  # why each one ended
     cue_moved: int = 0  # outside ball in hand: only the cue moved, restarted as before
+    # Nothing moved (design §16, checkpoint 135+).
+    still_counted: int = 0  # a shot counted where the list read every ball in place
+    still_refused: int = 0  # freezes released because the list read every ball in place
 
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
@@ -77,6 +84,10 @@ class Tiers:
         self.left_frozen += r.left_frozen
         self.phantom_candidates += len(r.phantom_candidates)
         self.scratches_journaled += r.scratches
+        self.scratch_candidates += r.scratch_candidates
+        self.scratch_refuted += r.scratch_refuted
+        if not r.scratch_candidates:
+            self.scratches_unadjudicated += r.scratches  # a pre-#26 journal's count
 
     def add_supplemental(self, path: Path) -> None:
         """Racks, vision-fired breaks, and expired-through misses.
@@ -96,6 +107,9 @@ class Tiers:
                 self.racks += 1
             elif kind == "vision_shot_taken" and rack == 1 and prev_rack == 0:
                 self.breaks_fired += 1
+            elif kind == "shot_provisional_reverted" and r.get("reason") == "rack_standing":
+                self.breaks_fired -= 1  # that fire was not a break
+                self.false_starts += 1
             elif kind == "vision_balls_settled" and r.get("state") != "IDLE":
                 if prev_rack is not None and rack is not None and rack > prev_rack:
                     window = rows[last_settle_i + 1 : i]
@@ -124,9 +138,12 @@ class Tiers:
                 if row is not None:
                     self.rows_judged += 1
                     self.cue_moved += row == "cue_moved"
+                    self.still_counted += row == "still" and bool(r.get("counted"))
                     if row == "ball_in_hand":
                         how = str(r.get("hand"))
                         self.placing[how] = self.placing.get(how, 0) + 1
+            elif kind == "vision_balls_settled":
+                self.still_refused += r.get("rejected") == "nothing_moved"
             elif kind == "ball_in_hand":
                 self.in_hand += 1
             elif kind == "ball_in_hand_ended":
@@ -212,14 +229,17 @@ def table(label: str, t: Tiers) -> str:
         ),
         (
             "Clock accuracy incl. self-healing",
-            pct(t.shots - t.expired_through, t.shots),
-            "clock ended up right on its own (self-heal = ran long, then reset)",
+            pct(t.shots - t.expired_through - t.still_counted, t.shots),
+            "clock ended up right on its own (self-heal = ran long, then reset)"
+            + (f"; {t.still_counted} restarted with nothing moved" if t.still_counted else ""),
         ),
         (
             "Break auto-catch",
             f"{pct(breaks_caught, t.racks)}  ({t.breaks_fired} fired"
             + (f" + {t.breaks_adjudicated} adjudicated" if t.breaks_adjudicated else "")
-            + f", {t.break_presses} by press)",
+            + f", {t.break_presses} by press"
+            + (f"; {t.false_starts} false starts taken back" if t.false_starts else "")
+            + ")",
             "clock started off the break with no press (press count valid from 2026-08-05)",
         ),
         (
@@ -241,7 +261,12 @@ def table(label: str, t: Tiers) -> str:
         (
             "Scratches journaled",
             f"{t.scratches_journaled}",
-            "UPPER BOUND ONLY — channel over-counts ~6x, issue #26",
+            "none"
+            if not t.scratches_journaled
+            else f"UPPER BOUND ONLY — {t.scratches_unadjudicated} from pre-#26 journals, "
+            "over-counted ~6x"
+            if t.scratches_unadjudicated
+            else f"adjudicated: {t.scratch_candidates} candidates, {t.scratch_refuted} refuted",
         ),
         (
             "Balls appeared mid-rack",
@@ -334,6 +359,12 @@ def table(label: str, t: Tiers) -> str:
                 "Only the cue moved, open play",
                 f"{t.cue_moved} of {t.rows_judged}",
                 "no scratch before it: restarted as before, a hand or a stick",
+            ),
+            (
+                "Restarted with nothing moved",
+                f"{t.still_counted} of {t.rows_judged}",
+                "a shot counted where the list read every ball in place — always an error; "
+                f"{t.still_refused} more were refused (§16)",
             ),
         ]
     if t.dark_candidates:

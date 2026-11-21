@@ -40,8 +40,11 @@ from cueclock.server.scratch import (
     TRAVEL_MIN_MM,
     RestLists,
     SettleFacts,
+    holds_rack,
     judge,
+    nothing_moved,
     only_cue_changed,
+    rack_stands,
     table_row,
 )
 
@@ -159,11 +162,19 @@ BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
 # clock.
 SCRATCH_HOLD_SECONDS = 5.0
 
-# Ball in hand (#64, §15): how long a settle during ball in hand waits for its
-# ball list before it is decided as today.
-# The list arrives 20-75 ms after its settle; this is twice the slowest fit
-# measured (#63's brief), and inside `session_replay.REMAINING_TOL_S`.
-SETTLE_LIST_WAIT_S = 0.15
+# How long a settle that waits for its ball list (ball in hand, #64 §15; a
+# freeze with nothing seen to move, §16) is held before it is decided as
+# today. Measured live, hub time from the settle to its list, over the 81
+# settles of sessions 20261117-201731 and 20261119-020755: median 74 ms, 90th
+# percentile 128 ms, and it grows with the table (1-5 balls 34-81 ms, 13 or
+# more 71-174 ms, median 142). The one outlier, 537 ms, came in a stretch
+# where the detect rate had fallen to 68-89 Hz. The first value was 0.15 s,
+# twice the slowest *fit* in #63's brief (20-75 ms), which left out the wait
+# for a detect worker: 4 of those 81 lists would have missed it, all with
+# nine or more balls listed, which is where a break scratch leaves ball in
+# hand. 0.3 s is 1.7x the slowest list of a healthy session. The wait costs
+# no clock time: the decision is made as of the settle's own instant.
+SETTLE_LIST_WAIT_S = 0.3
 
 
 @dataclass
@@ -206,9 +217,10 @@ class _BallInHand:
 
 @dataclass
 class _HeldSettle:
-    """A settle whose clock decision waits for its ball list (#64): during
-    ball in hand the list says whether it moved only the cue. Everything the
-    decision needs, as it stood when the settle arrived."""
+    """A settle whose clock decision waits for its ball list: during ball in
+    hand the list says whether it moved only the cue (#64), and on a freeze
+    with nothing seen to move it says whether anything moved at all (§16).
+    Everything the decision needs, as it stood when the settle arrived."""
 
     now: float  # the hub's clock at the settle: the decision is made as of then
     t: float | None
@@ -562,6 +574,9 @@ class Hub:
         self._ball_in_hand: _BallInHand | None = None
         self._held_settle: _HeldSettle | None = None
         self._settle_was_held = False
+        # §17: this episode's strike took the clock out of IDLE as the break.
+        # Its settle may still take that back (the rack never moved).
+        self._break_fired = False
         # #33 Part B: when the current provisional episode froze the clock
         # (mono). Doubles as the episode anchor for the scratch guard — a
         # candidate stamped at or after it was born inside this episode, so
@@ -1505,6 +1520,8 @@ class Hub:
                 self._pace_pending = (self._pace_since_mono, took)
             self._pace_since_mono = None
         self.clock.shot_taken()
+        if state_before is State.IDLE and self.clock.state is State.MOTION:
+            self._break_fired = True  # the break, until its settle says otherwise (§17)
         if state_before is State.RUNNING and self.clock.state is State.MOTION:
             # #33 Part B: the fire opened (or joined) the provisional
             # episode — its count is the settle's decision now.
@@ -1576,10 +1593,18 @@ class Hub:
         # Only settles that could be placing wait: an arm-free list since the
         # scratch to compare with, and travel under the hand bound. IDLE
         # settles are the clock's no-op and E8's business, never held.
+        # §16: so does a settle on a freeze in which the tracker saw no ball
+        # displaced — its list says whether anything moved at all. §17: and
+        # the settle of a strike that left IDLE as the break, when a rack
+        # stood before it — its list says whether the rack still does.
         if (
             self.clock.state is not State.IDLE
             and not self._settle_is_phantom(rearrange, backstop)
-            and self._may_be_placing(facts)
+            and (
+                self._may_be_placing(facts)
+                or self._may_be_no_shot(facts, rearrange, backstop)
+                or self._may_be_false_start(facts)
+            )
         ):
             self._held_settle = _HeldSettle(now, t, detail, rearrange, backstop)
             self._settle_was_held = True
@@ -1594,12 +1619,13 @@ class Hub:
         detail: dict[str, object],
         rearrange: "RearrangeSummary | None",
         backstop: bool = False,
-        hand: str | None = None,
+        refusal: str | None = None,
     ) -> bool:
         """The clock half of a settle, as of ``now`` (the settle's own hub
-        time, also when it waited for its list). ``hand`` is #64's verdict
-        (``ball_in_hand``: this settle moved only the cue): not a shot. True
-        when the settle counted a shot."""
+        time, also when it waited for its list). ``refusal`` is its list's
+        verdict that it was not a shot: ``ball_in_hand`` (#64: it moved only
+        the cue, during ball in hand) or ``nothing_moved`` (§16: every ball
+        was read where it stood). True when the settle counted a shot."""
         # Both settle-time refusals are decided here, before anything touches
         # the clock, and against the state the settle ARRIVED in. That is what
         # keeps them disjoint from the break adjudication below: E8 acts only
@@ -1607,6 +1633,18 @@ class Hub:
         # would let a break the hub had just counted be refused by a predicate
         # reading the post-break state.
         #
+        if self._break_fired:
+            self._break_fired = False
+            if refusal is not None and self.clock.break_reverted(now):
+                # §17: the strike that started this rack was not the break —
+                # the rack is standing where it stood. Back to the armed
+                # rack: the count is undone, and the real break will anchor
+                # the rack (and its replay) when it comes.
+                self._rack_pending = True
+                detail["rejected"] = refusal
+                self._log("shot_provisional_reverted", t=t, frame_t=t, reason=refusal)
+                self._log("vision_balls_settled", **detail)
+                return False
         # #37 — was this episode a phantom? The table is provably unchanged.
         phantom = self._settle_is_phantom(rearrange, backstop)
         if self._adjudicate_break(now, rearrange):
@@ -1619,7 +1657,7 @@ class Hub:
                 self._rack_break_mono = now  # replay anchor, as in shot_taken
                 self._rack_pending = False
         reverting = self._provisional_open_mono is not None
-        moved_clock = self.clock.balls_settled(now, suppress=phantom or hand is not None)
+        moved_clock = self.clock.balls_settled(now, suppress=phantom or refusal is not None)
         if self._settle_facts is not None and self._settle_facts.t == t:
             self._settle_facts = dataclasses.replace(self._settle_facts, counted=moved_clock)
         if phantom:
@@ -1641,13 +1679,15 @@ class Hub:
                 movers_alive=detail.get("movers_alive"),
                 mover_max_mm=detail.get("mover_max_mm"),
             )
-        elif hand is not None and not moved_clock:
-            # #64: placing the cue during ball in hand. Same resolution as a
-            # phantom: nothing counted, a frozen countdown resumes at the
-            # remaining it froze with, a running one (and a scratch hold in
-            # progress) is left alone. Two kinds, as #41 journaled them, so
-            # `report` tells a reverted freeze from a refused compensation.
-            reason = hand
+        elif refusal is not None and not moved_clock:
+            # The list's refusal: placing the cue during ball in hand (#64),
+            # or a freeze on a table where nothing moved (§16). Same
+            # resolution as a phantom: nothing counted, a frozen countdown
+            # resumes at the remaining it froze with, a running one (and a
+            # scratch hold in progress) is left alone. Two kinds, as #41
+            # journaled them, so `report` tells a reverted freeze from a
+            # refused compensation.
+            reason = refusal
             self._revert_pace()
             self._provisional_open_mono = None
             detail["rejected"] = reason
@@ -1658,10 +1698,10 @@ class Hub:
                 reason=reason,
                 mover_max_mm=detail.get("mover_max_mm"),
             )
-        elif hand is not None:
+        elif refusal is not None:
             # The clock refused: a GRACE or IDLE fire already committed a shot
             # this cycle, and committed counts do not un-happen. Left counted.
-            detail["hand_refused"] = hand
+            detail["hand_refused"] = refusal
         if moved_clock:
             self._end_ball_in_hand("shot")
             # The settle counted this episode's one shot (fired or
@@ -1715,6 +1755,38 @@ class Hub:
         compare with, and travel under the hand bound (§15)."""
         return self._placing_rest(facts) is not None and (facts.travel_mm or 0.0) < TRAVEL_MIN_MM
 
+    def _may_be_no_shot(
+        self, facts: SettleFacts, rearrange: "RearrangeSummary | None", backstop: bool
+    ) -> bool:
+        """Could this settle's list show that nothing moved (§16)?
+
+        The countdown is frozen on a provisional, so being wrong costs what
+        #33 already accepts; the tracker saw no ball displaced (a ball it
+        merely lost or found reads the same whether a pot or a sleeve did
+        it); and there is an arm-free list from before the motion to compare
+        with. A settle the tracker saw a ball move in is never held, and the
+        pipeline's backstop settle is break-scale by construction.
+        """
+        return (
+            self.clock.state is State.MOTION
+            and self._provisional_open_mono is not None
+            and not backstop
+            and rearrange is not None
+            and rearrange.moved == 0
+            and self._rest_lists.before(facts.motion_t)[0] is not None
+        )
+
+    def _may_be_false_start(self, facts: SettleFacts) -> bool:
+        """Could this settle's list show the rack still standing (§17)? The
+        episode's strike left IDLE as the break and nothing has counted
+        since, and the newest list before it holds a rack to compare with."""
+        return (
+            self._break_fired
+            and self.clock.state is State.MOTION
+            and self.clock.rack_shots == 1
+            and holds_rack(self._rest_lists.last_before(facts.motion_t))
+        )
+
     def _begin_ball_in_hand(self, state: _ShotScratch) -> None:
         """A shot with a scratch standing (called, not refuted or cleared)
         ended in a counted settle: ball in hand, until an object ball moves."""
@@ -1740,17 +1812,21 @@ class Hub:
         Live it arrives 20-75 ms after its frame, dispatched in the order the
         run loop drained it; a replay feeds it back after the same frame
         (`balls.jsonl` records which). The strip shows the latest list with no
-        arm over the table. A settle's own list is judged for the scratch hold
+        arm over the table, or with nothing over it but a pack of its own
+        balls. A settle's own list is judged for the scratch hold
         (#63, `server/scratch.py`), and every list is kept, by frame, as the
         "before" of the next shot.
         """
-        if not found.arm:
+        if not found.arm or found.pack:
+            # A standing rack trips the hand test by itself (`BallList.pack`):
+            # shown, or the strip sits on a mid-racking read until the break.
             self._ball_strip = list(found.labels)
         self._log(
             "ball_list",
             frame_t=round(t, 3),
             reason=reason,
             arm=found.arm,
+            **({"pack": True} if found.pack else {}),
             balls=" ".join(found.labels),
             tracker=tracker,
             reassigned=sum(b.own is not None for b in found.balls),
@@ -1761,9 +1837,10 @@ class Hub:
 
     async def _judge_settle_list(self, t: float, found: "BallList") -> None:
         """#63: the list's say at the settle it was read at — call the
-        scratch, clear it, or leave today's logic to decide alone. #64: a
-        settle held for this list is decided here: during ball in hand, one
-        that moved only the cue is kept off the clock."""
+        scratch, clear it, or leave today's logic to decide alone. A settle
+        held for this list is decided here: during ball in hand, one that
+        moved only the cue is kept off the clock (#64); so is one that moved
+        nothing at all (§16)."""
         facts = self._settle_facts
         if facts is None or self._settle_listed:
             return  # no settle waiting, or the next motion began first (journaled)
@@ -1781,8 +1858,17 @@ class Hub:
         if held is not None and held.t == facts.t:
             self._held_settle = None
             held.detail["held"] = "list"
+            refusal = hand
+            if (
+                refusal is None
+                and self._break_fired
+                and rack_stands(found, self._rest_lists.last_before(facts.motion_t))
+            ):
+                refusal = "rack_standing"
+            if refusal is None and nothing_moved(found, rest, cue_before):
+                refusal = "nothing_moved"
             moved_clock = self._decide_settle(
-                held.now, held.t, held.detail, held.rearrange, held.backstop, hand
+                held.now, held.t, held.detail, held.rearrange, held.backstop, refusal
             )
             facts = dataclasses.replace(facts, counted=moved_clock)
             # "applied": kept off the clock. "refused": the clock had already
@@ -1852,6 +1938,7 @@ class Hub:
         self._episode_epoch += 1
         self._episode_open = True
         self._episode_motion_t = t
+        self._break_fired = False
 
     def _retire_scratch(self) -> None:
         """One ``scratch_call`` line per shot that had a scratch called (#63):

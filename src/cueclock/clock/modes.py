@@ -58,6 +58,13 @@ from dataclasses import dataclass
 # the table, while an early start from racking self-heals — the real break that
 # follows fires a ShotTaken and resets the clock to 30.
 #
+# Since checkpoint 135 an early start no longer has to stand until then: a
+# strike that clears this floor and leaves the rack standing is taken back at
+# its settle (`design.md` §17, hub policy, the ball list as witness). The cue
+# ball rolling out of a hand read 6,520 mm/s on 2026-11-18, and a hand
+# carrying it 7,104 on 2026-08-01 (`break_0801b`): speed never could tell
+# those from a break.
+#
 # No floor can cover the whole class, and this one does not pretend to:
 # break_underread_0801 is a frame-verified rack explosion whose ShotTaken read
 # **705 mm/s** (the white streaked too fast to be observed). 705 sits inside the

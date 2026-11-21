@@ -63,10 +63,11 @@ if TYPE_CHECKING:
 FREEZE_LATE_S = 0.25
 FREEZE_EARLY_S = 0.5
 
-# Clips whose recorded truth is a break out of an armed rack. WNT §5 makes the
-# break untimed and starts the window at the rest, so there is no countdown to
-# freeze: the criterion for these is "counted exactly once out of IDLE", and a
-# freeze is not expected at all.
+# Clips recorded on an armed rack, the clock IDLE and waiting for the break.
+# WNT §5 makes the break untimed and starts the window at the rest, so there is
+# no countdown to freeze: the criterion for a break is "counted exactly once
+# out of IDLE", and a freeze is not expected at all. One of them holds no
+# break (`break_0801b`, see `FALSE_STARTS` in `test_corpus_events.py`).
 BREAK_CLIPS = frozenset(
     {
         "break_0801",
@@ -132,7 +133,7 @@ class ClockMark:
     """One user-visible thing the clock did, stamped in clip time."""
 
     t: float
-    kind: str  # "freeze" | "count" | "resume" | "expire"
+    kind: str  # "freeze" | "count" | "uncount" | "resume" | "expire"
     state: str
     rack_shots: int
 
@@ -158,6 +159,8 @@ class ClockTimeline:
     # and when a scratch hold was released early.
     rows: list[tuple[float, str]] = field(default_factory=list)
     releases: list[float] = field(default_factory=list)
+    # How the clip left the clock: its state and the rack's shot count.
+    final: tuple[str, int] = ("", 0)
 
     @property
     def rearrangement_is_anchored(self) -> bool:
@@ -296,7 +299,9 @@ def replay_clock(
             state = hub.clock.state
             rack_shots = hub.clock.rack_shots
             if rack_shots != prev_rack_shots:
-                timeline.marks.append(ClockMark(t, "count", state.value, rack_shots))
+                # Down is the break taken back (design §17), never a shot.
+                kind = "count" if rack_shots > prev_rack_shots else "uncount"
+                timeline.marks.append(ClockMark(t, kind, state.value, rack_shots))
             if state is not prev_state:
                 if state is State.MOTION:
                     timeline.marks.append(ClockMark(t, "freeze", state.value, rack_shots))
@@ -319,6 +324,7 @@ def replay_clock(
             prev_state = state
             prev_rack_shots = hub.clock.rack_shots
 
+        timeline.final = (hub.clock.state.value, hub.clock.rack_shots)
         records = hub.journal.tail(10_000.0)
         timeline.provisional_opens = [
             float(r["t"])

@@ -1159,8 +1159,8 @@ def _cmd_balls(args: argparse.Namespace) -> int:
         return ReferenceModel.build([reader.frame(int(i)) for i in idx], calibration)
 
     def show(t: float, reason: str, found: BallList, note: str = "") -> None:
-        arm = "arm" if found.arm else "   "
-        print(f"{t:8.2f}s  {reason:16s} {arm}  {' '.join(found.labels):44s} {note}".rstrip())
+        arm = "pack" if found.pack else "arm" if found.arm else ""
+        print(f"{t:8.2f}s  {reason:16s} {arm:4s} {' '.join(found.labels):44s} {note}".rstrip())
 
     target = Path(args.target)
     if (target / "timestamps.npy").exists():  # a clip

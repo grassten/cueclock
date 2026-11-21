@@ -71,10 +71,10 @@ DEFAULT_BUDGET_GB = 10.0
 # judged moment, which is all `review check` needs to replay it — and pinned
 # sessions have a budget of their own. Journals in logs/ get one too.
 DEFAULT_KEEP_FULL = 10
-# ~40 hours of play: ~2.4 GB/hour of log + stills. 1.6 measured on session
-# 20261117-201731 (364 MB in 13.4 min), plus ~0.8 for the ball list's rest
-# stills (#65): that session wrote 55 rest lists, 2 PNGs of 1.61 MB each.
-# Re-measure on the first session that writes them.
+# ~30 hours of play at 3.3 GB/hour of log + stills, measured on session
+# 20261119-020755 (955 MB in 17.4 min), the first to keep a frame with each
+# ball list written at rest (#65): 142 rest lists, 459 MB. Before that,
+# 1.6 GB/hour (20261117-201731: 364 MB in 13.4 min).
 DEFAULT_ARCHIVE_GB = 100.0
 DEFAULT_PINNED_GB = 5.0  # ~50 hours of detection log, if every session had a verdict
 DEFAULT_JOURNALS_GB = 1.0  # ~1 MB per session journal: decades, but bounded
@@ -85,7 +85,16 @@ PINNED_MARK = "pinned.json"  # a stripped session: what was kept, and when
 CUT_PAD_S = 10.0
 FULL_DIR = "recording"  # the session's own copy of its full recording(s)
 FULL_INDEX = "recording.json"  # [{"file", "start_wall", "stop_wall"}], read by the review page
-HOOK_TIMEOUT_S = 600.0  # a whole-session replay measured well under a minute (#57)
+# How long a hook (`session verify`, `review moments`, one ffmpeg cut) may run:
+# this floor, or the session's own length if that is longer. The agent runs as
+# a launchd Background job, which macOS schedules on the efficiency cores:
+# there `session verify` took 384 s on the 1,041 s session 20261119-020755
+# (62 s from a terminal), 0.37 s per second of play, so a fixed 600 s would
+# have killed the parity check of any session past ~27 minutes on every pass,
+# and a session whose hook fails is never archived. One second per second of
+# play is 2.7x that measurement (taken before the log reader stopped
+# decompressing per frame, which took 42% off a replay).
+HOOK_TIMEOUT_S = 600.0
 
 _STAMP = re.compile(r"^\d{8}-\d{6}$")  # the journal's `session-<stamp>.jsonl`
 _MOMENT_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")  # a safe file name
@@ -225,6 +234,12 @@ def journal_span(journal: Path, stamp: str) -> tuple[datetime, datetime]:
             except (ValueError, KeyError, TypeError):
                 continue
     return start, end
+
+
+def hook_timeout(session: Path) -> float:
+    """Seconds a hook may run on this session: see HOOK_TIMEOUT_S."""
+    start, end = journal_span(session / "journal.jsonl", session.name)
+    return max(HOOK_TIMEOUT_S, (end - start).total_seconds())
 
 
 def session_recordings(
@@ -617,7 +632,7 @@ class Maintainer:
         if self.dry_run:
             self.say(f"{session.name}: would run `cueclock {what}`")
             return "done"
-        code, err = self.run(argv, HOOK_TIMEOUT_S)
+        code, err = self.run(argv, hook_timeout(session))
         if (session / output).exists():
             # Written is done, whatever the exit: `session verify` exits 1 on a
             # divergence, which is a finding for the review page, not a failure.

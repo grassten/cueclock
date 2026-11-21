@@ -18,6 +18,7 @@ by a path from the URL.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -26,6 +27,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from cueclock import archive
+from cueclock.review import moments as finder
 from cueclock.review import sessions as sess
 from cueclock.review.moments import session_journal
 
@@ -245,11 +247,31 @@ def create_app(
                     return found
         raise HTTPException(404, "no such session")
 
+    def moments_of(s: sess.Session) -> list[dict[str, object]] | None:
+        """The session's moments: `moments.json` once the archive pass has
+        written it, until then found here from the journal.
+
+        The archive pass runs the finder after its parity check, up to 15
+        minutes and one whole-session replay after the session stops, and
+        the page read "The moments finder has not run here" for all of it
+        (2026-11-18: Steven opened it 11 minutes after a session, nothing to
+        review). Ids come from the journal's own records, so a verdict given
+        now is still attached when the file arrives; a moment the parity
+        check adds (`replay`) only appears then. None: no journal at all.
+        """
+        written = s.moments()
+        if written is not None:
+            return written
+        journal = session_journal(s.path, logs_dir)
+        return None if journal is None else [asdict(m) for m in finder.find(journal)]
+
     @app.get("/", response_class=HTMLResponse)
     async def index() -> HTMLResponse:
         rows = []
         for s in sess.discover(session_roots):
-            moments, open_ = s.moments(), s.unreviewed()
+            moments = moments_of(s)
+            judged = s.verdicts()
+            open_ = sum(1 for m in moments or [] if m.get("id") not in judged)
             if moments is None:
                 badge = "not scanned"
             elif not moments:
@@ -271,10 +293,10 @@ def create_app(
     @app.get("/s/{stamp}", response_class=HTMLResponse)
     async def session_page(stamp: str) -> HTMLResponse:
         s = session(stamp)
-        moments = s.moments()
+        moments = moments_of(s)
         head = f'<p><a href="/">← Sessions</a></p><h1>{_local(s.started)}</h1>'
         if moments is None:
-            return _page(stamp, head + '<p class="dim">The moments finder has not run here.</p>')
+            return _page(stamp, head + '<p class="dim">This session has no journal to read.</p>')
         verdicts = s.verdicts()
         records = _records(session_journal(s.path, logs_dir))
         available = sess.recordings(local_root)
@@ -313,7 +335,7 @@ def create_app(
             return _page(
                 stamp, head + '<p class="dim">No full recording kept for this session.</p>'
             )
-        moment_walls = {str(m.get("wall")) for m in s.moments() or []}
+        moment_walls = {str(m.get("wall")) for m in moments_of(s) or []}
         parts = []
         for n, (url, rec) in enumerate(sources):
             vid = f"full{n}"
@@ -345,7 +367,7 @@ def create_app(
     @app.post("/api/verdict/{stamp}/{moment_id}")
     async def verdict(stamp: str, moment_id: str, request: Request) -> JSONResponse:
         s = session(stamp)
-        if moment_id not in {m.get("id") for m in s.moments() or []}:
+        if moment_id not in {m.get("id") for m in moments_of(s) or []}:
             raise HTTPException(404, "no such moment")
         try:
             payload = await request.json()

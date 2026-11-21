@@ -78,6 +78,29 @@ def test_truth_stills_read_exactly() -> None:
             assert one.own == 9 and (one.cx, one.cy) == (640.0, 330.0)
 
 
+# Five frames of session 20261119-020755 (1115 mount) with truth.json: who is
+# over the table, and whether the only hand-sized blob is the rack itself.
+PACK_STILLS = CLIPS / "stills_20261119-020755"
+
+
+def test_a_standing_rack_is_a_pack_and_a_hand_is_not() -> None:
+    """A rack is one hand-sized blob, so the hand test flags it; `pack` says
+    it is only the list's own balls, and the strip may show it. A hand on the
+    rack, a hand placing the cue ball beside it and a sleeve next to a ball
+    are not packs. `arm` itself is as it was: the clock's rules still treat
+    every one of these lists as unable to show absence."""
+    _need("stills_20261119-020755", "empty_table_1115")
+    ref = _reference_model("empty_table_1115")
+    frames = json.loads((PACK_STILLS / "truth.json").read_text())["frames"]
+    assert len(frames) == 5
+    for frame in frames:
+        bayer = cv2.imread(str(PACK_STILLS / f"{frame['frame_i']:09d}.png"), cv2.IMREAD_UNCHANGED)
+        found = read_ball_list(bayer, ref)
+        assert (found.arm, found.pack) == (frame["arm"], frame["pack"]), frame["what"]
+        if "expected" in frame:
+            assert sorted(found.labels) == sorted(frame["expected"]), frame["what"]
+
+
 def _largest_cluster(balls: tuple[ListedBall, ...], link: float = 2.0) -> int:
     """Balls chained by centre gaps under ``link`` predicted radii: the rack."""
     best, seen = 0, set()
