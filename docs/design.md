@@ -1037,10 +1037,11 @@ way without counting and then undoing (a fresh countdown flashing on the
 wall, the count, pace and rack un-happening). So during ball in hand a settle
 with an arm-free list since the scratch and travel under 400 mm holds its
 clock decision until its list arrives. The clock meanwhile stays as it was.
-Anything else reaching the hub first (the next motion or strike, a
-candidate, a refutation, any command) or `SETTLE_LIST_WAIT_S` (0.3 s since
-checkpoint 135; it was 0.15 s, which a quarter of the lists read on a full
-table missed, §16) decides it as before. The decision is made as of the
+A candidate, a refutation or any command reaching the hub first, or
+`SETTLE_LIST_WAIT_S` (0.3 s since checkpoint 135; it was 0.15 s, which a
+quarter of the lists read on a full table missed, §16) decides it as before.
+The next motion or strike did too until §18.1: it now waits behind the
+settle. The decision is made as of the
 settle's own time, so a countdown it starts runs from the settle. Outside
 ball in hand no settle waits. The clock refuses the suppression when a GRACE
 or IDLE fire already committed a shot this cycle; the settle then counts
@@ -1116,7 +1117,8 @@ its spot, every object ball matched both ways) the freeze is released with
 the time it froze at and nothing is counted. Anything else decides the
 settle as before: a ball gone or moved on the list, a cue that moved, an arm
 hiding a ball, a hand read as a ball, two cues, no list in
-`SETTLE_LIST_WAIT_S`, or any other hub call arriving first.
+`SETTLE_LIST_WAIT_S`, or a command, candidate or refutation arriving first
+(§18.1; §18.2 widens which settles wait).
 
 It is #37's refusal ("the table is provably unchanged") with a witness that
 knows the balls apart, and it fails the same way: every doubt counts the
@@ -1152,8 +1154,9 @@ nothing_moved`; a `shot_provisional_reverted` line carries the same reason;
 the `scratch_list` line reads `row: still`, `counted: false`.
 
 **Known limits.** A settle the tracker saw a ball move in is not held (a
-sleeve can also drag a merged blob without killing the track; none is on
-record). A list later than the wait counts as before. Both leave a
+sleeve can also drag a merged blob without killing the track; the first one
+on record came three days later, and §18.2 holds it when no strike fired). A
+list later than the wait counts as before. Both leave a
 `scratch_list` line with `row: still` and `counted: true`, which is its own
 review moment (`no_change`) and its own `session-stats` row ("Restarted with
 nothing moved", counted against clock accuracy), so the next one is seen
@@ -1214,6 +1217,106 @@ record, logged with the clock already back in IDLE.
 
 **Known limits.** It needs the rack on a written list before the strike; a
 strike in the first second after the hands leave a rack that no list has
-read yet stands as today. A break that leaves all nine or more rack balls
+read yet stands as today. A false start whose settle never comes was
+confirmed by the frozen-clock watchdog until §18.3. A break that leaves all nine or more rack balls
 within 3 px of where they stood would be taken back; that is a cue ball
 that never reached the rack.
+
+## 18. What the first session with scratches sent back (issue #69, 2026-11-21)
+
+Session 20261121-153046 (27 minutes, 5 racks, checkpoint 135's code) was the
+first with scratches in it. Steven judged its review moments at the desk;
+five were wrong, and four of those come down to three mechanisms in the hub,
+each reproducible from the session log. `detect.py`, `events.py` and
+`track.py` are untouched.
+
+### 18.1 A held settle is decided by its list, not by what the pipeline says next
+
+§15 let "the next motion or strike" decide a settle that was waiting for its
+list. During placing the hand is still moving when the settle fires. At
+400.66 s a placing's settle was held; the motion latch rose 32 ms later and
+decided it as a shot; the list came 47 ms after the settle and read the
+table exactly as the last arm-free list had it. Ball in hand ended there
+(`placed: 0`), so the next adjustment 1.4 s later restarted the countdown
+again as open play. Of the ten settles held since checkpoint 133, nine were
+decided by their list and this one by motion; none timed out.
+
+**The rule.** While a settle is held, the pipeline's calls (motion started,
+strike, discard, another settle, the confirmed scratch verdict) queue behind
+it instead of deciding it, each stamped with the hub time it arrived at.
+When the list comes, or `SETTLE_LIST_WAIT_S` after the settle, the settle is
+decided and the queue is applied in arrival order, each call as of its own
+arrival (`Hub._vision`). A queued settle that is held in its turn stops the
+queue until its own list comes. What does not wait: the ball list itself; a
+scratch candidate or refutation, which are evidence about the cue in the
+held settle's own shot and decide it as before (§15: with a candidate open
+it is no pick-up); and every operator command, because a press is
+authoritative: it decides the held settle as before, the queue is applied,
+then the command runs.
+
+**Cost.** Only when a settle is held, a freeze right behind it can show up
+to 0.3 s late on the wall. No clock time is lost: a queued freeze stops the
+countdown as of when the motion arrived.
+
+**Rejected:** "pre-empted during ball in hand, so do not count". A real shot
+whose settle is followed within 50 ms by new motion would go uncounted, the
+countdown would not reset, and it could buzz.
+
+### 18.2 §16 also holds a freeze with no strike in which one ball moved
+
+At 712.5 s he stood over a shot, the tracker displaced one ball 38 mm, no
+strike fired, and the settle counted at once because §16 held only
+`moved == 0`. The list 74 ms later read every ball in place (`row: still`,
+`counted: true`): 25.4 s became 30 during his pre-shot routine.
+
+A distance cannot separate it: real shots in the same journals moved one
+ball 42, 44 and 49 mm. So the hold widens instead: a frozen settle also
+waits when **no strike fired in its episode and the tracker moved at most
+one ball**. The list decides exactly as in §16, refusing only a table read
+unchanged. Over the three sessions with list rows (160 settles) that shape
+occurred twice, and none of the 112 settles the list read as a shot reads
+unchanged. A settle with a strike in it, or with two or more balls moved,
+is decided at once as before.
+
+### 18.3 The watchdog does not confirm a break over a standing rack
+
+§17 lives in the settle's decision. At 453.9 s the cue ball set down for the
+break read as a strike out of IDLE with a full rack on the list before it,
+no settle came, and after 12 s the E9 watchdog synthesized one. A
+synthesized settle carries no evidence and counts; here that confirmed the
+false break and started a countdown on a racked table (he pressed New Rack
+again to clear it).
+
+**The rule.** When the watchdog fires on a strike that left IDLE as the
+break, and the newest list before the strike holds a rack (`holds_rack`),
+it takes the break back the way §17 does (`break_reverted`: IDLE, nothing
+counted, the rack armed again) instead of synthesizing a settle. A break is
+never 12 s quiet: its balls roll, and the longest roll-out on record is
+8.62 s. Mid-rack the watchdog is unchanged. Four settles have ever been
+synthesized; this is the only one at the break.
+
+### Evidence, journal, limits
+
+**Replayed** through this code, session 20261121-153046 differs from its
+live journal in three decisions and nothing else (compared by frame): the
+400.66 s and 402.06 s settles are placing (`hand: applied`; the countdown
+keeps running from 24.3 s and ball in hand lasts until New Rack); the
+453.9 s false start is taken back at the watchdog and the tracker's settle a
+second later lands in IDLE; the 712.5 s settle is refused (`nothing_moved`),
+the countdown resumes at 25.4 s and the stroke 5 s later fires at 20.5 s.
+`review check`: the four verdicts behind these go from *still wrong* to
+*changed*. The other sessions with a detection log replay unchanged.
+
+**Journal.** Nothing new to read. A held settle's `held` is now `list`,
+`timeout`, `input`, `candidate` or `refuted`, never `motion`, `shot`,
+`settle` or `discard`; the calls that waited are journaled when they are
+applied, right behind the settle's `scratch_list` line. The watchdog's
+revert is `shot_provisional_reverted` with `reason: rack_standing` and
+`by: watchdog`.
+
+**Known limits.** A list later than 0.3 s still loses to the timeout, and
+what queued is applied then. A real break over a rack list whose settle is
+lost for 12 s with the motion bit low would be taken back; none is on
+record, and E8's dark tier still counts a break that never fired. A cue
+ball rolled or pushed by hand with no scratch before it is still open play
+(#67, parked).

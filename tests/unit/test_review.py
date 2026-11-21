@@ -175,7 +175,7 @@ def test_write_uses_live_journal_until_archived(tmp_path: Path) -> None:
     found = moments.write(session_dir, logs)
     data = json.loads((session_dir / "moments.json").read_text())
     assert [d["id"] for d in data] == [m.id for m in found]
-    assert set(data[0]) == {"id", "wall", "kind", "summary", "start_wall", "end_wall"}
+    assert set(data[0]) == {"id", "wall", "kind", "summary", "start_wall", "end_wall", "kinds"}
 
     write_journal(session_dir / "journal.jsonl", SESSION[:3])  # the archived copy wins
     assert kinds(moments.write(session_dir, logs)) == ["idle_strike"]

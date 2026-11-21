@@ -1,15 +1,16 @@
-"""Tiered accuracy table for cueclock sessions — the session-stats skill's miner.
+"""Accuracy table for cueclock sessions — the session-stats skill's miner.
 
-Builds on `cueclock.server.report.build()` (the system of record for miss /
+Builds on `cueclock.server.report.build()` (the system of record for shot /
 phantom / break counters) and adds the tier math plus two supplemental counts
-the report does not carry: racks and vision-fired breaks, and which confessed
-misses ran through EXPIRED on their way to the rescue.
+the report does not carry: racks and vision-fired breaks, and which shots ran
+through EXPIRED before their settle counted them.
 
 Usage (repo root; safe any time — journal reading only, no camera, no corpus):
     .venv/bin/python3 .claude/skills/session-stats/stats.py             # newest session
     .venv/bin/python3 .claude/skills/session-stats/stats.py --last 2    # newest N merged
     .venv/bin/python3 .claude/skills/session-stats/stats.py --all       # everything
     .venv/bin/python3 .claude/skills/session-stats/stats.py logs/session-20260806-171905.jsonl
+    ... --internals    # add the tracker's own rows (how often the strike path fired)
 """
 
 from __future__ import annotations
@@ -22,14 +23,21 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from cueclock.server.report import SessionReport, build, find_journals, mid_rack_appearances
+from cueclock.server.report import (
+    Racking,
+    SessionReport,
+    build,
+    find_journals,
+    mid_rack_appearances,
+)
 
 
 @dataclass
 class Tiers:
     shots: int = 0
-    missed: int = 0
-    expired_through: int = 0  # confessed misses that hit EXPIRED before the rescue
+    missed: int = 0  # counted at the settle with no strike fired (internal)
+    expired_through: int = 0  # ... of those, hit EXPIRED before the settle counted them
+    racking_live_settles: int = 0  # settles while racking with the clock on: not shots
     racks: int = 0  # cmd_new_rack presses
     breaks_fired: int = 0  # vision fire counted the break (rack_shots 0 -> 1)
     false_starts: int = 0  # ... taken back: the rack never moved (design §17)
@@ -67,6 +75,7 @@ class Tiers:
     # Ball in hand (#64), from `scratch_list` rows and `ball_in_hand*` lines (checkpoint 133+).
     rows_judged: int = 0  # settles whose list said what they were
     placing: dict[str, int] = field(default_factory=dict)  # hand -> n, row ball_in_hand
+    placing_phantom: int = 0  # ... kept off by #37 instead: the tracker saw nothing move
     in_hand: int = 0  # ball in hand periods begun (a scratch stood)
     in_hand_ended: dict[str, int] = field(default_factory=dict)  # why each one ended
     cue_moved: int = 0  # outside ball in hand: only the cue moved, restarted as before
@@ -77,6 +86,7 @@ class Tiers:
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
         self.missed += len(r.missed)
+        self.racking_live_settles += r.racking_live_settles
         self.breaks_adjudicated += r.breaks_adjudicated
         self.break_presses += r.break_presses
         self.dark_candidates += r.dark_candidates
@@ -92,10 +102,9 @@ class Tiers:
     def add_supplemental(self, path: Path) -> None:
         """Racks, vision-fired breaks, and expired-through misses.
 
-        Expired-through: a confessed miss (settle bumps rack_shots) whose
-        freeze window contains an EXPIRED tick_transition — the false-foul
-        buzz sounded before the settle rescued the shot. E9's grace hold
-        (checkpoint 75) should pin this at 0 going forward.
+        Expired-through: a shot counted at its settle (the settle bumps
+        rack_shots) whose window contains an EXPIRED tick_transition — the
+        false-foul buzz sounded before the settle counted the shot.
         """
         rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
         prev_rack: float | None = None
@@ -128,8 +137,13 @@ class Tiers:
         had a scratch called, at the next shot's motion."""
         by: Counter[str] = Counter(self.scratch_by)
         missed: Counter[str] = Counter(self.scratch_missed)
+        in_hand = False
         for r in rows:
             kind = r.get("kind")
+            if kind == "ball_in_hand":
+                in_hand = True
+            elif kind == "ball_in_hand_ended":
+                in_hand = False
             if kind == "scratch_list":
                 self.settles_judged += 1
                 self.settles_no_list += r.get("verdict") == "no_list"
@@ -144,7 +158,10 @@ class Tiers:
                         self.placing[how] = self.placing.get(how, 0) + 1
             elif kind == "vision_balls_settled":
                 self.still_refused += r.get("rejected") == "nothing_moved"
-            elif kind == "ball_in_hand":
+                # A placing the tracker saw nothing move in is refused by #37
+                # before #64 is asked: kept off the clock all the same.
+                self.placing_phantom += in_hand and r.get("rejected") == "phantom"
+            if kind == "ball_in_hand":
                 self.in_hand += 1
             elif kind == "ball_in_hand_ended":
                 why = str(r.get("reason"))
@@ -169,19 +186,17 @@ class Tiers:
         A return is judged on arm-free lists from the break on (`rack_shots`
         >= 1), so racking by hand does not count; the scope resets when
         `rack_shots` falls back (a new rack). A list with an arm can show a
-        ball is there, never that one is gone, so it is never judged.
+        ball is there, never that one is gone, so it is never judged. Three
+        or more numbers back on one list is racking begun with the clock
+        still running, not three errors: nothing is judged from there to the
+        next rack (`report.Racking`, #69).
         """
-        seen: set[str] = set()
-        gone: set[str] = set()
-        prev_rack = 0
+        racking = Racking()
         for r in rows:
             labels = str(r.get("balls") or "").split()
             self.lists += 1
             rack = r.get("rack_shots")
-            rack = rack if isinstance(rack, int) else 0
-            if rack < prev_rack:
-                seen, gone = set(), set()
-            prev_rack = rack
+            racking.note_rack(rack if isinstance(rack, int) else 0)
             tracker = r.get("tracker")
             if r.get("reason") == "settle" and isinstance(tracker, int):
                 self.settle_lists += 1
@@ -195,11 +210,7 @@ class Tiers:
             reassigned = r.get("reassigned")
             self.reassigned += reassigned if isinstance(reassigned, int) else 0
             self.lists_duplicate += len(numbers) != len(set(numbers))
-            now = set(numbers)
-            if rack >= 1:  # racking moves balls on and off by hand: not judged
-                self.numbers_returned += len(now & gone)
-                gone = (gone | (seen - now)) - now
-            seen |= now
+            self.numbers_returned += racking.feed(r)
 
 
 def pct(num: float, den: float) -> str:
@@ -217,20 +228,21 @@ def mine(paths: list[Path]) -> Tiers:
     return t
 
 
-def table(label: str, t: Tiers) -> str:
+def table(label: str, t: Tiers, internals: bool = False) -> str:
     breaks_caught = t.breaks_fired + t.breaks_adjudicated
     hands_on = t.break_presses + t.left_frozen + t.expired_through
     rows = [
-        ("Shots / racks", f"{t.shots} / {t.racks}", ""),
         (
-            "Strike detection",
-            pct(t.shots - t.missed, t.shots),
-            "vision fired on the stroke itself",
+            "Shots / racks",
+            f"{t.shots} / {t.racks}",
+            f"{t.racking_live_settles} settles while racking with the clock on left out"
+            if t.racking_live_settles
+            else "",
         ),
         (
-            "Clock accuracy incl. self-healing",
+            "Detection",
             pct(t.shots - t.expired_through - t.still_counted, t.shots),
-            "clock ended up right on its own (self-heal = ran long, then reset)"
+            "the shot was counted and the clock was right with no key pressed"
             + (f"; {t.still_counted} restarted with nothing moved" if t.still_counted else ""),
         ),
         (
@@ -351,7 +363,13 @@ def table(label: str, t: Tiers) -> str:
             ),
             (
                 "Placings kept off the clock",
-                f"{t.placing.get('applied', 0)}" + (f"  (also {other})" if other else ""),
+                f"{t.placing.get('applied', 0) + t.placing_phantom}"
+                + (
+                    f"  ({t.placing_phantom} by #37: nothing seen to move)"
+                    if t.placing_phantom
+                    else ""
+                )
+                + (f"  (also {other})" if other else ""),
                 "settles in ball in hand that moved only the cue; refused = a shot "
                 "already counted, late = decided before its list",
             ),
@@ -380,7 +398,15 @@ def table(label: str, t: Tiers) -> str:
             (
                 "Settles synthesized",
                 str(t.settles_synthesized),
-                "E9 watchdog healed a frozen clock (the miss is counted above)",
+                "E9 watchdog released a frozen clock",
+            )
+        )
+    if internals:
+        rows.append(
+            (
+                "Strike fired (internal)",
+                pct(t.shots - t.missed, t.shots),
+                f"tracker work only: {t.missed} shots were counted at their settle instead",
             )
         )
     width = max(len(r[0]) for r in rows)
@@ -392,6 +418,8 @@ def table(label: str, t: Tiers) -> str:
 
 def main() -> None:
     args = sys.argv[1:]
+    internals = "--internals" in args
+    args = [a for a in args if a != "--internals"]
     logs = Path("logs")
     if args and args[0] == "--all":
         paths = find_journals(logs)
@@ -410,10 +438,10 @@ def main() -> None:
     if not paths:
         print("no session journals found under logs/")
         return
-    print(table(label, mine(paths)))
+    print(table(label, mine(paths), internals))
     if not (args and args[0] == "--all"):
         print()
-        print(table("ALL-TIME (context)", mine(find_journals(logs))))
+        print(table("ALL-TIME (context)", mine(find_journals(logs)), internals))
 
 
 if __name__ == "__main__":

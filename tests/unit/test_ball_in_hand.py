@@ -217,13 +217,115 @@ def test_the_countdown_a_late_decision_starts_runs_from_the_settle() -> None:
     assert abs(hub.clock.remaining - (30.0 - SETTLE_LIST_WAIT_S - 1.01)) < 1e-6
 
 
-def test_anything_else_first_decides_the_settle_as_today() -> None:
+def test_a_command_first_decides_the_settle_as_today() -> None:
     hub, clock = _hub()
     _scratch(hub, clock)
     _move(hub, clock, 8.0, None)
     asyncio.run(hub.extension())  # a command
     assert _kinds(hub, "vision_balls_settled")[-1]["held"] == "input"
     assert hub.clock.rack_shots == 2
+
+
+def test_the_hand_still_moving_at_the_settle_does_not_decide_it() -> None:
+    """#69, session 20261121-153046 at 400.66 s: the motion latch rose 32 ms
+    after a placing's settle and 47 ms before its list. The motion waits
+    behind the settle, the list keeps the placing off the clock, ball in hand
+    goes on, and the next adjustment is placing too."""
+    hub, clock = _hub()
+    _scratch(hub, clock)
+    _move(hub, clock, 8.0, None)  # the settle at 9.0, held for its list
+    frozen = hub.clock.remaining
+    clock.now += 0.032
+    asyncio.run(hub.episode_started(9.032))  # the hand again
+    assert not _kinds(hub, "vision_balls_settled")[1:]  # still undecided
+    clock.now += 0.015
+    asyncio.run(hub.ball_list(9.0, "settle", PLACED))
+    settle = _kinds(hub, "vision_balls_settled")[-1]
+    assert settle["held"] == "list" and settle["rejected"] == "ball_in_hand"
+    assert _row(hub)["hand"] == "applied" and _row(hub)["counted"] is False
+    assert hub.clock.rack_shots == 1 and not _kinds(hub, "ball_in_hand_ended")
+    # The motion that waited is applied behind the list: the countdown the
+    # placing gave back is frozen again, with nothing lost.
+    kinds = [r["kind"] for r in hub.journal.tail(10_000.0)]
+    assert kinds.index("scratch_list", kinds.index("ball_in_hand")) < len(kinds) - 1
+    assert kinds[-1] == "shot_provisional"
+    assert hub.clock.state is State.MOTION and hub.clock.remaining == frozen
+    clock.now += 1.0
+    asyncio.run(hub.balls_settled(10.4, movers=[SettleMover(travel_mm=374.0, alive=False)]))
+    clock.now += 0.05
+    asyncio.run(hub.ball_list(10.4, "settle", PLACED_AGAIN))
+    assert _row(hub)["row"] == "ball_in_hand" and hub.clock.rack_shots == 1
+    _move(hub, clock, 20.0, SHOT, travel=1500.0)
+    (ended,) = _kinds(hub, "ball_in_hand_ended")
+    assert ended["reason"] == "shot" and ended["placed"] == 2
+
+
+def test_what_waited_behind_a_settle_is_applied_in_order_when_the_wait_runs_out() -> None:
+    hub, clock = _hub()
+    _scratch(hub, clock)
+    _move(hub, clock, 8.0, None)
+    clock.now += 0.03
+    asyncio.run(hub.episode_started(9.03))
+    clock.now += 0.2
+    asyncio.run(hub.shot_taken(9.23, ball_id=1, speed_mms=900.0))
+    assert hub.clock.rack_shots == 1  # the settle, the motion and the strike all wait
+    clock.now += SETTLE_LIST_WAIT_S
+    hub.tick()
+    wanted = ("vision_balls_settled", "shot_provisional", "vision_shot_taken")
+    kinds = [r["kind"] for r in hub.journal.tail(10_000.0) if r["kind"] in wanted]
+    assert kinds[-3:] == list(wanted)
+    assert _kinds(hub, "vision_balls_settled")[-1]["held"] == "timeout"
+    assert hub.clock.rack_shots == 2 and hub.clock.state is State.MOTION
+    # Each as of its own arrival: the freeze is stamped when the motion came.
+    assert hub._provisional_open_mono == clock.now - SETTLE_LIST_WAIT_S - 0.2
+
+
+def test_a_call_past_the_wait_does_not_queue() -> None:
+    """The tick loop decides an overdue settle, but it beats at 10 Hz: a
+    call arriving after the wait and before the next beat decides it too."""
+    hub, clock = _hub()
+    _scratch(hub, clock)
+    _move(hub, clock, 8.0, None)
+    clock.now += SETTLE_LIST_WAIT_S + 0.01
+    asyncio.run(hub.episode_started(9.31))
+    assert _kinds(hub, "vision_balls_settled")[-1]["held"] == "timeout"
+    assert hub.clock.rack_shots == 2 and hub.clock.state is State.MOTION
+
+
+def test_a_command_applies_what_waited_before_it_runs() -> None:
+    hub, clock = _hub()
+    _scratch(hub, clock)
+    _move(hub, clock, 8.0, None)
+    clock.now += 0.03
+    asyncio.run(hub.episode_started(9.03))
+    asyncio.run(hub.new_rack())
+    kinds = [r["kind"] for r in hub.journal.tail(10_000.0)]
+    assert kinds.index("shot_provisional", kinds.index("ball_in_hand")) < kinds.index(
+        "cmd_new_rack"
+    )
+    assert _kinds(hub, "vision_balls_settled")[-1]["held"] == "input"
+    assert hub.clock.state is State.IDLE
+
+
+def test_a_settle_that_waited_behind_another_gets_its_own_list() -> None:
+    """Two placings whose settles come closer together than a list takes:
+    the second waits behind the first, is held in its turn, and its own list
+    decides it."""
+    hub, clock = _hub()
+    _scratch(hub, clock)
+    _move(hub, clock, 8.0, None)  # settle at 9.0, held
+    clock.now += 0.02
+    asyncio.run(hub.episode_started(9.02))
+    clock.now += 0.02
+    asyncio.run(hub.balls_settled(9.04, movers=[SettleMover(travel_mm=40.0, alive=False)]))
+    clock.now += 0.02
+    asyncio.run(hub.ball_list(9.0, "settle", PLACED))
+    assert _row(hub)["hand"] == "applied"
+    assert hub.clock.state is State.MOTION  # the second settle is held now
+    clock.now += 0.05
+    asyncio.run(hub.ball_list(9.04, "settle", PLACED_AGAIN))
+    assert [r["hand"] for r in _kinds(hub, "scratch_list")[1:]] == ["applied", "applied"]
+    assert hub.clock.state is State.RUNNING and hub.clock.rack_shots == 1
 
 
 def test_placing_in_grace_leaves_the_buzzer_alone() -> None:

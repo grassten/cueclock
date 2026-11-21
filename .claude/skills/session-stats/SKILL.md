@@ -1,20 +1,22 @@
 ---
 name: session-stats
-description: Tiered accuracy percentages for a cueclock session — strike detection, accuracy including self-healing, break auto-catch, hands-off play. Use after a session, or when Steven asks "how did the session go", "session stats", "what's my accuracy", or wants the percentage table. Journal-only and read-only — safe to run any time, including while a session is live.
+description: Accuracy percentages for a cueclock session — detection, break auto-catch, hands-off play. Use after a session, or when Steven asks "how did the session go", "session stats", "what's my accuracy", or wants the percentage table. Journal-only and read-only — safe to run any time, including while a session is live.
 ---
 
-# Session stats — the tiered accuracy table
+# Session stats — the accuracy table
 
 One command turns a session journal into the percentage table Steven asked for
-(2026-08-06): not one accuracy number but tiers, because "vision missed the
-strike" and "the clock ended up wrong" are different failures with different
-costs, and most misses self-heal invisibly.
+(2026-08-06). **Detection is one number** (Steven, 2026-11-21: "That is 99%
+detection."): a shot the settle counted was detected, exactly like one the
+strike path caught. Never split it, and never present the internal
+strike-fired rate beside it.
 
 ```bash
 .venv/bin/python3 .claude/skills/session-stats/stats.py             # newest session + all-time context
 .venv/bin/python3 .claude/skills/session-stats/stats.py --last 2    # newest N sessions merged
 .venv/bin/python3 .claude/skills/session-stats/stats.py --all       # everything, no context block
 .venv/bin/python3 .claude/skills/session-stats/stats.py logs/session-<stamp>.jsonl
+.venv/bin/python3 .claude/skills/session-stats/stats.py --internals # tracker work only: adds the strike-fired row
 ```
 
 Use `.venv/bin/python3`, never `uv run` (concurrent `uv run`s block). The
@@ -29,11 +31,11 @@ computes it identically.
 
 | Tier | Definition |
 |---|---|
-| **Strike detection** | Vision fired on the stroke itself. The raw number; E7 (tracker) territory. ~97% and flat as of 2026-08-06. |
-| **Clock accuracy incl. self-healing** | The clock ended in the right state with no human help. A self-healed miss (countdown ran a few seconds long, then the settle reset it — `report`'s confession mechanism) counts as success. Two things count against it: a false foul, and (journals from checkpoint 132 on, which carry the ball list's `row`) a shot counted where the list read every ball in place — see **Restarted with nothing moved** below. Older journals cannot tell that second one from a self-healed miss, so their number is an upper bound: 17 of the 947 counted settles in the #33-era journals had no strike and no ball seen to move. |
+| **Detection** | The shot was counted and the clock ended in the right state with no key pressed. A shot counted at its settle, with the countdown a few seconds long until then, is detected like any other. Two things count against it: a false foul, and (journals from checkpoint 132 on, which carry the ball list's `row`) a shot counted where the list read every ball in place — see **Restarted with nothing moved** below. Older journals cannot see that second one, so their number is an upper bound: 17 of the 947 counted settles in the #33-era journals had no strike and no ball seen to move. |
 | **Break auto-catch** | The clock started off the break with no press: vision fires + (checkpoint 75+) E8 `break_adjudicated`, **both tiers since #36 (2026-08-11)** — the dark tier now counts a no-fire break off the pack un-merging (`appeared >= 5`), which is the 15-25% of breaks that never started the clock. Denominator is `cmd_new_rack` presses. **The row #36 predicts will move.** A strike that started the clock and was taken back because the rack never moved (design §17, checkpoint 135+) is not a caught break; the row names how many. Before 135 those counted as fired, which is how a session could read over 100%. |
 | **Hands-off play** | Shots minus every manual intervention: break-rescue presses, frozen-clock rescues, false fouls. The felt-accuracy headline (§13.9 judges the whole arc on this). |
 | **False fouls** | Buzzer sounded through a live shot. E9's grace hold should pin this at 0 from checkpoint 75 on — a nonzero value here is news, flag it. |
+| **Shots / racks** | Counted settles and `cmd_new_rack` presses. Settles while he racks with the clock still running are left out, and the note says how many: from the arm-free list that brings three or more numbers back at once until New Rack is pressed (`report.Racking`, #69). Before checkpoint 136 those read as shots, some of them as shots with no strike. |
 | **Phantom candidates** | `report`'s review symptoms (no roll-out / snap-back). Candidates, never verdicts. |
 | **Balls appeared mid-rack** | Mid-rack settles (`rack_shots >= 2`, `baseline >= 3`) whose rearrangement reports `appeared >= 1`, over all such settles (`report.mid_rack_appearances`). Past the break balls only leave the table, so every appearance is a ball the tracker lost and found again, or a shadow it took for one. **Lower is better.** 88 / 711 (12.4%) all-time at the 2026-11-15 audit (#48/#52); the shadow-filter work is judged on this row. |
 | **Scratches journaled** | Journals **with `vision_scratch_candidate` records** (checkpoint 77+, #26): `vision_scratch` is an adjudicated verdict — present it as a count, with candidates/refuted beside it (`report` prints all three). Journals **without** candidate records predate the two-stage verdict: **upper bound only**, over-counted ~6x (potted object balls mis-crowned as the cue; Steven ground truth 2026-08-06) — never present those as a real count. The adjudicator's one known leak keeps even new counts a slight over-bound: a real cue at rest in deep rail shade (0.53 whiteness vs the 0.72 witness floor) cannot refute its false candidate. |
@@ -47,7 +49,7 @@ since #63 a settle's list also has a say in the scratch hold (rows below).
 | **Ball lists written** | Every settle's list plus each list read at rest that differed from the last, and how many had an arm over the table (an arm list can show a ball is there, never that one is gone, so it is left out of the three checks below). |
 | **List count = tracker's at a settle** | Settle lists whose ball count equals the tracker's present tracks at that frame. A disagreement says one of the two is wrong, not which. |
 | **Lists with a number twice** | Arm-free lists giving one number to two balls. **Always an error.** The corpus had 2 in 162 rests. From checkpoint 131 (#65) it is 0 by construction: each number goes to one ball per list, so read the next row instead. |
-| **Numbers back after leaving** | Within one rack, from the break on (`rack_shots >= 1`): a number missing from an arm-free list that turns up again later. **Always an error** (balls only leave the table past the break). |
+| **Numbers back after leaving** | Within one rack, from the break on (`rack_shots >= 1`): a number missing from an arm-free list that turns up again later. **Always an error** (balls only leave the table past the break). Three or more back on one list is racking begun with the clock running, not three errors: nothing is judged from that list to the next rack (#69; session 20261121-153046 read 47 before, 8 after). |
 | **Numbers given up** | Object balls on arm-free lists that read a number another ball matched better, and took their next best (`reassigned` on the `ball_list` line, checkpoint 131+; `own` in `balls.jsonl` says what each read). Not an error by itself: each one is a duplicate the list resolved, and only a by-eye look at its frame (`cueclock balls <session>`) says which way. Corpus: 2 in 1,482 readings at 162 rests, both a hand read as a ball. |
 | **Balls with no number** | `?` on arm-free lists over all object balls listed: mostly a stripe resting with its white cap straight up, the known open case. |
 
@@ -71,15 +73,15 @@ standing scratch to the first settle that moves an object ball.
 | Row | Definition |
 |---|---|
 | **Ball in hand (after a scratch)** | Periods begun (`ball_in_hand` lines), and how each ended (`ball_in_hand_ended`: `shot`, `new_rack`, `refuted`). |
-| **Placings kept off the clock** | Settles during ball in hand that moved only the cue, so they counted nothing and the clock kept running (`row` `ball_in_hand`, `hand` `applied`). In parentheses: `refused` (a GRACE/IDLE fire had already counted a shot), `late` (decided before its list came, or the 0.15 s wait ran out), `not_held` (clock idle or off). **A placing that was a real shot sends #64 back**; each is a `placing` moment on the review page, and each counted settle that ended ball in hand an `in_hand_shot` moment (Steven's shot, or a placing missed). |
+| **Placings kept off the clock** | Settles during ball in hand that moved only the cue, so they counted nothing and the clock kept running (`row` `ball_in_hand`, `hand` `applied`), plus placings #37 refused first because the tracker saw nothing move at all (`rejected: phantom` during ball in hand; named in the row). In parentheses: `refused` (a GRACE/IDLE fire had already counted a shot), `late` (the 0.3 s wait ran out, or a command, candidate or refutation decided it first; since checkpoint 136 the next motion or strike waits behind the settle instead), `not_held` (clock idle or off). **A placing that was a real shot sends #64 back**; each is a `placing` moment on the review page, and each counted settle that ended ball in hand an `in_hand_shot` moment (Steven's shot, or a placing missed). |
 | **Only the cue moved, open play** | Settles with no scratch before them where the cue moved and no object ball did, out of settles with a row. They restart the countdown as before (Steven's call: open-play carries are behavioural). |
-| **Restarted with nothing moved** | Settles that counted a shot while their ball list read the cue and every object ball where they stood before the motion (`row` `still`, `counted`), out of settles with a row. **Always an error**: the countdown restarted and no shot was played (first seen 20261119-020755 at 176 s: a sleeve beside the ball at the side pocket, the tracker lost the ball and reported it vanished). From checkpoint 135 (design §16) the hub refuses these when the tracker saw no ball displaced and the list arrives in time; the note gives how many it refused. What is left here is a list that came late, or a settle the tracker saw a ball move in: each is a `no_change` moment on the review page. |
+| **Restarted with nothing moved** | Settles that counted a shot while their ball list read the cue and every object ball where they stood before the motion (`row` `still`, `counted`), out of settles with a row. **Always an error**: the countdown restarted and no shot was played (first seen 20261119-020755 at 176 s: a sleeve beside the ball at the side pocket, the tracker lost the ball and reported it vanished). From checkpoint 135 (design §16) the hub refuses these when the tracker saw no ball displaced and the list arrives in time; the note gives how many it refused. From checkpoint 136 it also holds a settle with no strike in which the tracker moved one ball. What is left here is a list that came late, or a settle with a strike or two balls moved: each is a `no_change` moment on the review page. |
 
 Rows that appear only when nonzero: **dark break candidates** (E8's no-fire
 tier while it was shadow-only, checkpoint 75 → #36 — **historical, pre-2026-08-11
 journals only**; the tier went live in #36 keying on `appeared >= 5`, so a dark
 catch now counts inside break auto-catch as a `break_adjudicated` with
-`tier="dark"`), **settles synthesized** (E9 watchdog rescues), **provisional
+`tier="dark"`), **settles synthesized** (E9 watchdog rescues; a break over a standing rack is taken back instead since checkpoint 136 and shows as a false start), **strike fired (internal)** (`--internals` only: how often the strike path fired, for tracker work; never the detection number), **provisional
 shots** (#33: latch freezes / reverted-not-a-shot / suppressed settles —
 reverts and suppressions are placements the clock now correctly ignores, not
 misses).
@@ -90,13 +92,13 @@ misses).
   Restart key didn't bump `rack_shots` 0→1, so all-time break rows undercount
   manual rescues (the true pre-08-05 rate was ~15-25% of racks, mined from
   press timing in accuracy plan §13.0).
-- **A miss whose settle was also missed leaves no trace** (`report`'s floor,
-  not ceiling) — the backstop (checkpoint 75) narrows but does not close this.
+- **A shot with neither a strike nor a settle leaves no trace** (`report`'s
+  floor, not ceiling) — the backstop (checkpoint 75) narrows but does not
+  close this.
 - **Journals from #33 on defer RUNNING fires to the settle**, so `rack_shots`
   bumps at the settle even for seen strikes; `report` marks those settles
-  seen via the open strike record. Strike-detection rates stay comparable
-  across the boundary — a pre-#33 confessed miss and a post-#33 one read the
-  same way.
+  seen via the open strike record. The internal strike-fired rate stays
+  comparable across the boundary.
 - Strategy questions ("is it getting better?") get answered from this table
   plus the trend across sessions — never by opening clips (Steven, 2026-08-05).
 

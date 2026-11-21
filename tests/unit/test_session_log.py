@@ -327,6 +327,35 @@ def test_compare_tolerates_timing_but_not_verdicts() -> None:
     assert compare([*live, {"kind": "detect_heartbeat"}], live) == []
 
 
+def test_a_count_that_shifted_is_one_difference_not_one_per_record() -> None:
+    """#69: newer code refuses a settle the live code counted. Every later
+    record of the rack then carries a count one lower; only the refused
+    settle is a different decision, and New Rack resets either count."""
+
+    def rec(kind: str, shots: int, state: str = "RUNNING", **extra: object) -> dict[str, object]:
+        return {"kind": kind, "state": state, "rack_shots": shots, "remaining": 30.0, **extra}
+
+    def rack(first: int, refused: bool) -> list[dict[str, object]]:
+        second = first if refused else first + 1
+        return [
+            rec("vision_balls_settled", first),
+            rec(
+                "vision_balls_settled", second, **({"rejected": "nothing_moved"} if refused else {})
+            ),
+            rec("vision_shot_taken", second, "MOTION"),
+            rec("vision_balls_settled", second + 1),
+            rec("cmd_new_rack", 0, "IDLE"),
+            rec("vision_shot_taken", 1, "MOTION"),
+        ]
+
+    (diff,) = compare(rack(5, refused=False), rack(5, refused=True))
+    assert diff["op"] == "changed" and diff["replay"]["rejected"] == "nothing_moved"
+    # A settle counted twice is still a difference, with nothing else changed.
+    twice = rack(5, refused=False)
+    twice[3] = rec("vision_balls_settled", 8)
+    assert [d["op"] for d in compare(rack(5, refused=False), twice)] == ["changed"]
+
+
 def test_a_record_kind_the_live_code_never_wrote_is_not_a_difference() -> None:
     """Newer code journals more: a `scratch_list` line at every settle since
     checkpoint 132. Replaying an older session must not call that a changed

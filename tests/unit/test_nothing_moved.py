@@ -23,6 +23,8 @@ POTTED = _list(("cue", 100.0), ("8", 700.0))  # the 3 is gone
 NUDGED = _list(("cue", 106.0), ("3", 400.0), ("8", 700.0))  # the cue moved 6 px
 VANISHED = RearrangeSummary(moved=0, appeared=0, vanished=1, moved_mm=0.0, baseline_balls=3)
 MOVED = RearrangeSummary(moved=1, appeared=0, vanished=1, moved_mm=310.0, baseline_balls=3)
+CREPT = RearrangeSummary(moved=1, appeared=0, vanished=0, moved_mm=38.0, baseline_balls=3)
+TWO_MOVED = RearrangeSummary(moved=2, appeared=0, vanished=0, moved_mm=310.0, baseline_balls=3)
 
 
 # ---------- the rule ----------
@@ -129,9 +131,46 @@ def test_a_list_that_never_comes_counts_as_before() -> None:
     assert _kinds(hub, "vision_balls_settled")[-1]["held"] == "timeout"
 
 
-def test_a_settle_the_tracker_saw_a_ball_move_in_never_waits() -> None:
+def test_one_ball_the_tracker_moved_with_no_strike_waits_for_the_list() -> None:
+    """#69, session 20261121-153046 at 712 s: he stood over the shot, the
+    tracker moved one ball 38 mm, no strike fired, and the settle restarted
+    the countdown 5 s before the stroke. The list read every ball in place."""
     hub, clock = _hub()
-    _freeze_and_settle(hub, clock, MOVED)
+    frozen = _freeze_and_settle(hub, clock, CREPT)
+    assert hub.clock.state is State.MOTION  # held
+    clock.now += 0.074
+    asyncio.run(hub.ball_list(5.6, "settle", SAME))
+    assert hub.clock.state is State.RUNNING and hub.clock.rack_shots == 0
+    assert hub.clock.remaining == frozen
+    (revert,) = _kinds(hub, "shot_provisional_reverted")
+    assert revert["reason"] == "nothing_moved"
+
+
+def test_one_ball_moved_and_no_strike_still_counts_when_the_list_shows_it() -> None:
+    """A soft shot the strike machinery missed reads the same to the
+    tracker (42-49 mm on record); its list shows the ball gone or moved."""
+    hub, clock = _hub()
+    _freeze_and_settle(hub, clock, CREPT)
+    clock.now += 0.05
+    asyncio.run(hub.ball_list(5.6, "settle", POTTED))
+    assert hub.clock.rack_shots == 1 and hub.clock.remaining == 30.0
+    assert _kinds(hub, "vision_balls_settled")[-1]["held"] == "list"
+
+
+def test_a_ball_moved_by_a_strike_never_waits() -> None:
+    hub, clock = _hub()
+    clock.now += 9.5
+    asyncio.run(hub.episode_started(5.0))
+    asyncio.run(hub.shot_taken(5.1, ball_id=1, speed_mms=2400.0))
+    clock.now += 0.6
+    asyncio.run(hub.balls_settled(5.6, rearrange=MOVED, tracker_cue=True))
+    assert hub.clock.state is State.RUNNING and hub.clock.rack_shots == 1
+    assert "held" not in _kinds(hub, "vision_balls_settled")[-1]
+
+
+def test_two_balls_moved_never_wait() -> None:
+    hub, clock = _hub()
+    _freeze_and_settle(hub, clock, TWO_MOVED)
     assert hub.clock.state is State.RUNNING and hub.clock.rack_shots == 1
     assert "held" not in _kinds(hub, "vision_balls_settled")[-1]
 

@@ -14,6 +14,7 @@ import functools
 import inspect
 import json
 import time
+from collections import deque
 from collections.abc import Callable, Coroutine, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -163,11 +164,13 @@ BREAK_FIRE_SETTLE_MAX_SECONDS = 15.0
 SCRATCH_HOLD_SECONDS = 5.0
 
 # How long a settle that waits for its ball list (ball in hand, #64 §15; a
-# freeze with nothing seen to move, §16) is held before it is decided as
-# today. Measured live, hub time from the settle to its list, over the 81
-# settles of sessions 20261117-201731 and 20261119-020755: median 74 ms, 90th
-# percentile 128 ms, and it grows with the table (1-5 balls 34-81 ms, 13 or
-# more 71-174 ms, median 142). The one outlier, 537 ms, came in a stretch
+# freeze with nothing seen to move, §16; a break over a standing rack, §17)
+# is held before it is decided as today. The pipeline's calls that arrive
+# meanwhile wait behind it for the same time (#69, `Hub._vision`). Measured
+# live, hub time from the settle to its list, over the 81 settles of sessions
+# 20261117-201731 and 20261119-020755: median 74 ms, 90th percentile 128 ms,
+# and it grows with the table (1-5 balls 34-81 ms, 13 or more 71-174 ms,
+# median 142). The one outlier, 537 ms, came in a stretch
 # where the detect rate had fallen to 68-89 Hz. The first value was 0.15 s,
 # twice the slowest *fit* in #63's brief (20-75 ms), which left out the wait
 # for a detect worker: 4 of those 81 lists would have missed it, all with
@@ -441,8 +444,9 @@ def hub_input(
     async def wrapper(hub: "Hub", /, *args: _P.args, **kwargs: _P.kwargs) -> _R:
         if _IN_INPUT.get() or hub.on_input is None:
             # A settle waiting for its ball list (#64) is decided as today
-            # before any command touches the clock.
-            hub._decide_held_settle("input")
+            # before any command touches the clock, and what queued behind
+            # it is applied: a press is authoritative and never waits.
+            hub._flush_held("input")
             return await method(hub, *args, **kwargs)
         bound = signature.bind(hub, *args, **kwargs)
         hub.on_input(
@@ -455,7 +459,7 @@ def hub_input(
         )
         token = _IN_INPUT.set(True)
         try:
-            hub._decide_held_settle("input")
+            hub._flush_held("input")
             return await method(hub, *args, **kwargs)
         finally:
             _IN_INPUT.reset(token)
@@ -574,6 +578,13 @@ class Hub:
         self._ball_in_hand: _BallInHand | None = None
         self._held_settle: _HeldSettle | None = None
         self._settle_was_held = False
+        # #69: the pipeline's calls that arrived while a settle was held,
+        # each with the hub time it arrived at (`_vision`). Non-empty only
+        # while a settle is held.
+        self._queued: deque[tuple[float, Callable[[float], bool]]] = deque()
+        # A strike fired in the open episode (§16: a freeze with none is a
+        # pure compensation, and its settle may wait for its list).
+        self._episode_struck = False
         # §17: this episode's strike took the clock out of IDLE as the break.
         # Its settle may still take that back (the rack never moved).
         self._break_fired = False
@@ -801,6 +812,9 @@ class Hub:
         The synthesized settle rides the normal compensation path — a shot
         with no strike still gets counted — and journals its own kind so
         triage sees the underlying miss rather than a clean settle.
+
+        The one freeze it does not count is a break over a standing rack
+        (§17): that one goes back to the armed rack instead.
         """
         if self.clock.state is not State.MOTION:
             self._motion_entered_mono = None
@@ -811,6 +825,29 @@ class Hub:
         if self._motion_high_mono is not None:
             anchor = max(anchor, self._motion_high_mono)
         if self._table_motion or now - anchor < FROZEN_WATCHDOG_SECONDS:
+            return
+        if (
+            self._break_fired
+            and holds_rack(self._rest_lists.last_before(self._episode_motion_t))
+            and self.clock.break_reverted(now)
+        ):
+            # §17 for the settle that never came (#69): the strike left IDLE
+            # as the break with a rack standing, and the table has been quiet
+            # ever since. A break is never quiet: its balls roll, and its
+            # settle comes within 8.62 s. Counting here would start a
+            # countdown on a racked table (session 20261121-153046, 10:38:33:
+            # the cue ball set down for the break, 12 s of nothing, 30 s on
+            # the wall). Back to the armed rack, as the settle's list would
+            # have decided it.
+            self._break_fired = False
+            self._rack_pending = True
+            self._log(
+                "shot_provisional_reverted",
+                reason="rack_standing",
+                by="watchdog",
+                quiet_s=round(now - anchor, 2),
+            )
+            self._motion_entered_mono = None
             return
         self.clock.balls_settled(now)
         # A synthesized settle carries no evidence, so it fails open and
@@ -1455,6 +1492,64 @@ class Hub:
     # `detect_heartbeat` line provides (its `mono` minus `frame_age_s` ≈ the mono
     # instant of its `frame_t`).
 
+    #
+    # Each of the pipeline's calls goes through `_vision`: applied at once, or
+    # queued behind a settle that is waiting for its list (#69). The halves
+    # that do the work are synchronous and take the hub time the call arrived
+    # at; they return whether the clock may have changed (a broadcast is due).
+
+    def _vision(self, call: Callable[[float], bool]) -> bool:
+        """Apply one pipeline call, or queue it behind a held settle.
+
+        A settle held for its ball list is decided by that list, not by
+        whatever the pipeline says next (#69). During placing the hand is
+        still moving when the settle fires: in session 20261121-153046 the
+        motion latch rose 32 ms after a held settle and decided it as a shot,
+        47 ms before the list that would have read it as placing; ball in
+        hand ended there, and the next adjustment restarted the countdown
+        again. So the calls that arrive while a settle is held wait behind
+        it, for at most what is left of SETTLE_LIST_WAIT_S, and are then
+        applied in the order they came, each as of its own arrival. The cost
+        is that a freeze right behind a held settle can show up to 0.3 s late
+        on the wall; no clock time is lost.
+
+        The ball list is what the settle waits for and never queues. Neither
+        do a scratch candidate or a refutation, which are evidence about the
+        cue in the held settle's own shot and decide it as before, nor an
+        operator command (`hub_input`): a press is authoritative.
+        """
+        now = self._now()
+        held = self._held_settle
+        if held is not None and now - held.now >= SETTLE_LIST_WAIT_S:
+            self._flush_held("timeout")  # the tick loop is up to 0.1 s behind
+        if self._held_settle is not None:
+            self._queued.append((now, call))
+            return False
+        return call(now)
+
+    def _drain_queued(self) -> bool:
+        """Apply what queued behind a held settle, now that it is decided:
+        in arrival order, each as of its own arrival. Stops if one of them is
+        a settle that is held in turn; the rest then wait behind that one.
+        True when anything was applied."""
+        applied = False
+        while self._queued and self._held_settle is None:
+            now, call = self._queued.popleft()
+            call(now)
+            applied = True
+        return applied
+
+    def _flush_held(self, why: str) -> bool:
+        """Decide a held settle as today (``why``) and apply everything
+        queued behind it; a queued settle that is held in turn goes the same
+        way. True when a settle was waiting. The caller broadcasts."""
+        flushed = False
+        while self._held_settle is not None:
+            self._decide_held_settle(why)
+            self._drain_queued()
+            flushed = True
+        return flushed
+
     async def shot_taken(
         self,
         t: float | None = None,
@@ -1462,13 +1557,24 @@ class Hub:
         speed_mms: float | None = None,
         newborn: bool = False,
     ) -> None:
-        self._decide_held_settle("shot")
+        if self._vision(lambda now: self._shot_taken(now, t, ball_id, speed_mms, newborn)):
+            await self.broadcast(self.clock.snapshot())
+
+    def _shot_taken(
+        self,
+        now: float,
+        t: float | None,
+        ball_id: int | None,
+        speed_mms: float | None,
+        newborn: bool,
+    ) -> bool:
         detail: dict[str, object] = {"t": t, "frame_t": t, "ball": ball_id, "newborn": newborn}
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
-        self._last_shot_mono = self._now()  # replay anchor — before every gate
+        self._last_shot_mono = now  # replay anchor — before every gate
         if not self._episode_open:
             self._begin_episode(t)  # a strike the latch never saw is still a shot (#63)
+        self._episode_struck = True
         if self._rack_pending or self._rack_break_mono is None:
             # The break: the first shot after a New Rack press, or the session's
             # first shot (a `no_clock` drill has no New Rack key at all). From
@@ -1478,12 +1584,12 @@ class Hub:
             self._rack_pending = False
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
-            return  # kill switch: misbehaving vision must not move the clock
+            return False  # kill switch: misbehaving vision must not move the clock
         if not self.clock_live:
             if not self.clock.mode.clock_live:
                 self._drill_reps += 1  # the solo panel's REPS — approximate by design
             self._log("vision_shot_taken_no_clock", **detail)
-            return  # no_clock mode / freestyle: journaled as evidence, never clocked
+            return False  # no_clock mode / freestyle: journaled as evidence, never clocked
         floor = self.clock.mode.break_floor_mms
         if self.clock.state is State.IDLE:
             # E8 evidence, stamped before the floor gate: whatever the gate
@@ -1492,7 +1598,7 @@ class Hub:
             # In-flight tracks under-read speed 2-4x, so the fires the floor
             # eats are mostly real breaks — 15 of the 84 eaten fires on
             # record needed a manual rescue press.
-            self._idle_fire = (self._now(), speed_mms)
+            self._idle_fire = (now, speed_mms)
         if (
             self.clock.state is State.IDLE
             and floor is not None
@@ -1502,7 +1608,7 @@ class Hub:
             # Racking / placement motion, not a break — see the gate note
             # above. Speed only: the newborn half was removed at checkpoint 57.
             self._log("vision_shot_taken_ignored_idle", **detail)
-            return
+            return False
         state_before = self.clock.state
         if self._pace_since_mono is not None and state_before in (State.RUNNING, State.GRACE):
             # Solo pace (#30): this shot ends the countdown the stamp opened.
@@ -1526,10 +1632,10 @@ class Hub:
             # #33 Part B: the fire opened (or joined) the provisional
             # episode — its count is the settle's decision now.
             if self._provisional_open_mono is None:
-                self._provisional_open_mono = self._now()
+                self._provisional_open_mono = now
             detail["provisional"] = True
         self._log("vision_shot_taken", **detail)
-        await self.broadcast(self.clock.snapshot())
+        return True
 
     async def balls_settled(
         self,
@@ -1539,8 +1645,21 @@ class Hub:
         movers: "list[SettleMover] | None" = None,
         tracker_cue: bool = False,
     ) -> None:
+        if self._vision(
+            lambda now: self._balls_settled(now, t, rearrange, backstop, movers, tracker_cue)
+        ):
+            await self.broadcast(self.clock.snapshot())
+
+    def _balls_settled(
+        self,
+        now: float,
+        t: float | None,
+        rearrange: "RearrangeSummary | None",
+        backstop: bool,
+        movers: "list[SettleMover] | None",
+        tracker_cue: bool,
+    ) -> bool:
         detail: dict[str, object] = {"t": t, "frame_t": t}
-        self._decide_held_settle("settle")
         # #63: what this settle's ball list will be judged against, kept until
         # the list arrives (20-75 ms later live). Before every gate, so a
         # killed or untimed settle still journals what the list said.
@@ -1579,11 +1698,10 @@ class Hub:
             detail["mover_max_mm"] = round(max(m.travel_mm for m in movers))
         if not self.vision_enabled:
             self._log("vision_balls_settled_killed", **detail)
-            return  # kill switch, as above
+            return False  # kill switch, as above
         if not self.clock_live:
             self._log("vision_balls_settled_no_clock", **detail)
-            return  # journaled, not clocked — as above
-        now = self._now()
+            return False  # journaled, not clocked — as above
         # #64: during ball in hand a settle waits for its list before it
         # touches the clock — at most SETTLE_LIST_WAIT_S — because only the
         # list can say whether it moved nothing but the cue. The clock stays
@@ -1594,7 +1712,8 @@ class Hub:
         # scratch to compare with, and travel under the hand bound. IDLE
         # settles are the clock's no-op and E8's business, never held.
         # §16: so does a settle on a freeze in which the tracker saw no ball
-        # displaced — its list says whether anything moved at all. §17: and
+        # displaced, or one ball and no strike — its list says whether
+        # anything moved at all. §17: and
         # the settle of a strike that left IDLE as the break, when a rack
         # stood before it — its list says whether the rack still does.
         if (
@@ -1608,9 +1727,9 @@ class Hub:
         ):
             self._held_settle = _HeldSettle(now, t, detail, rearrange, backstop)
             self._settle_was_held = True
-            return
+            return False
         self._decide_settle(now, t, detail, rearrange, backstop)
-        await self.broadcast(self.clock.snapshot())
+        return True
 
     def _decide_settle(
         self,
@@ -1725,9 +1844,10 @@ class Hub:
 
     def _decide_held_settle(self, why: str) -> bool:
         """Decide a settle that is waiting for its list as today, because
-        something else reached the hub first (``why``: the next vision call,
-        a command) or the wait ran out (``timeout``). True when one was
-        waiting. The caller broadcasts."""
+        something that does not wait reached the hub first (``why``: a
+        command, a scratch candidate or refutation) or the wait ran out
+        (``timeout``). True when one was waiting. Callers go through
+        `_flush_held`, which also applies what queued behind it."""
         held, self._held_settle = self._held_settle, None
         if held is None:
             return False
@@ -1740,7 +1860,7 @@ class Hub:
         within SETTLE_LIST_WAIT_S is decided as today."""
         held = self._held_settle
         if held is not None and now - held.now >= SETTLE_LIST_WAIT_S:
-            self._decide_held_settle("timeout")
+            self._flush_held("timeout")
 
     def _placing_rest(self, facts: SettleFacts) -> "BallList | None":
         """During ball in hand: the newest arm-free list since the scratch and
@@ -1763,16 +1883,27 @@ class Hub:
         The countdown is frozen on a provisional, so being wrong costs what
         #33 already accepts; the tracker saw no ball displaced (a ball it
         merely lost or found reads the same whether a pot or a sleeve did
-        it); and there is an arm-free list from before the motion to compare
-        with. A settle the tracker saw a ball move in is never held, and the
-        pipeline's backstop settle is break-scale by construction.
+        it), or one ball in an episode with no strike; and there is an
+        arm-free list from before the motion to compare with. The pipeline's
+        backstop settle is break-scale by construction and never held.
+
+        One ball and no strike (#69): in session 20261121-153046 at 712 s the
+        tracker moved one ball 38 mm while he stood over the shot, the settle
+        counted, and the list 74 ms later read every ball where it stood. A
+        distance cannot separate that from a shot (real ones in the same
+        journals read 42, 44 and 49 mm), so the list decides, and it refuses
+        only a table read unchanged: none of the 112 settles it read as a
+        shot in the three sessions since checkpoint 132 does. A settle with a
+        strike in it, or with two or more balls moved, is decided at once.
         """
+        if rearrange is None:
+            return False
+        unmoved = rearrange.moved == 0 or (rearrange.moved == 1 and not self._episode_struck)
         return (
             self.clock.state is State.MOTION
             and self._provisional_open_mono is not None
             and not backstop
-            and rearrange is not None
-            and rearrange.moved == 0
+            and unmoved
             and self._rest_lists.before(facts.motion_t)[0] is not None
         )
 
@@ -1834,6 +1965,9 @@ class Hub:
         if reason == "settle":
             await self._judge_settle_list(t, found)
         self._rest_lists.add(t, found)
+        # #69: what the pipeline said while the settle waited for this list.
+        if self._drain_queued():
+            await self.broadcast(self.clock.snapshot())
 
     async def _judge_settle_list(self, t: float, found: "BallList") -> None:
         """#63: the list's say at the settle it was read at — call the
@@ -1939,6 +2073,7 @@ class Hub:
         self._episode_open = True
         self._episode_motion_t = t
         self._break_fired = False
+        self._episode_struck = False
 
     def _retire_scratch(self) -> None:
         """One ``scratch_call`` line per shot that had a scratch called (#63):
@@ -2122,14 +2257,16 @@ class Hub:
         optimize it (#33): the 0.2 s displacement window dominates, stride 1
         is a measured null (plan §3.1 item 4).
         """
-        self._decide_held_settle("motion")
+        if self._vision(lambda now: self._episode_started(now, t)):
+            await self.broadcast(self.clock.snapshot())
+
+    def _episode_started(self, now: float, t: float | None) -> bool:
         if not self._episode_open:
             self._begin_episode(t)
         if not self.vision_enabled or not self.clock_live:
-            return
-        now = self._now()
+            return False
         if not self.clock.motion_started(now):
-            return  # only a RUNNING countdown freezes; GRACE/IDLE decline
+            return False  # only a RUNNING countdown freezes; GRACE/IDLE decline
         self._provisional_open_mono = now
         if self._pace_since_mono is not None:
             # The stroke pace-wise ends at the freeze (~0.25 s after it) —
@@ -2137,7 +2274,7 @@ class Hub:
             self._pace_pending = (self._pace_since_mono, now - self._pace_since_mono)
             self._pace_since_mono = None
         self._log("shot_provisional", t=t, frame_t=t)
-        await self.broadcast(self.clock.snapshot())
+        return True
 
     async def episode_discarded(self, t: float | None = None) -> None:
         """#33 Part B: the engine unlatched with no settle — its pickup
@@ -2147,17 +2284,20 @@ class Hub:
         A scratch hold owed through the freeze is granted on the way out
         (#63: lost once, 2026-08-13, when the verdict came during the freeze).
         """
-        self._decide_held_settle("discard")
+        if self._vision(lambda now: self._episode_discarded(now, t)):
+            await self.broadcast(self.clock.snapshot())
+
+    def _episode_discarded(self, now: float, t: float | None) -> bool:
         self._episode_open = False
         if not self.vision_enabled or not self.clock_live:
-            return
-        now = self._now()
-        if self.clock.motion_reverted(now):
+            return False
+        reverted = self.clock.motion_reverted(now)
+        if reverted:
             self._revert_pace()
             self._log("shot_provisional_reverted", t=t, frame_t=t, reason="pickup_discard")
             self._maybe_hold_for_scratch()
-            await self.broadcast(self.clock.snapshot())
         self._provisional_open_mono = None
+        return reverted
 
     def _abandon_provisional(self) -> None:
         """An operator key rescoped the clock: the open episode is over (#33).
@@ -2196,7 +2336,11 @@ class Hub:
         # running with no hold). Since #26 this is a candidate the whiteness
         # census could not refute; journals without candidate records predate
         # the split and stay what they always were — an upper bound.
+        self._vision(lambda now: self._scratch_seen(t))
+
+    def _scratch_seen(self, t: float | None) -> bool:
         self._log("vision_scratch", t=t, frame_t=t)
+        return False
 
     async def scratch_candidate(
         self,
@@ -2213,7 +2357,7 @@ class Hub:
         # so a live candidate is auditable from the journal alone. A settle
         # still waiting for its list is decided first: with a candidate open
         # it is no pick-up (#64), and the hold needs the countdown it starts.
-        decided = self._decide_held_settle("candidate")
+        decided = self._flush_held("candidate")
         state = self._scratch if self._scratch is not None else _ShotScratch()
         self._scratch = state
         if state.closed == "refuted" and not state.granted:
@@ -2246,7 +2390,7 @@ class Hub:
     ) -> None:
         # The witness's position and reading ride along so any refutation
         # can be spot-audited against footage later.
-        self._decide_held_settle("refuted")
+        self._flush_held("refuted")
         self._log(
             "vision_scratch_refuted",
             t=t,

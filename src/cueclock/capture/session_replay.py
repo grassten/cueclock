@@ -251,8 +251,27 @@ def decisions(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [r for r in records if str(r.get("kind", "")).startswith(DECISION_PREFIXES)]
 
 
-def _key(record: dict[str, Any]) -> tuple[object, ...]:
-    return (record["kind"], *(record.get(f) for f in VERDICT_FIELDS))
+def _keys(records: list[dict[str, Any]]) -> list[tuple[object, ...]]:
+    """What each decision record is compared on: its kind and verdict fields,
+    with the rack's shot count as its step from the record before.
+
+    The step is what the record did to the count. Compared as a total, one
+    settle that newer code no longer counts made every later record of the
+    rack differ, the matcher then paired each shot with the one after it,
+    and `review check` called verdicts regressed that nothing had touched
+    (#69: 34 such differences behind 3 changed decisions). A count going
+    down is a reset (New Rack, a break taken back), whatever it stood at.
+    """
+    keys: list[tuple[object, ...]] = []
+    before = 0
+    for record in records:
+        fields = {f: record.get(f) for f in VERDICT_FIELDS}
+        shots = record.get("rack_shots")
+        if isinstance(shots, int):
+            fields["rack_shots"] = shots - before if shots >= before else "reset"
+            before = shots
+        keys.append((record["kind"], *fields.values()))
+    return keys
 
 
 def _brief(record: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -298,14 +317,15 @@ def compare(live: list[dict[str, Any]], replayed: list[dict[str, Any]]) -> list[
     called every older "right" verdict regressed for holding one. What newer
     logic *did* to the clock still shows in the kinds both journals hold: a
     refused settle, a reverted freeze, a different ``remaining``.
+
+    A decision that changes the shot count is one difference, at the record
+    that counted (`_keys`), not one at every record until the next rack.
     """
     a = decisions(live)
     written = {r["kind"] for r in a}
     b = [r for r in decisions(replayed) if r["kind"] in written]
     diffs: list[dict[str, Any]] = []
-    matcher = difflib.SequenceMatcher(
-        a=[_key(r) for r in a], b=[_key(r) for r in b], autojunk=False
-    )
+    matcher = difflib.SequenceMatcher(a=_keys(a), b=_keys(b), autojunk=False)
     for op, i1, i2, j1, j2 in matcher.get_opcodes():
         if op == "equal":
             for same_a, same_b in zip(a[i1:i2], b[j1:j2], strict=True):

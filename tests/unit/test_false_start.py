@@ -12,7 +12,7 @@ import asyncio
 
 from cueclock.clock import get_ruleset
 from cueclock.clock.state import ShotClock, State
-from cueclock.server.hub import SETTLE_LIST_WAIT_S, Hub
+from cueclock.server.hub import FROZEN_WATCHDOG_SECONDS, SETTLE_LIST_WAIT_S, Hub
 from cueclock.server.scratch import RACK_MIN_BALLS, RestLists, holds_rack, rack_stands
 from cueclock.vision.ball_list import BallList
 from tests.unit.test_scratch_list import _ball
@@ -166,3 +166,62 @@ def test_without_a_rack_on_the_list_before_nothing_waits() -> None:
     _fire_and_settle(hub, clock, None)
     assert (hub.clock.state, hub.clock.rack_shots) == (State.RUNNING, 1)
     assert "held" not in _kinds(hub, "vision_balls_settled")[-1]
+
+
+def test_the_watchdog_does_not_confirm_a_break_over_a_standing_rack() -> None:
+    """#69, session 20261121-153046, 10:38: the cue ball set down for the
+    break read as a strike, no settle came, and 12 s later the watchdog
+    counted it and started 30 s on a racked table. A break is never quiet."""
+    hub, clock = _armed()
+    clock.now += 5.0
+    asyncio.run(hub.shot_taken(5.0, ball_id=9, speed_mms=3801.0))
+    assert (hub.clock.state, hub.clock.rack_shots) == (State.MOTION, 1)
+    hub.tick()
+    clock.now += FROZEN_WATCHDOG_SECONDS + 0.1
+    hub.tick()
+    assert (hub.clock.state, hub.clock.rack_shots) == (State.IDLE, 0)
+    assert not _kinds(hub, "settle_synthesized")
+    (revert,) = _kinds(hub, "shot_provisional_reverted")
+    assert revert["reason"] == "rack_standing" and revert["by"] == "watchdog"
+    # The tracker's own settle, a second later, lands in IDLE and does nothing.
+    clock.now += 0.9
+    asyncio.run(hub.balls_settled(18.0, tracker_cue=True))
+    assert (hub.clock.state, hub.clock.rack_shots) == (State.IDLE, 0)
+    # The rack is still armed: the real break is the break.
+    clock.now += 5.0
+    asyncio.run(hub.shot_taken(23.0, ball_id=9, speed_mms=7000.0))
+    clock.now += 6.0
+    asyncio.run(hub.balls_settled(29.0, tracker_cue=False))
+    clock.now += 0.15
+    scattered = BallList(
+        balls=tuple(_ball(str(n + 1), 300.0 + 150.0 * n) for n in range(9)), arm=False
+    )
+    asyncio.run(hub.ball_list(29.0, "settle", scattered))
+    assert (hub.clock.state, hub.clock.rack_shots) == (State.RUNNING, 1)
+
+
+def test_the_watchdog_still_releases_a_break_with_no_rack_on_the_list_before() -> None:
+    clock = _Clock()
+    hub = Hub(now=clock)
+    asyncio.run(hub.new_rack())
+    clock.now += 5.0
+    asyncio.run(hub.shot_taken(5.0, ball_id=9, speed_mms=6520.0))
+    hub.tick()
+    clock.now += FROZEN_WATCHDOG_SECONDS + 0.1
+    hub.tick()
+    assert (hub.clock.state, hub.clock.rack_shots) == (State.RUNNING, 1)
+    assert _kinds(hub, "settle_synthesized")
+
+
+def test_the_watchdog_still_releases_a_freeze_in_the_middle_of_a_rack() -> None:
+    hub, clock = _armed()
+    _fire_and_settle(hub, clock, None)
+    clock.now += SETTLE_LIST_WAIT_S + 0.01
+    hub.tick()  # the break stands
+    clock.now += 10.0
+    asyncio.run(hub.episode_started(20.0))
+    hub.tick()
+    clock.now += FROZEN_WATCHDOG_SECONDS + 0.1
+    hub.tick()
+    assert (hub.clock.state, hub.clock.rack_shots) == (State.RUNNING, 2)
+    assert _kinds(hub, "settle_synthesized")

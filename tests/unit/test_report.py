@@ -7,6 +7,9 @@ when no ShotTaken arrived since the previous settle. These tests pin that
 reading, and pin the two ways it can be read wrongly — racking settles in IDLE,
 and the first record of a session having nothing to compare against.
 
+Since #69 the count is worded as what it is: a shot counted at its settle
+was detected, and the number is an internal one for tracker work.
+
 The phantom half has no such compensation to read — the engine believes a
 phantom, so it confesses nothing — and these tests pin what stands in for it:
 four symptoms of a freeze that no strike earned, and the boundary between the
@@ -295,11 +298,79 @@ def test_rollup_totals_across_sessions(tmp_path: Path) -> None:
     assert "1/2 sessions" in text  # only session-b opened badly
 
 
-def test_session_format_names_the_missed_shots(tmp_path: Path) -> None:
+def test_session_format_names_the_shots_counted_at_their_settle(tmp_path: Path) -> None:
+    """An internal count for tracker work, worded as what it is: those shots
+    were detected (#69: one detection number, and it is not this one)."""
     path = journal(tmp_path, shot(10.0, 1), settle(14.0, 1), settle(30.0, 2))
     text = format_session(build(path))
-    assert "MISSED" in text
-    assert "#2" in text
+    assert "counted at settle  1" in text and "#2" in text
+    assert "MISSED" not in text and "miss" not in text.lower()
+
+
+# ---------- #69: racking with the clock running is not play ----------
+
+
+def balls(rack: int, labels: str, arm: bool = False) -> dict[str, Any]:
+    return {
+        "kind": "ball_list",
+        "rack_shots": rack,
+        "state": "RUNNING",
+        "arm": arm,
+        "balls": labels,
+    }
+
+
+def test_settles_while_racking_on_a_live_clock_are_not_shots(tmp_path: Path) -> None:
+    """Session 20261121-153046, 887 s: he ran out and racked without pressing
+    New Rack. Six numbers came back on one list; the two settles the clock
+    counted after it were balls set down by hand."""
+    path = journal(
+        tmp_path,
+        balls(0, "cue 1 3 5 6 7 8 9 10 12 13 14 15"),
+        shot(10.0, 1),
+        settle(14.0, 1),
+        balls(1, "cue 3 5 6 9 10 14"),
+        balls(1, "cue 1 3 5 6 7 8 9 10 12 13 14 15"),  # 1 7 8 12 13 15 are back
+        settle(30.0, 2),  # no strike: would read as a shot counted at its settle
+        shot(40.0, 2),
+        settle(46.0, 3),
+        command("cmd_new_rack", 0, "IDLE"),
+        shot(60.0, 1),
+        settle(66.0, 1),
+    )
+    report = build(path)
+    assert report.total == 2 and report.missed == []
+    assert report.racking_live_settles == 2 and report.left_frozen == 0
+    assert "racking, clock on  2" in format_session(report)
+
+
+def test_one_or_two_numbers_back_is_not_racking(tmp_path: Path) -> None:
+    """The list misreading a ball brings a number back; that is its own
+    error, and play goes on being counted."""
+    path = journal(
+        tmp_path,
+        balls(0, "cue 1 2 3 4 5"),
+        shot(10.0, 1),
+        settle(14.0, 1),
+        balls(1, "cue 1 4 5"),
+        balls(1, "cue 1 2 3 4 5"),  # two back
+        settle(30.0, 2),
+    )
+    report = build(path)
+    assert report.total == 2 and report.racking_live_settles == 0
+
+
+def test_an_arm_over_the_table_never_starts_racking(tmp_path: Path) -> None:
+    path = journal(
+        tmp_path,
+        balls(0, "cue 1 2 3 4 5 6"),
+        shot(10.0, 1),
+        settle(14.0, 1),
+        balls(1, "cue 1 5 6", arm=True),  # an arm hides balls: nothing is gone
+        balls(1, "cue 1 2 3 4 5 6"),
+        settle(30.0, 2),
+    )
+    assert build(path).racking_live_settles == 0
 
 
 # ---------- #33: deferred fires, provisionals, reverts ----------

@@ -319,6 +319,83 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-21 (checkpoint 136 — what the first session with scratches sent
+  back; #69):** Steven played 27 minutes that morning (session
+  `20261121-153046`, 5 racks, checkpoint 135's code) and judged its moments
+  on the review page: five wrong. Four come down to three mechanisms in the
+  hub, each reproduced from the session log; the fifth (`reverted-1718077079`)
+  is §17 working as designed and is left alone. `detect.py`, `events.py` and
+  `track.py` are untouched. Auto rack end was split to #72 and parked.
+  - **A held settle waits for its own list** (`server/hub.py`, `design.md`
+    §18.1): at 400.66 s a placing's settle was held, the motion latch rose
+    32 ms later and decided it as a shot, and the list came 47 ms after the
+    settle reading the table as placing. Ball in hand ended, and the next
+    adjustment restarted the countdown again. Of ten settles held since
+    checkpoint 133 this is the one not decided by its list. The pipeline's
+    calls (motion, strike, discard, settle, the confirmed scratch verdict)
+    now queue behind a held settle for what is left of its 0.3 s and are
+    applied in arrival order, each as of its own arrival. A command still
+    decides it at once, and so do a scratch candidate and a refutation: they
+    are evidence about the cue in the held settle's own shot (§15), which
+    the issue's "anything else from the pipeline" did not single out. Cost:
+    a freeze right behind a held settle can show up to 0.3 s late.
+  - **§16 also holds one ball moved with no strike** (§18.2): at 712.5 s
+    the tracker moved one ball 38 mm while he stood over the shot, no strike
+    fired, and 25.4 s became 30. Real shots read 42, 44 and 49 mm, so no
+    distance separates it; the settle waits for its list instead, which
+    refuses only a table read unchanged (0 of the 112 settles it read as a
+    shot in three sessions).
+  - **The watchdog does not confirm a break over a standing rack** (§18.3):
+    at 453.9 s the cue ball set down for the break read as a strike, no
+    settle came, and 12 s later the watchdog's synthesized settle started
+    30 s on a racked table. With a rack on the list before the strike it now
+    takes the break back as §17 does (`shot_provisional_reverted`,
+    `reason: rack_standing`, `by: watchdog`). Mid-rack it is unchanged.
+  - **Replayed**, the session differs from its live journal in those three
+    decisions and nothing else, compared by frame: 400.66 s and 402.06 s are
+    placing (`hand: applied`), the countdown runs on from 24.3 s; the false
+    start is taken back and the tracker's settle a second later lands in
+    IDLE; 712.5 s is refused, the countdown resumes at 25.4 s and the stroke
+    fires at 20.5 s. The six other sessions with a detection log replay
+    record for record as they did on checkpoint 135's hub.
+  - **`review check`**: the four verdicts go from *still wrong* to
+    *changed*. Two right verdicts flag as regressed because they share the
+    400 s window (`phantom-1717566109`, `correction-1717580595`: the
+    countdown under the New Rack press now reads 16.6 s, not 22.4); re-judge
+    them with the changed ones. Everything else holds. To read that, the
+    comparison had to stop counting a shifted shot count at every later
+    record (`session_replay.compare`): one settle no longer counted made 34
+    differences out of 3, paired each shot with the one after it, and called
+    three untouched verdicts regressed. A record is now compared on what it
+    did to the count.
+  - **Racking is not play** (`server/report.py`, `session-stats`): he ran
+    out twice and racked before pressing New Rack, and every ball set down
+    settled on a live clock. From the arm-free list that brings three or
+    more numbers back at once until the next New Rack, settles are not shots
+    and returning numbers are not list errors (`report.Racking`). The
+    session reads 72 shots (was 75) and 8 numbers back (was 47; the issue
+    estimated 2, but 8 single returns in play are real list misreads). A
+    placing #37 refused before #64 was asked now counts as a placing kept
+    off the clock (1, was 0).
+  - **One detection number** (Steven: "That is 99% detection"):
+    `session-stats` prints **Detection** (the definition the "incl.
+    self-healing" row had) and drops the strike-fired rate to `--internals`;
+    `report` words its count as shots "counted at settle", an internal for
+    tracker work, and loses the "felt as a miss every N racks" line.
+  - **One card per thing that happened** (`review/moments.py`): candidates
+    raised within 2 s of each other are one moment with one verdict (the
+    earliest one's id and kind, every sentence, all kinds in `kinds`); a
+    `quiet` stretch stays its own. That settle's three cards had been judged
+    wrong, right and wrong. The session goes from 18 cards to 16; the next
+    nearest pair in the archive is 7.0 s apart. The page itself is not
+    touched here.
+  - **Not verified:** at the table. Nothing in this has been played on; the
+    next session with a scratch and a placing is the test (#66 is still
+    open).
+  - Verified: unit tests 792 passed (774 before), the new ones
+    failing against checkpoint 135's code; ruff, mypy --strict clean; the
+    corpus battery with `--detect-cache`, 896 passed in 36 s (no detection
+    change, so no cold run).
 - **2026-11-18 (checkpoint 135 — the first #66 session; #66):** Steven
   played two racks for #66 (session `20261119-020755`, 17 minutes, 46 shots)
   and reported: ball in hand near the end behaved; "I still have to shout

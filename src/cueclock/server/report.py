@@ -26,7 +26,16 @@ journal record carries `rack_shots`. Therefore:
 > record's **is the engine confessing it missed a strike**.
 
 Settles recorded in `IDLE` are excluded: those are racking motion the clock
-correctly ignored, not shots.
+correctly ignored, not shots. So are settles while he racks with the
+countdown still running (`Racking`, #69): the clock counted them, and they
+were balls set down by hand.
+
+**It is not the detection number.** A shot counted at its settle was
+detected: the countdown ran a few seconds long and reset. Steven,
+2026-11-21: "That is 99% detection. It's not self healing it's just part of
+the detection logic." The count below is how often the *strike* path did not
+fire, which is what tracker work is judged on; `session-stats` prints
+Detection.
 
 ## Why derived, never accumulated
 
@@ -95,6 +104,7 @@ from statistics import median
 
 SETTLE_KIND = "vision_balls_settled"
 SHOT_KIND = "vision_shot_taken"
+BALL_LIST_KIND = "ball_list"
 SCRATCH_KIND = "vision_scratch"
 # Two-stage scratch verdict (#26): candidate/refuted are the evidence trail;
 # SCRATCH_KIND is the confirmed verdict. Journals with no candidate records
@@ -180,6 +190,64 @@ PHANTOM_LEAD_S = 8.62
 # batteries drag it to 11-30 Hz, and a shot detected down there failed for a
 # reason that is not the vision logic.
 STARVED_HZ = 50.0
+
+# Racking with the clock still running (#69). He ran out and began racking
+# without pressing New Rack: the countdown is live, every ball set down is a
+# settle, and those are not shots. The ball list says when it began: past the
+# break balls only leave the table, so numbers coming back are balls put back
+# by hand. One or two back on one list is the list misreading a ball (the
+# error "numbers back after leaving" counts); three or more at once is
+# racking. Over the three sessions with lists since checkpoint 132 that fires
+# on both racking stretches (6 and 4 numbers back on their first list) and on
+# nothing else.
+RACKING_MIN_RETURNS = 3
+
+
+class Racking:
+    """Reads the journal's `ball_list` lines for racking on a live clock.
+
+    `on` from the arm-free list that brings RACKING_MIN_RETURNS numbers back
+    until the rack's shot count falls (New Rack). Until then nothing on the
+    table is play: `build` counts no shots and `session-stats` no list errors.
+    A list with an arm over it can show a ball is there, never that one is
+    gone, so only arm-free lists from the break on (`rack_shots >= 1`) are
+    read.
+    """
+
+    def __init__(self) -> None:
+        self.on = False
+        self._seen: set[str] = set()
+        self._gone: set[str] = set()
+        self._rack = 0
+
+    def note_rack(self, rack_shots: int) -> None:
+        """Every journal record's shot count: a fall is a new rack."""
+        if rack_shots < self._rack:
+            self.on = False
+            self._seen, self._gone = set(), set()
+        self._rack = rack_shots
+
+    def feed(self, record: dict[str, object]) -> int:
+        """One `ball_list` record. Returns the numbers it brought back that
+        are errors: 0 on the list that starts racking, and while it lasts."""
+        if record.get("arm") or self.on or self._rack < 1:
+            if not record.get("arm") and not self.on:
+                self._seen |= self._numbers(record)  # before the break: seen, not judged
+            return 0
+        now = self._numbers(record)
+        back = now & self._gone
+        if len(back) >= RACKING_MIN_RETURNS:
+            self.on = True
+            self._seen, self._gone = set(), set()
+            return 0
+        self._gone = (self._gone | (self._seen - now)) - now
+        self._seen |= now
+        return len(back)
+
+    @staticmethod
+    def _numbers(record: dict[str, object]) -> set[str]:
+        return {n for n in str(record.get("balls") or "").split() if n.isdigit()}
+
 
 _SINCE = re.compile(r"^(\d+(?:\.\d+)?)([hdw])$")
 _SINCE_SECONDS = {"h": 3600.0, "d": 86400.0, "w": 604800.0}
@@ -281,6 +349,9 @@ class SessionReport:
     scratch_candidates: int = 0
     scratch_refuted: int = 0
     racking_settles: int = 0
+    # Settles while he racked with the countdown still running (`Racking`):
+    # the clock counted them, and they were not shots. Not in `shots`.
+    racking_live_settles: int = 0
     gated: dict[str, int] = field(default_factory=dict)
     hz: list[float] = field(default_factory=list)
     torn_lines: int = 0
@@ -387,6 +458,7 @@ def build(path: Path) -> SessionReport:
     last_settle_t: float | None = None  # previous settle the clock acted on
     last_hz: float | None = None
     adjudicated_pending = False  # break_adjudicated seen; the next settle is a caught break
+    racking = Racking()
 
     for line in path.read_text().splitlines():
         line = line.strip()
@@ -401,8 +473,19 @@ def build(path: Path) -> SessionReport:
             continue
         kind = record.get("kind")
         rack = _number(record, "rack_shots")
+        if rack is not None:
+            racking.note_rack(int(rack))
 
-        if kind == HEARTBEAT_KIND:
+        if kind == BALL_LIST_KIND:
+            racking.feed(record)
+            if racking.on:
+                pending_shot_t = freeze_open_t = None  # a strike read off a hand
+        elif racking.on and kind in (SHOT_KIND, SETTLE_KIND, SETTLE_SYNTHESIZED_KIND):
+            # Racking with the clock running: balls set down by hand settle
+            # and "strike" like shots. Not play, so not shots and not misses.
+            if kind != SHOT_KIND and record.get("state") != "IDLE":
+                report.racking_live_settles += 1
+        elif kind == HEARTBEAT_KIND:
             hz = _number(record, "hz")
             if hz is not None:
                 last_hz = hz
@@ -620,14 +703,19 @@ def format_session(report: SessionReport) -> str:
         return "\n".join(out)
 
     out.append(f"  shots              {report.total}")
-    out.append(f"  MISSED             {len(report.missed)}   {_rate(report).strip()}")
+    # An internal count for tracker work, not the detection number: these
+    # shots were detected, by their settle (`session-stats` has Detection).
+    out.append(
+        f"  counted at settle  {len(report.missed)}   {_rate(report).strip()}"
+        "   (no strike fired; the settle counted the shot)"
+    )
     if report.missed:
         marks = ", ".join(
             f"#{s.index}" + (f" @{s.t:.0f}s" if s.t is not None else "") for s in report.missed
         )
         out.append(f"    at               {marks}")
     if report.opening_miss:
-        out.append(f"    ⚠ a miss landed in the first {OPENING_SHOTS} shots of the session")
+        out.append(f"    one of them in the first {OPENING_SHOTS} shots of the session")
     if report.starved_misses:
         out.append(
             f"    {len(report.starved_misses)} of those ran below {STARVED_HZ:.0f} Hz "
@@ -682,7 +770,7 @@ def format_session(report: SessionReport) -> str:
     if report.settles_synthesized:
         out.append(
             f"  settles synthesized {report.settles_synthesized}   "
-            "(frozen-clock watchdog; the underlying miss is counted above)"
+            "(frozen-clock watchdog; each is in the count at settle above)"
         )
     if report.provisionals or report.provisional_reverts or report.suppressed_settles:
         out.append(
@@ -721,6 +809,11 @@ def format_session(report: SessionReport) -> str:
         out.append(f"    rate             1 per {report.total / report.scratches:.0f} shots")
     if report.racking_settles:
         out.append(f"  racking settles    {report.racking_settles}   (ignored in IDLE, not shots)")
+    if report.racking_live_settles:
+        out.append(
+            f"  racking, clock on  {report.racking_live_settles}   "
+            "(settles while racking before New Rack was pressed; not shots)"
+        )
     for label, count in sorted(report.gated.items()):
         out.append(f"  {label:<18} {count}   (vision saw it, the clock declined it)")
     if report.hz:
@@ -739,9 +832,7 @@ def format_rollup(reports: list[SessionReport]) -> str:
     """Per-session table plus the total. The total is the number that matters."""
     played = [r for r in reports if r.total]
     out: list[str] = []
-    out.append(
-        f"{'session':<34}{'shots':>7}{'missed':>8}{'miss':>8}{'phant':>7}{'phan':>8}{'scr':>6}"
-    )
+    out.append(f"{'session':<34}{'shots':>7}{'settle':>8}{'':>8}{'phant':>7}{'phan':>8}{'scr':>6}")
     out.append("-" * 78)
     for report in played:
         out.append(
@@ -762,13 +853,14 @@ def format_rollup(reports: list[SessionReport]) -> str:
         return "\n".join(out)
 
     out.append("")
-    out.append(f"  miss rate          {missed / shots:.2%}")
-    if missed:
-        out.append(f"  felt as            a miss every {shots / missed / 14:.1f} racks (14 shots)")
+    out.append(
+        f"  counted at settle  {missed / shots:.2%}   "
+        "(no strike fired; the `settle` column — internal, for tracker work)"
+    )
     opening = [r for r in played if r.opening_miss]
     out.append(
-        f"  bad first impression  {len(opening)}/{len(played)} sessions "
-        f"({len(opening) / len(played):.0%}) opened with a miss in {OPENING_SHOTS} shots"
+        f"  in the opening     {len(opening)}/{len(played)} sessions "
+        f"({len(opening) / len(played):.0%}) had one in their first {OPENING_SHOTS} shots"
     )
     # Both rates on one line because the pair is the point: a second strike
     # path OR-ed into the first buys misses with phantoms, and neither number

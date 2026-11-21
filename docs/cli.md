@@ -53,7 +53,7 @@ Ground rules that apply to every command:
 | `calibrate` | Fit the px→mm table homography from the rails | no |
 | `recalibrate` | Record a fresh empty-table reference, refit both, swap them in only if good (the deck's RECAL key) | owns it |
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
-| `report` | Accuracy report: missed strikes per session, read back from the journals | no |
+| `report` | Journal report: shots, strikes that did not fire, phantom candidates, breaks, scratches | no |
 | `review` | Session review (#57): find a session's candidate moments, or serve the always-up review page | no |
 | `deck` | Stream Deck control-surface daemon | no |
 | `sidecam` | Side-angle camera settings: show, save the current ones, apply the saved ones | side camera only |
@@ -278,9 +278,13 @@ Plus the shared mic args below.
 
 ### `report`
 
-**The accuracy number.** Reads the session journals and counts the strikes
-vision missed. Offline, read-only, no camera — run it on any journal, any time,
-including one copied off the machine.
+**The journal, read back.** Counts each session's shots and, for tracker
+work, how many of them were counted at their settle because no strike fired.
+That count is internal: such a shot was detected (the countdown ran a few
+seconds long, then reset), and the detection number is the **Detection** row
+of the `session-stats` skill, which builds on this reader. Offline, read-only,
+no camera — run it on any journal, any time, including one copied off the
+machine.
 
 | Flag | Default | What |
 |---|---|---|
@@ -299,8 +303,8 @@ uv run python -m cueclock.cli report --all        # the whole history
 Session key ends with the number on screen) and appends it to the journal as a
 `session_summary` record.
 
-**Where the number comes from — this is the part worth understanding.** Nothing
-in the journal says "missed". Two detectors run per shot: *"he hit the ball"*,
+**Where the count comes from — this is the part worth understanding.** Nothing
+in the journal says a strike did not fire. Two detectors run per shot: *"he hit the ball"*,
 which must identify the cue ball through the moment the stick and hand are one
 blob with it, and *"everything has stopped"*, which needs no ball identity and
 is reliable. When the first fails and the second fires, `ShotClock.balls_settled`
@@ -309,26 +313,33 @@ happened, and bumps `rack_shots` (`clock/state.py`, written 2026-07-31 for
 correctness, not for measurement). Every journal record carries that count, so:
 
 > a `vision_balls_settled` record whose `rack_shots` exceeds the preceding
-> record's **is the engine confessing it missed a strike**.
+> record's **is a shot the settle counted with no strike** (`counted at
+> settle` in the output).
 
 Derived, never accumulated — nothing runs live, so the rate survives a crash or
 a `kill -9`, and improving the reader retroactively improves every session ever
 recorded.
 
-Four things about reading it:
+Things about reading it:
 
-- **It is a floor, not a ceiling.** A shot whose *settle* was also missed leaves
-  no trace at all.
+- **It is a floor, not a ceiling.** A shot with neither a strike nor a settle
+  leaves no trace at all.
 - **Settles in `IDLE` are not shots.** Those are racking motion the clock
   correctly ignored; counting them would pad the denominator and make the number
   look better than the table does. The report prints them separately.
+- **Neither are settles while racking with the clock still running** (#69).
+  Run out, start racking without pressing New Rack, and every ball set down
+  settles on a live countdown. The ball list says when that began: three or
+  more numbers back on one arm-free list (past the break balls only leave the
+  table). From that list to the next New Rack nothing is a shot; the report
+  prints the count as `racking, clock on`.
 - **Phantoms are candidates, never verdicts.** The journal cannot prove the clock
   froze with no shot behind it. What it can show is an implausibly short
   shot→settle interval (<1 s against a measured 2.27–8.62 s roll-out), which is
   reported for review.
-- **A miss below ~50 Hz is not a vision failure.** Corpus batteries and
-  other heavy jobs starve the detect loop; those misses are counted separately so
-  contention never gets mistaken for a detection bug.
+- **A strike that did not fire below ~50 Hz is not a vision failure.** Corpus
+  batteries and other heavy jobs starve the detect loop; those are counted
+  separately so contention never gets mistaken for a detection bug.
 - **Scratch counts come in two vintages (2026-08-07, #26).** A journal carrying
   `vision_scratch_candidate` records is adjudicated: `vision_scratch` there is a
   candidate the whiteness census could not refute, and the report prints
@@ -363,13 +374,18 @@ camera or needs `run`:
   `list_cleared` (#63), `placing` / `in_hand_shot` / `cue_only` (#64) and
   `no_change` (a shot counted at a settle whose list read every ball where
   it stood, `design.md` §16). About one per ten shots over the
-  history. Ids are `<kind>-<mono ms>`, so re-running keeps verdicts attached.
+  history. Candidates raised within 2 s of each other are one moment (one
+  card, one verdict): it keeps the earliest one's id and kind, carries every
+  sentence, and lists them all in `kinds`. A `quiet` stretch is always its
+  own. Ids are `<kind>-<mono ms>`, so re-running keeps verdicts attached.
   `cueclock session maintain` runs it on every session it archives.
 - `review check [stamp ...]` replays every judged session (or just those
   named) through the code checked out now and grades each verdict on the
   differences inside its moment's window: a **right** verdict *holds* or is
   **REGRESSED**; a **wrong** one is *still wrong* or *changed* (maybe fixed —
-  re-judge it). Exit 1 on any regression. Roughly 3 minutes per hour of play:
+  re-judge it). A decision that changes the rack's shot count is a
+  difference where it happened, not at every later record of the rack. Exit
+  1 on any regression. Roughly 3 minutes per hour of play:
   the check for `events.py` / `track.py` / hub-policy work, beside the corpus
   battery.
 - `review serve` serves the review page on the LAN (`0.0.0.0:8001`) and prints

@@ -31,6 +31,11 @@ Steven decides. The phantom rules are not re-derived here — they are
 `server/report.py`'s, read through `report.build`, so the review page and the
 accuracy report can never disagree about what a phantom candidate is.
 
+Candidates raised within `MERGE_S` of each other are **one moment**: one
+thing happened at the table, and it gets one card and one verdict (#69). The
+card carries every candidate's sentence and kind; its id and first kind are
+the earliest candidate's.
+
 Ids are ``<kind>-<mono in ms>`` of the record that raised the moment, so a
 re-run over the same journal yields the same ids and a verdict already given
 stays attached to its moment.
@@ -41,7 +46,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -61,6 +66,13 @@ POST_S = 8.0
 # idle strikes in bursts and a fumbled correction is several key presses; each
 # burst is one thing to look at.
 CLUSTER_S = 10.0
+
+# Candidates raised this close together are one moment, whatever their kinds.
+# In session 20261121-153046 one settle raised `in_hand_shot` and `phantom`
+# 1 ms apart and the adjustment after it `cue_only` 1.4 s later; as three
+# cards they were judged wrong, right and wrong. The next nearest pair of
+# candidates in the seven archived sessions is 7.0 s apart.
+MERGE_S = 2.0
 
 # No strike, settle or key for this long with the clock not IDLE is a turn
 # that outran the longest legal allowance — the 60 s first shot plus a 30 s
@@ -88,6 +100,7 @@ class Moment:
     summary: str
     start_wall: str  # the span a cut should cover
     end_wall: str
+    kinds: tuple[str, ...] = ()  # every candidate on the card, `kind` first
 
 
 def _iso(when: datetime) -> str:
@@ -137,7 +150,39 @@ def _moment(
         summary=summary,
         start_wall=_iso(start or wall - timedelta(seconds=PRE_S)),
         end_wall=_iso(end or wall + timedelta(seconds=POST_S)),
+        kinds=(kind,),
     )
+
+
+def _merged(moments: list[Moment]) -> list[Moment]:
+    """One moment per run of candidates each within `MERGE_S` of the one
+    before: the earliest keeps its id, wall and kind, the summaries follow
+    each other, and the span covers them all. ``moments`` is oldest first.
+
+    A `quiet` stretch stays its own card: it is the 90 s *after* the record
+    it is stamped with, a different thing to watch than whatever that record
+    also raised."""
+    out: list[Moment] = []
+    last: datetime | None = None
+    for moment in moments:
+        if moment.kind == "quiet":
+            out.append(moment)
+            last = None
+            continue
+        wall = datetime.fromisoformat(moment.wall)
+        if out and last is not None and (wall - last).total_seconds() <= MERGE_S:
+            card = out[-1]
+            out[-1] = replace(
+                card,
+                summary=f"{card.summary} {moment.summary}",
+                start_wall=min(card.start_wall, moment.start_wall),
+                end_wall=max(card.end_wall, moment.end_wall),
+                kinds=(*card.kinds, *(k for k in moment.kinds if k not in card.kinds)),
+            )
+        else:
+            out.append(moment)
+        last = wall
+    return out
 
 
 def _clustered(
@@ -320,7 +365,7 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
     )
     if replay is not None and replay.exists():
         moments += _replay_moments(replay, records)
-    return sorted(moments, key=lambda m: m.wall)
+    return _merged(sorted(moments, key=lambda m: m.wall))
 
 
 def _list_moment(call: dict[str, object], settle: dict[str, object]) -> Moment | None:
