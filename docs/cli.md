@@ -391,19 +391,36 @@ camera or needs `run`:
 - `review serve` serves the review page on the LAN (`0.0.0.0:8001`) and prints
   the URL a phone should open. It lists the session directories under
   `sessions.nosync/` and `/Volumes/T7/cueclock_sessions/` (an unmounted T7 is
-  just skipped), and shows each moment with its footage — the session's
-  `cuts/<id>.mp4`, else the full OBS recording from `sessions.nosync/
-  recordings.jsonl` seeked to the moment, else "footage pruned" — the journal
-  lines around it in plain words. Judging is two steps: **Clock right / Clock
-  wrong** opens a note box, **Save** writes the session's `verdicts.json` and
-  collapses the card to a one-line summary (**Change** reopens it, **Clear
-  verdict** withdraws it); the page then scrolls to the next open moment. **Watch the full
+  just skipped). A session is a list of its moments, one row each, in the
+  order they happened; one row is open, the first without a verdict
+  (`/s/<stamp>#<moment id>` opens a particular one). An open moment shows:
+  - what the clock did, in a sentence;
+  - **its clip**: the session's `cuts/<id>.mp4`, which is the moment's span
+    and nothing else, so it is watched from its first frame to its last. A
+    cut the archive pass has not made yet is cut when the moment is opened,
+    from the listed recording (`sessions.nosync/recordings.jsonl`) or the
+    session's kept copy; with neither left the card says there is no
+    footage. A card never plays a whole recording;
+  - a strip under the clip with the flagged instant and every journal line
+    marked on it (tap the strip to jump);
+  - **Clock right / Clock wrong**, directly under that. Picking one opens a
+    note box with **Save** beside it. Save writes the session's
+    `verdicts.json`, closes the moment and opens the next unjudged one
+    *below* it. It never goes back up the list: a moment skipped on purpose
+    waits for **Next to review** at the end;
+  - the journal lines around the moment in plain words, each with the clock
+    as it left it. Tap one and the clip plays from 2 s before it.
+
+  A judged row shows its verdict and note; tapping it reopens the moment,
+  where the verdict can be changed or withdrawn (**Clear verdict**). **Full
   session** (`/s/<stamp>/full`) plays the whole recording — the session's own
   kept copy (`recording.json`), else the listed recording while it is still in
-  `~/Movies` — above a list of strikes, settles, reverts and key presses; tap
-  one to jump there. It only serves those cuts, kept copies and listed
-  recordings. Always up under launchd as
-  `com.cueclock.review` (`scripts/install_review_agent.sh`).
+  `~/Movies` — above a list of strikes, settles, reverts and key presses: tap
+  one to watch it from 2 s before, and the list follows the video. Each
+  moment links to its place there. The page serves only those cuts, kept
+  copies and listed recordings, and writes only verdicts and missing cuts.
+  Always up under launchd as `com.cueclock.review`
+  (`scripts/install_review_agent.sh`).
 
 | Flag | Default | What |
 |---|---|---|
@@ -472,14 +489,17 @@ For each session directory under `sessions.nosync/` (the layout `run` writes):
 2. `cueclock session verify <dir>` → `replay.json`, if that file isn't there yet;
 3. `cueclock review moments <dir>` → `moments.json`, likewise;
 4. cut each moment out of the OBS recording covering it → `cuts/<id>.mp4`
-   (ffmpeg stream copy, 10 s either side, matched by wall time against
-   `sessions.nosync/recordings.jsonl`);
+   (ffmpeg stream copy of the moment's own span, matched by wall time against
+   `sessions.nosync/recordings.jsonl`; a cut the review page already made for
+   an opened moment is left as it is);
 5. when that drive is mounted, hard-link the OBS recording(s) overlapping the
    session into `recording/` (indexed in `recording.json`; free on the SSD,
    and the budget still prunes the original; only the newest `--keep-full`
    archived sessions keep it), then move the directory to
-   `--archive-root`: copy,
-   check every file's size, then delete the local copy.
+   `--archive-root`: copy, check the size of every file in the directory as
+   it then stands, and delete the local copy. A file that appeared or changed
+   during the copy (a verdict saved from the review page) keeps the session
+   local, and the next pass carries it.
 
 A step that is already done is skipped, so passes repeat safely. A hook command
 that doesn't exist in this build is logged and skipped, and the session then

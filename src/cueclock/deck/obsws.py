@@ -272,13 +272,32 @@ def start_record() -> float | None:
     status = request("GetRecordStatus")
     if status is None:
         return None
-    if status.get("outputActive"):
-        duration_ms = status.get("outputDuration")
-        return float(duration_ms) / 1000.0 if isinstance(duration_ms, int | float) else 0.0
+    recorded = _recorded_s(status)
+    if recorded is not None:
+        return recorded
     if request("StartRecord") is None:
         return None
     print("obsws: recording started", flush=True)
     return 0.0
+
+
+def _recorded_s(status: dict[str, Any]) -> float | None:
+    """Seconds of video in the recording a `GetRecordStatus` reply describes;
+    None when it says OBS is not recording."""
+    if not status.get("outputActive"):
+        return None
+    duration_ms = status.get("outputDuration")
+    return float(duration_ms) / 1000.0 if isinstance(duration_ms, int | float) else 0.0
+
+
+def record_age() -> float | None:
+    """Seconds of video in the recording OBS is writing now.
+
+    That is the file's own length so far, so `now - record_age()` is when its
+    first frame was written. None = not recording, or OBS couldn't be asked.
+    """
+    status = request("GetRecordStatus")
+    return None if status is None else _recorded_s(status)
 
 
 def stop_record() -> str | None:

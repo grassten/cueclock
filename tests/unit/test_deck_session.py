@@ -17,6 +17,7 @@ from tempfile import mkdtemp
 
 import pytest
 
+from cueclock.deck import obsws
 from cueclock.deck.session import (
     CAFFEINATE,
     CAMERA_PROBE,
@@ -96,6 +97,8 @@ class Harness:
         self.camera = camera
         self.camera_probes = 0
         self.record_elapsed = record_elapsed
+        # What OBS says it has written when asked at the stop; None = can't say.
+        self.record_age: float | None = None
         self.record_path = record_path
         self.recordings: list[dict[str, str]] = []
         self.adoptable: dict[int, FakeProcess] = {}
@@ -116,6 +119,7 @@ class Harness:
             sidecam_ready=self._sidecam_ready,
             clear_match=self._clear_match,
             start_record=self._start_record,
+            record_age=lambda: self.record_age,
             stop_record=self._stop_record,
             log_recording=self.recordings.append,
             shot_age=self._shot_age,
@@ -721,6 +725,43 @@ def test_stop_ends_the_recording_by_name_before_obs_is_told_to_quit() -> None:
             "stop_wall": "2026-11-16T22:30:30.000+00:00",
         }
     ]
+
+
+def test_the_logged_start_is_when_obs_wrote_the_first_frame() -> None:
+    # OBS acknowledges StartRecord and starts writing a second or two later,
+    # so the start is back-dated from what it has written by the stop: every
+    # clip and every seek is an offset from this instant.
+    h = Harness()
+    _session_on(h)  # asked for at 22:00:30
+    h.clock = 1830.0
+    h.record_age = 1798.25
+    h.manager.stop()
+    assert h.recordings[0]["start_wall"] == "2026-11-16T22:00:31.750+00:00"
+    assert h.recordings[0]["stop_wall"] == "2026-11-16T22:30:30.000+00:00"
+
+
+def test_obs_says_how_much_it_has_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    replies: dict[str, dict[str, object] | None] = {
+        "GetRecordStatus": {"outputActive": True, "outputDuration": 1798250}
+    }
+    sent: list[str] = []
+
+    def request(kind: str, *args: object, **kwargs: object) -> dict[str, object] | None:
+        sent.append(kind)
+        return replies.get(kind)
+
+    monkeypatch.setattr(obsws, "request", request)
+    assert obsws.record_age() == 1798.25
+    assert obsws.start_record() == 1798.25  # already recording: adopted as it is
+    assert "StartRecord" not in sent
+
+    replies["GetRecordStatus"] = {"outputActive": False}
+    replies["StartRecord"] = {}
+    assert obsws.record_age() is None
+    assert obsws.start_record() == 0.0 and sent[-1] == "StartRecord"
+
+    replies["GetRecordStatus"] = None  # OBS can't be asked
+    assert obsws.record_age() is None and obsws.start_record() is None
 
 
 def test_the_recording_starts_once_and_retries_until_obs_answers() -> None:

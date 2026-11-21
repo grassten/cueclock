@@ -338,6 +338,7 @@ class SessionManager:
     clear_match: Callable[[], bool] = _clear_match
     shot_age: Callable[[], float | None] = _shot_age
     start_record: Callable[[], float | None] = obsws.start_record
+    record_age: Callable[[], float | None] = obsws.record_age
     stop_record: Callable[[], str | None] = obsws.stop_record
     log_recording: Callable[[dict[str, str]], None] = _log_recording
     wall: Callable[[], datetime] = _wall_now
@@ -638,6 +639,8 @@ class SessionManager:
         An already-running recording reports its age, so a re-adopted session
         back-dates its start to the file's first frame rather than to the
         moment this daemon came back — the review cuts seek by that offset.
+        `_close_recording` measures the start again from the finished file's
+        length; this one stands when OBS can't be asked then.
         """
         elapsed = self.start_record()
         if elapsed is not None:
@@ -653,6 +656,15 @@ class SessionManager:
         if self._record_start is None:
             return
         start, self._record_start = self._record_start, None
+        # The start is taken from what OBS has written, not from when this
+        # daemon asked for it: an OBS that has just launched acknowledges
+        # StartRecord and writes its first frame 1.2-1.8 s later (six
+        # recordings, 2026-11-16 to 11-21: logged span minus file length; the
+        # one started into an OBS already up came out at 0.09 s). Every review
+        # clip and every tap-to-seek landed that much late.
+        recorded = self.record_age()
+        if recorded is not None:
+            start = self.wall() - timedelta(seconds=recorded)
         path = self.stop_record()
         if path is None:
             print("session: recording stop not confirmed — file left unlisted", flush=True)

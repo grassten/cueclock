@@ -31,16 +31,21 @@ def _rec(path: str, start: float, stop: float) -> Recording:
 # --- moment cuts --------------------------------------------------------------
 
 
-def test_a_moment_is_cut_with_ten_seconds_either_side() -> None:
+def test_a_moment_without_a_span_is_cut_ten_seconds_either_side() -> None:
     cut = plan_cut({"wall": _iso(100)}, [_rec("/m/a.mov", 0, 1800)])
     assert cut == archive.Cut(Path("/m/a.mov"), 90.0, 20.0)
 
 
-def test_a_moment_span_is_padded_from_its_own_start_and_end() -> None:
-    moment = {"wall": _iso(100), "start_wall": _iso(95), "end_wall": _iso(130)}
+def test_a_moment_with_a_span_is_cut_to_exactly_that_span() -> None:
+    # The review page plays a cut end to end and marks the moment inside it,
+    # so the file holds the finder's span and nothing either side of it.
+    moment = {"wall": _iso(100), "start_wall": _iso(88), "end_wall": _iso(108)}
     cut = plan_cut(moment, [_rec("/m/a.mov", 0, 1800)])
     assert cut is not None
-    assert (cut.offset_s, cut.duration_s) == (85.0, 55.0)
+    assert (cut.offset_s, cut.duration_s) == (88.0, 20.0)
+    assert plan_cut(moment, [_rec("/m/a.mov", 90, 1800)]) == archive.Cut(
+        Path("/m/a.mov"), 0.0, 18.0
+    )  # a recording that began inside the span: a shorter lead-in
 
 
 def test_a_moment_at_the_edge_of_a_recording_is_clipped_not_dropped() -> None:
@@ -284,6 +289,42 @@ def test_the_budget_prunes_after_the_cuts_are_taken(tmp_path: Path) -> None:
     assert t.maintainer.pass_() == 0
     assert (t.t7 / STAMP / "cuts" / "m1.mp4").is_file()
     assert not t.recording.exists()
+
+
+def test_a_verdict_saved_while_the_session_is_copied_is_not_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The review page reads the local copy until it is gone, and writes
+    verdicts into it. One saved after the copy listed its files is a file the
+    list never had: the session stays local, and the next pass carries it."""
+    t = Tree(tmp_path)
+    copyfile = archive.shutil.copyfile
+    verdict = t.session / "verdicts.json"
+
+    def copy_then_judge(src: Path, dst: Path) -> None:
+        copyfile(src, dst)
+        if Path(src).parent == t.session and not verdict.exists():
+            verdict.write_text('{"m1": {"verdict": "wrong"}}')
+
+    monkeypatch.setattr(archive.shutil, "copyfile", copy_then_judge)
+    assert t.maintainer.pass_() == 1
+    assert verdict.is_file()  # still here: nothing was deleted
+    assert any("didn't verify" in line for line in t.lines)
+
+    assert t.maintainer.pass_() == 0
+    assert not t.session.exists()
+    assert json.loads((t.t7 / STAMP / "verdicts.json").read_text())["m1"]["verdict"] == "wrong"
+
+
+def test_two_processes_cutting_one_moment_do_not_share_a_temp_file(tmp_path: Path) -> None:
+    # The archive pass and the review page both cut: each writes under a name
+    # of its own and renames, so neither can truncate the other's file.
+    t = Tree(tmp_path)
+    (t.session / "moments.json").write_text(json.dumps([{"id": "m1", "wall": _iso(100)}]))
+    assert t.maintainer.cut_moments(t.session, archive.load_recordings(t.root / "recordings.jsonl"))
+    written = [Path(argv[-1]).name for argv in t.calls if argv[0] == archive.FFMPEG]
+    assert written == [f".m1.{os.getpid()}.part.mp4"]
+    assert [p.name for p in (t.session / "cuts").iterdir()] == ["m1.mp4"]
 
 
 def test_a_partial_earlier_copy_is_completed_not_duplicated(tmp_path: Path) -> None:

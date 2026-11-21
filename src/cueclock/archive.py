@@ -14,7 +14,8 @@ One pass, for every session directory still on the internal SSD:
    original stays in `logs/`, where `report` and `session-stats` read it);
 2. `cueclock session verify <dir>` → `replay.json` (the parity check);
 3. `cueclock review moments <dir>` → `moments.json` (what the review page lists);
-4. cut each moment out of the recording that covers it → `cuts/<id>.mp4`;
+4. cut each moment out of the recording that covers it → `cuts/<id>.mp4`,
+   unless the review page already cut it for a card Steven opened;
 5. when the T7 is mounted, hard-link the session's full OBS recording into
    `recording/` (listed in `recording.json`, for the review page's
    full-session player), then move the directory to the T7
@@ -80,8 +81,9 @@ DEFAULT_PINNED_GB = 5.0  # ~50 hours of detection log, if every session had a ve
 DEFAULT_JOURNALS_GB = 1.0  # ~1 MB per session journal: decades, but bounded
 VERDICTS_FILE = "verdicts.json"  # written by the review page
 PINNED_MARK = "pinned.json"  # a stripped session: what was kept, and when
-# Either side of a moment. A shot's wind-up and the settle after it both fit,
-# and at ~6 Mbps a 20 s cut is ~16 MB.
+# Either side of a moment that carries no span of its own. The finder's
+# moments all do (`review/moments.py`: 12 s before, 8 s after), and their cut
+# is that span exactly. OBS records at ~8.7 Mbps, so 20 s is ~22 MB.
 CUT_PAD_S = 10.0
 FULL_DIR = "recording"  # the session's own copy of its full recording(s)
 FULL_INDEX = "recording.json"  # [{"file", "start_wall", "stop_wall"}], read by the review page
@@ -154,17 +156,24 @@ class Cut:
 def plan_cut(
     moment: dict[str, Any], recordings: Sequence[Recording], pad_s: float = CUT_PAD_S
 ) -> Cut | None:
-    """The stretch of footage around a moment, from the recording covering most of it.
+    """The stretch of footage a moment's cut holds, from the recording covering most of it.
 
-    The window is the moment's own span (`start_wall`..`end_wall`, or just
-    `wall`) padded `pad_s` each side, then clipped to the recording — a moment
-    in the first seconds of a session gets a shorter lead-in, not a failure.
-    None when no recording overlaps it at all (none made, or none logged).
+    The moment's own span (`start_wall`..`end_wall`), exactly: the review
+    page plays a cut from its first frame to its last and marks the moment
+    inside it, so the file is the clip and nothing else. Until checkpoint 137
+    the span was padded 10 s each side as well, which made every cut 40 s
+    with the moment 22 s in, and nothing on the page said so. A moment
+    without a span gets `pad_s` either side of its `wall`.
+
+    Clipped to the recording: a moment in the first seconds of a session gets
+    a shorter lead-in, not a failure. None when no recording overlaps it at
+    all (none made, or none logged).
     """
     centre = parse_wall(moment["wall"])
-    start = parse_wall(moment["start_wall"]) if moment.get("start_wall") else centre
-    end = parse_wall(moment["end_wall"]) if moment.get("end_wall") else centre
-    lo, hi = start - timedelta(seconds=pad_s), end + timedelta(seconds=pad_s)
+    if moment.get("start_wall") and moment.get("end_wall"):
+        lo, hi = parse_wall(moment["start_wall"]), parse_wall(moment["end_wall"])
+    else:
+        lo, hi = centre - timedelta(seconds=pad_s), centre + timedelta(seconds=pad_s)
 
     best: tuple[float, Recording] | None = None
     for rec in recordings:
@@ -686,7 +695,10 @@ class Maintainer:
             self.say(f"{session.name}: would cut {mid} ({cut.duration_s:.0f} s)")
             return True
         out.parent.mkdir(exist_ok=True)
-        part = out.with_name(f".{mid}.part.mp4")  # never a half-written cut under the real name
+        # Never a half-written cut under the real name, and a name of this
+        # process's own: the review page cuts the moment Steven opens while
+        # the archive pass works through the same session.
+        part = out.with_name(f".{mid}.{os.getpid()}.part.mp4")
         code, err = self.run(cut_command(cut, part), HOOK_TIMEOUT_S)
         if code != 0:
             part.unlink(missing_ok=True)
@@ -697,7 +709,7 @@ class Maintainer:
         return True
 
     def move(self, session: Path) -> bool:
-        """Copy to the archive, check every size, then delete the local copy.
+        """Copy to the archive, check every file's size, then delete the local copy.
 
         Plain `copyfile`, no metadata: the T7 is ExFAT, and copying flags or
         xattrs onto it is a way to fail for nothing.
@@ -716,11 +728,20 @@ class Maintainer:
                 continue  # landed on an earlier, interrupted pass
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
+        # Checked against the directory as it stands now, not the list the
+        # copy started from. The review page reads this copy until it is gone
+        # and writes into it: a verdict saved while the copy ran (38 s on
+        # 2026-11-21, with Steven judging; his first save landed 3 s after it)
+        # is a file the first list never had, and deleting the directory
+        # would delete the verdict. Kept local, the next pass carries it.
         short = [
             p
-            for p in files
-            if not (dest / p.relative_to(session)).is_file()
-            or (dest / p.relative_to(session)).stat().st_size != p.stat().st_size
+            for p in session.rglob("*")
+            if p.is_file()
+            and (
+                not (dest / p.relative_to(session)).is_file()
+                or (dest / p.relative_to(session)).stat().st_size != p.stat().st_size
+            )
         ]
         if short:
             self.say(f"{session.name}: {len(short)} files didn't verify on {dest} — kept local")

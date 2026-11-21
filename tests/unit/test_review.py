@@ -1,6 +1,9 @@
 """#57 review: the moments finder, verdicts, and the review page's file serving."""
 
 import json
+import re
+import shutil
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -8,10 +11,12 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from cueclock import archive
 from cueclock.review import moments, sessions
 from cueclock.review.app import create_app
 
 STAMP = "20261116-120000"
+MINUS = "\u2212"  # the page writes times before the moment with a real minus sign
 T0 = datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
 
 
@@ -196,9 +201,50 @@ def roots(tmp_path: Path) -> tuple[Path, Path]:
     return local, archive
 
 
-def client(roots: tuple[Path, Path], tmp_path: Path) -> TestClient:
-    local, archive = roots
-    return TestClient(create_app([local, archive], local_root=local, logs_dir=tmp_path / "logs"))
+class FakeFfmpeg:
+    """Stands in for ffmpeg under the real `Maintainer.cut_one`: writes the
+    output file it was asked for and remembers each command."""
+
+    def __init__(self) -> None:
+        self.commands: list[list[str]] = []
+        self.cut_one = archive.Maintainer(run=self._run, say=lambda _line: None).cut_one
+
+    def _run(self, argv: Sequence[str], timeout: float) -> tuple[int, str]:
+        self.commands.append(list(argv))
+        Path(argv[-1]).write_bytes(b"\0" * 4096)
+        return 0, ""
+
+
+def client(
+    roots: tuple[Path, Path], tmp_path: Path, ffmpeg: FakeFfmpeg | None = None
+) -> TestClient:
+    local, t7 = roots
+    return TestClient(
+        create_app(
+            [local, t7],
+            local_root=local,
+            logs_dir=tmp_path / "logs",
+            cutter=(ffmpeg or FakeFfmpeg()).cut_one,
+        )
+    )
+
+
+def list_recording(local: Path, video: Path, start_s: float = -30.0) -> None:
+    """One line in the local root's `recordings.jsonl`: an hour from `start_s`."""
+    video.write_bytes(b"\0" * 4096)
+    line = {
+        "path": str(video),
+        "start_wall": (T0 + timedelta(seconds=start_s)).isoformat(),
+        "stop_wall": (T0 + timedelta(hours=1)).isoformat(),
+    }
+    with (local / "recordings.jsonl").open("a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
+def cards(page: str) -> dict[str, str]:
+    """Each moment's `<details …>` opening tag on a session page, by id."""
+    tags = re.finditer(r'<details class="card[^>]*id="([^"]+)"[^>]*>', page)
+    return {m.group(1): m.group(0) for m in tags}
 
 
 def first_id(session_dir: Path) -> str:
@@ -301,45 +347,121 @@ def test_cut_served_with_range_requests(roots: tuple[Path, Path], tmp_path: Path
     (local / STAMP / "cuts" / f"{mid}.mp4").write_bytes(bytes(range(256)) * 4)
     app = client(roots, tmp_path)
 
-    assert f'src="/media/{STAMP}/{mid}.mp4"' in app.get(f"/s/{STAMP}").text
+    assert f' src="/media/{STAMP}/{mid}.mp4#t=0.001"' in app.get(f"/s/{STAMP}").text
     reply = app.get(f"/media/{STAMP}/{mid}.mp4", headers={"Range": "bytes=100-199"})
     assert reply.status_code == 206
     assert reply.headers["content-range"] == "bytes 100-199/1024"
     assert reply.content == bytes(range(100, 200))
 
 
-def test_falls_back_to_recording_then_pruned(roots: tuple[Path, Path], tmp_path: Path) -> None:
+def test_a_moment_opened_before_the_archive_pass_gets_its_own_clip(
+    roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """Steven reviews minutes after a session; the archive pass cuts later.
+    Until 2026-11-21 a card with no cut played the whole recording from an
+    offset, with nothing to say where the moment ended. The page now cuts the
+    moment it is asked for, with the archive pass's own cutter."""
     local, _ = roots
-    video = tmp_path / "obs.mp4"
-    video.write_bytes(b"\0" * 4096)
-    stop = (T0 + timedelta(hours=1)).isoformat()
-    (local / "recordings.jsonl").write_text(
-        json.dumps(
-            {"path": str(tmp_path / "gone.mp4"), "start_wall": T0.isoformat(), "stop_wall": stop}
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "path": str(video),
-                "start_wall": (T0 - timedelta(seconds=30)).isoformat(),
-                "stop_wall": stop,
-            }
-        )
-        + "\n"
-    )
-    app = client(roots, tmp_path)
-    page = app.get(f"/s/{STAMP}").text
-    first = json.loads((local / STAMP / "moments.json").read_text())[0]
-    offset = (
-        datetime.fromisoformat(first["start_wall"]) - (T0 - timedelta(seconds=30))
-    ).total_seconds()
-    assert f'src="/recording/1#t={offset:.1f}"' in page  # line 0's file is gone
-    reply = app.get("/recording/1", headers={"Range": "bytes=0-9"})
-    assert reply.status_code == 206 and len(reply.content) == 10
-    assert app.get("/recording/0").status_code == 404
+    video = tmp_path / "obs.mov"
+    list_recording(local, video, start_s=-30.0)
+    ffmpeg = FakeFfmpeg()
+    app = client(roots, tmp_path, ffmpeg)
+    found = json.loads((local / STAMP / "moments.json").read_text())
+    mid = next(m["id"] for m in found if m["kind"] == "phantom")
 
-    video.unlink()
-    assert "Footage pruned" in app.get(f"/s/{STAMP}").text
+    page = app.get(f"/s/{STAMP}").text
+    # A closed moment's video carries its address as data: nothing is fetched,
+    # and so nothing is cut, until the moment is opened. The open one has it.
+    assert f' data-src="/media/{STAMP}/{mid}.mp4#t=0.001"' in page
+    assert len(re.findall(r'<video [^>]* src="/media/', page)) == 1
+    assert "/recording/" not in page  # never the whole recording in a card
+    assert not (local / STAMP / "cuts").exists()  # rendering the page cut nothing
+
+    assert app.get(f"/media/{STAMP}/{mid}.mp4").status_code == 200
+    assert app.get(f"/media/{STAMP}/{mid}.mp4", headers={"Range": "bytes=0-9"}).status_code == 206
+    assert (local / STAMP / "cuts" / f"{mid}.mp4").is_file()
+    assert len(ffmpeg.commands) == 1  # cut once, then served from disk
+    argv = ffmpeg.commands[0]
+    # The settle is at 40.4 s; its span starts 12 s before, 30 s into the file.
+    assert argv[argv.index("-ss") + 1] == "58.400" and argv[argv.index("-t") + 1] == "20.000"
+    assert argv[argv.index("-i") + 1] == str(video)
+
+    assert app.get(f"/media/{STAMP}/phantom-1.mp4").status_code == 404  # not a moment
+    assert len(ffmpeg.commands) == 1
+
+
+def test_a_clip_marks_the_flagged_instant_and_the_journal_lines_in_it(
+    roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local, _ = roots
+    list_recording(local, tmp_path / "obs.mov")
+    page = client(roots, tmp_path).get(f"/s/{STAMP}").text
+    phantom = page[page.index('id="phantom-') :].split("</details>")[0]
+    assert 'data-len="20.00"' in phantom
+    assert '<i class="flag" style="left:60.00%">' in phantom  # 12 s into 20
+    assert f"<span>{MINUS}12 s</span>" in phantom and "<span>+8 s</span>" in phantom
+    # The strike 0.4 s before the settle: 11.6 s into the clip.
+    assert f'<li data-t="11.60"><span class="at">{MINUS}0.4 s</span>' in phantom
+    assert 'class="here" data-t="12.00"><span class="at">0.0 s</span>' in phantom
+    assert '<span class="ev">Strike seen</span><span class="clk">frozen 30 s</span>' in phantom
+
+
+def test_a_moment_at_the_start_of_the_recording_keeps_its_mark_in_place(
+    roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    # The idle strikes at 5-7 s: their span starts 12 s earlier, before the
+    # recording did (2 s before the session), so the clip is clipped to it.
+    local, _ = roots
+    list_recording(local, tmp_path / "obs.mov", start_s=-2.0)
+    page = client(roots, tmp_path).get(f"/s/{STAMP}").text
+    idle = page[page.index('id="idle_strike-') :].split("</details>")[0]
+    assert 'data-len="17.00"' in idle  # from the recording's start to 8 s after the last
+    assert '<i class="flag" style="left:41.18%">' in idle  # 7 s into 17
+    assert f"<span>{MINUS}7 s</span>" in idle and "<span>+10 s</span>" in idle
+
+
+def test_no_recording_left_means_no_footage_and_still_a_verdict(
+    roots: tuple[Path, Path], tmp_path: Path
+) -> None:
+    local, _ = roots
+    video = tmp_path / "obs.mov"
+    list_recording(local, video)
+    video.unlink()  # pruned by the footage budget
+    ffmpeg = FakeFfmpeg()
+    app = client(roots, tmp_path, ffmpeg)
+    page = app.get(f"/s/{STAMP}").text
+    mid = first_id(local / STAMP)
+    assert "No footage to show" in page and "<video" not in page
+    assert "data-t=" not in page  # nothing to seek in
+    assert app.get(f"/media/{STAMP}/{mid}.mp4").status_code == 404
+    assert ffmpeg.commands == []
+    assert app.post(f"/api/verdict/{STAMP}/{mid}", json={"verdict": "right"}).status_code == 200
+
+    assert app.get("/recording/0").status_code == 404  # the pruned file is not served
+
+
+def test_a_verdict_saved_as_the_session_is_archived_lands_in_the_archive(
+    roots: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The archive pass deletes the local copy minutes after a session, which
+    is when it is being judged. A save that finds the directory gone must not
+    bring it back holding one file (the next pass would copy that file over
+    the archived verdicts): it goes to the copy on the T7."""
+    local, t7 = roots
+    shutil.copytree(local / STAMP, t7 / STAMP)
+    mid = first_id(local / STAMP)
+    set_verdict = sessions.Session.set_verdict
+
+    def archived_under_it(self: sessions.Session, *args: Any) -> None:
+        if self.path.parent == local:
+            shutil.rmtree(self.path)  # the pass finishes between lookup and write
+        set_verdict(self, *args)
+
+    monkeypatch.setattr(sessions.Session, "set_verdict", archived_under_it)
+    reply = client(roots, tmp_path).post(f"/api/verdict/{STAMP}/{mid}", json={"verdict": "wrong"})
+    assert reply.status_code == 200 and reply.json()["verdict"] == "wrong"
+    assert not (local / STAMP).exists()
+    assert json.loads((t7 / STAMP / "verdicts.json").read_text())[mid]["verdict"] == "wrong"
 
 
 def test_session_page_reads_journal_in_plain_language(
@@ -373,7 +495,9 @@ def test_full_session_player_lists_events_and_serves_the_kept_copy(
     assert f'href="/s/{STAMP}/full"' in app.get(f"/s/{STAMP}").text
     page = app.get(f"/s/{STAMP}/full").text
     assert f'src="/full/{STAMP}/0"' in page
-    assert "Strike seen" in page and "data-seek=" in page
+    assert "Strike seen" in page and re.search(r'<li data-t="[\d.]+"><span class="at">0:30', page)
+    # A moment's card links to its place in that recording (10 s before T0).
+    assert f'href="/s/{STAMP}/full#v0=' in app.get(f"/s/{STAMP}").text
     reply = app.get(f"/full/{STAMP}/0", headers={"Range": "bytes=0-9"})
     assert reply.status_code == 206 and len(reply.content) == 10
     assert app.get(f"/full/{STAMP}/1").status_code == 404  # resolves outside the session
@@ -395,19 +519,49 @@ def test_full_session_falls_back_to_the_listed_recording(
     assert 'src="/recording/0"' in app.get(f"/s/{STAMP}/full").text
     video.unlink()
     assert "No full recording" in app.get(f"/s/{STAMP}/full").text
-    assert "/full" not in app.get(f"/s/{STAMP}").text.split("<section")[0]
+    assert "/full" not in app.get(f"/s/{STAMP}").text.split("<details")[0]
 
 
-def test_a_judged_moment_renders_collapsed_with_progress(
+def test_one_moment_is_open_and_it_is_the_first_still_to_judge(
     roots: tuple[Path, Path], tmp_path: Path
 ) -> None:
+    """Every moment is a row; the page arrives with one of them open. (The
+    first page showed all of them at full height: 13,570 px for 18 moments,
+    and a save scrolled back to the first unjudged one above.)"""
     local, _ = roots
-    mid = first_id(local / STAMP)
-    total = len(json.loads((local / STAMP / "moments.json").read_text()))
+    ids = [m["id"] for m in json.loads((local / STAMP / "moments.json").read_text())]
     app = client(roots, tmp_path)
-    assert f"0 of {total} reviewed" in app.get(f"/s/{STAMP}").text
-    app.post(f"/api/verdict/{STAMP}/{mid}", json={"verdict": "wrong", "note": "it was a safety"})
+
     page = app.get(f"/s/{STAMP}").text
-    assert f"1 of {total} reviewed" in page
-    assert f'<section class="card done" id="{mid}"' in page
-    assert "✗ Clock wrong" in page and "— it was a safety" in page
+    rows = cards(page)
+    assert list(rows) == ids  # session order
+    assert [mid for mid, tag in rows.items() if tag.endswith(" open>")] == [ids[0]]
+    assert f"0 of {len(ids)} reviewed" in page
+
+    app.post(f"/api/verdict/{STAMP}/{ids[0]}", json={"verdict": "wrong", "note": "it was a safety"})
+    app.post(f"/api/verdict/{STAMP}/{ids[1]}", json={"verdict": "right"})
+    page = app.get(f"/s/{STAMP}").text
+    rows = cards(page)
+    assert [mid for mid, tag in rows.items() if tag.endswith(" open>")] == [ids[2]]
+    assert rows[ids[0]].startswith('<details class="card wrong"')
+    assert rows[ids[1]].startswith('<details class="card right"')
+    assert '<span class="verdict-text">Clock wrong</span>' in page
+    assert '<span class="note-text">it was a safety</span>' in page
+    assert f"2 of {len(ids)} reviewed" in page
+
+    for mid in ids[2:]:
+        app.post(f"/api/verdict/{STAMP}/{mid}", json={"verdict": "right"})
+    assert " open>" not in app.get(f"/s/{STAMP}").text  # all judged: all rows
+
+
+def test_rows_are_named_in_plain_words(roots: tuple[Path, Path], tmp_path: Path) -> None:
+    page = client(roots, tmp_path).get(f"/s/{STAMP}").text
+    for name in (
+        "Strike with the clock idle",
+        "Possible phantom shot",
+        "Not counted as a shot",
+        "You corrected the clock",
+        "Watchdog released the clock",
+        "Clock ran with nothing seen",
+    ):
+        assert f"<b>{name}</b>" in page

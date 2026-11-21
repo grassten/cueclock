@@ -958,9 +958,14 @@ Flag path went is in §C2.
 key's setup retries `StartRecord` with the other prep steps (§C4); on stop it
 sends `StopRecord` before the blanket output stop and appends one line to
 `sessions.nosync/recordings.jsonl`: `{"path", "start_wall", "stop_wall"}`
-(ISO UTC, the journal's own format). A daemon restart mid-session re-adopts the
-running recording and back-dates its start by OBS's `outputDuration`, so
-offsets into the file stay right. A stop OBS doesn't confirm leaves the file
+(ISO UTC, the journal's own format). `start_wall` is when the file's first
+frame was written, not when the deck asked for it: just before `StopRecord`
+the deck reads `GetRecordStatus.outputDuration`, which is the file's length,
+and back-dates the start by it. A freshly launched OBS acknowledges
+`StartRecord` 1.2-1.8 s before it writes anything (six recordings,
+2026-11-16 to 11-21), and every review clip and seek is an offset from this
+instant. A daemon restart mid-session re-adopts the running recording the
+same way. A stop OBS doesn't confirm leaves the file
 **unlisted** — and an unlisted file is one housekeeping never cuts or deletes.
 A terminal `run` (`DEV`) is not recorded: the deck only records sessions it owns.
 

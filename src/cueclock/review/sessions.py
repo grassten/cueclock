@@ -5,9 +5,10 @@ the internal SSD's `sessions.nosync/` and the T7's `cueclock_sessions/`. The T7
 is often unmounted, so a missing root is simply empty — the page must still
 come up with whatever is local.
 
-Footage for a moment comes from the best source still on disk: the session's
-own cut (`cuts/<id>.mp4`), else the full OBS recording that covered it (from
-the global `recordings.jsonl`), else nothing — recordings are pruned by a byte
+Footage for a moment is its cut (`cuts/<id>.mp4`): the archive pass makes
+them, and the page makes the one a card asks for when it is not there yet,
+from the listed recording (`recordings.jsonl`) or the session's own kept copy.
+With neither left there is no footage: recordings are pruned by a byte
 budget, and the verdict can still be given from the journal.
 """
 
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cueclock import archive
 from cueclock.archive import FULL_INDEX, RECORDINGS_LOG, SESSIONS_ROOT
 from cueclock.review.moments import MOMENTS_FILE, write_json
 
@@ -68,7 +70,11 @@ class Session:
         return sum(1 for m in moments if m.get("id") not in judged)
 
     def set_verdict(self, moment_id: str, verdict: str | None, note: str) -> None:
-        """Record (or, with `verdict=None`, withdraw) Steven's call on one moment."""
+        """Record (or, with `verdict=None`, withdraw) Steven's call on one moment.
+
+        FileNotFoundError when the directory is gone: the archive pass moved
+        the session between the lookup and this write. Look it up again.
+        """
         verdicts = self.verdicts()
         if verdict is None:
             verdicts.pop(moment_id, None)
@@ -170,7 +176,12 @@ def overlapping(start: datetime, end: datetime, available: list[Recording]) -> l
     )
 
 
-def recording_for(when: datetime, available: list[Recording]) -> Recording | None:
-    """The newest recording covering `when`, if one survives."""
-    covering = [r for r in available if r.covers(when)]
-    return max(covering, key=lambda r: r.start) if covering else None
+def clip_sources(session: Session, local_root: Path) -> list[archive.Recording]:
+    """What a moment of this session can be cut from, in the cutter's terms.
+
+    The listed recordings first: they are on the internal SSD, and while one
+    is there it is the same footage as the session's kept copy on the T7. A
+    recording still being written has no stop time and is left out.
+    """
+    found = [*recordings(local_root), *session.full_recordings()]
+    return [archive.Recording(r.path, r.start, r.stop) for r in found if r.stop is not None]

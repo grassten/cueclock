@@ -319,6 +319,86 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-21 (checkpoint 137 — the review page, one moment at a time):**
+  Steven judged that morning's session (`20261121-153046`, 27 minutes, 18
+  moments) on his phone and reported the page "really hard to use": "it's not
+  collapsing, it's not showing cropped clips but just skipping to a timestamp
+  in the full video so idk how long to watch, it's scrolling all the way to
+  the top when I click save". `detect.py`, `events.py` and `track.py` are
+  untouched.
+  - **What he was looking at**, reproduced at phone width in WebKit against a
+    copy of the session: 18 cards at full height, 13,570 px, each a video,
+    then 9-14 journal lines, then the verdict buttons below the fold. Save
+    did collapse its card (1,142 px to 95) and then scrolled to the first
+    unjudged card on the page: 3,171 px to 214. He had begun at card 5 (his
+    first five verdicts are cards 5, 7, 8, 15, 11), so every save threw him
+    to card 1.
+  - **Why there were no clips:** the archive pass cut them at 11:08, eleven
+    minutes after the stop; he had the page open before that, and a card
+    with no cut played the 27-minute recording from an offset. The cuts,
+    once made, were 40 s with the moment 22 s in (the finder's 12 s + 8 s
+    span, padded 10 s each side by `plan_cut`), and nothing on the page said
+    where.
+  - **The page** (`review/app.py`): a list of rows with one open, the first
+    without a verdict. Open, a moment is a sentence, its clip, a strip
+    marking the flagged instant and each journal line in it, the two verdict
+    buttons directly under that, then the journal lines (tap one and the
+    clip plays from 2 s before it). A pick opens the note with Save beside
+    it; Save closes the moment and opens the next unjudged one *below*, and
+    a skipped one waits for "Next to review" at the list's end. Rows are
+    named in words ("Not counted as a shot", not `reverted`); a judged row
+    shows its verdict and note, and reopens to change or clear it. The same
+    session is 2,324 px. A video is fetched when its moment opens (18 were
+    fetched on arrival): a closed moment's video carries its address as
+    `data-src`, not `src`. The first build that went live left the `src`
+    with `preload="none"`, and half a minute later all 18 clips of the
+    session were asked for at once (cut 11:54:09 to 11:54:12; the server
+    keeps no access log, so by what is not known. WebKit on the Mac did not
+    ask for them).
+  - **A clip is the moment** (`archive.plan_cut`): the cut is the finder's
+    span exactly, 20 s and 23-26 MB against 40 s and 43-53 MB; the 10 s pad
+    is left for a moment with no span. `/media/<stamp>/<id>.mp4` makes a
+    missing cut on the spot with the archive pass's own `cut_one` (cut and
+    served in 0.15 s from the internal SSD), from the listed recording or
+    the session's kept copy, and the pass skips what is already there. A
+    card never plays a whole recording.
+  - **Recording time was 1.2-1.8 s off** (`deck/session.py`,
+    `deck/obsws.py`): `start_wall` was when the deck asked for the
+    recording, and a freshly launched OBS writes its first frame later.
+    Logged span minus file length, over the six recordings on disk: 1.49,
+    1.78, 1.64, 1.69, 1.20, 1.77 s; the one recording started into an OBS
+    already running, 0.09 s. Every cut, every seek on the full-session page
+    and every recording offset read off a journal landed that much late
+    (the "~1.3 s ahead" noted during checkpoint 135). The deck now takes the
+    start from `GetRecordStatus.outputDuration` just before the stop. The six
+    listed recordings and their kept copies on the T7 were corrected to
+    `stop_wall` minus file length, and the cuts made on the old times
+    removed (they are cut again when opened). Against the footage: a strike
+    journaled 15.05 s into a cut shows its first ball motion at
+    15.10-15.12 s.
+  - **The archive pass could delete a verdict** (`archive.move`): the page
+    reads and writes the local copy of a session until it is gone. The move
+    listed the files, copied for 38 s (11:08:04 to 11:08:41), checked that
+    list and deleted the directory, so a first verdict saved meanwhile was
+    in no list. His first save landed at 11:08:44. The check now reads the
+    directory as it stands, and such a session waits for the next pass. A
+    write into a directory already gone fails instead of bringing it back
+    with one file in it (`write_json` no longer creates directories); the
+    page then saves to the archived copy.
+  - **Full-session page:** the same rows; a tapped line plays from 2 s
+    before it, the line being played is highlighted and the list follows
+    the video; each moment links to its place there.
+  - **Not verified:** Safari on the iPhone. The page was rendered and driven
+    in WebKit on the Mac at 390 px; the on-screen keyboard and iOS inline
+    video were not. The deck's new start time has no recording behind it
+    yet: for the next session, logged span minus file length should read
+    about 0.1 s.
+  - **On checkpoint 136**, which landed the same morning: a merged moment
+    (candidates within 2 s) is one row under its first kind's name, its
+    candidates' sentences run on under it, and its clip is its whole span
+    (21.4 s for this session's three-candidate one).
+  - Verified: unit tests 801 passed (792 before); ruff, mypy --strict
+    clean. The new tests fail against checkpoint 136's code.
 - **2026-11-21 (checkpoint 136 — what the first session with scratches sent
   back; #69):** Steven played 27 minutes that morning (session
   `20261121-153046`, 5 racks, checkpoint 135's code) and judged its moments

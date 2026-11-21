@@ -444,13 +444,19 @@ def write(session_dir: Path, logs_dir: Path = Path("logs")) -> list[Moment]:
     if journal is None:
         raise FileNotFoundError(f"no journal for session {session_dir.name}")
     moments = find(journal, session_dir / REPLAY_FILE)
+    session_dir.mkdir(parents=True, exist_ok=True)
     write_json(session_dir / MOMENTS_FILE, [asdict(m) for m in moments])
     return moments
 
 
 def write_json(path: Path, data: object) -> None:
-    """Write-then-rename, so a reader never sees half a file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Write-then-rename, so a reader never sees half a file.
+
+    Into a directory that exists: a session the archive pass has just moved
+    to the T7 must not come back as a directory holding one file (the next
+    pass would copy that file over the archived one), so a write into a
+    directory that is gone fails with FileNotFoundError.
+    """
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(json.dumps(data, indent=1) + "\n")
     os.replace(tmp, path)
