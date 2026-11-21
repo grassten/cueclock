@@ -1,6 +1,7 @@
 """The ball list's say in the scratch hold (#63, docs/design.md §14), in
 ball in hand after a scratch (#64, §15), in whether a settle moved anything
-at all (§16) and in whether a break broke the rack (§17).
+at all (§16), in whether a break broke the rack (§17) and, with the cue
+ball's rolling time, in whether a hand moved it (#67, §21).
 
 Today's logic raises a scratch candidate only when the tracker loses the cue
 while it is moving inside a pocket zone. The ball list asks a different
@@ -38,6 +39,13 @@ OBJECT_MOVED_PX = 3.0
 # recorded hand moves of the cue travel 18-288 mm, the five scratches 474-1711.
 TRAVEL_MIN_MM = 400.0
 
+# The cue ball was seen rolling when a clean cue-white detection stood away
+# from its rest spots for this long in the motion a settle ends
+# (`vision.roll`, #67). Hand moves read 0.013 s at most (one frame at 78 Hz),
+# 0.006 s live; the lowest stick shot is `tip_bump` (a 48 mm bump) at 0.19 s,
+# the lowest live shot 0.28 s.
+ROLL_MIN_S = 0.1
+
 # The fewest numbered balls a list must hold to stand for a rack: nine-ball's,
 # the smallest rack in `clock/rulesets.py`.
 RACK_MIN_BALLS = 9
@@ -58,6 +66,15 @@ class SettleFacts:
     travel_mm: float | None  # the farthest any mover went, None with no movers
     tracker_cue: bool  # the tracker held a cue-grade ball at the settle
     motion_t: float | None  # when the motion this settle ends began
+    # How long the cue ball was seen rolling in that motion (`vision.roll`);
+    # None when there was no motion to measure.
+    cue_roll_s: float | None = None
+
+    @property
+    def seen_rolling(self) -> bool:
+        """The cue ball moved by itself, or there is no evidence that it did
+        not: no evidence counts as rolling, so every doubt counts the shot."""
+        return self.cue_roll_s is None or self.cue_roll_s >= ROLL_MIN_S
 
 
 @dataclass(frozen=True)
@@ -91,6 +108,18 @@ def object_moved(before: BallList, now: BallList) -> bool:
 
     a, b = _objects(before), _objects(now)
     return not (covered(a, b) and covered(b, a))
+
+
+def object_missing(before: BallList, now: BallList) -> bool:
+    """Some object ball on ``before`` has no ball within OBJECT_MOVED_PX on
+    ``now`` (#67, §21). One way, as `rack_stands` asks: a circle that is new
+    on ``now`` is not asked about, because a hand, a glove or a sleeve read as
+    a ball is always a new circle. A hand hiding an object ball makes it
+    missing, which counts the settle: the safe side."""
+    return not all(
+        any(math.hypot(b.cx - n.cx, b.cy - n.cy) <= OBJECT_MOVED_PX for n in now.balls)
+        for b in _objects(before)
+    )
 
 
 class RestLists:
@@ -145,8 +174,9 @@ def judge(
     ``scratch``: a shot was counted, the cue was on the table before it, the
     list (with no arm over the table) and the tracker both miss it now, and
     it was not lifted by hand — an object ball moved, something travelled
-    TRAVEL_MIN_MM or more, or today's logic has a candidate open for this
-    shot. ``lifted``: all of that but the last; #64's case, nothing here.
+    TRAVEL_MIN_MM or more, the cue ball was seen rolling (#67), or today's
+    logic has a candidate open for this shot. ``lifted``: all of that but
+    the last; nothing here.
     When the list sees the cue (``says == "cue"``) the hub clears any
     candidate instead: the cue counts as present if either one sees it.
     """
@@ -155,7 +185,7 @@ def judge(
     before = "cue" if cue_before else "no_cue"
     if says != "no_cue" or not facts.counted or not cue_before or facts.tracker_cue:
         call = "none"
-    elif moved or candidate or (facts.travel_mm or 0.0) >= TRAVEL_MIN_MM:
+    elif moved or candidate or facts.seen_rolling or (facts.travel_mm or 0.0) >= TRAVEL_MIN_MM:
         call = "scratch"
     else:
         call = "lifted"
@@ -165,16 +195,32 @@ def judge(
 def only_cue_changed(now: BallList, rest: BallList | None, facts: SettleFacts) -> bool:
     """Ball in hand (#64, §15): did this settle move nothing but the cue?
 
-    Every object ball on ``rest`` (the newest arm-free list since the
-    scratch) has one within OBJECT_MOVED_PX on ``now`` and the reverse, and
-    nothing travelled TRAVEL_MIN_MM or more. The cue itself is not looked at:
+    No object ball on ``rest`` (the newest arm-free list since the scratch)
+    is missing from ``now`` (`object_missing`), and either nothing travelled
+    TRAVEL_MIN_MM or more or the cue ball was not seen rolling: a carry is
+    placing however far it went (#67). The cue itself is not looked at:
     placed, lifted, or moved spot to spot, it is all placing. An arm over the
     table is allowed — a hand on the cue hides the cue, not the object balls;
-    one hiding an object ball reads as moved, and the settle counts.
+    one hiding an object ball reads as missing, and the settle counts.
     """
-    if rest is None or (facts.travel_mm or 0.0) >= TRAVEL_MIN_MM:
+    if rest is None:
         return False
-    return not object_moved(rest, now)
+    if (facts.travel_mm or 0.0) >= TRAVEL_MIN_MM and facts.seen_rolling:
+        return False
+    return not object_missing(rest, now)
+
+
+def moved_by_hand(now: BallList, rest: BallList | None, facts: SettleFacts) -> bool:
+    """Open play (#67, §21): was this settle the cue ball moved by hand?
+
+    The cue ball was not seen rolling, and no object ball on ``rest`` (the
+    newest arm-free list before the motion) is missing from ``now``. A ball
+    that moved by itself rolls in the open; a ball in a hand is one blob with
+    the hand. Placed spot to spot, picked up or put down, it is all the same.
+    No list to compare with, or no evidence, answers False and the settle
+    counts as before.
+    """
+    return rest is not None and not facts.seen_rolling and not object_missing(rest, now)
 
 
 def _cue(found: BallList) -> ListedBall | None:
@@ -249,14 +295,21 @@ def rack_stands(now: BallList, before: BallList | None) -> bool:
 
 
 def table_row(
-    now: BallList, rest: BallList | None, cue_before: bool, placing: bool, call: str
+    now: BallList,
+    rest: BallList | None,
+    cue_before: bool,
+    placing: bool,
+    call: str,
+    by_hand: bool = False,
 ) -> str:
     """What a settle was, for the journal.
 
     ``ball_in_hand`` (a settle during ball in hand that moved only the cue),
+    ``by_hand`` (the cue ball moved by hand in open play, #67),
     ``shot`` (the cue before and now, an object ball moved), ``scratch`` and
     ``lifted`` (the list's calls, §14), ``cue_moved`` (only the cue moved,
-    outside ball in hand: a hand or a stick that touched nothing), ``still``
+    outside ball in hand, and it was seen rolling: a stick shot that touched
+    nothing, or a ball rolled or pushed), ``still``
     (the cue ball on its spot: no shot was played, whatever else the list
     read, §19). ``arm`` (a hand over the table and no cue seen) and
     ``no_rest`` (nothing to compare with) cannot be read; ``other`` is
@@ -264,6 +317,8 @@ def table_row(
     """
     if placing:
         return "ball_in_hand"
+    if by_hand:
+        return "by_hand"
     if call in ("scratch", "lifted"):
         return call
     if rest is None:

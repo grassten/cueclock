@@ -44,6 +44,7 @@ from cueclock.server.scratch import (
     cue_px,
     holds_rack,
     judge,
+    moved_by_hand,
     nothing_moved,
     only_cue_changed,
     rack_stands,
@@ -1645,9 +1646,15 @@ class Hub:
         backstop: bool = False,
         movers: "list[SettleMover] | None" = None,
         tracker_cue: bool = False,
+        cue_roll_s: float | None = None,
     ) -> None:
+        """``cue_roll_s``: how long the cue ball was seen rolling in the
+        motion this settle ends (#67, `vision.roll`); None with no motion to
+        measure, which counts as rolling."""
         if self._vision(
-            lambda now: self._balls_settled(now, t, rearrange, backstop, movers, tracker_cue)
+            lambda now: self._balls_settled(
+                now, t, rearrange, backstop, movers, tracker_cue, cue_roll_s
+            )
         ):
             await self.broadcast(self.clock.snapshot())
 
@@ -1659,6 +1666,7 @@ class Hub:
         backstop: bool,
         movers: "list[SettleMover] | None",
         tracker_cue: bool,
+        cue_roll_s: float | None = None,
     ) -> bool:
         detail: dict[str, object] = {"t": t, "frame_t": t}
         # #63: what this settle's ball list will be judged against, kept until
@@ -1673,6 +1681,7 @@ class Hub:
             travel_mm=max(m.travel_mm for m in movers) if movers else None,
             tracker_cue=tracker_cue,
             motion_t=self._episode_motion_t,
+            cue_roll_s=cue_roll_s,
         )
         self._settle_facts = facts
         self._settle_listed = False
@@ -1697,6 +1706,9 @@ class Hub:
         if movers:
             detail["movers_alive"] = sum(m.alive for m in movers)
             detail["mover_max_mm"] = round(max(m.travel_mm for m in movers))
+        # #67: on every record, null with no motion to measure, so the next
+        # question about it needs no replay.
+        detail["cue_roll_s"] = None if cue_roll_s is None else round(cue_roll_s, 3)
         if not self.vision_enabled:
             self._log("vision_balls_settled_killed", **detail)
             return False  # kill switch, as above
@@ -1716,7 +1728,9 @@ class Hub:
         # displaced, or one ball and no strike — its list says whether
         # anything moved at all. §17: and
         # the settle of a strike that left IDLE as the break, when a rack
-        # stood before it — its list says whether the rack still does.
+        # stood before it — its list says whether the rack still does. §21:
+        # and a settle whose cue ball was never seen rolling — its list says
+        # whether an object ball went, or a hand moved only the cue.
         if (
             self.clock.state is not State.IDLE
             and not self._settle_is_phantom(rearrange, backstop)
@@ -1724,6 +1738,7 @@ class Hub:
                 self._may_be_placing(facts)
                 or self._may_be_no_shot(facts, rearrange, backstop)
                 or self._may_be_false_start(facts)
+                or self._may_be_by_hand(facts, backstop)
             )
         ):
             self._held_settle = _HeldSettle(now, t, detail, rearrange, backstop)
@@ -1744,8 +1759,9 @@ class Hub:
         """The clock half of a settle, as of ``now`` (the settle's own hub
         time, also when it waited for its list). ``refusal`` is its list's
         verdict that it was not a shot: ``ball_in_hand`` (#64: it moved only
-        the cue, during ball in hand) or ``nothing_moved`` (§16, §19: the cue
-        ball was read on its spot). True when the settle counted a shot."""
+        the cue, during ball in hand), ``rack_standing`` (§17), ``nothing_moved``
+        (§16, §19: the cue ball was read on its spot) or ``by_hand`` (§21: the
+        cue ball moved by hand in open play). True when the settle counted a shot."""
         # Both settle-time refusals are decided here, before anything touches
         # the clock, and against the state the settle ARRIVED in. That is what
         # keeps them disjoint from the break adjudication below: E8 acts only
@@ -1873,8 +1889,22 @@ class Hub:
 
     def _may_be_placing(self, facts: SettleFacts) -> bool:
         """Could this settle's list make it placing? Ball in hand, a list to
-        compare with, and travel under the hand bound (§15)."""
-        return self._placing_rest(facts) is not None and (facts.travel_mm or 0.0) < TRAVEL_MIN_MM
+        compare with, and travel under the hand bound (§15) or the cue ball
+        never seen rolling: a carry is placing however far it went (§21)."""
+        return self._placing_rest(facts) is not None and (
+            (facts.travel_mm or 0.0) < TRAVEL_MIN_MM or not facts.seen_rolling
+        )
+
+    def _may_be_by_hand(self, facts: SettleFacts, backstop: bool) -> bool:
+        """Could this settle's list show the cue ball moved by hand (§21)?
+        The cue ball was never seen rolling in the motion it ends, and there
+        is an arm-free list from before the motion to compare with. The
+        backstop settle is break-scale by construction and never held."""
+        return (
+            not backstop
+            and not facts.seen_rolling
+            and self._rest_lists.before(facts.motion_t)[0] is not None
+        )
 
     def _may_be_no_shot(
         self, facts: SettleFacts, rearrange: "RearrangeSummary | None", backstop: bool
@@ -1977,7 +2007,8 @@ class Hub:
         scratch, clear it, or leave today's logic to decide alone. A settle
         held for this list is decided here: during ball in hand, one that
         moved only the cue is kept off the clock (#64); so is one that left
-        the cue ball on its spot (§16, §19)."""
+        the rack standing (§17) or the cue ball on its spot (§16, §19), and
+        one in which a hand moved only the cue ball (§21)."""
         facts = self._settle_facts
         if facts is None or self._settle_listed:
             return  # no settle waiting, or the next motion began first (journaled)
@@ -1990,33 +2021,38 @@ class Hub:
         candidate = state.candidate and state.closed is None
         placing = only_cue_changed(found, self._placing_rest(facts), facts)
         hand = "ball_in_hand" if placing and self._ball_in_hand is not None else None
+        # The refusals in the order they are asked; the first that holds is
+        # the verdict. The two hand ones (#64, §21) journal `hand` as well.
+        rack = self._break_fired and rack_stands(
+            found, self._rest_lists.last_before(facts.motion_t)
+        )
+        still = nothing_moved(found, rest)
+        by_hand = hand is None and not rack and not still and moved_by_hand(found, rest, facts)
+        refusal = (
+            hand
+            or ("rack_standing" if rack else None)
+            or ("nothing_moved" if still else None)
+            or ("by_hand" if by_hand else None)
+        )
+        hand_kind = hand or ("by_hand" if by_hand else None)
         held = self._held_settle
         moved_clock = False
         if held is not None and held.t == facts.t:
             self._held_settle = None
             held.detail["held"] = "list"
-            refusal = hand
-            if (
-                refusal is None
-                and self._break_fired
-                and rack_stands(found, self._rest_lists.last_before(facts.motion_t))
-            ):
-                refusal = "rack_standing"
-            if refusal is None and nothing_moved(found, rest):
-                refusal = "nothing_moved"
             moved_clock = self._decide_settle(
                 held.now, held.t, held.detail, held.rearrange, held.backstop, refusal
             )
             facts = dataclasses.replace(facts, counted=moved_clock)
             # "applied": kept off the clock. "refused": the clock had already
             # committed a shot this cycle, so the settle counted anyway.
-            applied = None if hand is None else "refused" if moved_clock else "applied"
-            if applied == "applied" and self._ball_in_hand is not None:
+            applied = None if hand_kind is None else "refused" if moved_clock else "applied"
+            if applied == "applied" and hand is not None and self._ball_in_hand is not None:
                 self._ball_in_hand.placed += 1
         else:
             # Not held: the clock was idle or off, or something else decided
             # the settle before its list came (``late``). Journaled as a row.
-            applied = None if hand is None else "late" if self._settle_was_held else "not_held"
+            applied = None if hand_kind is None else "late" if self._settle_was_held else "not_held"
         verdict = judge(found, rest, cue_before, facts, candidate)
         state.says = verdict.says
         released = False
@@ -2042,7 +2078,7 @@ class Hub:
             frame_t=round(t, 3),
             **verdict.journal(),
             verdict=call,
-            row=table_row(found, rest, cue_before, hand is not None, call),
+            row=table_row(found, rest, cue_before, hand is not None, call, by_hand=by_hand),
             cue_px=None if (px := cue_px(found, rest)) is None else round(px, 1),
             hand=applied,
             counted=facts.counted,

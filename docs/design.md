@@ -940,7 +940,8 @@ birth gate, `EventEngine.cue_witnessed`, exported as
 `VisionPipeline.last_settle_cue_seen`), and (4) it was not lifted by hand: an
 object ball moved, or something travelled 400 mm or more (the engine's
 `pickup_travel_max_mm`; scratches 474–1711 mm, hand moves 18–288 mm), or a
-candidate is open for this shot. (1)–(3) without (4) journals `lifted`: #64's
+candidate is open for this shot, or (since checkpoint 140, §21) the cue ball
+was seen rolling. (1)–(3) without (4) journals `lifted`: #64's
 case, handled as before. **The list clears**: when it sees the cue, no hold
 is granted for this shot and a running one is released, and a candidate that
 arrives later for the same shot finds it cleared. **A refutation by today's
@@ -987,7 +988,8 @@ outcome changed.
 **Known limits.** A scratch with the clock idle gets no hold (all 7 journaled
 no-clock scratches). An arm over the table at the settle leaves today's logic
 alone (the `session-stats` row counts it). A cue that rolls under 400 mm into
-a pocket touching nothing reads as lifted (none in the corpus); a cue slid
+a pocket touching nothing read as lifted until §21, which calls it a scratch
+because it was seen rolling (none in the corpus); a cue slid
 400 mm or more by hand and then lifted reads as a scratch. A hand holding the
 cue on the cloth can read "no cue, no arm" (`ball_in_hand_nudge`), so after a
 real shot that is a scratch call unless the tracker still holds the cue.
@@ -1014,11 +1016,15 @@ While it lasts, a settle that moved **only the cue** is placing: nothing
 counted, a frozen countdown resumes at the remaining it froze with, a running
 one and the scratch hold keep going. Placed, picked up, placed somewhere
 else, nudged: the cue itself is never looked at. The first settle that moves
-an object ball (or travels 400 mm or more, the engine's hand bound) counts as
-the shot and ends it; so do New Rack and a refutation of the scratch.
+an object ball (or travels 400 mm or more, the engine's hand bound; since
+§21 only when the cue ball was also seen rolling, so a carry stays placing
+however far it went) counts as the shot and ends it; so do New Rack and a
+refutation of the scratch.
 
 "Only the cue" is #63's `object_moved` (3 px, measured there) between the
-settle's list and the newest arm-free list read since the scratch. An arm
+settle's list and the newest arm-free list read since the scratch (since
+§21 asked one way, `object_missing`: a circle new on the settle's list is
+not asked about). An arm
 over the table at the settle is allowed: a hand on the cue hides the cue, not
 the object balls. An arm hiding an object ball reads as moved and the settle
 counts, which is the safe side.
@@ -1051,7 +1057,8 @@ or IDLE fire already committed a shot this cycle; the settle then counts
 rule is you wait for everything to settle before picking up the cue ball").
 A cue lifted or moved by hand without a scratch before it counts as before.
 Ball in hand after other fouls is not covered: nothing on the table says a
-foul happened.
+foul happened. (§21 changes this paragraph: since checkpoint 140 a cue ball
+never seen rolling counts nothing in open play either.)
 
 **The corpus**: `scratch_replace` 10.00 s is placing (no count, the hold from
 8.45 s unreleased); every other clip's clock marks are identical to
@@ -1072,7 +1079,8 @@ or `compensation_suppressed` (none) with reason `ball_in_hand`, and
 (`held`).
 
 **Known limits.** It starts only from a scratch the hub recognised (§14); a
-missed scratch leaves placing counting as before. An arm or a hand-blob
+missed scratch leaves placing counting as before (until §21, which keeps a
+hand move off the clock without one). An arm or a hand-blob
 phantom changing the object balls at the settle counts the placing as a shot
 (restart). A ball-in-hand shot that touches nothing and travels under 400 mm
 is placing (not counted). With no arm-free list since the scratch (an arm in
@@ -1322,7 +1330,7 @@ what queued is applied then. A real break over a rack list whose settle is
 lost for 12 s with the motion bit low would be taken back; none is on
 record, and E8's dark tier still counts a break that never fired. A cue
 ball rolled or pushed by hand with no scratch before it is still open play
-(#67, parked).
+(#67, parked; §21 leaves it counting).
 
 ## 19. The cue ball on its spot means no shot was played (issue #73, 2026-11-21)
 
@@ -1469,3 +1477,128 @@ the `balls.jsonl` record and on the hub's `ball_list` line when not zero.
 `session-stats` reads it as "Lists with a second cue ball" (two `cue` labels
 in journals before this): the row §19 added as "Lists with two cue balls",
 now counted on every list, an arm in frame or not.
+
+## 21. A cue ball moved by hand counts no shot (issue #67, 2026-11-21)
+
+Steven: "If I'm moving the cue ball by hand it's because there was a foul
+lol. So yes if I'm moving the cue ball by hand the clock should keep
+running, that's the whole idea". Every rule set he plays gives ball in hand
+anywhere after a foul, and the countdown runs through the placement in all
+of them. Since §15 the clock knew that after a scratch it recognised. After
+any other foul, or a scratch it missed, a hand move of the cue ball could
+restart the countdown.
+
+**The evidence: was the cue ball seen rolling** (`vision/roll.py`). A ball
+that moved by itself rolls across the cloth in the open. A ball in a hand
+never does: from overhead hand and ball are one blob. At every settle
+`VisionPipeline.last_settle_cue_roll_s` reports how long a clean cue-white
+detection (merged with nothing, this frame's own whiteness 0.70 or more)
+stood more than 6 mm from every rest spot, over a window from 1 s before
+the motion start (the frame before the latch's last run, or the first
+strike, whichever is earlier; never before the previous settle) to the
+settle. Rest spots: every such detection in the 50 ms at the window's start
+and in the 50 ms up to the settle, and any spot such detections stood on
+for 0.1 s or more between the window's start and the motion start. None
+when no motion started since the previous settle (the pipeline's backstop
+settle), and none counts as rolling. Positions, not speeds, and each frame's
+whiteness, not the track's average (both alternatives were measured and
+fail: the issue's research record). It is computed from detections alone,
+so `session replay` and the corpus harness recompute it, and `bridge`
+passes it to `Hub.balls_settled`. Every `vision_balls_settled` record
+carries it as `cue_roll_s`.
+
+| Settles | n | Seen rolling |
+|---|---|---|
+| Live, no shot behind them (four logged sessions) | 17 | 0.006 s at most |
+| Live shots | 152 | 0.28 s at least |
+| Corpus, the cue ball moved by hand | 6 | 0.013 s at most |
+| Corpus, `tip_bump` (a 48 mm stick bump), the lowest stroke | | 0.19 s |
+
+Under `ROLL_MIN_S` (0.1 s, `server/scratch.py`) the cue ball was not seen
+rolling. The floor 0.70 holds where 0.60 does not (a glove passes and a
+settle with no shot reads 0.134 s); 6 mm holds at 3 and 10; spots by
+occupancy over the whole window lose `tip_bump`.
+
+**Three places use it.**
+
+- **Open play** (`scratch.moved_by_hand`, refusal `by_hand`). A settle with
+  the clock not IDLE, not a #37 phantom, not the backstop, whose cue ball
+  was not seen rolling, waits for its list (§15's wait, §18.1's queue) when
+  an arm-free list from before the motion exists. After the earlier
+  refusals (`ball_in_hand`, `rack_standing`, `nothing_moved`), it is
+  refused when no object ball of that list is missing from the settle's:
+  nothing counted, a frozen countdown resumes at what it froze with, a
+  running one keeps going. No 5 s hold: the hold is for fetching the ball
+  from a pocket. Placed spot to spot, lifted off, put down: all the same.
+- **Ball in hand after a scratch** (§15). Placing is no object ball missing
+  and travel under 400 mm **or** the cue ball not seen rolling: a carry
+  stays placing however far it went (two live placings read 372 and
+  374 mm). A cue-only settle that travelled 400 mm or more and was seen
+  rolling still counts and ends ball in hand.
+- **The scratch call** (§14, guard 4). Seen rolling is one more way the cue
+  ball was not lifted: a cue ball that rolls into a pocket touching nothing
+  under 400 mm is a scratch, where it read `lifted` before.
+
+**The object question, one way** (`scratch.object_missing`, for the two
+placing tests): some object ball on the list before has no ball within
+`OBJECT_MOVED_PX` on the settle's list. Circles new on the settle's list are
+not asked about, because a hand, a glove or a sleeve read as a ball is
+always new. `rack_stands` (§17) already compares this way; `judge` keeps
+the two-way `object_moved` for the scratch call.
+
+**Which way it fails.** A real shot is refused only if its cue ball was
+never in the open for 0.1 s and no object ball moved 3 px: the lowest
+stroke on record reads 0.19 s. Every doubt counts the shot: no evidence, no
+list before, no list in time, an object ball missing (a hand hiding one
+too), a candidate or a command first.
+
+**The corpus.** The four open-play hand settles stop counting
+(`ball_in_hand_carry_b_0811` 13.35 s, `ball_in_hand_carry_0811` 15.43 s,
+`ball_in_hand_triple_0811` 14.74 s and 16.04 s, row `by_hand`), so each
+carry clip counts once, on its stroke (`CARRY_CLIPS`, asserted again); the
+three stick settles that touched nothing count (`ball_in_hand_triple_0811`
+12.46 s, `pickup_newborn_0801` 8.60 s, `tip_bump` 3.87 s). Every other
+clock mark, row, list verdict and hold of the 69 clips is unchanged.
+
+**Logged sessions.** The four with play replay decision for decision as
+under checkpoint 139: every one of the 13 in-game settles with no shot
+behind them was already refused by an earlier rule. The evidence reads
+under 0.1 s at 16 settles and 0.28 s or more at 154; the 171st,
+20261121-153046 at 886.74 s (racking), is the pipeline's backstop and
+carries none, so it counts as before (the research had read it 0.000 s and
+expected it to stop counting). `review check` is line for line as at
+checkpoint 139.
+
+**Journal.** `cue_roll_s` on every `vision_balls_settled` record (null with
+no motion to measure). A refused settle: `rejected: by_hand`, a
+`shot_provisional_reverted` or `compensation_suppressed` line with that
+reason, and its `scratch_list` line `row: by_hand` with `hand` (`applied`,
+`refused`, `late`, `not_held`) as §15 journals it. `cue_moved` keeps its
+meaning, a counted open-play settle that moved only the cue, which is now a
+cue ball seen rolling. The review page shows every one kept off the clock
+as a `placing` moment, worded without a scratch, and a counted `by_hand`
+(late or refused) as a `cue_only` moment; `session-stats` splits "Placings
+kept off the clock" into after a scratch and in open play.
+
+**Known limits.**
+
+- A cue ball rolled or pushed so that it travels on its own, by hand or
+  with the shaft, was seen rolling and counts. During ball in hand after a
+  scratch only one of 400 mm or more does. No in-game example is on record;
+  the issue keeps two candidate readings for when one is.
+- A hand or arm hiding an object ball when the settle's list is read makes
+  that ball missing, and the settle counts.
+- A misread on the list before counts the same way (seen once: the cue ball
+  in a hand read as a `15` with no arm flagged, 20261121-153046 at 266.5 s,
+  which #37 caught).
+- No arm-free list before the motion, or a list later than 0.3 s: the rule
+  does not apply.
+- Ball in hand does not begin at a hand move: a short roll after the first
+  placement in open play counts. No such sequence is on record.
+- All of the evidence is Steven alone at the table. How another player
+  handles the cue ball is not on record.
+
+**What would send this back:** a hand move kept off the clock that was a
+real shot (a `placing` moment marked wrong), or a hand move in a game that
+restarted the countdown (a `cue_only` moment marked as a hand whose
+`cue_roll_s` is under 0.1 s).

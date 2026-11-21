@@ -85,12 +85,21 @@ def _row(hub: Hub) -> dict[str, object]:
     return _kinds(hub, "scratch_list")[-1]
 
 
-def _move(hub: Hub, clock: _Clock, t: float, found: BallList | None, travel: float = 120.0) -> None:
-    """One episode: motion at ``t``, its settle 1 s later, the list 50 ms on."""
+def _move(
+    hub: Hub,
+    clock: _Clock,
+    t: float,
+    found: BallList | None,
+    travel: float = 120.0,
+    roll: float | None = None,
+) -> None:
+    """One episode: motion at ``t``, its settle 1 s later, the list 50 ms on.
+    ``roll``: how long the cue ball was seen rolling (None: no evidence)."""
     clock.now += 1.0
     asyncio.run(hub.episode_started(t))
     clock.now += 1.0
-    asyncio.run(hub.balls_settled(t + 1.0, movers=[SettleMover(travel_mm=travel, alive=False)]))
+    movers = [SettleMover(travel_mm=travel, alive=False)]
+    asyncio.run(hub.balls_settled(t + 1.0, movers=movers, cue_roll_s=roll))
     if found is not None:
         clock.now += 0.05
         asyncio.run(hub.ball_list(t + 1.0, "settle", found))
@@ -150,14 +159,17 @@ def test_an_arm_hiding_an_object_ball_counts() -> None:
 
 
 def test_no_scratch_no_ball_in_hand() -> None:
-    """A cue lifted in open play still counts, as before #64: only a scratch
-    starts ball in hand."""
+    """A cue lifted and put back in open play counts nothing (#67, §21), but
+    only a scratch starts ball in hand: a roll during it still counts."""
     hub, clock = _hub()
-    _move(hub, clock, 5.0, GONE_STILL)
-    assert _row(hub)["verdict"] == "lifted" and _row(hub)["row"] == "lifted"
-    assert hub.clock.rack_shots == 1
-    _move(hub, clock, 8.0, REST)
-    assert hub.clock.rack_shots == 2
+    _move(hub, clock, 5.0, GONE_STILL, roll=0.0)  # lifted
+    assert _row(hub)["row"] == "by_hand" and _row(hub)["hand"] == "applied"
+    _move(hub, clock, 8.0, REST, roll=0.0)  # put back
+    assert _row(hub)["row"] == "by_hand"
+    assert hub.clock.rack_shots == 0
+    rolled = _list(("cue", 160.0), ("3", 400.0), ("8", 700.0))
+    _move(hub, clock, 12.0, rolled, roll=0.6)  # rolled, touching nothing
+    assert _row(hub)["row"] == "cue_moved" and hub.clock.rack_shots == 1
     assert not _kinds(hub, "ball_in_hand")
 
 

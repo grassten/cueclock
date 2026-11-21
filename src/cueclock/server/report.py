@@ -332,6 +332,9 @@ REJECTION_BLURBS = {
     # §17 (checkpoint 135): a strike out of an armed rack, and the settle's
     # ball list read the rack standing where it stood. Not the break.
     "rack_standing": "false start (the rack never moved)",
+    # #67 (checkpoint 140): open play, the cue ball never seen rolling and no
+    # object ball missing from the list before. A hand moved it.
+    "by_hand": "cue ball moved by hand (never seen rolling, no other ball moved)",
 }
 
 
@@ -387,7 +390,8 @@ class SessionReport:
     #
     # Reasons emitted today: `phantom` (#37), the table provably unchanged
     # against a real quiet baseline *and* no tracked mover having travelled;
-    # `ball_in_hand` (#64), a placing after a scratch.
+    # `ball_in_hand` (#64), a placing after a scratch; `rack_standing` and
+    # `nothing_moved` (§16, §17); `by_hand` (#67), a hand move in open play.
     # `hand_placement` (#41) was removed in checkpoint 104 and survives only
     # in journals recorded before it; both are still tallied separately here,
     # because the whole point of the breakdown is to catch a predicate that

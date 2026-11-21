@@ -843,8 +843,9 @@ LIST_VERDICTS: dict[str, list[tuple[float, set[str]]]] = {
     "scratch_shot_0801": [(5.73, {"scratch"})],
     "scratch_replace": [(8.45, {"scratch"})],  # candidate already open (5.02 s)
     "shot_debug": [(11.90, {"scratch"})],  # candidate already open (9.52 s)
-    # The cue lifted by hand (159 mm, nothing else moved): picked up (#64).
-    "ball_in_hand_carry_b_0811": [(13.35, {"lifted"})],
+    # The cue lifted by hand (159 mm, nothing else moved, never seen rolling):
+    # #67 keeps it off the clock, so it counts nothing and calls nothing.
+    "ball_in_hand_carry_b_0811": [(13.35, {"none"})],
     "break_0801b": [(17.16, {"none"})],  # a hand on the cue: the list cannot say
     # The list holds the cue (0.93) where the tracker holds none.
     "cluster_shot_0801": [(18.43, {"none", "cleared"})],
@@ -853,27 +854,31 @@ LIST_VERDICTS: dict[str, list[tuple[float, set[str]]]] = {
 SCRATCH_HOLD_CLIPS = frozenset(n for n, v in LIST_VERDICTS.items() if v[0][1] == {"scratch"})
 
 
-# #64's gates: what each named settle was, and whether it counted. After a
-# scratch, ball in hand lasts until an object ball moves, and a settle that
-# moves only the cue in between is placing and counts nothing. Outside ball
-# in hand nothing changed: a cue lifted or moved by hand counts as before
-# (Steven, 2026-11-17: open-play carries are behavioural). Every other judged
-# settle in the corpus must not be placing.
+# #64's and #67's gates: what each named settle was, and whether it counted.
+# After a scratch, ball in hand lasts until an object ball moves, and a settle
+# that moves only the cue in between is placing and counts nothing (#64). In
+# open play a settle whose cue ball was never seen rolling and that left every
+# object ball in place was a hand, and counts nothing either (#67, Steven
+# 2026-11-21: "if I'm moving the cue ball by hand the clock should keep
+# running"); one seen rolling counts. Every other judged settle in the corpus
+# must be neither. The evidence (seconds seen rolling) is in the comments.
 HAND_ROWS: dict[str, list[tuple[float, str, bool]]] = {
-    # The cue back after the scratch at 8.45 s: no count, and its hold runs on.
+    # The cue back after the scratch at 8.45 s (0.013 s): no count, its hold runs on.
     "scratch_replace": [(8.45, "scratch", True), (10.00, "ball_in_hand", False)],
     "kick_scratch_0811": [(15.37, "scratch", True)],  # 1711 mm: still a scratch (#63)
-    # Open play, no scratch before: as before #64.
-    "ball_in_hand_carry_b_0811": [(13.35, "lifted", True)],  # 159 mm, no candidate
-    "ball_in_hand_carry_0811": [(15.43, "cue_moved", True)],
+    # Open play, no scratch before.
+    "ball_in_hand_carry_b_0811": [(13.35, "by_hand", False)],  # lifted, 0.000 s
+    "ball_in_hand_carry_0811": [(15.43, "by_hand", False)],  # carried, 0.000 s
     "ball_in_hand_triple_0811": [
-        (12.46, "cue_moved", True),  # a stick shot that touched nothing
-        (14.74, "cue_moved", True),
-        (16.04, "cue_moved", True),
+        (12.46, "cue_moved", True),  # a stick shot that touched nothing, 5.45 s
+        (14.74, "by_hand", False),  # placed, 0.013 s
+        (16.04, "by_hand", False),  # placed again, 0.000 s
     ],
-    "pickup_newborn_0801": [(8.60, "cue_moved", True)],  # a stick, touching nothing
-    "tip_bump": [(3.87, "cue_moved", True)],  # a stick bump, 34.5 px
+    "pickup_newborn_0801": [(8.60, "cue_moved", True)],  # a stick, touching nothing, 6.77 s
+    "tip_bump": [(3.87, "cue_moved", True)],  # a stick bump, 34.5 px, 0.19 s: the thin one
 }
+# The rows no settle outside HAND_ROWS may carry: either is a count withheld.
+HAND_KEPT_OFF = ("ball_in_hand", "by_hand")
 
 
 # §17's gate: a strike out of an armed rack that left the rack standing is
@@ -900,7 +905,7 @@ def _assert_false_starts(name: str, timeline: "ClockTimeline") -> None:
 
 
 def _assert_hand_rows(name: str, timeline: "ClockTimeline") -> None:
-    """#64: placing during ball in hand counts nothing; nothing else moved."""
+    """#64, #67: a hand move counts nothing; nothing else is one."""
     expected = HAND_ROWS.get(name, [])
     for settle_t, row, counted in expected:
         near = [r for t, r in timeline.rows if abs(t - settle_t) <= 0.1]
@@ -916,9 +921,9 @@ def _assert_hand_rows(name: str, timeline: "ClockTimeline") -> None:
     stray = [
         round(t, 2)
         for t, r in timeline.rows
-        if r == "ball_in_hand" and not any(abs(t - n) <= 0.1 for n in named)
+        if r in HAND_KEPT_OFF and not any(abs(t - n) <= 0.1 for n in named)
     ]
-    assert not stray, f"{name}: placing the corpus does not hold, at {stray}"
+    assert not stray, f"{name}: a hand move the corpus does not hold, at {stray}"
 
 
 def _assert_list_verdicts(name: str, timeline: "ClockTimeline") -> None:
@@ -1619,29 +1624,23 @@ def test_phantom_still_down_is_rejected_at_the_settle() -> None:
 
 @pytest.mark.parametrize("name", sorted(CARRY_CLIPS))
 def test_0811_carries_still_count_the_real_stroke(name: str) -> None:
-    """The labelled carry clips, pinned on what survives #41's removal.
+    """The labelled carry clips: each counts once, on its real stroke (#67).
 
     Each clip holds one real stroke and one or two ball-in-hand carries
     (`CARRY_CLIPS` maps the strokes, with the journal timestamps they came
-    from). Until checkpoint 104 this test asserted the carries did *not*
-    count — the #41 done-when, stated as the clock. That verdict is gone
-    (`hub`'s removal note has the live measurement), so the carries reset the
-    countdown again and asserting otherwise would be asserting a rule the
-    product no longer has.
-
-    What is still true, and is what this now defends: **the real stroke is
-    counted, and counted at its own settle.** Every regression that ever
-    threatened these clips took that away — the pre-#41 engine counted the
-    carries *instead of* landing on the stroke — so the clips keep their
-    grading value without pinning the retired verdict.
+    from). Until checkpoint 104 this test asserted the carries did not count
+    (#41's verdict); from 104 to 139 nothing kept them off the clock, so it
+    asserted only that the stroke counted. #67 keeps a cue ball never seen
+    rolling off the clock, so the carries count nothing again and this is
+    once more the full done-when: **exactly one count per clip, at the
+    stroke's own settle.** Every regression that ever threatened these clips
+    took the stroke away (the pre-#41 engine counted the carries instead of
+    landing on it), so that half stays the first assertion.
 
     The freeze assertion is kept for the same reason it was written: the
     countdown must stop before the stroke and resume at the remaining it
     froze with. A change that stopped a carry counting by making the table
     invisible would pass a count assertion and be a worse product.
-
-    These clips are the labelled ground truth any future ball-in-hand attempt
-    starts from. Keeping them graded is why they are still here.
     """
     if not (CLIPS / name).exists():
         pytest.skip(f"clip {name} not recorded")
@@ -1650,24 +1649,30 @@ def test_0811_carries_still_count_the_real_stroke(name: str) -> None:
     reader = ClipReader(CLIPS / name)
     pipeline = _pipeline(REFERENCES[name], reader)
     indices = reader.detect_indices()
+    lists = _BallLists(reader, CLIPS / name, pipeline)  # what tells a carry (#67)
     timeline = replay_clock(
         name,
         pipeline,
         [float(t) for t in reader.timestamps],
         _detections(reader, CLIPS / name, pipeline, indices),
         indices,
+        lists=lists,
     )
+    lists.save()
     strokes = CARRY_CLIPS[name]
     for stroke in strokes:
         assert any(abs(c - stroke) <= FREEZE_LATE_S for c in timeline.counts), (
             f"{name}: no count landed on the real stroke's settle at "
             f"{stroke:.3f}s — counts are {[round(c, 3) for c in timeline.counts]}. "
-            "The carries counting too is expected since #41's removal; the "
-            "stroke itself going uncounted is a miss, and the thing this "
-            "clip is here to catch."
+            "The stroke going uncounted is a miss, and the thing this clip is "
+            "here to catch."
         )
     for stroke in strokes:
         assert any(f <= stroke for f in timeline.freezes), (
             f"{name}: the countdown never stopped before the stroke settling at "
             f"{stroke:.3f}s — freezes at {[round(f, 3) for f in timeline.freezes]}"
         )
+    assert len(timeline.counts) == len(strokes), (
+        f"{name}: counts at {[round(c, 3) for c in timeline.counts]}, expected only the "
+        f"stroke{'s' if len(strokes) > 1 else ''} at {strokes}: a carry counted (#67)"
+    )

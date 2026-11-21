@@ -117,6 +117,19 @@ def test_ball_in_hand_placing_and_its_end_are_moments(tmp_path: Path) -> None:
     assert "after 2 placing(s)" in found[2].summary
 
 
+def test_a_hand_move_in_open_play_is_a_moment(tmp_path: Path) -> None:
+    """#67: kept off the clock, it is a placing, worded without a scratch;
+    counted because its list came late, it is a cue_only to label."""
+    calls = [
+        run(10, "shot_provisional_reverted", reason="by_hand"),
+        run(10, "scratch_list", frame_t=10.0, row="by_hand", hand="applied", counted=False),
+        run(30, "scratch_list", frame_t=30.0, row="by_hand", hand="late", counted=True),
+    ]
+    found = moments.find(write_journal(tmp_path / "j.jsonl", calls))
+    assert kinds(found) == ["placing", "cue_only"]
+    assert "moved by hand" in found[0].summary and "scratch" not in found[0].summary
+
+
 def test_a_shot_counted_with_nothing_moved_is_a_moment(tmp_path: Path) -> None:
     """§16: the list read the cue ball on its spot and the settle counted
     anyway (its list came late, or a strike fired). Refused ones show as the

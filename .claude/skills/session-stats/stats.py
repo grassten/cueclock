@@ -80,7 +80,9 @@ class Tiers:
     placing_phantom: int = 0  # ... kept off by #37 instead: the tracker saw nothing move
     in_hand: int = 0  # ball in hand periods begun (a scratch stood)
     in_hand_ended: dict[str, int] = field(default_factory=dict)  # why each one ended
-    cue_moved: int = 0  # outside ball in hand: only the cue moved, restarted as before
+    cue_moved: int = 0  # outside ball in hand: only the cue moved, seen rolling, counted
+    # #67 (checkpoint 140+): open play, the cue ball moved by hand (row by_hand).
+    by_hand: dict[str, int] = field(default_factory=dict)  # hand -> n
     # The cue ball on its spot (design §16, checkpoint 135+; the cue alone from 138).
     still_counted: int = 0  # a shot counted where the list read the cue on its spot
     still_refused: int = 0  # freezes released because the list read the cue on its spot
@@ -164,6 +166,9 @@ class Tiers:
                     if row == "ball_in_hand":
                         how = str(r.get("hand"))
                         self.placing[how] = self.placing.get(how, 0) + 1
+                    elif row == "by_hand":
+                        how = str(r.get("hand"))
+                        self.by_hand[how] = self.by_hand.get(how, 0) + 1
             elif kind == "vision_balls_settled":
                 self.still_refused += r.get("rejected") == "nothing_moved"
                 # A placing the tracker saw nothing move in is refused by #37
@@ -373,7 +378,13 @@ def table(label: str, t: Tiers, internals: bool = False) -> str:
             ),
         ]
     if t.rows_judged:
-        other = ", ".join(f"{n} {k}" for k, n in sorted(t.placing.items()) if k != "applied")
+        other = ", ".join(
+            f"{n} {k}{' in open play' if where else ''}"
+            for where, counts in ((False, t.placing), (True, t.by_hand))
+            for k, n in sorted(counts.items())
+            # In open play `not_held` is the clock idle: racking, not a game.
+            if k != "applied" and not (where and k == "not_held")
+        )
         ended = ", ".join(f"{n} {k}" for k, n in sorted(t.in_hand_ended.items()))
         rows += [
             (
@@ -383,20 +394,23 @@ def table(label: str, t: Tiers, internals: bool = False) -> str:
             ),
             (
                 "Placings kept off the clock",
-                f"{t.placing.get('applied', 0) + t.placing_phantom}"
+                f"{t.placing.get('applied', 0) + t.placing_phantom} after a scratch, "
+                f"{t.by_hand.get('applied', 0)} in open play"
                 + (
                     f"  ({t.placing_phantom} by #37: nothing seen to move)"
                     if t.placing_phantom
                     else ""
                 )
                 + (f"  (also {other})" if other else ""),
-                "settles in ball in hand that moved only the cue; refused = a shot "
-                "already counted, late = decided before its list",
+                "hand moves of the cue ball, never misses: after a scratch only the cue "
+                "moved (#64); in open play it was never seen rolling (#67); refused = a "
+                "shot already counted, late = decided before its list",
             ),
             (
                 "Only the cue moved, open play",
                 f"{t.cue_moved} of {t.rows_judged}",
-                "no scratch before it: restarted as before, a hand or a stick",
+                "counted; from checkpoint 140 the cue ball was seen rolling (a stick shot "
+                "that touched nothing, a ball rolled or pushed), before it hand moves too",
             ),
             (
                 "Counted with the cue ball on its spot",

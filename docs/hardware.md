@@ -1053,7 +1053,9 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.
    Since 2026-11-16 (checkpoint 116, #58) `run` journals **every** final
    as a `voice_final` record (`text`, `conf`, `accepted`, `reason`, and from
    checkpoint 121 `peak_dbfs`), rejected and wordless ones too, so a missed "extension" leaves its confidence behind. The 0.9
-   floor is v1's and gets re-anchored to those records (#58). A separate
+   floor stays (#58, closed 2026-11-21): words that sound like the keyword
+   ("attention", "exception", "extended") score 1.00, the same as real
+   calls, so the records hold no gap to set a floor in. A separate
    `listen` started while `run` is live heard nothing on 2026-11-16, so
    measure from the session journal rather than a second listener.
    **Gain** (checkpoint 135, 2026-11-18): the samples are amplified 40 dB

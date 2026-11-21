@@ -373,7 +373,10 @@ camera or needs `run`:
   frozen-clock watchdog's settle), `quiet` (90 s of a running clock with
   nothing seen — longer than any legal turn), `replay` (the parity check's
   diffs, when `replay.json` has any), and the ball list's: `list_scratch` /
-  `list_cleared` (#63), `placing` / `in_hand_shot` / `cue_only` (#64) and
+  `list_cleared` (#63), `placing` / `in_hand_shot` / `cue_only` (#64;
+  since checkpoint 140 a `placing` is any hand move of the cue ball kept off
+  the clock, after a scratch or in open play, #67, and a `cue_only` a
+  counted one, seen rolling or decided before its list) and
   `no_change` (a shot counted at a settle whose list read the cue ball on
   its spot, `design.md` §16 and §19), and `no_strike` (exactly `report`'s
   "counted at settle": a shot counted with no strike seen, a soft shot or

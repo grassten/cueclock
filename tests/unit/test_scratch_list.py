@@ -66,12 +66,18 @@ def test_each_guard_on_and_off() -> None:
     # 3. the tracker still holds a cue-grade ball
     tracker = SettleFacts(**{**FACTS.__dict__, "tracker_cue": True})
     assert judge(GONE_MOVED, REST, True, tracker, False).call == "none"
-    # 4. lifted by hand: nothing else moved, short travel, no candidate ...
-    assert judge(GONE_STILL, REST, True, FACTS, False).call == "lifted"
-    # ... unless any one of the three says otherwise
-    far = SettleFacts(**{**FACTS.__dict__, "travel_mm": 400.0})
+    # 4. lifted by hand: nothing else moved, short travel, no candidate, and
+    # the cue ball never seen rolling (#67) ...
+    hand = SettleFacts(**{**FACTS.__dict__, "cue_roll_s": 0.0})
+    assert judge(GONE_STILL, REST, True, hand, False).call == "lifted"
+    # ... unless any one of the four says otherwise
+    far = SettleFacts(**{**hand.__dict__, "travel_mm": 400.0})
     assert judge(GONE_STILL, REST, True, far, False).call == "scratch"
-    assert judge(GONE_STILL, REST, True, FACTS, True).call == "scratch"
+    assert judge(GONE_STILL, REST, True, hand, True).call == "scratch"
+    rolled = SettleFacts(**{**hand.__dict__, "cue_roll_s": 0.19})  # tip_bump's reading
+    assert judge(GONE_STILL, REST, True, rolled, False).call == "scratch"
+    # No evidence counts as rolling.
+    assert judge(GONE_STILL, REST, True, FACTS, False).call == "scratch"
     # and only at a settle that counted a shot
     uncounted = SettleFacts(**{**FACTS.__dict__, "counted": False})
     assert judge(GONE_MOVED, REST, True, uncounted, False).call == "none"
@@ -106,9 +112,15 @@ def _shot(hub: Hub, t: float = 5.0) -> None:
     assert hub.clock.state is State.MOTION
 
 
-def _settle(hub: Hub, t: float = 10.0, travel: float = 150.0, tracker_cue: bool = False) -> None:
+def _settle(
+    hub: Hub,
+    t: float = 10.0,
+    travel: float = 150.0,
+    tracker_cue: bool = False,
+    roll: float | None = None,
+) -> None:
     movers = [SettleMover(travel_mm=travel, alive=False)]
-    asyncio.run(hub.balls_settled(t, movers=movers, tracker_cue=tracker_cue))
+    asyncio.run(hub.balls_settled(t, movers=movers, tracker_cue=tracker_cue, cue_roll_s=roll))
 
 
 def _candidate(hub: Hub, t: float) -> None:
@@ -150,14 +162,41 @@ def test_the_list_calls_a_scratch_today_s_logic_missed() -> None:
 
 
 def test_a_cue_lifted_by_hand_is_not_a_scratch() -> None:
+    """Never seen rolling, nothing else moved: a hand took it (#67), so the
+    settle counts nothing and calls nothing."""
     hub = _hub()
     _shot(hub)
-    _settle(hub)
+    _settle(hub, roll=0.0)
     asyncio.run(hub.ball_list(10.0, "settle", GONE_STILL))
     assert not hub.clock.holding(time.monotonic())
-    assert _kinds(hub, "scratch_list")[0]["verdict"] == "lifted"
+    (row,) = _kinds(hub, "scratch_list")
+    assert row["verdict"] == "none" and row["row"] == "by_hand" and row["counted"] is False
     _shot(hub, 20.0)
     assert not _kinds(hub, "scratch_call")  # nothing was called
+
+
+def test_a_cue_lifted_whose_list_comes_late_is_lifted() -> None:
+    """The same lift decided before its list came (here: a command): it
+    counted, so the list journals it `lifted` and still calls no scratch."""
+    hub = _hub()
+    _shot(hub)
+    _settle(hub, roll=0.0)
+    asyncio.run(hub.extension())  # a press decides the held settle as today
+    asyncio.run(hub.ball_list(10.0, "settle", GONE_STILL))
+    (row,) = _kinds(hub, "scratch_list")
+    assert row["verdict"] == "lifted" and row["counted"] is True and row["hand"] == "late"
+    assert not hub.clock.holding(time.monotonic())
+
+
+def test_a_cue_rolled_into_a_pocket_touching_nothing_is_a_scratch() -> None:
+    """Under 400 mm, nothing else moved, no candidate: seen rolling, so the
+    cue ball went down by itself (#67, §21). Before, this read as lifted."""
+    hub = _hub()
+    _shot(hub)
+    _settle(hub, travel=250.0, roll=0.9)
+    asyncio.run(hub.ball_list(10.0, "settle", GONE_STILL))
+    assert _kinds(hub, "scratch_list")[0]["verdict"] == "scratch"
+    assert hub.clock.holding(time.monotonic())
 
 
 def test_the_list_clears_a_candidate_and_a_later_one() -> None:

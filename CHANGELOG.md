@@ -319,6 +319,64 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-21 (checkpoint 140 — a cue ball moved by hand counts no shot;
+  #67):** Steven: "if I'm moving the cue ball by hand the clock should keep
+  running, that's the whole idea". Until now only a recognised scratch (#64)
+  kept a hand move off the clock; after any other foul, or a missed scratch,
+  placing the cue ball could restart the countdown. Built from the issue's
+  brief. `detect.py`, `events.py` and `track.py` are untouched: no golden
+  moved.
+  - **The evidence** (`vision/roll.py`, `design.md` §21): at every settle,
+    how long a clean cue-white detection stood away from the cue ball's rest
+    spots in the motion the settle ends (`last_settle_cue_roll_s`, passed by
+    `bridge` to `Hub.balls_settled`, journaled as `cue_roll_s` on every
+    `vision_balls_settled` record). A ball in a hand is one blob with the
+    hand and is never seen rolling. Checked against the research script it
+    reproduces (`roll_premotion.py`) at all 238 corpus and session settles:
+    237 identical, and the backstop settle at 20261121-153046 886.74 s reads
+    none, as the brief defines it, where the script read 0.000 s.
+  - **The policy** (`server/scratch.py`, `server/hub.py`), `ROLL_MIN_S` 0.1 s:
+    in open play a settle whose cue ball was not seen rolling waits for its
+    list and is refused as `by_hand` when no object ball of the arm-free list
+    before the motion is missing from it; during ball in hand a carry stays
+    placing past 400 mm unless it was seen rolling; and a cue ball seen
+    rolling into a pocket is a scratch, not `lifted`. Both placing tests ask
+    the object question one way (`object_missing`): a hand read as a ball is
+    a new circle and is not asked about. Every doubt counts the shot.
+  - **Corpus**: the four open-play hand settles stop counting (row `by_hand`)
+    and the three stick settles that touched nothing still count; each carry
+    clip counts once, on its stroke, which `test_0811_carries_still_count_
+    the_real_stroke` asserts again (now with ball lists). Diffed clip by clip
+    against checkpoint 139 (marks, rows, list verdicts, holds, final state
+    over 69 clips): those four settles are the only change.
+  - **Logged sessions**: 001351, 201731, 020755 and 153046 replay with every
+    decision as at checkpoint 139; the evidence reads under 0.1 s at 16
+    settles, all no-shot, and 0.28 s or more at 154. The one racking change
+    the brief expected (153046 at 886.74 s) does not happen: that settle is
+    the pipeline's backstop, which carries no evidence and is never held.
+  - **`review check`**: line for line as at checkpoint 139. Its three
+    REGRESSED rows predate this build (`reverted-1718748001` since 138,
+    `correction-1717580595` and `phantom-1717566109` since the 400.66 s
+    placing fix of 136).
+  - **Readers**: a `placing` review moment for every hand move kept off the
+    clock (worded without a scratch), a `cue_only` one for a `by_hand` that
+    counted because its list came late; `session-stats` splits "Placings
+    kept off the clock" into after a scratch and in open play; `report`
+    names `by_hand`. `docs/cli.md` and the skill text follow.
+  - **Known limits** (§21): a cue ball rolled or pushed so it travels on its
+    own (hand or shaft) was seen rolling and counts, and during ball in hand
+    only one of 400 mm or more does; a hand hiding an object ball, or a
+    misread on the list before, counts the settle; no arm-free list before,
+    or a list later than 0.3 s, and the rule does not apply; a real shot is
+    refused only if its cue ball was never in the open for 0.1 s and no
+    object ball moved 3 px (lowest on record: `tip_bump`, 0.19 s); ball in
+    hand does not begin at a hand move; all of the evidence is Steven alone
+    at the table.
+  - **After the first sessions**, what would send it back: a `placing` moment
+    that was a real shot, or a `cue_only` moment marked as a hand with
+    `cue_roll_s` under 0.1 s.
+  - **#58 closed** (2026-11-21, see its closing comment): `docs/hardware.md`
+    Part D no longer says the 0.9 voice floor gets re-anchored; it stays.
 - **2026-11-21 (checkpoint 139 — the cue ball once per list):** Steven,
   on checkpoint 138 leaving the list to call a glove a cue: "There should
   never be two cue balls detected." `detect.py`, `events.py`, `track.py` and

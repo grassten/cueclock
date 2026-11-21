@@ -42,7 +42,9 @@ from cueclock.vision.events import (
     EventConfig,
     EventEngine,
     SettleMover,
+    ShotTaken,
 )
+from cueclock.vision.roll import CUE_WHITE_MIN, CueRollWitness
 from cueclock.vision.track import BallTracker, Observation, TrackConfig
 
 
@@ -368,6 +370,11 @@ class VisionPipeline:
         # most recent settle (`EventEngine.cue_witnessed`)? The hub reads it
         # beside the ball list to call a scratch the tracker never suspected.
         self.last_settle_cue_seen = False
+        # #67 settle evidence: how long the cue ball was seen rolling in the
+        # motion the most recent settle ended (`vision.roll`); None when no
+        # motion started since the settle before (a backstop settle).
+        self._roll = CueRollWitness(cadence_hz)
+        self.last_settle_cue_roll_s: float | None = None
 
     @property
     def reference(self) -> ReferenceModel:
@@ -463,9 +470,12 @@ class VisionPipeline:
         documented as such.
         """
         observations: list[Observation] = []
+        whites = np.zeros((0, 2))
         if detections:
             px = np.array([[d.cx, d.cy] for d in detections], dtype=np.float64)
             mm = self._calibration.to_table_mm(px)
+            clean = [not d.merged and d.whiteness >= CUE_WHITE_MIN for d in detections]
+            whites = mm[np.array(clean, dtype=bool)]
             observations = [
                 Observation(
                     x_mm=float(p[0]),
@@ -556,6 +566,13 @@ class VisionPipeline:
                 self.last_settle_cue_seen = self._engine.cue_witnessed(balls)
                 events = [*events, BallsSettled(t)]
             settled = True
+        self._roll.frame(
+            whites,
+            moving=self._engine.table_moving,
+            shot=any(isinstance(e, ShotTaken) for e in events),
+        )
+        if any(isinstance(e, BallsSettled) for e in events):
+            self.last_settle_cue_roll_s = self._roll.settle()
         if settled:
             self._settled_baseline = present
             self._rearrange_pending = False

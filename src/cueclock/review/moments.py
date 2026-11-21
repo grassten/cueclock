@@ -14,12 +14,15 @@ have gone wrong, so this module reads the journal and lists those:
     synthesized  the frozen-clock watchdog had to invent a settle
     list_scratch the ball list called a scratch today's logic never noticed (#63)
     list_cleared the ball list saw the cue and cleared today's scratch candidate
-    placing      ball in hand after a scratch: a settle that moved only the cue
-                 was kept off the clock (#64)
+    placing      a hand move of the cue ball was kept off the clock: during
+                 ball in hand after a scratch (#64), or in open play, where
+                 the cue ball was never seen rolling (#67). Where a real shot
+                 refused would show
     in_hand_shot ball in hand ended on a counted settle: Steven's shot, or a
                  placing the ball list missed
-    cue_only     open play: a counted settle that moved only the cue — a hand,
-                 or a stick shot that touched nothing (the table cannot tell)
+    cue_only     open play: a counted settle that moved only the cue — a stick
+                 shot that touched nothing, a ball rolled or pushed, or a hand
+                 move counted because its list came late
     no_change    a shot was counted at a settle whose ball list read the cue
                  ball on its spot: the clock restarted and no shot was played
                  (§16 refuses these when it can; this is the rest)
@@ -280,6 +283,16 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
                         f"clock kept running ({_rack(record)}).",
                     )
                 )
+            elif record.get("hand") == "applied" and record.get("row") == "by_hand":
+                moments.append(
+                    _moment(
+                        "placing",
+                        record,
+                        f"The cue ball was moved by hand (never seen rolling, no other ball "
+                        f"moved), so no shot was counted and the clock kept running "
+                        f"({_rack(record)}).",
+                    )
+                )
             elif record.get("row") == "still" and record.get("counted"):
                 moments.append(
                     _moment(
@@ -289,9 +302,10 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
                         f"spot: the clock restarted with no shot played ({_rack(record)}).",
                     )
                 )
-            elif record.get("row") in ("cue_moved", "lifted") and record.get("counted"):
-                # Labels for the open-play case #64 left alone: only Steven
-                # knows whether a hand or a stick moved the cue.
+            elif record.get("row") in ("cue_moved", "lifted", "by_hand") and record.get("counted"):
+                # Labels for the open-play cue-only settles that counted: a
+                # stick shot that touched nothing, a ball rolled or pushed, or
+                # a hand move whose list came too late (#67's limits).
                 moments.append(
                     _moment(
                         "cue_only",
@@ -317,7 +331,10 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
             moment = _list_moment(record, list_settle or record)
             if moment is not None:
                 moments.append(moment)
-        elif kind == report.PROVISIONAL_REVERTED_KIND and record.get("reason") != "ball_in_hand":
+        elif kind == report.PROVISIONAL_REVERTED_KIND and record.get("reason") not in (
+            "ball_in_hand",
+            "by_hand",
+        ):
             # A placing's revert is its own moment, at its list.
             remaining = record.get("remaining")
             back = f"{remaining:.0f}" if isinstance(remaining, int | float) else "?"
