@@ -1,25 +1,29 @@
-"""§16: a freeze on a table where nothing moved is not a shot.
+"""§16, §19: a freeze that left the cue ball on its spot is not a shot.
 
 The tracker reports a ball it lost the same way whether a pot or a sleeve
-took it; the settle's ball list reads the pixels and finds every ball where
-it stood. The pure rule (`server/scratch.py`) and what the hub does with it.
-Anchored on session 20261119-020755 at 176 s: a sleeve beside the ball at the
-side pocket, a freeze, a settle reporting one ball vanished, and a fresh 30 s
-with 20 left on the clock.
+took it; the settle's ball list reads the pixels and finds the cue ball
+where it stood. The pure rule (`server/scratch.py`) and what the hub does
+with it. Anchored on session 20261119-020755 at 176 s (a sleeve beside the
+ball at the side pocket, a freeze, a settle reporting one ball vanished, and
+a fresh 30 s with 20 left on the clock) and on 20261121-153046 at 699 s and
+1565 s (#73: a gloved bridge hand read as a second cue ball, the stick's
+shaft across the 2).
 """
 
 import asyncio
 
 from cueclock.clock.state import State
 from cueclock.server.hub import SETTLE_LIST_WAIT_S, Hub
-from cueclock.server.scratch import nothing_moved
+from cueclock.server.scratch import cue_px, nothing_moved, table_row
 from cueclock.vision.ball_list import BallList
 from cueclock.vision.events import SettleMover
 from cueclock.vision.pipeline import RearrangeSummary
 from tests.unit.test_scratch_list import REST, _list
 
 SAME = _list(("cue", 100.9), ("3", 401.2), ("8", 699.5))  # jitter under 3 px
-POTTED = _list(("cue", 100.0), ("8", 700.0))  # the 3 is gone
+POTTED = _list(("cue", 160.0), ("8", 700.0))  # the cue moved 60 px and the 3 is gone
+HAND_BEFORE = _list(("cue", 100.0), ("cue", 250.0), ("3", 400.0), ("8", 700.0))  # a glove
+SHAFT = _list(("cue", 100.0), ("8", 700.0), arm=True)  # the stick lies across the 3
 NUDGED = _list(("cue", 106.0), ("3", 400.0), ("8", 700.0))  # the cue moved 6 px
 VANISHED = RearrangeSummary(moved=0, appeared=0, vanished=1, moved_mm=0.0, baseline_balls=3)
 MOVED = RearrangeSummary(moved=1, appeared=0, vanished=1, moved_mm=310.0, baseline_balls=3)
@@ -30,21 +34,34 @@ TWO_MOVED = RearrangeSummary(moved=2, appeared=0, vanished=0, moved_mm=310.0, ba
 # ---------- the rule ----------
 
 
-def test_nothing_moved_needs_every_ball_read_in_place() -> None:
-    assert nothing_moved(SAME, REST, True)
-    assert nothing_moved(BallList(balls=SAME.balls, arm=True), REST, True)  # an arm, all seen
-    assert not nothing_moved(POTTED, REST, True)  # an object ball left
-    assert not nothing_moved(NUDGED, REST, True)  # only the cue moved: a stick may have
-    assert not nothing_moved(SAME, None, True)  # nothing to compare with
-    assert not nothing_moved(SAME, REST, False)  # no cue on the table before
-    # A hand read as a ball, a ball hidden by the arm, a second "cue": not proof.
-    assert not nothing_moved(
-        _list(*[("cue", 100.0), ("3", 400.0), ("8", 700.0), ("5", 900.0)]), REST, True
-    )
-    assert not nothing_moved(_list(("cue", 100.0), ("3", 400.0), arm=True), REST, True)
-    assert not nothing_moved(
-        _list(("cue", 100.0), ("cue", 250.0), ("3", 400.0), ("8", 700.0)), REST, True
-    )
+def test_nothing_moved_asks_only_whether_the_cue_is_on_its_spot() -> None:
+    assert nothing_moved(SAME, REST)
+    assert nothing_moved(BallList(balls=SAME.balls, arm=True), REST)  # an arm over the table
+    assert not nothing_moved(POTTED, REST)  # a shot: the cue moved
+    assert not nothing_moved(NUDGED, REST)  # only the cue moved: a stick may have
+    assert not nothing_moved(SAME, None)  # nothing to compare with
+    assert not nothing_moved(SAME, _list(("3", 400.0), ("8", 700.0)))  # no cue before
+    # #73: the object balls are not asked. A hand read as a ball and a ball
+    # hidden by the stick say nothing about a shot; the cue on its spot does.
+    assert nothing_moved(_list(("cue", 100.0), ("3", 400.0), ("8", 700.0), ("5", 900.0)), REST)
+    assert nothing_moved(SHAFT, REST)
+    # A hand read as a second cue before the motion: the real one is on the list.
+    assert nothing_moved(SAME, HAND_BEFORE)
+    assert not nothing_moved(NUDGED, HAND_BEFORE)
+    # Two cues now: which one is the ball cannot be said, so the settle counts.
+    assert not nothing_moved(HAND_BEFORE, REST)
+
+
+def test_cue_px_is_the_distance_to_the_nearest_cue_before() -> None:
+    assert cue_px(NUDGED, REST) == 6.0
+    assert cue_px(_list(("cue", 240.0)), HAND_BEFORE) == 10.0  # nearest of the two
+    assert cue_px(SAME, None) is None and cue_px(HAND_BEFORE, REST) is None
+    assert cue_px(_list(("3", 400.0)), REST) is None  # no cue now
+
+
+def test_a_cue_on_its_spot_reads_still_whatever_else_the_list_read() -> None:
+    assert table_row(SHAFT, HAND_BEFORE, False, False, "none") == "still"
+    assert table_row(POTTED, HAND_BEFORE, False, False, "none") == "other"  # as before
 
 
 # ---------- the hub ----------
@@ -98,12 +115,32 @@ def test_a_freeze_with_nothing_moved_is_released_with_its_time() -> None:
     (settle,) = _kinds(hub, "vision_balls_settled")
     assert settle["rejected"] == "nothing_moved" and settle["held"] == "list"
     (row,) = _kinds(hub, "scratch_list")
-    assert row["row"] == "still" and row["counted"] is False
+    assert row["row"] == "still" and row["counted"] is False and row["cue_px"] == 0.9
+
+
+def test_a_hand_read_as_a_second_cue_does_not_restart_the_countdown() -> None:
+    """#73, session 20261121-153046 at 1565 s: the list before the motion
+    held his gloved bridge hand as a second cue, the settle's list missed the
+    ball under the stick's shaft, and the countdown went from 23.66 s to 30
+    with no shot played. The cue ball read 0.0 px from its spot."""
+    clock = _Clock()
+    hub = Hub(now=clock)
+    asyncio.run(hub.start())
+    asyncio.run(hub.ball_list(1.0, "rest", HAND_BEFORE))
+    frozen = _freeze_and_settle(hub, clock, VANISHED)
+    clock.now += 0.074
+    asyncio.run(hub.ball_list(5.6, "settle", SHAFT))
+    assert hub.clock.state is State.RUNNING and hub.clock.rack_shots == 0
+    assert hub.clock.remaining == frozen
+    (revert,) = _kinds(hub, "shot_provisional_reverted")
+    assert revert["reason"] == "nothing_moved"
+    (row,) = _kinds(hub, "scratch_list")
+    assert row["row"] == "still" and row["counted"] is False and row["cue_px"] == 0.0
 
 
 def test_a_missed_strike_still_counts_when_its_list_shows_a_ball_gone() -> None:
     """The same tracker report from a real pot the strike machinery missed:
-    the list says the 3 left, so the settle counts as it always did."""
+    the list says the cue moved, so the settle counts as it always did."""
     hub, clock = _hub()
     _freeze_and_settle(hub, clock, VANISHED)
     clock.now += 0.05
@@ -148,7 +185,7 @@ def test_one_ball_the_tracker_moved_with_no_strike_waits_for_the_list() -> None:
 
 def test_one_ball_moved_and_no_strike_still_counts_when_the_list_shows_it() -> None:
     """A soft shot the strike machinery missed reads the same to the
-    tracker (42-49 mm on record); its list shows the ball gone or moved."""
+    tracker (42-49 mm on record); its list shows the cue ball moved."""
     hub, clock = _hub()
     _freeze_and_settle(hub, clock, CREPT)
     clock.now += 0.05

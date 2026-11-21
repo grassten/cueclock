@@ -1118,7 +1118,10 @@ the time it froze at and nothing is counted. Anything else decides the
 settle as before: a ball gone or moved on the list, a cue that moved, an arm
 hiding a ball, a hand read as a ball, two cues, no list in
 `SETTLE_LIST_WAIT_S`, or a command, candidate or refutation arriving first
-(§18.1; §18.2 widens which settles wait).
+(§18.1; §18.2 widens which settles wait; **§19 replaces the question the
+list is asked: since checkpoint 138 only the cue ball has to be on its
+spot**, so an arm hiding a ball, a hand read as a ball and two cues before
+the motion no longer count the settle).
 
 It is #37's refusal ("the table is provably unchanged") with a witness that
 knows the balls apart, and it fails the same way: every doubt counts the
@@ -1320,3 +1323,98 @@ lost for 12 s with the motion bit low would be taken back; none is on
 record, and E8's dark tier still counts a break that never fired. A cue
 ball rolled or pushed by hand with no scratch before it is still open play
 (#67, parked).
+
+## 19. The cue ball on its spot means no shot was played (issue #73, 2026-11-21)
+
+In session 20261121-153046 the countdown restarted twice with no shot
+played: at 699.4 s (8.75 s became 30) and at 1565.2 s (23.66 s became 30,
+five seconds after his one extension). Steven found both in the recording;
+neither had raised a review moment, and checkpoint 136 replayed them exactly
+as they ran live.
+
+**Mechanism.** His gloved bridge hand resting on the cloth was read as a
+ball by both readers. The ball list labelled it `cue` with no arm flagged
+(white 0.61-0.64 against 0.97-0.99 for the real cue, coverage 0.667); the
+tracker tracked it (699 s: `appeared 1`, a mover of 460 mm) or lost the
+balls under the stick and arm (1565 s: `vanished 3`). Motion latched, the
+countdown froze, no strike fired, and the settle was held for its list
+exactly as §16 intends. The list then could not say "nothing moved", for
+two reasons, either one enough: `RestLists.before` wanted exactly one cue on
+the list before the motion and found two (`before: no_cue`); and
+`nothing_moved` wanted every object ball matched both ways, while the
+stick's shaft hid the 2 (1565 s) and the hand read as a `10` (699 s). Every
+doubt counts the shot (§16), so both counted. In both, the real cue read at
+the same pixel before and after: 0.0 px.
+
+**The rule.** Every shot moves the cue ball. So a held settle is refused as
+`nothing_moved` when its list holds exactly one cue and some cue on the
+newest arm-free list before the motion stands within `OBJECT_MOVED_PX`
+(3 px, about 5 mm) of it (`scratch.cue_px`, `scratch.nothing_moved`). The
+object balls are no longer asked about, and a second "cue" on the list
+before no longer voids the comparison: the nearest one is taken. Which
+settles are held is unchanged (§16, §18.2: a frozen provisional in which the
+tracker displaced no ball, or one ball with no strike), and so is
+everything else that decides one.
+
+**Measured** over every settle in the four sessions with ball lists
+(20261117-201731, 20261119-020755, 20261119-022522, 20261121-153046) whose
+list holds one cue and whose list before holds at least one, 114 settles:
+
+| Cue moved | Settles | What they were |
+|---|---|---|
+| 0-1 px | 8 | none a shot: 4 already refused, the two §16 and §18.2 fixed (176.2 s, 712.5 s), and these two |
+| 27.5 px or more | 106 | all 101 counted settles the list read as a shot among them |
+
+Nothing lies between 1 px and 27.5 px.
+
+**What it risks.** A real shot, held because no strike fired, whose cue
+ball comes to rest within 3 px of where it started: it would not be counted
+and the countdown would not reset. None is on record. It also means a ball
+moved by hand on a frozen provisional, with the cue untouched, resumes the
+countdown instead of restarting it; that was never a shot either.
+
+**Not done, noted.** The list could also decline to call the glove a cue
+(white 0.61-0.64 against 0.92 or more for every real cue on 257 arm-free
+lists). That is two samples, unchecked against the corpus, and this rule
+does not need it. `session-stats` counts such lists so the misread stays
+visible.
+
+**Replayed** through this rule, session 20261121-153046 journals
+`shot_provisional_reverted` with `reason: nothing_moved` at 699.402 s and
+1565.199 s; the countdown resumes at 8.74 s and 23.66 s, and the strokes
+3.0 s and 4.6 s later fire at 5.66 s and 18.96 s instead of a restarted
+26.92 s and 25.3 s. The rack counts one shot fewer each time. One other
+line differs: the settle at 1582.6 s, refused by #37 before and after,
+changes `row` from `shot` to `still` (a hand read as a `14`; the cue had
+not moved). The six other sessions with a detection log replay record for
+record.
+
+**Journal.** The `scratch_list` line carries `cue_px`: the distance from the
+settle's cue to the nearest cue on the list before the motion, null when
+either is missing. `row: still` now means the cue ball is on its spot,
+whatever else the list read, so a refused settle reads `rejected:
+nothing_moved` and `row: still` as before.
+
+**Seeing the next one.** Three things in the journal's readers, so a count
+with no shot behind it is not filed as a soft shot again:
+
+- A review moment `no_strike` for every shot counted with no strike behind
+  it (`report`'s "counted at settle" list): 100 in the 56 journals with
+  shots, 1.8 a session. In the sessions with ball lists there were 6 and
+  none was a shot. It merges into whatever else that settle raised and
+  never gives the card its id, so verdicts given before it existed stay
+  attached.
+- `session-stats`: "Counted with the cue ball on its spot" (was "Restarted
+  with nothing moved"): a counted settle with `cue_px` of 3 or less, or
+  `row: still`. Always an error, counted against Detection. The `no_change`
+  review moment is the same settles.
+- `session-stats`: "Lists with two cue balls", arm-free lists holding more
+  than one `cue`. Always an error: 2 in 257 across the four sessions, both
+  these events.
+
+**Known limits.** A settle that is not held (a strike fired, or two or more
+balls displaced) is still decided at once; with the cue on its spot it
+counts, and shows as `no_change` and in the stats row. A list later than
+0.3 s still loses to the timeout. A journal written before checkpoint 138
+has no `cue_px`, so the stats row there sees only the stricter old
+`row: still`.

@@ -20,9 +20,11 @@ have gone wrong, so this module reads the journal and lists those:
                  placing the ball list missed
     cue_only     open play: a counted settle that moved only the cue — a hand,
                  or a stick shot that touched nothing (the table cannot tell)
-    no_change    a shot was counted at a settle whose ball list read every
-                 ball where it stood before: the clock restarted and nothing
-                 moved (§16 refuses these when it can; this is the rest)
+    no_change    a shot was counted at a settle whose ball list read the cue
+                 ball on its spot: the clock restarted and no shot was played
+                 (§16 refuses these when it can; this is the rest)
+    no_strike    `report`'s "counted at settle": a shot was counted and no
+                 strike was seen — a soft shot, or nothing at all (#73)
     quiet        the clock ran longer than any legal turn with nothing seen
     replay       the offline replay disagreed with the live session
 
@@ -161,7 +163,12 @@ def _merged(moments: list[Moment]) -> list[Moment]:
 
     A `quiet` stretch stays its own card: it is the 90 s *after* the record
     it is stamped with, a different thing to watch than whatever that record
-    also raised."""
+    also raised.
+
+    A `no_strike` candidate never names a card it shares. It is raised at the
+    settle record, ahead of everything that settle's list raises a few
+    milliseconds later, and a card judged before the kind existed has to keep
+    its id for its verdict to stay attached."""
     out: list[Moment] = []
     last: datetime | None = None
     for moment in moments:
@@ -172,12 +179,13 @@ def _merged(moments: list[Moment]) -> list[Moment]:
         wall = datetime.fromisoformat(moment.wall)
         if out and last is not None and (wall - last).total_seconds() <= MERGE_S:
             card = out[-1]
+            lead, tail = (moment, card) if card.kind == "no_strike" else (card, moment)
             out[-1] = replace(
-                card,
-                summary=f"{card.summary} {moment.summary}",
+                lead,
+                summary=f"{lead.summary} {tail.summary}",
                 start_wall=min(card.start_wall, moment.start_wall),
                 end_wall=max(card.end_wall, moment.end_wall),
-                kinds=(*card.kinds, *(k for k in moment.kinds if k not in card.kinds)),
+                kinds=(*lead.kinds, *(k for k in tail.kinds if k not in lead.kinds)),
             )
         else:
             out.append(moment)
@@ -226,7 +234,8 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
         if r.get("kind") in (report.SETTLE_KIND, report.SETTLE_SYNTHESIZED_KIND)
         and (t := _capture_t(r)) is not None
     }
-    for shot in report.build(journal).phantom_candidates:
+    accuracy = report.build(journal)
+    for shot in accuracy.phantom_candidates:
         settle = settles.get(shot.t) if shot.t is not None else None
         if settle is None:
             continue
@@ -235,6 +244,21 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
         else:
             why = f"froze again {shot.address_gap_s or 0:.2f} s after the previous settle"
         moments.append(_moment("phantom", settle, f"Possible phantom: {why} ({_rack(settle)})."))
+    # Every shot counted with no strike behind it (#73). Until this kind the
+    # count was only a line in `report`: in session 20261121-153046 two of
+    # them restarted the countdown with no shot played and raised nothing.
+    # 100 in the 56 journals with shots, 1.8 a session.
+    for shot in accuracy.missed:
+        settle = settles.get(shot.t) if shot.t is not None else None
+        if settle is not None:
+            moments.append(
+                _moment(
+                    "no_strike",
+                    settle,
+                    f"A shot was counted and no strike was seen: a soft shot, or nothing "
+                    f"at all? ({_rack(settle)}).",
+                )
+            )
 
     prev_state: object = None
     quiet_from: dict[str, object] | None = None  # last activity while not IDLE
@@ -261,9 +285,8 @@ def find(journal: Path, replay: Path | None = None) -> list[Moment]:
                     _moment(
                         "no_change",
                         record,
-                        f"A shot was counted, and the ball list read every ball where it "
-                        f"stood before: the clock restarted with nothing moved "
-                        f"({_rack(record)}).",
+                        f"A shot was counted, and the ball list read the cue ball on its "
+                        f"spot: the clock restarted with no shot played ({_rack(record)}).",
                     )
                 )
             elif record.get("row") in ("cue_moved", "lifted") and record.get("counted"):

@@ -326,8 +326,9 @@ REJECTION_BLURBS = {
     # ball list saw nothing but the cue move.
     "ball_in_hand": "ball in hand (only the cue moved since the scratch)",
     # §16 (checkpoint 135): a freeze the tracker saw no ball move in, and the
-    # settle's ball list read every ball where it stood before.
-    "nothing_moved": "nothing moved (the ball list read every ball in place)",
+    # settle's ball list read the cue ball where it stood before (every ball,
+    # until §19 narrowed it to the cue in checkpoint 138).
+    "nothing_moved": "no shot played (the ball list read the cue ball on its spot)",
     # §17 (checkpoint 135): a strike out of an armed rack, and the settle's
     # ball list read the rack standing where it stood. Not the break.
     "rack_standing": "false start (the rack never moved)",

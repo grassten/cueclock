@@ -319,6 +319,67 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-21 (checkpoint 138 — the cue ball on its spot means no shot
+  was played; #73):** in session `20261121-153046` the countdown restarted
+  twice with no shot played (699.4 s: 8.75 s became 30; 1565.2 s: 23.66 s
+  became 30, five seconds after his extension). Steven found both in the
+  recording: "a second cue ball detected and the clock reset on a phantom
+  shot as I was going down on the shot". Neither had raised a review
+  moment. `detect.py`, `events.py` and `track.py` are untouched.
+  - **Mechanism** (`design.md` §19): his gloved bridge hand on the cloth
+    read as a ball. The list before the motion held two cues, so
+    `RestLists.before` reported no cue before; the settle's list missed the
+    2 under the stick's shaft (1565 s) or read the hand as a `10` (699 s),
+    so `nothing_moved` could not match every object ball. Either doubt
+    counted the shot. The real cue read 0.0 px from its spot both times.
+  - **The rule** (`server/scratch.py`, `server/hub.py`): a held settle is
+    refused as `nothing_moved` when its list holds one cue and some cue on
+    the newest arm-free list before the motion stands within
+    `OBJECT_MOVED_PX` (3 px) of it. Object balls are not asked, and a second
+    "cue" before no longer voids the comparison. Which settles are held is
+    unchanged. Measured over the 114 settles of the four sessions with
+    lists: the cue stood 0-1 px from its spot at 8, none a shot, and 27.5 px
+    or more at the other 106, all 101 real shots among them. The risk taken:
+    a real shot with no strike whose cue ball stops within 5 mm of where it
+    started would not count; none is on record.
+  - **Replayed**, the session journals `shot_provisional_reverted`
+    `reason: nothing_moved` at 699.402 s and 1565.199 s, the countdown
+    resumes at 8.74 s and 23.66 s, and the strokes after them fire at
+    5.66 s and 18.96 s instead of a restarted 26.92 s and 25.3 s. One more
+    line differs: the settle at 1582.6 s (refused by #37 before and after)
+    reads `row: still` instead of `shot`. The six other sessions with a
+    detection log replay record for record against checkpoint 137's hub.
+  - **`review check`**: `no_change-1717877982` stays *changed* (its window
+    now holds the 699 s refusal too). `reverted-1718748001`, judged right,
+    reads REGRESSED on that `row` alone: the clock did the same thing and
+    the row is the truer one. Every other status is as it was.
+  - **`row: still` and `cue_px`**: the `scratch_list` line carries `cue_px`
+    (the settle's cue to the nearest cue before the motion), and `still`
+    means the cue ball on its spot whatever else the list read, so a
+    refused settle reads `still` as before.
+  - **A review moment for every shot counted with no strike**
+    (`review/moments.py`, kind `no_strike`, exactly `report`'s "counted at
+    settle" list): 100 in the 56 journals with shots, 1.8 a session; of the
+    6 in the sessions with lists none was a shot. It merges into whatever
+    else the settle raised and never gives the card its id, so every verdict
+    on the seven archived sessions stays attached (checked). Over this
+    session's journal it adds two cards, at 15:42:26 and 15:56:52 UTC: these
+    two events.
+  - **`session-stats`**: "Restarted with nothing moved" becomes "Counted
+    with the cue ball on its spot" (a counted settle with `cue_px` of 3 or
+    less, or `row: still`; one row instead of the two the issue sketched,
+    since the old one is a subset), still counted against Detection. New
+    row "Lists with two cue balls" beside "Lists with a number twice": 2 of
+    130 arm-free lists in this session, both these events. `report` words
+    the refusal "no shot played (the ball list read the cue ball on its
+    spot)".
+  - Not done: teaching the list that the glove is not a cue (white
+    0.61-0.64 against 0.92 or more for every real cue; two samples,
+    unchecked against the corpus). The rule does not need it.
+  - Verified: unit tests 806 passed (801 before); corpus battery with
+    `--detect-cache` 910 passed in 43 s; ruff, mypy --strict clean; seven
+    session replays compared record by record against the same replays on
+    checkpoint 137's code.
 - **2026-11-21 (checkpoint 137 — the review page, one moment at a time):**
   Steven judged that morning's session (`20261121-153046`, 27 minutes, 18
   moments) on his phone and reported the page "really hard to use": "it's not

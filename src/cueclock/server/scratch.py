@@ -27,7 +27,9 @@ if TYPE_CHECKING:
 # An object ball counts as moved when nothing stands within this many
 # (distorted) pixels of it on the other list. At the 9 corpus settles where no
 # object ball changed, the largest shift between lists is 1.4 px; the smallest
-# move that has to be caught is 8.6 px (`pot_scratch_nohold_0811`).
+# move that has to be caught is 8.6 px (`pot_scratch_nohold_0811`). The cue
+# ball is held to the same bound (`nothing_moved`): it reads 0-1 px from its
+# spot when no shot was played and 27.5 px or more after every shot on record.
 OBJECT_MOVED_PX = 3.0
 
 # A cue that travelled this far was not carried by hand: the engine's own
@@ -180,27 +182,44 @@ def _cue(found: BallList) -> ListedBall | None:
     return cues[0] if len(cues) == 1 else None
 
 
-def nothing_moved(now: BallList, rest: BallList | None, cue_before: bool) -> bool:
-    """Did this settle leave the table exactly as it was (§16)?
+def cue_px(now: BallList, rest: BallList | None) -> float | None:
+    """How far the cue ball stands from where it stood, in (distorted)
+    pixels: from the one cue on ``now`` to the nearest cue on ``rest`` (the
+    newest arm-free list before the motion). None when ``now`` does not hold
+    exactly one cue, or ``rest`` holds none or is missing.
 
-    The cue stood on the table before the motion and stands within
-    OBJECT_MOVED_PX of the same spot now, and every object ball on ``rest``
-    (the newest arm-free list before the motion) has one within
-    OBJECT_MOVED_PX on ``now`` and the reverse. Every ball has to be read in
-    place: an arm hiding one, a hand read as a ball, a second cue or no list
-    to compare with all answer False, and the settle counts as before.
+    The nearest of several, because a hand resting on the cloth can be read
+    as a second cue ball (#73): the real one is still on that list.
+    """
+    cue = _cue(now)
+    if cue is None or rest is None:
+        return None
+    return min(
+        (math.hypot(cue.cx - b.cx, cue.cy - b.cy) for b in rest.balls if b.cue), default=None
+    )
+
+
+def nothing_moved(now: BallList, rest: BallList | None) -> bool:
+    """Was no shot played before this settle (§16, §19)? The cue ball stands
+    within OBJECT_MOVED_PX of where it stood before the motion.
+
+    Every shot moves the cue ball, so the cue is the only ball asked about.
+    Over the 114 settles of the first four logged sessions that can be
+    measured, the cue stood 0-1 px from its spot at 8, none of them a shot,
+    and 27.5 px or more at the other 106, every real shot among them. The
+    object balls are not asked: a stick lying across one hides it, a hand is
+    read as one, and either made §16's first form ("every ball read in
+    place") count a shot nobody played (#73). No list to compare with, no
+    cue on it, or anything but one cue now answers False, and the settle
+    counts as before.
 
     This is what the tracker cannot say. A sleeve beside a ball swallows its
     blob, the track dies and the settle reports the ball vanished, the same
     report a pot makes; the list reads the pixels of the settle's own frame
-    and finds the ball where it was (session 20261119-020755, 176 s).
+    and finds the cue where it was (session 20261119-020755, 176 s).
     """
-    if rest is None or not cue_before or object_moved(rest, now):
-        return False
-    a, b = _cue(rest), _cue(now)
-    if a is None or b is None:
-        return False
-    return math.hypot(a.cx - b.cx, a.cy - b.cy) <= OBJECT_MOVED_PX
+    px = cue_px(now, rest)
+    return px is not None and px <= OBJECT_MOVED_PX
 
 
 def holds_rack(found: BallList | None) -> bool:
@@ -238,7 +257,8 @@ def table_row(
     ``shot`` (the cue before and now, an object ball moved), ``scratch`` and
     ``lifted`` (the list's calls, §14), ``cue_moved`` (only the cue moved,
     outside ball in hand: a hand or a stick that touched nothing), ``still``
-    (nothing moved). ``arm`` (a hand over the table and no cue seen) and
+    (the cue ball on its spot: no shot was played, whatever else the list
+    read, §19). ``arm`` (a hand over the table and no cue seen) and
     ``no_rest`` (nothing to compare with) cannot be read; ``other`` is
     anything else (no cue before or after, a cue the tracker still holds).
     """
@@ -250,10 +270,12 @@ def table_row(
         return "no_rest"
     if now.arm and not _cues(now):
         return "arm"
+    if nothing_moved(now, rest):
+        return "still"
     if not cue_before or not _cues(now):
         return "other"
     if object_moved(rest, now):
         return "shot"
     if _cue(rest) is None or _cue(now) is None:
         return "other"
-    return "still" if nothing_moved(now, rest, cue_before) else "cue_moved"
+    return "cue_moved"

@@ -372,11 +372,15 @@ camera or needs `run`:
   nothing seen — longer than any legal turn), `replay` (the parity check's
   diffs, when `replay.json` has any), and the ball list's: `list_scratch` /
   `list_cleared` (#63), `placing` / `in_hand_shot` / `cue_only` (#64) and
-  `no_change` (a shot counted at a settle whose list read every ball where
-  it stood, `design.md` §16). About one per ten shots over the
-  history. Candidates raised within 2 s of each other are one moment (one
-  card, one verdict): it keeps the earliest one's id and kind, carries every
-  sentence, and lists them all in `kinds`. A `quiet` stretch is always its
+  `no_change` (a shot counted at a settle whose list read the cue ball on
+  its spot, `design.md` §16 and §19), and `no_strike` (exactly `report`'s
+  "counted at settle": a shot counted with no strike seen, a soft shot or
+  nothing at all; 1.8 a session over the history, #73). About one per ten
+  shots over the history. Candidates raised within 2 s of each other are one moment (one
+  card, one verdict): it keeps the earliest one's id and kind (never
+  `no_strike`'s when another candidate shares the card, so cards judged
+  before that kind existed keep their verdicts), carries every sentence, and
+  lists them all in `kinds`. A `quiet` stretch is always its
   own. Ids are `<kind>-<mono ms>`, so re-running keeps verdicts attached.
   `cueclock session maintain` runs it on every session it archives.
 - `review check [stamp ...]` replays every judged session (or just those

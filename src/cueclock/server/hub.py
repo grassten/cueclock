@@ -41,6 +41,7 @@ from cueclock.server.scratch import (
     TRAVEL_MIN_MM,
     RestLists,
     SettleFacts,
+    cue_px,
     holds_rack,
     judge,
     nothing_moved,
@@ -1743,8 +1744,8 @@ class Hub:
         """The clock half of a settle, as of ``now`` (the settle's own hub
         time, also when it waited for its list). ``refusal`` is its list's
         verdict that it was not a shot: ``ball_in_hand`` (#64: it moved only
-        the cue, during ball in hand) or ``nothing_moved`` (§16: every ball
-        was read where it stood). True when the settle counted a shot."""
+        the cue, during ball in hand) or ``nothing_moved`` (§16, §19: the cue
+        ball was read on its spot). True when the settle counted a shot."""
         # Both settle-time refusals are decided here, before anything touches
         # the clock, and against the state the settle ARRIVED in. That is what
         # keeps them disjoint from the break adjudication below: E8 acts only
@@ -1892,9 +1893,10 @@ class Hub:
         counted, and the list 74 ms later read every ball where it stood. A
         distance cannot separate that from a shot (real ones in the same
         journals read 42, 44 and 49 mm), so the list decides, and it refuses
-        only a table read unchanged: none of the 112 settles it read as a
-        shot in the three sessions since checkpoint 132 does. A settle with a
-        strike in it, or with two or more balls moved, is decided at once.
+        only a cue ball read on its spot (§19): none of the 101 counted
+        settles it read as a shot in the four logged sessions has the cue
+        within 27 px of it. A settle with a strike in it, or with two or
+        more balls moved, is decided at once.
         """
         if rearrange is None:
             return False
@@ -1973,8 +1975,8 @@ class Hub:
         """#63: the list's say at the settle it was read at — call the
         scratch, clear it, or leave today's logic to decide alone. A settle
         held for this list is decided here: during ball in hand, one that
-        moved only the cue is kept off the clock (#64); so is one that moved
-        nothing at all (§16)."""
+        moved only the cue is kept off the clock (#64); so is one that left
+        the cue ball on its spot (§16, §19)."""
         facts = self._settle_facts
         if facts is None or self._settle_listed:
             return  # no settle waiting, or the next motion began first (journaled)
@@ -1999,7 +2001,7 @@ class Hub:
                 and rack_stands(found, self._rest_lists.last_before(facts.motion_t))
             ):
                 refusal = "rack_standing"
-            if refusal is None and nothing_moved(found, rest, cue_before):
+            if refusal is None and nothing_moved(found, rest):
                 refusal = "nothing_moved"
             moved_clock = self._decide_settle(
                 held.now, held.t, held.detail, held.rearrange, held.backstop, refusal
@@ -2040,6 +2042,7 @@ class Hub:
             **verdict.journal(),
             verdict=call,
             row=table_row(found, rest, cue_before, hand is not None, call),
+            cue_px=None if (px := cue_px(found, rest)) is None else round(px, 1),
             hand=applied,
             counted=facts.counted,
             tracker_cue=facts.tracker_cue,

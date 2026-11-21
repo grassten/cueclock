@@ -118,9 +118,9 @@ def test_ball_in_hand_placing_and_its_end_are_moments(tmp_path: Path) -> None:
 
 
 def test_a_shot_counted_with_nothing_moved_is_a_moment(tmp_path: Path) -> None:
-    """§16: the list read every ball where it stood and the settle counted
-    anyway (its list came late, or the tracker saw a ball move). Refused ones
-    show as the freeze they released; a still table nobody counted is nothing."""
+    """§16: the list read the cue ball on its spot and the settle counted
+    anyway (its list came late, or a strike fired). Refused ones show as the
+    freeze they released; a still table nobody counted is nothing."""
     calls = [
         run(10, "scratch_list", frame_t=10.0, row="still", counted=True),
         run(20, "shot_provisional_reverted", reason="nothing_moved"),
@@ -129,7 +129,7 @@ def test_a_shot_counted_with_nothing_moved_is_a_moment(tmp_path: Path) -> None:
     ]
     found = moments.find(write_journal(tmp_path / "j.jsonl", calls))
     assert kinds(found) == ["no_change", "reverted"]
-    assert "nothing moved" in found[0].summary
+    assert "no shot played" in found[0].summary
 
 
 def test_clean_session_has_no_moments(tmp_path: Path) -> None:

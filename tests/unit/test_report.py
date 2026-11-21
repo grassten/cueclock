@@ -229,7 +229,8 @@ def test_a_freeze_released_because_nothing_moved_is_named(tmp_path: Path) -> Non
     )
     report = build(path)
     assert report.settles_rejected_by_reason == {"nothing_moved": 1}
-    assert "1 nothing moved (the ball list read every ball in place)" in format_session(report)
+    said = format_session(report)
+    assert "1 no shot played (the ball list read the cue ball on its spot)" in said
 
 
 # ---------- robustness: the journal is written by a process that gets killed ----------

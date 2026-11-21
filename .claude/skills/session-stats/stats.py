@@ -30,6 +30,7 @@ from cueclock.server.report import (
     find_journals,
     mid_rack_appearances,
 )
+from cueclock.server.scratch import OBJECT_MOVED_PX
 
 
 @dataclass
@@ -59,6 +60,7 @@ class Tiers:
     settle_lists: int = 0  # settle lists with the tracker's count beside them
     settle_lists_agree: int = 0  # ... whose ball count equals the tracker's
     lists_duplicate: int = 0  # arm-free lists giving one number to two balls
+    lists_two_cues: int = 0  # arm-free lists holding more than one cue ball (#73)
     numbers_returned: int = 0  # a number back after it left, within one rack
     listed_balls: int = 0  # object balls on arm-free lists
     unnumbered: int = 0  # ... listed with no number
@@ -79,9 +81,9 @@ class Tiers:
     in_hand: int = 0  # ball in hand periods begun (a scratch stood)
     in_hand_ended: dict[str, int] = field(default_factory=dict)  # why each one ended
     cue_moved: int = 0  # outside ball in hand: only the cue moved, restarted as before
-    # Nothing moved (design §16, checkpoint 135+).
-    still_counted: int = 0  # a shot counted where the list read every ball in place
-    still_refused: int = 0  # freezes released because the list read every ball in place
+    # The cue ball on its spot (design §16, checkpoint 135+; the cue alone from 138).
+    still_counted: int = 0  # a shot counted where the list read the cue on its spot
+    still_refused: int = 0  # freezes released because the list read the cue on its spot
 
     def add_report(self, r: SessionReport) -> None:
         self.shots += r.total
@@ -152,7 +154,13 @@ class Tiers:
                 if row is not None:
                     self.rows_judged += 1
                     self.cue_moved += row == "cue_moved"
-                    self.still_counted += row == "still" and bool(r.get("counted"))
+                    # `cue_px` from checkpoint 138; before it, `still` meant
+                    # every ball read in place, a subset of the same error.
+                    cue_px = r.get("cue_px")
+                    on_spot = row == "still" or (
+                        isinstance(cue_px, int | float) and cue_px <= OBJECT_MOVED_PX
+                    )
+                    self.still_counted += on_spot and bool(r.get("counted"))
                     if row == "ball_in_hand":
                         how = str(r.get("hand"))
                         self.placing[how] = self.placing.get(how, 0) + 1
@@ -210,6 +218,7 @@ class Tiers:
             reassigned = r.get("reassigned")
             self.reassigned += reassigned if isinstance(reassigned, int) else 0
             self.lists_duplicate += len(numbers) != len(set(numbers))
+            self.lists_two_cues += labels.count("cue") > 1
             self.numbers_returned += racking.feed(r)
 
 
@@ -243,7 +252,11 @@ def table(label: str, t: Tiers, internals: bool = False) -> str:
             "Detection",
             pct(t.shots - t.expired_through - t.still_counted, t.shots),
             "the shot was counted and the clock was right with no key pressed"
-            + (f"; {t.still_counted} restarted with nothing moved" if t.still_counted else ""),
+            + (
+                f"; {t.still_counted} counted with the cue ball on its spot"
+                if t.still_counted
+                else ""
+            ),
         ),
         (
             "Break auto-catch",
@@ -304,6 +317,11 @@ def table(label: str, t: Tiers, internals: bool = False) -> str:
                 "Lists with a number twice",
                 f"{t.lists_duplicate}  ({pct(t.lists_duplicate, t.lists - t.lists_arm)})",
                 "arm-free lists; always an error",
+            ),
+            (
+                "Lists with two cue balls",
+                f"{t.lists_two_cues}  ({pct(t.lists_two_cues, t.lists - t.lists_arm)})",
+                "arm-free lists; always an error (a hand read as a ball, #73)",
             ),
             (
                 "Numbers back after leaving",
@@ -379,10 +397,10 @@ def table(label: str, t: Tiers, internals: bool = False) -> str:
                 "no scratch before it: restarted as before, a hand or a stick",
             ),
             (
-                "Restarted with nothing moved",
+                "Counted with the cue ball on its spot",
                 f"{t.still_counted} of {t.rows_judged}",
-                "a shot counted where the list read every ball in place — always an error; "
-                f"{t.still_refused} more were refused (§16)",
+                "a shot counted where the list read the cue where it stood — always an "
+                f"error; {t.still_refused} more were refused (§16)",
             ),
         ]
     if t.dark_candidates:

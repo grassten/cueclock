@@ -87,7 +87,8 @@ _TITLES = {
     "placing": "Ball in hand: placing not counted",
     "in_hand_shot": "Ball in hand ended on a shot",
     "cue_only": "Shot counted, only the cue moved",
-    "no_change": "Shot counted, nothing moved",
+    "no_change": "Shot counted, cue ball never moved",
+    "no_strike": "Shot counted, no strike seen",
     "quiet": "Clock ran with nothing seen",
     "replay": "Replay disagrees with the session",
 }

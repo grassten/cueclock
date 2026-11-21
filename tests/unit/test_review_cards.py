@@ -49,3 +49,30 @@ def test_a_quiet_stretch_is_its_own_card(tmp_path: Path) -> None:
     found = moments.find(write_journal(tmp_path / "j.jsonl", journal))
     assert [m.kinds for m in found] == [("synthesized",), ("quiet",)]
     assert found[0].wall == found[1].wall
+
+
+# #73: a counted settle with no strike behind it (the count went 3 -> 4 at the
+# settle). Session 20261121-153046 had two that restarted the countdown with
+# no shot played, and neither raised a moment.
+NO_STRIKE = [
+    run(20, "vision_shot_taken", state="MOTION", t=20.0),
+    run(24, "vision_balls_settled", t=24.0),
+    run(40, "shot_provisional", state="MOTION", frame_t=40.0),
+    run(40.6, "vision_balls_settled", rack=4, frame_t=40.6),
+]
+
+
+def test_a_shot_counted_with_no_strike_is_a_moment(tmp_path: Path) -> None:
+    (card,) = moments.find(write_journal(tmp_path / "j.jsonl", NO_STRIKE))
+    assert card.kinds == ("no_strike",) and card.wall == NO_STRIKE[3]["wall"]
+    assert "no strike was seen" in card.summary
+
+
+def test_no_strike_never_names_a_card_it_shares(tmp_path: Path) -> None:
+    """The settle's list raises its own candidate 74 ms later. That card was
+    judged before `no_strike` existed; it keeps its id, and so its verdict."""
+    listed = run(40.674, "scratch_list", rack=4, frame_t=40.6, row="still", counted=True)
+    (card,) = moments.find(write_journal(tmp_path / "j.jsonl", [*NO_STRIKE, listed]))
+    assert card.kinds == ("no_change", "no_strike")
+    assert card.id.startswith("no_change-") and card.wall == listed["wall"]
+    assert "no strike was seen" in card.summary and "on its spot" in card.summary
