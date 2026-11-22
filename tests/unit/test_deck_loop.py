@@ -22,11 +22,13 @@ from typing import Any
 
 import pytest
 
+from cueclock.clock import Settings
 from cueclock.deck import bracket as deck_bracket
-from cueclock.deck import client, daemon
+from cueclock.deck import client, daemon, faces
 from cueclock.deck.layout import (
     LAYOUT,
     BracketConfirm,
+    MenuToggle,
     Recalibrate,
     SceneToggle,
     SessionToggle,
@@ -506,3 +508,101 @@ def test_a_press_on_a_face_the_session_has_already_left_does_nothing(
         assert session.starts == 1
     finally:
         _stop(thread)
+
+
+# --- the SETUP menu (#74): a second page, and what must not cross pages ---
+
+SETUP_KEY = next(k for k in LAYOUT if isinstance(k.action, MenuToggle))
+P1_KEY = next(k for k in LAYOUT if k.name == "p1")
+
+
+class MenuRig:
+    """What the loop posted and last drew, per cell."""
+
+    def __init__(self) -> None:
+        self.posted: list[str] = []
+        self.drawn: dict[int, Any] = {}
+
+    def text(self, index: int) -> str | None:
+        face = self.drawn.get(index)
+        return face.text if isinstance(face, faces.Face) else None
+
+
+@pytest.fixture
+def menu(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FakeDeck, MenuRig]]:
+    rig = MenuRig()
+    _STOP.clear()
+    payload = {"state": "IDLE", "mode": "match", "settings": Settings().as_dict()}
+
+    def post(base: str, path: str, timeout: float = 3.0) -> client.PostResult:
+        rig.posted.append(path)
+        return client.PostResult(True, 200, "{}")
+
+    monkeypatch.setattr(client, "get_json", _stoppable(payload))
+    monkeypatch.setattr(client, "post", post)
+    monkeypatch.setattr(daemon, "_set_key", lambda _d, i, face: rig.drawn.__setitem__(i, face))
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)
+
+    deck = FakeDeck()
+    thread = _start_loop(deck)
+    yield deck, rig
+    _stop(thread)
+
+
+def _tap(deck: FakeDeck, index: int) -> None:
+    deck.press(index)
+    deck.release(index)
+
+
+def test_setup_opens_the_menu_and_done_closes_it(menu: tuple[FakeDeck, MenuRig]) -> None:
+    deck, rig = menu
+    _tap(deck, SETUP_KEY.index)
+    assert _wait(lambda: rig.text(1) == "GAME"), "the menu never opened"
+    assert rig.text(SETUP_KEY.index) == "DONE"
+    _tap(deck, SETUP_KEY.index)
+    assert _wait(lambda: rig.text(1) == "MATCH"), "DONE did not bring the main page back"
+    assert rig.posted == []  # opening and closing a page asks nothing of the server
+
+
+def test_a_setting_press_posts_and_the_menu_stays_open(menu: tuple[FakeDeck, MenuRig]) -> None:
+    deck, rig = menu
+    _tap(deck, SETUP_KEY.index)
+    assert _wait(lambda: rig.text(1) == "GAME")
+    _tap(deck, 2)  # (1,3) SHOT
+    assert _wait(lambda: rig.posted == ["/api/setting/shot/15"])
+    time.sleep(0.2)
+    assert rig.text(1) == "GAME"
+
+
+def test_an_empty_menu_cell_does_nothing(menu: tuple[FakeDeck, MenuRig]) -> None:
+    """Keys are found on the page that is showing: (3,3) is P1 on the main
+    page and nothing on the menu, so a tap there must not score a point."""
+    deck, rig = menu
+    _tap(deck, SETUP_KEY.index)
+    assert _wait(lambda: rig.text(1) == "GAME")
+    _tap(deck, P1_KEY.index)
+    _tap(deck, 5)  # (2,1): empty on both pages
+    time.sleep(0.3)
+    assert rig.posted == []
+
+
+def test_the_menu_closes_itself(
+    menu: tuple[FakeDeck, MenuRig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deck, rig = menu
+    monkeypatch.setattr(daemon, "MENU_IDLE_S", 0.3)
+    _tap(deck, SETUP_KEY.index)
+    assert _wait(lambda: rig.text(1) == "GAME")
+    assert _wait(lambda: rig.text(1) == "MATCH", 2.0), "the menu stayed open"
+
+
+def test_opening_the_menu_drops_a_hold_in_progress(menu: tuple[FakeDeck, MenuRig]) -> None:
+    """A P1 hold begun on the main page must not take a point back once the
+    page has changed under the finger."""
+    deck, rig = menu
+    deck.press(P1_KEY.index)
+    _tap(deck, SETUP_KEY.index)
+    time.sleep(1.0)  # past the 0.6 s score hold
+    deck.release(P1_KEY.index)
+    time.sleep(0.2)
+    assert rig.posted == []

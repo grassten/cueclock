@@ -81,7 +81,7 @@ MERGE_S = 2.0
 
 # No strike, settle or key for this long with the clock not IDLE is a turn
 # that outran the longest legal allowance — the 60 s first shot plus a 30 s
-# extension (WNT §5, `clock/rulesets.py`). Either nothing was played or
+# extension (WNT §5, the longest `clock/settings.py` offers). Either nothing was played or
 # vision missed a shot *and* its settle, which `report` cannot see at all.
 QUIET_S = 90.0
 

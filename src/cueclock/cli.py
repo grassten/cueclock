@@ -546,7 +546,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     # Scores persist across restarts (a mid-match crash must not lose the match).
     # So does a live bracket (#43), for the same reason and by the same means;
-    # finished ones are archived beside the session journals.
+    # finished ones are archived beside the session journals. The clock's
+    # settings (#74) are remembered the same way, so a session starts on the
+    # last one's.
     session_stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     journal_path = Path("logs") / f"session-{session_stamp}.jsonl"
     app = create_app(
@@ -554,6 +556,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         journal_path=journal_path,
         bracket_path=Path("config/bracket.json"),
         archive_dir=journal_path.parent,
+        settings_path=Path("config/settings.json"),
     )
     hub = cast(Hub, app.state.hub)
 
@@ -580,7 +583,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             "reference": {"path": str(ref_path), "digest": vision.reference.digest()},
             "calibration": json.loads(cal_path.read_text()),
             "hub": {
-                "ruleset": hub.clock.ruleset.name,
+                "settings": hub.clock.settings.as_dict(),
                 "mode": hub.clock.mode.name,
                 "vision": hub.vision_enabled,
                 "score": _json_or_none(Path("config/score.json")),

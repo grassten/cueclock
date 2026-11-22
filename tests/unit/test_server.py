@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 import cueclock.server.app as server_app
 import cueclock.server.hub as hub_module
-from cueclock.clock import State
+from cueclock.clock import Settings, State
 from cueclock.server import create_app, fargo
 from cueclock.server.hub import Hub
 from cueclock.server.score import MatchScore
@@ -33,10 +33,11 @@ def test_state_snapshot_shape() -> None:
             "state",
             "time",
             "display",
-            "ruleset",
+            # The clock's six settings (#74), which replaced the ruleset.
+            "settings",
             "mode",
-            # False only under an untimed ruleset (freestyle) — the overlays
-            # drop their countdown surfaces on it.
+            # False only with CLOCK off — the overlays drop their countdown
+            # surfaces on it.
             "timed",
             # What a fresh countdown gives you right now. The deck's START key
             # renders it, so the face can't drift from the behaviour.
@@ -83,7 +84,7 @@ def test_start_pause_reset() -> None:
 
 
 def test_extension_unlimited_over_the_api() -> None:
-    # The pool cap is unenforced (rulesets.ENFORCE_EXTENSION_LIMIT, off since
+    # The pool cap is unenforced (settings.ENFORCE_EXTENSION_LIMIT, off since
     # 2026-08-13) — a third call is granted where it used to be refused. A
     # call with no countdown running is still refused: there is nothing to
     # extend, and the denial tone is the answer to a misheard verbal call.
@@ -162,14 +163,76 @@ def test_voice_asset_is_served_when_generated_and_404s_when_not(
         assert response.headers["content-type"] == "audio/wav"
 
 
-def test_ruleset_switch_alias_and_unknown() -> None:
+def _wnt(client: TestClient) -> None:
+    """WNT 9-ball's clock: 60 s after the break, 30 s extensions, push outs."""
+    for name, value in (("after_break", "60"), ("extension", "30"), ("push", "on")):
+        assert client.post(f"/api/setting/{name}/{value}").json() == {"ok": True}
+
+
+def test_settings_are_listed_and_changed_one_at_a_time() -> None:
     with make_client() as client:
-        listing = client.get("/api/rulesets").json()
-        assert listing["active"] == "ultimate_pool_8ball"
-        assert "wnt_9ball" in listing["available"]
-        assert client.post("/api/ruleset/ultimate_9ball").json() == {"ok": True}  # alias
-        assert client.get("/api/state").json()["ruleset"] == "wnt_9ball"
-        assert client.post("/api/ruleset/no_such_ruleset").status_code == 404
+        listing = client.get("/api/settings").json()
+        assert listing["values"]["shot"] == "30"
+        assert listing["options"]["shot"] == ["30", "15"]
+        assert listing["options"]["game"] == ["8ball", "9ball", "10ball", "other"]
+        assert client.post("/api/setting/shot/15").json() == {"ok": True}
+        snap = client.get("/api/state").json()
+        assert snap["settings"]["shot"] == "15"
+        assert snap["base"] == 15
+        assert client.post("/api/setting/shot/45").status_code == 404
+        assert client.post("/api/setting/ruleset/wnt_9ball").status_code == 404
+        assert client.get("/api/state").json()["settings"]["shot"] == "15"  # unchanged
+
+
+def test_the_ruleset_urls_are_gone() -> None:
+    """Withdrawn in checkpoint 145 (#74); 404, per the `/score` rule."""
+    with make_client() as client:
+        assert client.post("/api/ruleset/wnt_9ball").status_code == 404
+        assert client.get("/api/rulesets").status_code == 404
+
+
+def test_settings_are_remembered_for_the_next_session(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    with TestClient(create_app(settings_path=path)) as client:
+        client.post("/api/setting/game/9ball")
+        client.post("/api/setting/after_break/60")
+    assert json.loads(path.read_text())["game"] == "9ball"
+    with TestClient(create_app(settings_path=path)) as client:
+        values = client.get("/api/settings").json()["values"]
+    assert (values["game"], values["after_break"]) == ("9ball", "60")
+
+
+def test_an_unreadable_settings_file_starts_on_the_defaults(tmp_path: Path) -> None:
+    """A launchd job can be refused a file in `config/` (EDEADLK): the session
+    starts on today's defaults and says why, never fails."""
+    path = tmp_path / "settings.json"
+    path.write_text("{not json")
+    journal = tmp_path / "session.jsonl"
+    hub = Hub(settings_path=path, journal_path=journal)
+    assert hub.clock.settings == Settings()
+    assert "settings_unreadable" in journal.read_text()
+
+
+def test_a_setting_change_is_journaled_and_logged_as_an_input() -> None:
+    hub = Hub()
+    inputs: list[dict[str, object]] = []
+    hub.on_input = inputs.append
+    assert asyncio.run(hub.set_setting("clock", "off"))
+    assert not asyncio.run(hub.set_setting("clock", "maybe"))
+    assert [r["method"] for r in inputs] == ["set_setting", "set_setting"]
+    assert inputs[0]["kwargs"] == {"name": "clock", "value": "off"}
+    assert hub.clock_live is False
+
+
+def test_a_logged_ruleset_switch_still_replays() -> None:
+    """Old session logs record `set_ruleset`; replay calls it by that name."""
+    hub = Hub()
+    asyncio.run(hub.set_setting("game", "10ball"))
+    assert asyncio.run(hub.set_ruleset("ultimate_9ball"))
+    assert hub.clock.settings == Settings(
+        game="10ball", after_break="60", extension="30", push="on"
+    )
+    assert not asyncio.run(hub.set_ruleset("no_such_ruleset"))
 
 
 def test_websocket_snapshot_on_connect() -> None:
@@ -229,7 +292,7 @@ def test_vision_events_drive_clock() -> None:
     asyncio.run(hub.shot_taken())
     asyncio.run(hub.balls_settled())
     assert hub.clock.state is State.RUNNING
-    assert hub.clock.remaining == float(hub.clock.ruleset.base_seconds)
+    assert hub.clock.remaining == float(hub.clock.settings.base_seconds)
 
 
 # ---------- match mode (rack / push / score / vision, added 2026-07-31) ----------
@@ -237,7 +300,7 @@ def test_vision_events_drive_clock() -> None:
 
 def test_rack_restart_and_push_endpoints() -> None:
     with make_client() as client:
-        client.post("/api/ruleset/wnt_9ball")
+        _wnt(client)
         assert client.post("/api/rack").json() == {"ok": True}
         snap = client.get("/api/state").json()
         assert snap["state"] == "IDLE"
@@ -800,7 +863,7 @@ def test_mode_listing_and_switch_and_unknown() -> None:
 
 def test_run_out_drops_the_first_shot_allowance_over_the_api() -> None:
     with make_client() as client:
-        client.post("/api/ruleset/wnt_9ball")
+        _wnt(client)
         assert client.get("/api/state").json()["base"] == 60
         client.post("/api/mode/run_out")
         assert client.get("/api/state").json()["base"] == 30
@@ -824,15 +887,15 @@ def test_no_clock_ignores_vision_but_still_journals_it(tmp_path: Path) -> None:
     assert "vision_balls_settled_no_clock" in kinds
 
 
-def test_freestyle_parks_the_clock_but_keeps_the_match(tmp_path: Path) -> None:
-    # The untimed ruleset (2026-08-13): vision is journaled but never clocked
+def test_clock_off_parks_the_clock_but_keeps_the_match(tmp_path: Path) -> None:
+    # CLOCK off (the freestyle ruleset, 2026-08-13): vision is journaled but never clocked
     # (same gate as `no_clock` mode), operator keys have nothing to start —
     # and it is still a *match*: score, racks, mode all stay.
     journal = tmp_path / "session.jsonl"
     app = create_app(journal_path=journal)
     hub: Hub = app.state.hub
     with TestClient(app) as client:
-        client.post("/api/ruleset/freestyle")
+        client.post("/api/setting/clock/off")
         client.post("/api/start")  # a stray phone press must not start a countdown
         client.post("/api/restart")
         asyncio.run(hub.shot_taken(t=1.0, speed_mms=4000.0))
@@ -846,21 +909,6 @@ def test_freestyle_parks_the_clock_but_keeps_the_match(tmp_path: Path) -> None:
     kinds = [line.split('"kind": "')[1].split('"')[0] for line in journal.read_text().splitlines()]
     assert "vision_shot_taken_no_clock" in kinds
     assert "vision_balls_settled_no_clock" in kinds
-
-
-def test_ruleset_listing_carries_details_for_the_picker() -> None:
-    # The control page captions the pick from these instead of hardcoding the
-    # rulebook (2026-08-13).
-    with make_client() as client:
-        listing = client.get("/api/rulesets").json()
-        assert listing["available"][-1] == "freestyle"
-        assert listing["details"]["wnt_9ball"] == {
-            "base_seconds": 30,
-            "first_shot_seconds": 60,
-            "extension_seconds": 30,
-            "timed": True,
-        }
-        assert listing["details"]["freestyle"]["timed"] is False
 
 
 def test_the_shot_age_is_null_until_a_shot() -> None:
@@ -1012,7 +1060,7 @@ def test_dark_break_scale_settle_counts_the_break() -> None:
     assert hub.clock.state is State.RUNNING
     assert hub.clock.rack_shots == 1  # counted exactly once
     # ...and the settle started the WNT §5 first-shot window over it.
-    assert hub.clock.current_base() == hub.clock.ruleset.first_shot_seconds
+    assert hub.clock.current_base() == hub.clock.settings.first_shot_seconds
     assert hub.clock.remaining == pytest.approx(hub.clock.current_base(), abs=0.2)
     tiers = [r.get("tier") for r in hub.journal.tail(60.0) if r["kind"] == "break_adjudicated"]
     assert tiers == ["dark"]

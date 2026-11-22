@@ -1,15 +1,15 @@
 """Session modes — what kind of practice the clock is shaping.
 
-A mode is orthogonal to a ruleset. A ruleset is a *rulebook* (Ultimate Pool
-8-ball, WNT 9-ball) and every entry in ``rulesets.py`` cites published rules; a
-mode is what you are doing at the table, and the same rulebook applies across
-all of them. Steven runs three (2026-08-02):
+A mode is orthogonal to the clock's settings (``settings.py``). The settings
+say how long each countdown is, sourced from published rules; a mode is what
+you are doing at the table, and the same settings apply across all of them.
+Steven runs three (2026-08-02):
 
-- **match** — a rack. Break, rack boundaries, the ruleset's first-shot
+- **match** — a rack. Break, rack boundaries, the AFTER BREAK
   allowance, extensions per rack, and the IDLE break gate.
 - **run_out** — fifteen balls thrown up, no rack, run them. There is no break,
   so there is no first-shot allowance and no break gate; the clock is the
-  ruleset's base countdown on every shot including the first.
+  SHOT countdown on every shot including the first.
 - **no_clock** — actual drills: repeat a shot as long as you like. Vision keeps
   running and keeps journaling (a drill still produces evidence, and a flag
   press still dumps a real ring) — it just doesn't drive the clock.

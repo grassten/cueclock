@@ -1,6 +1,7 @@
 """The session log and its replay (#57) — synthetic, no camera, no clips."""
 
 import asyncio
+import functools
 import json
 import shutil
 import threading
@@ -24,6 +25,7 @@ from cueclock.capture.session_replay import (
     to_mono,
     verify,
 )
+from cueclock.clock import Settings
 from cueclock.server.hub import BROADCAST_INTERVAL_SECONDS, Hub
 from cueclock.vision.ball_list import BallList, ListedBall
 from cueclock.vision.calibration import TableCalibration, UndistortParams
@@ -56,7 +58,8 @@ def _calibration() -> TableCalibration:
     )
 
 
-def _header(tmp_path: Path) -> dict[str, object]:
+def _header(tmp_path: Path, *, legacy: bool = False) -> dict[str, object]:
+    """A header as `cueclock run` writes it; ``legacy``: as it did before #74."""
     cal = tmp_path / "cal.json"
     _calibration().save(cal)
     return {
@@ -72,7 +75,9 @@ def _header(tmp_path: Path) -> dict[str, object]:
         "reference": {"path": "x", "digest": "y"},
         "calibration": json.loads(cal.read_text()),
         "hub": {
-            "ruleset": "ultimate_pool_8ball",
+            **(
+                {"ruleset": "ultimate_pool_8ball"} if legacy else {"settings": Settings().as_dict()}
+            ),
             "mode": "match",
             "vision": True,
             "score": None,
@@ -217,19 +222,25 @@ _LIST_AT_REST = BallList(balls=(_listed("cue", 500.0), _listed("3", 1500.0)), ar
 _LIST_SETTLED = BallList(balls=(_listed("3", 1500.0),), arm=False)  # the list misses the cue
 
 
-def _record_live_session(tmp_path: Path) -> Path:
+def _record_live_session(tmp_path: Path, *, legacy: bool = False) -> Path:
     """What `cueclock run` does, on a virtual clock: frames, inputs, ticks.
 
     The tick phase and the dispatch lag deliberately differ from replay's, as
-    they do live."""
+    they do live. ``legacy`` records a session from before #74: a ruleset in
+    the header and a ruleset switch among the inputs."""
     root = tmp_path / "sessions" / "20261116-225226"
-    header = _header(tmp_path)
+    header = _header(tmp_path, legacy=legacy)
     writer = SessionLogWriter(root, header)
     clock = VirtualClock(now=STARTED_MONO, started_mono=STARTED_MONO, started_wall=STARTED_WALL)
     hub = Hub(journal_path=tmp_path / "live.jsonl", now=clock.mono, wall=clock.wall)
     hub.on_input = writer.input
     vision = VisionPipeline(_calibration(), None, cadence_hz=CADENCE)
-    commands = {1.0: hub.start, 20.0: hub.extension, 70.0: hub.new_rack}
+    change = (
+        functools.partial(hub.set_ruleset, "wnt_9ball")
+        if legacy
+        else functools.partial(hub.set_setting, "after_break", "60")
+    )
+    commands = {1.0: hub.start, 20.0: hub.extension, 70.0: hub.new_rack, 75.0: change}
     next_tick = STARTED_MONO + 0.037
     episode = False
     # The ball lists (#63): read at rest at frame 200 and at the settle, each
@@ -272,14 +283,16 @@ def _record_live_session(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.mark.parametrize("legacy", [False, True], ids=["settings", "ruleset"])
 def test_replay_reproduces_the_live_journal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool
 ) -> None:
-    root = _record_live_session(tmp_path)
+    root = _record_live_session(tmp_path, legacy=legacy)
     live = read_journal(tmp_path / "live.jsonl")
     kinds = {r["kind"] for r in live}
     # The scenario exercises vision, commands and tick-driven transitions.
     assert {"vision_shot_taken", "vision_balls_settled", "cmd_start", "tick_transition"} <= kinds
+    assert ("cmd_ruleset" if legacy else "cmd_setting") in kinds
     monkeypatch.setattr("cueclock.capture.session_replay.git_state", lambda: (None, False))
     verdict = verify(SessionLog(root), tmp_path / "live.jsonl", tmp_path / "replay.jsonl")
     assert verdict["ok"], verdict["diffs"]

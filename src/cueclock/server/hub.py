@@ -26,12 +26,13 @@ from fastapi import WebSocket
 
 from cueclock.clock import (
     DEFAULT_MODE,
-    DEFAULT_RULESET,
+    Settings,
     ShotClock,
     Snapshot,
     State,
     get_mode,
-    get_ruleset,
+    legacy_name,
+    legacy_ruleset,
 )
 from cueclock.server import bracket as bracket_mod
 from cueclock.server.bracket import Bracket, BracketError, Match, Player
@@ -433,7 +434,7 @@ def hub_input(
 ) -> "Callable[Concatenate[Hub, _P], Coroutine[Any, Any, _R]]":
     """Mark a Hub coroutine as an input: something from outside vision (#57).
 
-    Every API command, deck key, voice extension and ruleset / mode / score /
+    Every API command, deck key, voice extension and setting / mode / score /
     bracket change reaches the hub through one of these, so this is the one
     seam where they are recorded — `Hub.on_input` gets
     ``{"mono", "wall", "method", "kwargs"}`` before the method runs, and a
@@ -469,6 +470,19 @@ def hub_input(
     return wrapper
 
 
+def _load_settings(path: Path | None) -> tuple[Settings, str | None]:
+    """The remembered settings, and why they could not be read (None if fine).
+
+    No file is the first run, not an error: the defaults, silently.
+    """
+    if path is None or not path.exists():
+        return Settings(), None
+    try:
+        return Settings.from_dict(json.loads(path.read_text())), None
+    except (OSError, ValueError) as exc:
+        return Settings(), f"{type(exc).__name__}: {exc}"
+
+
 class Hub:
     def __init__(
         self,
@@ -477,18 +491,24 @@ class Hub:
         bracket_path: Path | None = None,
         archive_dir: Path | None = None,
         *,
+        settings_path: Path | None = None,
         now: Callable[[], float] = _monotonic,
         wall: Callable[[], datetime] | None = None,
     ) -> None:
         """``now`` is the monotonic clock every policy reads and ``wall`` the
         matching UTC wall clock the journal stamps; both default to the real
-        ones. A session replay passes a virtual pair (#57)."""
+        ones. A session replay passes a virtual pair (#57).
+
+        ``settings_path`` is where the clock's settings are remembered between
+        sessions (#74), as the score is; None keeps them in memory."""
         self._now = now
         self._wall = wall if wall is not None else (lambda: datetime.now(UTC))
         # Called with each input record (see `hub_input`); `cueclock run`
         # points it at the session log. None records nothing.
         self.on_input: Callable[[dict[str, object]], None] | None = None
-        self.clock = ShotClock(get_ruleset(DEFAULT_RULESET), now=now(), mode=get_mode(DEFAULT_MODE))
+        self.settings_path = settings_path
+        settings, settings_error = _load_settings(settings_path)
+        self.clock = ShotClock(settings, now=now(), mode=get_mode(DEFAULT_MODE))
         self.clients: set[WebSocket] = set()
         self.score = MatchScore(path=score_path)  # None = in-memory only
         # The bracket (#43) is optional state layered on top of the score: with
@@ -510,6 +530,11 @@ class Hub:
         # engine actually did (journal.py module docstring).
         self.journal = SessionJournal(path=journal_path, now=now, wall=self._wall)
         self._journal_state = self.clock.state.value
+        if settings_error is not None:
+            # Today's defaults rather than a failed start. `config/` is an
+            # iCloud-pinned symlink, and a launchd job can be refused a file
+            # there (EDEADLK, CLAUDE.md): say so, then play on the defaults.
+            self._log("settings_unreadable", error=settings_error)
         # Detect-loop telemetry: the `cueclock run` camera thread stamps each
         # processed detect frame via note_frame(); the tick loop turns the
         # stamps into `detect_heartbeat` journal lines. Plain attribute
@@ -643,12 +668,12 @@ class Hub:
     def clock_live(self) -> bool:
         """May vision move the clock right now?
 
-        Two axes park it: `no_clock` mode (drills) and an untimed ruleset
-        (freestyle — a match with no shot clock). The journal lines on the
-        False branch keep their `_no_clock` names for both; the payload's
-        `mode`/`ruleset` fields say which axis it was.
+        Two axes park it: `no_clock` mode (drills) and CLOCK off (a match with
+        no shot clock). The journal lines on the False branch keep their
+        `_no_clock` names for both; the payload's `mode` and `timed` fields say
+        which axis it was.
         """
-        return self.clock.mode.clock_live and self.clock.ruleset.timed
+        return self.clock.mode.clock_live and self.clock.settings.timed
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
         """The composed broadcast/state payload: clock + `vision` + `score` +
@@ -1020,19 +1045,60 @@ class Hub:
         return accepted
 
     @hub_input
-    async def set_ruleset(self, name: str) -> bool:
-        """Switch ruleset by canonical name or alias; False if unknown."""
+    async def set_setting(self, name: str, value: str) -> bool:
+        """Change one of the clock's settings (#74); False if unknown.
+
+        It takes effect on the next countdown (`ShotClock.change_settings`),
+        and is remembered for the next session. Turning the clock on or off
+        parks it, so whatever a provisional shot was waiting on is dropped
+        with it, as a mode switch does.
+        """
         try:
-            ruleset = get_ruleset(name)
+            settings = self.clock.settings.with_(name, value)
+        except (KeyError, ValueError):
+            return False
+        if settings.timed != self.clock.settings.timed:
+            self._idle_fire = None
+            self._abandon_provisional()
+        self.clock.change_settings(settings)
+        self._save_settings()
+        self._log("cmd_setting", setting=name, value=value)
+        await self.broadcast(self.clock.snapshot())
+        return True
+
+    @hub_input
+    async def set_ruleset(self, name: str) -> bool:
+        """A ruleset switch from a session logged before checkpoint 145.
+
+        Rulesets are gone (#74): nothing live calls this, and no URL reaches
+        it. It stays so `cueclock session replay` can apply the `set_ruleset`
+        inputs old logs recorded, with the clock and the journal line they
+        produced live. It keeps the game that is set and is not remembered.
+        """
+        try:
+            settings = legacy_ruleset(name, game=self.clock.settings.game)
         except KeyError:
             return False
-        self.clock.set_ruleset(ruleset)
+        self.clock.apply_legacy_ruleset(settings)
         self._idle_fire = None
         self._abandon_provisional()
         self._reset_pace()  # the clock zeroed its rack scope; the panel follows
-        self._log("cmd_ruleset", ruleset=self.clock.ruleset.name)
+        self._log("cmd_ruleset", ruleset=legacy_name(name))
         await self.broadcast(self.clock.snapshot())
         return True
+
+    def _save_settings(self) -> None:
+        """Write the settings where the next session reads them. Atomic, as
+        the score's file is; a failed write is journaled, never raised."""
+        if self.settings_path is None:
+            return
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.settings_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.clock.settings.as_dict(), indent=2) + "\n")
+            tmp.replace(self.settings_path)
+        except OSError as exc:
+            self._log("settings_unsaved", error=str(exc))
 
     @hub_input
     async def set_mode(self, name: str) -> bool:

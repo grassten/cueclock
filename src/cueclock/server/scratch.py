@@ -47,7 +47,7 @@ TRAVEL_MIN_MM = 400.0
 ROLL_MIN_S = 0.1
 
 # The fewest numbered balls a list must hold to stand for a rack: nine-ball's,
-# the smallest rack in `clock/rulesets.py`.
+# the smallest rack the GAME setting offers (`clock/settings.py`).
 RACK_MIN_BALLS = 9
 
 # Written at-rest lists kept to find the one before a shot. Lists are written

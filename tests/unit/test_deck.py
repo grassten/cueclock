@@ -10,13 +10,14 @@ from dataclasses import replace
 
 import pytest
 
-from cueclock.clock import MODES, RULESETS
+from cueclock.clock import MODES, OPTIONS, Settings
 from cueclock.deck import client, faces
 from cueclock.deck.daemon import _dispatch, _score_post, build_state
 from cueclock.deck.layout import (
     CLOCKED,
     COLS,
     LAYOUT,
+    MENU,
     MODE_FACES,
     ROWS,
     ApiPost,
@@ -24,16 +25,22 @@ from cueclock.deck.layout import (
     DeckState,
     Group,
     Key,
+    MenuToggle,
     ScoreAdjust,
     SessionToggle,
+    SettingCycle,
     cycle_label,
     cycle_next,
     cycle_path,
+    page,
+    setting_next,
 )
 from cueclock.deck.session import SessionState
 
-MATCH = DeckState(up=True, mode="match", ruleset="wnt_9ball", base=60, extensions_allowed=2)
-RUN_OUT = replace(MATCH, mode="run_out", ruleset="ultimate_pool_8ball", base=30)
+WNT = Settings(after_break="60", extension="30", push="on").as_dict()
+
+MATCH = DeckState(up=True, mode="match", settings=WNT, base=60, extensions_allowed=2)
+RUN_OUT = replace(MATCH, mode="run_out", settings=Settings().as_dict(), base=30)
 NO_CLOCK = replace(MATCH, mode="no_clock")
 DOWN = DeckState(up=False)
 # The same deck with a bracket loaded (#43). Kept as a separate state rather
@@ -133,13 +140,13 @@ def test_no_clock_collapses_to_the_spine() -> None:
     assert visible_names(NO_CLOCK) == ALWAYS_ON
 
 
-def test_freestyle_drops_the_countdown_keys_but_keeps_the_match() -> None:
-    # The untimed ruleset (2026-08-13): no countdown, so Start and Extension
-    # go dark with it (and Push is 9-ball-only anyway) — but it is still a
-    # match, so the score keys and New Rack stay exactly where they are.
-    freestyle = replace(MATCH, ruleset="freestyle", base=30)
-    assert visible_names(MATCH) - visible_names(freestyle) == {"start", "push", "extension"}
-    assert {"p1", "p2", "new_rack", "ruleset"} <= visible_names(freestyle)
+def test_clock_off_drops_the_countdown_keys_but_keeps_the_match() -> None:
+    # CLOCK off (the freestyle ruleset until #74): no countdown, so Start and
+    # Extension go dark with it — but it is still a match, so the score keys
+    # and New Rack stay exactly where they are. PUSH follows its own setting.
+    untimed = replace(MATCH, settings={**WNT, "clock": "off", "push": "off"})
+    assert visible_names(MATCH) - visible_names(untimed) == {"start", "push", "extension"}
+    assert {"p1", "p2", "new_rack", "setup"} <= visible_names(untimed)
 
 
 def test_the_retired_ground_truth_cell_holds_the_bracket_confirm() -> None:
@@ -156,11 +163,10 @@ def test_the_retired_ground_truth_cell_holds_the_bracket_confirm() -> None:
     assert not at_35[0].visible(MATCH)
 
 
-def test_push_is_absent_under_the_eight_ball_rulebooks() -> None:
-    # Push outs are a 9-ball rule; removal follows the ruleset axis too.
-    for name, ruleset in RULESETS.items():
-        state = replace(MATCH, ruleset=ruleset.name)
-        assert ("push" in visible_names(state)) is (name == "wnt_9ball"), name
+def test_push_shows_only_with_its_setting_on() -> None:
+    for value in OPTIONS["push"]:
+        state = replace(MATCH, settings={**WNT, "push": value})
+        assert ("push" in visible_names(state)) is (value == "on"), value
 
 
 def test_an_unknown_mode_hides_nothing() -> None:
@@ -198,7 +204,7 @@ def test_the_clock_group_is_exactly_the_keys_that_leave_with_the_clock() -> None
     clock_keys = {k.name for k in LAYOUT if k.group is Group.CLOCK}
     # These leave `no_clock` for a different reason — they are rack-scoped, not
     # clock-scoped. Confirm joins them: a drill has no match to report.
-    non_clock = {"ruleset", "new_rack", "p1", "p2", "confirm"}
+    non_clock = {"setup", "new_rack", "p1", "p2", "confirm"}
     quiet = visible_names(replace(TOURNEY, mode="no_clock"))
     assert clock_keys == ONLINE - quiet - non_clock
     for key in LAYOUT:
@@ -210,10 +216,10 @@ def test_the_clock_group_is_exactly_the_keys_that_leave_with_the_clock() -> None
 
 
 def test_cycle_faces_put_current_over_next() -> None:
-    for key in (BY_NAME["mode"], BY_NAME["ruleset"]):
+    for key in (BY_NAME["mode"],):
         action = key.action
         assert isinstance(action, Cycle)
-        active = MATCH.mode if action.kind == "mode" else MATCH.ruleset
+        active = MATCH.mode
         face = key.face(MATCH)
         assert face.text == cycle_label(action.kind, active)
         assert face.sub == cycle_label(action.kind, cycle_next(action.kind, active))
@@ -229,17 +235,14 @@ def test_mode_cycle_runs_match_to_run_out_to_no_clock_and_wraps() -> None:
 
 def test_cycle_next_falls_back_to_the_first_value() -> None:
     assert cycle_next("mode", "garbage") == next(iter(MODES))
-    assert cycle_next("ruleset", None) == next(iter(RULESETS))
 
 
-def test_every_mode_and_ruleset_has_a_deliberate_face() -> None:
+def test_every_mode_has_a_deliberate_face() -> None:
     # Guards against adding one and forgetting the deck. The fallback path
     # (truncate + upper) still renders rather than hiding a key, but a raw
-    # `ULTIMATE_POO` on the tile is not a face anyone chose.
+    # name on the tile is not a face anyone chose.
     for name in MODES:
         assert name in MODE_FACES, name
-    for name in RULESETS:
-        assert cycle_label("ruleset", name) != name[:12].upper(), name
 
 
 def test_an_unknown_cycle_value_still_renders_something() -> None:
@@ -254,7 +257,6 @@ def test_an_unknown_cycle_value_still_renders_something() -> None:
 # other second line untrustworthy.
 SUB_LINE_KEYS = {
     "mode": "value",
-    "ruleset": "value",
     "session": "gesture",
     "confirm": "gesture",  # only once armed — see below
     "scene": "destination",
@@ -370,15 +372,17 @@ def test_every_key_actually_renders_in_every_mode_and_rulebook() -> None:
 
     The data-level tests all passed while the daemon crash-looped on launch
     (2026-08-02): Pillow's `textlength` raises on a string containing a
-    newline, and `FINAL\\n10` reaches the ruleset cycle key's `sub` as the next
+    newline, and `FINAL\\n10` reached the ruleset cycle key's `sub` as the next
     value. Nothing rendered a multi-line sub-line, so nothing caught it.
     """
     for mode in MODES:
-        for ruleset in RULESETS:
-            state = replace(MATCH, mode=mode, ruleset=ruleset)
-            for key in LAYOUT:
-                image = faces.render(key.face(state))
-                assert image.size == (faces.SIZE, faces.SIZE), (key.name, mode, ruleset)
+        for name, options in OPTIONS.items():
+            for value in options:
+                for menu in (False, True):
+                    state = replace(MATCH, mode=mode, settings={**WNT, name: value}, menu=menu)
+                    for key in page(state):
+                        image = faces.render(key.face(state))
+                        assert image.size == (faces.SIZE, faces.SIZE), (key.name, value)
 
 
 def test_render_survives_a_newline_in_every_field() -> None:
@@ -427,7 +431,7 @@ def test_build_state_reads_one_payload_into_every_face() -> None:
     state = build_state(
         {
             "mode": "run_out",
-            "ruleset": "wnt_9ball",
+            "settings": WNT,
             "base": 60,
             "extensions_used": 1,
             "extensions_allowed": 2,
@@ -436,7 +440,7 @@ def test_build_state_reads_one_payload_into_every_face() -> None:
         SessionState.ON,
     )
     assert state.up
-    assert (state.mode, state.ruleset, state.base) == ("run_out", "wnt_9ball", 60)
+    assert (state.mode, state.settings, state.base) == ("run_out", WNT, 60)
     assert (state.extensions_used, state.extensions_allowed) == (1, 2)
     assert (state.p1, state.p2) == (3, 2)
     assert (state.session_face, state.session_sub) == ("ON", "HOLD 1s")
@@ -647,3 +651,67 @@ def test_recal_face_comes_from_the_recalibration_and_wears_the_system_stripe() -
     # Mid-start the camera is spoken for: the key goes dark.
     assert not recal.visible(build_state(None, SessionState.STARTING))
     assert recal.visible(build_state(None, SessionState.NO_CAMERA))
+
+
+# --- the SETUP menu (#74): the clock's settings, one key each ---
+
+MENU_BY_NAME = {key.name: key for key in MENU}
+OPEN = replace(MATCH, menu=True)
+
+
+def test_setup_opens_a_page_and_the_same_cell_closes_it() -> None:
+    setup = BY_NAME["setup"]
+    assert isinstance(setup.action, MenuToggle)
+    assert (setup.row, setup.col) == (3, 1)  # the ruleset key's old cell
+    assert MENU_BY_NAME["setup"] is setup
+    assert setup.face(MATCH).text == "SETUP"
+    assert setup.face(OPEN).text == "DONE"  # not BACK: BACK means the TV
+    assert page(MATCH) is LAYOUT and page(OPEN) is MENU
+
+
+def test_the_menu_keeps_session_and_ext_where_they_are() -> None:
+    # EXT is the key a player under the clock hunts for; an open menu must
+    # never cost it, and the night's start/stop key never moves.
+    for name in ("session", "extension"):
+        assert MENU_BY_NAME[name] is BY_NAME[name], name
+    assert "extension" in {k.name for k in MENU if k.visible(OPEN)}
+
+
+def test_every_setting_has_one_menu_key() -> None:
+    settings = [k.action.setting for k in MENU if isinstance(k.action, SettingCycle)]
+    assert sorted(settings) == sorted(OPTIONS)
+    positions = [(k.row, k.col) for k in MENU]
+    assert len(set(positions)) == len(positions)
+    assert all(1 <= k.row <= ROWS and 1 <= k.col <= COLS for k in MENU)
+
+
+def test_a_setting_key_names_its_setting_over_its_value() -> None:
+    shot = MENU_BY_NAME["setting_shot"]
+    face = shot.face(replace(OPEN, settings={**WNT, "shot": "15"}))
+    assert (face.text, face.big) == ("SHOT", "15")
+    assert MENU_BY_NAME["setting_game"].face(OPEN).big == "8-BALL"
+    assert MENU_BY_NAME["setting_after_break"].face(OPEN).big == "60"
+    assert MENU_BY_NAME["setting_shot"].face(replace(OPEN, settings={})).big == "—"
+
+
+def test_setting_keys_cycle_in_the_settings_own_order() -> None:
+    assert setting_next("game", "8ball") == "9ball"
+    assert setting_next("game", "other") == "8ball"  # wraps
+    assert setting_next("shot", None) == "30"  # unknown: the first
+
+
+def test_dispatching_a_setting_posts_it_and_moves_every_face_it_gates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    posted: list[str] = []
+
+    def fake_post(base: str, path: str, timeout: float = 3.0) -> client.PostResult:
+        posted.append(path)
+        return client.PostResult(True, 200, "{}")
+
+    monkeypatch.setattr(client, "post", fake_post)
+    image, moved = _dispatch(MENU_BY_NAME["setting_push"], "http://x", OPEN)
+    assert posted == ["/api/setting/push/off"]
+    assert moved is not None and moved.settings["push"] == "off"
+    assert "push" not in visible_names(replace(moved, menu=False))
+    assert image.getpixel((0, 0)) == faces.BG_OK

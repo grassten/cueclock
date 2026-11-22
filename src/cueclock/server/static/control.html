@@ -11,7 +11,7 @@
            Two tabs for the page's two jobs: Play is everything touched
            mid-game (clock keys, score bumps) laid out for a thumb — big
            targets, nothing to scroll past; Setup is everything decided before
-           play (players, race, ruleset — or the whole tournament). Setup and
+           play (players, race, clock settings — or the whole tournament). Setup and
            Bracket were separate tabs until 2026-08-13; with a handicapped
            tournament live, the old Setup's single "Race to" had nothing true
            to say ("Race to –") and its name fields could fight the bracket
@@ -314,7 +314,7 @@
                     </div>
                     <div class="num" id="time">–</div>
                 </div>
-                <!-- Two key sets, one visible: under Freestyle there is no
+                <!-- Two key sets, one visible: with the clock off there is no
                      countdown, so every key about one leaves and New Rack
                      keeps the row (racks still happen — they scope the
                      journal). -->
@@ -325,7 +325,7 @@
                         <button class="lg" onclick="post('/api/extension')">Extension</button>
                     </div>
                     <div class="grid2">
-                        <button onclick="post('/api/push')">Push</button>
+                        <button id="push-btn" onclick="post('/api/push')">Push</button>
                         <button onclick="post('/api/pause')">Pause</button>
                     </div>
                 </div>
@@ -542,16 +542,18 @@
                 <p class="hint" id="bracket-error"></p>
             </section>
 
-            <!-- The ruleset rides below both workflows: it is about the table,
-                 not the pairing. Mode (match / run_out / no_clock) left this
+            <!-- The clock settings ride below both workflows: they are about
+                 the table, not the pairing. They replaced the ruleset select
+                 (#74): six independent values, the same six the deck's SETUP
+                 menu cycles, listed off GET /api/settings. Mode (match / run_out / no_clock) left this
                  page on 2026-08-13 — in real use it is always `match` when a
                  phone is out, and the deck's Mode key still cycles it for
                  drills. The Vision kill switch left the same day, never used
                  from a phone; both APIs stay (design.md §2.1). -->
             <section>
-                <h2>Ruleset</h2>
-                <select id="ruleset" onchange="setRuleset(this.value)"></select>
-                <p class="hint" id="ruleset-detail"></p>
+                <h2>Clock</h2>
+                <div class="two" id="settings"></div>
+                <p class="hint" id="settings-detail"></p>
             </section>
             <!-- #54's test graphic: the strip of balls above the wall's bar. -->
             <section>
@@ -615,52 +617,65 @@
         document.getElementById('ball-strip-btn').innerText =
             ballStripShown ? 'Hide ball strip' : 'Show ball strip';
     }
-    async function setRuleset(name) {
-        await fetch('/api/ruleset/' + encodeURIComponent(name), { method: 'POST' });
-        renderRulesetDetail(name);
+    // ---- Clock settings (#74) ----
+    // The options come from the server; only how they read lives here. A
+    // number reads as seconds, and anything this page hasn't met reads raw.
+    const SETTING_LABELS = {
+        game: 'Game', shot: 'Per shot', after_break: 'After the break',
+        extension: 'Extension', push: 'Push out', clock: 'Shot clock',
+    };
+    const VALUE_LABELS = {
+        '8ball': '8-ball', '9ball': '9-ball', '10ball': '10-ball', other: 'Other',
+        same: 'Same as the shot clock', on: 'On', off: 'Off',
+    };
+    const valueLabel = v => VALUE_LABELS[v] || (/^\d+$/.test(v) ? `${v} s` : v);
+
+    async function setSetting(name, value) {
+        await fetch(`/api/setting/${encodeURIComponent(name)}/${encodeURIComponent(value)}`,
+            { method: 'POST' });
     }
 
-    // ---- Ruleset select ----
-    // Friendly labels over the API's canonical names; the caption states the
-    // rulebook's numbers so the pick never needs the docs. Both fall back to
-    // the raw name / nothing for a ruleset this page hasn't met.
-    const RULESET_LABELS = {
-        ultimate_pool_8ball: 'Ultimate Pool 8-Ball',
-        ultimate_pool_8ball_final10: 'Ultimate Pool 8-Ball — Final 10',
-        wnt_9ball: 'WNT 9-Ball',
-        freestyle: 'Freestyle — no shot clock',
-    };
-    let rulesetDetails = {}; // per-ruleset facts off /api/rulesets
-
-    function renderRulesetDetail(name) {
-        const d = rulesetDetails[name];
-        const el = document.getElementById('ruleset-detail');
-        if (!d) { el.innerText = ''; return; }
-        if (!d.timed) {
-            el.innerText = 'No shot clock — play at your own pace. '
-                + 'Scores, racks and replays all still work.';
+    function renderSettings(values) {
+        if (!values) return;
+        for (const [name, value] of Object.entries(values)) {
+            const sel = document.getElementById(`setting-${name}`);
+            if (sel && sel.value !== value) sel.value = value;
+        }
+        const el = document.getElementById('settings-detail');
+        if (values.clock === 'off') {
+            el.innerText = 'No shot clock — play at your own pace. Scores and racks still work.';
             return;
         }
-        const parts = [`${d.base_seconds} s per shot`];
-        if (d.first_shot_seconds !== d.base_seconds) {
-            parts.push(`${d.first_shot_seconds} s after the break or a push out`);
+        const parts = [`${values.shot} s per shot`];
+        if (values.after_break !== 'same' && values.after_break !== values.shot) {
+            parts.push(`${values.after_break} s after the break or a push out`);
         }
-        parts.push(`extensions +${d.extension_seconds} s`);
+        parts.push(`extensions +${values.extension} s`);
         el.innerText = parts.join(' · ');
     }
 
-    async function loadRulesets() {
-        const listing = await fetch('/api/rulesets').then(x => x.json());
-        rulesetDetails = listing.details || {};
-        const sel = document.getElementById('ruleset');
-        sel.innerHTML = '';
-        for (const n of listing.available) {
-            const opt = document.createElement('option');
-            opt.value = n; opt.textContent = RULESET_LABELS[n] || n;
-            if (n === listing.active) opt.selected = true;
-            sel.appendChild(opt);
+    async function loadSettings() {
+        const listing = await fetch('/api/settings').then(x => x.json());
+        const box = document.getElementById('settings');
+        box.replaceChildren();
+        for (const [name, options] of Object.entries(listing.options)) {
+            const field = document.createElement('div');
+            field.className = 'field';
+            const label = document.createElement('label');
+            label.htmlFor = `setting-${name}`;
+            label.textContent = SETTING_LABELS[name] || name;
+            const sel = document.createElement('select');
+            sel.id = `setting-${name}`;
+            for (const value of options) {
+                const opt = document.createElement('option');
+                opt.value = value; opt.textContent = valueLabel(value);
+                sel.appendChild(opt);
+            }
+            sel.onchange = () => setSetting(name, sel.value);
+            field.append(label, sel);
+            box.appendChild(field);
         }
-        renderRulesetDetail(listing.active);
+        renderSettings(listing.values);
     }
 
     // ---- Match ----
@@ -1292,7 +1307,7 @@
     function render(s) {
         renderHealth(s.health);
         renderBallStrip(s.ball_strip);
-        // Freestyle (`timed: false`): there is no countdown, so the number
+        // Clock off (`timed: false`): there is no countdown, so the number
         // and every key about one leave and the pill says why.
         const untimed = s.timed === false;
         document.getElementById('time').hidden = untimed;
@@ -1318,12 +1333,10 @@
         if (typeof s.base === 'number') {
             document.getElementById('start-n').innerText = `Start ${s.base}`;
         }
-        // re-sync the ruleset dropdown if it changed elsewhere (the deck)
-        const sel = document.getElementById('ruleset');
-        if (s.ruleset && sel.value !== s.ruleset) {
-            for (const o of sel.options) if (o.value === s.ruleset) o.selected = true;
-            renderRulesetDetail(s.ruleset);
-        }
+        // Re-sync the settings if they changed elsewhere (the deck), and show
+        // Push only when push outs are being called, as the deck does.
+        renderSettings(s.settings);
+        if (s.settings) document.getElementById('push-btn').hidden = s.settings.push !== 'on';
         if (s.score) renderScore(s.score);
         renderBracketLive(s.bracket);
     }
@@ -1339,7 +1352,7 @@
         ws.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch (e) {} };
         ws.onclose = () => { setConnected(false); setTimeout(connect, 500); };
     }
-    loadRulesets();
+    loadSettings();
     connect();
 </script>
 </body>

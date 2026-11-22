@@ -34,7 +34,7 @@ from typing import Any
 
 from cueclock.bridge import hub_calls
 from cueclock.capture.session_log import SessionLog, git_state
-from cueclock.clock import get_mode, get_ruleset
+from cueclock.clock import Settings, get_mode, legacy_ruleset
 from cueclock.server.bracket import BracketError
 from cueclock.server.hub import BROADCAST_INTERVAL_SECONDS, Hub
 from cueclock.vision.ball_list import BallList
@@ -157,7 +157,12 @@ async def _replay(log: SessionLog, out: Path, tmp: Path, mono_to: float | None) 
         now=clock.mono,
         wall=clock.wall,
     )
-    hub.clock.set_ruleset(get_ruleset(state["ruleset"]))
+    # A header from before checkpoint 145 names a ruleset instead (#74).
+    hub.clock.change_settings(
+        Settings.from_dict(state["settings"])
+        if "settings" in state
+        else legacy_ruleset(str(state["ruleset"]))
+    )
     hub.clock.set_mode(get_mode(state["mode"]))
     hub.vision_enabled = bool(state["vision"])
     vision = VisionPipeline(

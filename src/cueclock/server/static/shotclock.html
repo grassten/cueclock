@@ -87,7 +87,7 @@
             fill: white;
         }
 
-        /* no_clock mode — and the freestyle ruleset, which is the same
+        /* no_clock mode — and CLOCK off (once the freestyle ruleset), the same
            quietness with a different label: a parked countdown rendering a
            static 30 is indistinguishable from the stalled clock a missed
            settle produces — the exact failure Steven is trained to distrust.
@@ -935,7 +935,7 @@
             eyebrowEl.innerText = (state.mode ?? '').replace(/_/g, ' ').toUpperCase();
 
             // The gauge reads time against whatever a fresh countdown would
-            // hand you right now — `base` is already rack- and ruleset-aware,
+            // hand you right now — `base` is already rack- and settings-aware,
             // so a 60 s first shot drains over 60 s, not over 30.
             const base = state.base || 0;
             const left = Math.max(0, Math.min(1, base ? (state.time ?? 0) / base : 0));
@@ -992,8 +992,8 @@
             if (barView) renderBar(state);
             // Sessions before mode existed (and any older server) send no
             // `mode` — treat that as a normal clocked session, not as quiet.
-            // `timed: false` is the freestyle ruleset (2026-08-13): the same
-            // quietness as no_clock, wearing the ruleset's own name.
+            // `timed: false` is CLOCK off (the freestyle ruleset until #74): the
+            // same quietness as no_clock, under the name it had then.
             const noClock = state.mode === 'no_clock' || state.timed === false;
             clockEl.classList.toggle('no-clock', noClock);
             if (noClock) {

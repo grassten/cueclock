@@ -319,6 +319,50 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 145: the clock's settings instead of rulesets;
+  #74):** Steven: *"What if we just had buttons on the deck for those? … Then
+  there's no ambiguity and we don't have to worry about adding new rulesets
+  ever."* Rulesets are gone. The clock runs on six independent settings, and
+  the deck has its first second page to set them. Rationale and decisions:
+  `design.md` §22; the deck: `hardware.md` §C2b.
+  - **Clock:** `clock/settings.py` replaces `rulesets.py`. `Settings` holds
+    `game` (8ball 9ball 10ball other), `shot` (30 15), `after_break` (same
+    60), `extension` (15 30), `push` (off on) and `clock` (on off); the lists
+    are data (`OPTIONS`). A change applies to the next countdown
+    (`ShotClock.change_settings`): a running shot keeps its time and the rack
+    its count, an IDLE clock shows the new number, and CLOCK on/off parks the
+    clock. Grace, post-expiry and the unenforced pool are constants.
+  - **Server:** `POST /api/setting/{name}/{value}` and `GET /api/settings`;
+    `POST /api/ruleset/<name>` and `GET /api/rulesets` 404. The snapshot's
+    `ruleset` is now `settings`. `cmd_setting` per change. Settings are
+    remembered in `config/settings.json` (`run` and `python -m
+    cueclock.server`); unreadable means the defaults and `settings_unreadable`,
+    never a failed start. The session header carries `hub.settings`.
+  - **Old logs still replay:** the four rulesets survive only as
+    `LEGACY_RULESETS`, read by `session replay` for a header that names one,
+    and by `Hub.set_ruleset`, which no URL reaches, for a logged
+    `set_ruleset` input. It keeps that input's rack-zeroing behaviour and its
+    `cmd_ruleset` line.
+  - **Deck:** SETUP (3,1) took the ruleset key's cell and opens the menu:
+    GAME, SHOT, BREAK, EXT TIME, PUSH and CLOCK, each its name over its
+    current value, a press moving it to the next. The same cell reads DONE;
+    SESSION and EXT keep their cells; the menu closes itself 10 s after its
+    last press (`MENU_IDLE_S`, chosen). Keys are looked up on the page that is
+    showing, so an empty menu cell does nothing, and a page change drops any
+    hold in progress. PUSH shows with PUSH on, START and EXT with CLOCK on.
+  - **Control page:** the Ruleset select is six selects off `GET
+    /api/settings` with a caption of the numbers; Push hides with PUSH off.
+  - **Confirmed by Steven (2026-11-22):** a change applies to the next
+    countdown, not a rack reset; SHOT stays 30 / 15; the menu waits 10 s; DONE
+    stays in SETUP's cell. Not asked, left out (YAGNI until #72 needs it on
+    the wall): showing the game outside the menu.
+  - **Verified:** unit tests (lint, mypy --strict); each deck page rendered
+    and checked by eye; the control page rendered in WebKit against a scratch
+    server; and every archived session with inputs (six) replayed under
+    checkpoint 144 and under this code to the same decision records, 726 of
+    them, no differences, three of them through logged `set_ruleset` inputs.
+    No detection code touched, so no corpus battery. Closes #74.
+
 - **2026-11-22 (checkpoint 144: instant replay removed; #75):** Steven:
   *"I don't really use it in its current form and we're saving the full
   sessions so we don't need to save replays in this way."* It had saved five

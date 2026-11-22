@@ -237,7 +237,7 @@ REGRESSED because they share a window with a fixed one (the dossier's
 ### 7. Sort before writing
 
 - **Changes:** evidence + rule + measurement + "done when".
-- **Questions for Steven:** ruleset, intent, what looked wrong on the wall.
+- **Questions for Steven:** clock settings, intent, what looked wrong on the wall.
 - **Observations:** facts that justify nothing yet.
 - Drop anything a standing decision rules out, and anything not reproducible
   from the session log (it goes to observations or nowhere).
@@ -280,7 +280,7 @@ With `--dry-run`, stop after writing the file and print its path.
 
 ## The issue
 
-1. **Header:** stamp, local date and times, shots and racks, ruleset, code
+1. **Header:** stamp, local date and times, shots and racks, clock settings (or the ruleset an old header names), code
    sha (clean or dirty) and which checkpoint that is, judged/right/wrong
    counts, unjudged count, and which open test issue it serves.
 2. **Summary table:** # · change · verdicts it answers · size (e.g. "hub

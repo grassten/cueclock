@@ -320,7 +320,7 @@ Everything below follows from these; they are also the module docstring of
 `deck/layout.py`.
 
 1. **A key that can't be pressed goes dark, it doesn't dim.** Visibility is
-   declared per key against the session mode and the ruleset, so what is lit is
+   declared per key against the session mode and the clock's settings, so what is lit is
    always exactly what is pressable. **Nothing reflows** when a key leaves — it
    leaves a hole and every survivor keeps its cell, so position stays learnable
    even though the set changes. The deck goes 9 keys in Match → 6 in Run out →
@@ -385,8 +385,9 @@ flash stops reading.
 
 ### C2. Button map — current state
 
-Page 1 (only page). 5 columns × 3 rows; unlisted cells stay dark, as do listed
-keys outside the modes and rulesets named in **Present in**.
+Two pages since checkpoint 145 (#74): the main page below, and the **SETUP
+menu** (§C2b) that its SETUP key opens. 5 columns × 3 rows; unlisted cells stay
+dark, as do listed keys outside the modes and settings named in **Present in**.
 
 ```
         col 1        col 2        col 3        col 4        col 5
@@ -396,7 +397,7 @@ row 1   SESSION      MODE         START 30     PUSH         EXT ••
 row 2   (·)          (·)          BRACKET*     (·)          RECAL†
         ▁▁grey▁▁                  ▁▁grey▁▁                  ▁▁grey▁▁
 
-row 3   RULESET      NEW RACK     P1  3        P2  2        MATCH 4*
+row 3   SETUP        NEW RACK     P1  3        P2  2        MATCH 4*
         ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁blue▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
 ```
 
@@ -409,12 +410,12 @@ exactly when every other key but Session is dark, and the two never meet.
 |---|---|---|---|---|
 | 1,1 | **Session** | Tap while idle: spawn `run` + a `caffeinate -d` assertion, launch OBS as soon as the server answers, rebind its Syphon source. **Hold 1 s** while `ON`: `POST /api/match/clear` (end of day, 2026-08-13 — score back to PLAYER 1 / PLAYER 2, a loaded bracket archived-and-cleared, so tomorrow never wears yesterday's match), then SIGINT `run`, stop OBS's outputs, quit OBS, release the assertion. **Stops itself after 10 min with no shot** (same sequence, no warning; §C4). Stays lit with the server down — it is what starts the server | `START` / `STARTING…` / `ON`+`HOLD 1s` / `STOPPING…` / `DEV`; `HOLD…` while held. **A start that fails stays on the key, red and named** — `NO CAMERA`+`CHECK USB` (nothing on the USB bus) or `START FAILED`+`SEE LOG`, both cleared by pressing again, which retries. Refused (flashes `RECAL…`) while a recalibration has the camera. **A press counts only for the face it was made on** (checkpoint 135): the stop takes about 5 s on the deck's own loop, the key says `STOPPING…` from the moment the hold lands, and presses made while it works are dropped instead of being read later against `START` (on 2026-11-18 they started a second session). **Dot** = server answering: green, or **amber when the server's health line warns** (#52): the reference drift at launch crossed the warn level (> 8), or detection is below 78 Hz, the cadence every event constant was tuned at. The numbers are on the control page (bottom of the Play tab) | **always**, incl. server down |
 | 1,2 | **Mode** | Cycle session mode via `POST /api/mode/{next}` — match → run out → no clock → match | current over next: `MATCH`/`RUN OUT` | always |
-| 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; timed rulesets |
-| 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
-| 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left** — but only while the pool is enforced (`rulesets.ENFORCE_EXTENSION_LIMIT`, **off since 2026-08-13**: the verbal extension can mishear table-side talk, and against an unlimited pool a false grant costs nothing; the snapshot reports the pool as 0, so the face is a bare `EXT` and every press over a live countdown is granted). Flip the flag back on and the pips return | `EXT` (+ pips while enforced), flashes `OK` / `NO EXT` | match, run out; timed rulesets |
+| 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — the AFTER BREAK time inside the first-shot window (60 when set), the SHOT time otherwise (30 or 15). Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; CLOCK on |
+| 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the AFTER BREAK time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** PUSH on |
+| 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left** — but only while the pool is enforced (`settings.ENFORCE_EXTENSION_LIMIT`, **off since 2026-08-13**: the verbal extension can mishear table-side talk, and against an unlimited pool a false grant costs nothing; the snapshot reports the pool as 0, so the face is a bare `EXT` and every press over a live countdown is granted). Flip the flag back on and the pips return | `EXT` (+ pips while enforced), flashes `OK` / `NO EXT` | match, run out; CLOCK on |
 | 2,3 | **Scene** | Swap the TV between the play scene and the bracket (#43). The deck remembers the scene it left rather than naming one, so the play scene can be renamed in OBS without touching code | `BRACKET`+`TO TV` ⇄ `BACK`+`TO PLAY` | **bracket loaded** |
 | 2,5 | **RECAL** | **Hold 2 s** (longer than Session's 1 s, so neither is mistaken for the other): run `cueclock recalibrate`, which records a fresh empty-table reference, refits undistort + calibration, and swaps the three files in only if every check passes (§E2). Takes ~10–20 s, polled, so the deck keeps drawing; a Session press meanwhile is refused. The result **stays on the key** until the next hold or the next session start | `RECAL`+`HOLD 2s` → `HOLD…` → `RECAL…` → `OK 0.8PX`/`DRIFT 2` on green, or the refusal on red (`BALLS`/`ON CLOTH`, `BAD`/`FIT 2.4px`, `CAMERA`/`BUSY`, `NO`/`TABLE`), each over `HOLD 2s` | **session off** only (server down, not mid-start/stop) |
-| 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` — 8-ball → Final 10 → 9-ball → **Freestyle** (2026-08-13: match play with no shot clock; the amber clock keys go dark with the countdown, the wall shows `FREE STYLE` where the digits were, and vision journals without ever moving a clock) | current over next: `8-BALL`/`FINAL 10`/`9-BALL`/`FREE STYLE` | match, run out |
+| 3,1 | **Setup** | Open the SETUP menu (§C2b); on the menu the same cell is **DONE** and closes it. Replaced the Ruleset key, which cycled 8-ball → Final 10 → 9-ball → Freestyle, in checkpoint 145 (#74) | `SETUP` ⇄ `DONE` | match, run out; on both pages |
 | 3,2 | **New Rack** | `POST /api/rack` — you're not shooting, you're building the next rack: clock parks, extensions refill, shot count zeroes. One key for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `NEW RACK`, flashes `RACK` / `ERROR` | match, run out |
 | 3,3 | **P1** | **Tap** `POST /api/score/p1/increment`, **hold 0.6 s** decrement. Face shows the live score | `P1` over the score, flashes `+1` / `-1` / `ERROR` | match |
 | 3,4 | **P2** | as P1 | `P2` over the score | match |
@@ -487,14 +488,13 @@ Accuracy evidence now comes from the session journals (`cueclock report`,
 
 ### C2a. Session modes
 
-A **mode** is orthogonal to a ruleset: a ruleset is a *rulebook* (every entry in
-`clock/rulesets.py` cites published rules), a mode is what you're doing at the
-table. Both are cycle keys, both blue-adjacent on the deck, and `clock/modes.py`
-is the table.
+A **mode** is orthogonal to the clock's settings: the settings say how long each
+countdown is (`clock/settings.py`, sourced from published rules), a mode is what
+you're doing at the table. `clock/modes.py` is the table.
 
 | Mode | What it is | Opening shot | Clock |
 |---|---|---|---|
-| **match** | A rack: break, rack boundaries, the ruleset's first-shot allowance | must reach 3000 mm/s (the IDLE break gate) | live, rack-aware |
+| **match** | A rack: break, rack boundaries, the AFTER BREAK allowance | must reach 3000 mm/s (the IDLE break gate) | live, rack-aware |
 | **run out** | Fifteen balls thrown up, no rack, run them | any speed | live, base countdown on every shot |
 | **no clock** | Actual drills — repeat a shot as long as you like | — | off; vision still journals |
 
@@ -515,11 +515,53 @@ parked clock rendering a static `30` is indistinguishable from the stalled clock
 a missed settle produces, which is the exact failure Steven is trained to
 distrust.
 
+### C2b. The SETUP menu (checkpoint 145, #74)
+
+The clock's six settings (`clock/settings.py`), one key each, on the deck's
+only second page. SETUP (3,1) opens it, the same cell reads **DONE** and
+closes it, and it closes itself `daemon.MENU_IDLE_S` (10 s, a chosen value)
+after the last press in it, so it is never left open over a game. SESSION and
+EXT keep their cells and their function; every other main-page key is gone
+while it is open, and an empty menu cell does nothing (keys are looked up on
+the page that is showing). Opening or closing it drops any hold in progress.
+
+```
+        col 1        col 2        col 3        col 4        col 5
+row 1   SESSION      GAME         SHOT         BREAK        EXT ••
+row 2   (·)          EXT TIME     PUSH         CLOCK        (·)
+row 3   DONE         (·)          (·)          (·)          (·)
+```
+
+Each setting key shows its name over its current value, the shape `START 30`
+and the score keys have: on a page of six such keys the value alone would not
+say which setting it is. A press moves it to the next value and applies it at
+once (`POST /api/setting/{name}/{value}`); it flashes the new value.
+
+| Key | Values (in cycle order) | What it decides |
+|---|---|---|
+| **GAME** | 8-BALL · 9-BALL · 10-BALL · OTHER | which ball ends the rack (read by #72) |
+| **SHOT** | 30 · 15 | the countdown for each shot (15 = Ultimate Pool's last ten minutes) |
+| **BREAK** | SAME · 60 | the countdown after the break or a push out (60 = WNT §5) |
+| **EXT TIME** | 15 · 30 | seconds an extension adds |
+| **PUSH** | OFF · ON | whether the main page shows the PUSH key |
+| **CLOCK** | ON · OFF | OFF = match play with no shot clock (was `freestyle`): START and EXT go dark, the wall shows `FREE STYLE` |
+
+A change takes effect on the next countdown: a running shot keeps its time and
+the rack keeps its count, so SHOT → 15 mid-match does not hand anyone the 60 s
+window again. Turning CLOCK on or off parks the clock. The settings are
+remembered in `config/settings.json`, so a session starts on the last one's; an
+unreadable file means the defaults (8-BALL, 30, SAME, 15, OFF, ON) and a
+`settings_unreadable` journal line, never a failed start. The control page's
+Setup tab has the same six as selects.
+
+What the old rulesets were, as settings: 8-ball = the defaults; Final 10 =
+SHOT 15; 9-ball (WNT) = BREAK 60, EXT TIME 30, PUSH ON; Freestyle = CLOCK OFF.
+
 ### C3. Architecture
 
 ```
 Stream Deck MK.2 ── USB HID ── cueclock deck (launchd agent, always on)
-                                   ├─ HTTP → localhost:8000/api/*   (clock, score, ruleset)
+                                   ├─ HTTP → localhost:8000/api/*   (clock, score, settings)
                                    ├─ obs-websocket → OBS           (projector, recording, scenes, quit)
                                    ├─ osascript                     (Music.app, volume — backlog)
                                    └─ subprocess                    (owns `cueclock run` — phase 2)
@@ -552,7 +594,7 @@ Wake-on-LAN magic packet starts the TV climbing out of standby (§E1). Both are
 fire-and-forget: the assertion expires by itself and the TV confirms on a later
 poll, so neither can hold up the camera. Then spawn the canonical `run` command
 (README, built by `session.run_command()`) and a `caffeinate -d` assertion →
-face reads `STARTING…` → on the first poll where `/api/rulesets` answers, launch OBS
+face reads `STARTING…` → on the first poll where `/api/state` answers, launch OBS
 (`open -a OBS --args --disable-shutdown-check`) and go
 `ON` → then set the rig up for this session, retried on the poll (20 attempts,
 ~40 s) because nothing is ready when first asked — the TV is still waking and

@@ -75,6 +75,14 @@ def _clock(seconds: float) -> str:
     return f"{m // 60}:{m % 60:02d}:{s:02d}" if m >= 60 else f"{m}:{s:02d}"
 
 
+def _settings_text(hub: dict[object, object]) -> str:
+    """What the clock ran on: the settings, or the ruleset a pre-#74 log names."""
+    settings = hub.get("settings")
+    if isinstance(settings, dict):
+        return "settings " + " ".join(f"{k}={v}" for k, v in settings.items())
+    return f"ruleset {hub.get('ruleset', '?')}"
+
+
 # ---------------------------------------------------------------- measurements
 
 
@@ -320,7 +328,7 @@ def build(session: sess.Session, journal: Path) -> str:
         f"{first.astimezone():%a %d %b %Y}, {_local(first)}-{_local(last)} local "
         f"({_clock((last - first).total_seconds())}); {built.total} shots, "
         f"{racks} New Rack presses; "
-        f"ruleset {hub.get('ruleset', '?')}, mode {hub.get('mode', '?')}"
+        f"{_settings_text(hub)}, mode {hub.get('mode', '?')}"
     )
     page.add(f"dir {session.path}  journal {journal}")
 

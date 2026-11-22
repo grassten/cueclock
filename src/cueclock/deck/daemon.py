@@ -7,7 +7,7 @@ launchd — `scripts/install_deck_agent.sh`; `cueclock deck` is the same loop
 in a terminal.
 
 The loop polls `GET /api/state` once every `POLL_S` and rebuilds a `DeckState`
-from it — one request carrying clock state, mode, ruleset, the countdown a
+from it — one request carrying clock state, mode, settings, the countdown a
 Start press would hand you, the extension pool and the score, so every face is
 drawn from the same snapshot and none of them can drift apart.
 """
@@ -25,19 +25,22 @@ from PIL import Image
 from cueclock.deck import bracket, client, faces
 from cueclock.deck.layout import (
     CONFIRM_PENDING_FACE,
-    LAYOUT,
     ApiPost,
     BracketConfirm,
     Cycle,
     DeckState,
     Key,
+    MenuToggle,
     Recalibrate,
     SceneToggle,
     ScoreAdjust,
     SessionToggle,
+    SettingCycle,
     cycle_listing,
     cycle_next,
     cycle_path,
+    page,
+    setting_next,
 )
 from cueclock.deck.recal import Recalibrator
 from cueclock.deck.session import SessionManager, SessionState, shot_age_of
@@ -47,8 +50,27 @@ FLASH_S = 1.2  # how long a press outcome stays on the key
 RETRY_S = 3.0  # device reconnect cadence
 CONFIRM_S = 5.0  # a bracket confirm writes a result, loads a match and racks
 HOLD_FACE = "HOLD…"  # shown while the Session key is held toward a stop
+# The SETUP menu closes by itself this long after the last press in it, so it
+# can never be left open over a game. Chosen, not measured: long enough to read
+# a key and press the next, short enough that a menu nobody closed is gone by
+# the time anyone breaks. Change it at the table if it feels wrong.
+MENU_IDLE_S = 10.0
 
-_BY_INDEX: dict[int, Key] = {key.index: key for key in LAYOUT}
+
+def _key_at(index: int, state: DeckState) -> Key | None:
+    """The key in cell ``index`` on the page the deck is showing.
+
+    Looked up per page, never by index alone: the menu's empty cells must do
+    nothing, not whatever the main page has there.
+    """
+    return next((key for key in page(state) if key.index == index), None)
+
+
+def _settings_of(payload: object) -> dict[str, str]:
+    """The `settings` object of a state payload, as plain strings."""
+    if not isinstance(payload, dict):
+        return {}
+    return {k: v for k, v in payload.items() if isinstance(k, str) and isinstance(v, str)}
 
 
 def _score_of(payload: object, slot: str) -> int:
@@ -105,6 +127,7 @@ def build_state(
     session: SessionState,
     *,
     on_bracket: bool = False,
+    menu: bool = False,
     recal_face: faces.Face | None = None,
 ) -> DeckState:
     """Turn one `GET /api/state` body into everything the faces need.
@@ -112,9 +135,10 @@ def build_state(
     Server down is a `DeckState` too, not an exception: every key but Session
     goes dark, and the Session key still says how to bring the server back.
 
-    ``on_bracket`` is the face input the server knows nothing about — it lives
-    entirely between the deck and OBS — so the loop passes its own answer in
-    rather than inventing a second source of state.
+    ``on_bracket`` and ``menu`` are the face inputs the server knows nothing
+    about — the scene lives between the deck and OBS, the page on the deck
+    alone — so the loop passes its own answers in rather than inventing a
+    second source of state. The menu never survives the server going down.
     """
     if data is None:
         return DeckState(
@@ -138,13 +162,14 @@ def build_state(
     return DeckState(
         up=True,
         mode=_str("mode"),
-        ruleset=_str("ruleset"),
+        settings=_settings_of(data.get("settings")),
         base=_int("base", 30),
         extensions_used=_int("extensions_used", 0),
         extensions_allowed=_int("extensions_allowed", 0),
         p1=_score_of(data.get("score"), "p1"),
         p2=_score_of(data.get("score"), "p2"),
         on_bracket=on_bracket,
+        menu=menu,
         session_face=session.face,
         session_sub=session.sub,
         session_bg=faces.BG_ERR if session.failed else faces.BG,
@@ -176,16 +201,24 @@ def _dispatch(key: Key, base: str, state: DeckState) -> tuple[Image.Image, DeckS
         listing = client.get_json(base, cycle_listing(action.kind))
         available = listing.get("available") if listing else None
         names = [n for n in available if isinstance(n, str)] if isinstance(available, list) else []
-        active = state.mode if action.kind == "mode" else state.ruleset
-        target = cycle_next(action.kind, active, names)
+        target = cycle_next(action.kind, state.mode, names)
         result = client.post(base, cycle_path(action.kind, target))
         print(f"{key.name}: -> {target} ({result.status})", flush=True)
         if not result.ok:
             return faces.flash_err("ERROR"), None
-        moved = (
-            replace(state, mode=target) if action.kind == "mode" else replace(state, ruleset=target)
-        )
+        moved = replace(state, mode=target)
         return faces.flash_ok(key.face(moved).text), moved
+    if isinstance(action, SettingCycle):
+        target = setting_next(action.setting, state.settings.get(action.setting))
+        result = client.post(base, f"/api/setting/{action.setting}/{target}")
+        print(f"{key.name}: -> {target} ({result.status})", flush=True)
+        if not result.ok:
+            return faces.flash_err("ERROR"), None
+        # The new value shows on the key and on every key it gates (PUSH,
+        # START, EXT) without waiting for the poll.
+        moved = replace(state, settings={**state.settings, action.setting: target})
+        moved_face = key.face(moved)
+        return faces.flash_ok(moved_face.big or moved_face.text), moved
     raise TypeError(f"{key.name}: action has no dispatch path")  # pragma: no cover
 
 
@@ -237,7 +270,7 @@ def _draw_all(
     for i in range(deck.key_count()):
         if i in skip:
             continue
-        key = _BY_INDEX.get(i)
+        key = _key_at(i, state)
         visible = key is not None and key.visible(state)
         _set_key(deck, i, key.face(state) if visible and key else faces.Face())
 
@@ -255,7 +288,7 @@ def _set_key(deck: Any, index: int, face: faces.Face | Image.Image) -> None:
 
 def _visible_key(index: int, state: DeckState) -> Key | None:
     """The key at `index` if it is pressable right now, else None."""
-    key = _BY_INDEX.get(index)
+    key = _key_at(index, state)
     if key is None or not key.visible(state):
         return None
     return key
@@ -283,11 +316,14 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
     # as the confirm key, so the wall does the same thing.
     decided: int | None = None
     shown_decided: int | None = None
+    menu_until: float | None = None  # the SETUP menu is open until then
 
     def poll() -> DeckState:
         """One request serves both the session machine and every face."""
-        nonlocal clock_state, decided
+        nonlocal clock_state, decided, menu_until
         data = client.get_json(base, "/api/state")
+        if data is None:
+            menu_until = None  # nothing on the menu works without the server
         raw_clock = data.get("state") if isinstance(data, dict) else None
         clock_state = raw_clock if isinstance(raw_clock, str) else None
         decided = _decided_of(data)
@@ -298,6 +334,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             data,
             session.tick(data is not None),
             on_bracket=showing is not None,
+            menu=menu_until is not None,
             recal_face=recal.face(),
         )
 
@@ -334,6 +371,12 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                     # showing somebody *chose* keeps having no deadline.
                     showing = replace(showing, until=now + bracket.DWELL_S)
             shown_decided = decided
+        if menu_until is not None and now >= menu_until:
+            # Nobody closed it: it closes itself before it can sit over a game.
+            menu_until = None
+            holds.clear()
+            state = replace(state, menu=False)
+            _draw_all(deck, state, skip=frozenset(flashes))
         if recal.poll():
             # A recalibration finished: its result goes on the key now, not
             # on the next 2 s poll.
@@ -368,11 +411,9 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 _draw_all(deck, state, skip=frozenset(flashes))
                 continue
             # A score key held past its threshold: take the point back.
-            action = _BY_INDEX[index].action
-            if isinstance(action, ScoreAdjust):
-                _set_key(
-                    deck, index, _score_post(action, _BY_INDEX[index].name, base, decrement=True)
-                )
+            held = _key_at(index, state)
+            if held is not None and isinstance(held.action, ScoreAdjust):
+                _set_key(deck, index, _score_post(held.action, held.name, base, decrement=True))
                 flashes[index] = time.monotonic() + FLASH_S
         for index, deadline in list(flashes.items()):
             if now >= deadline:
@@ -390,7 +431,9 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
 
         key = _visible_key(index, state)
         if key is None:
-            continue  # dark cell: this mode has no such key
+            continue  # dark cell: this mode (or page) has no such key
+        if menu_until is not None:
+            menu_until = time.monotonic() + MENU_IDLE_S  # any press keeps it open
 
         if isinstance(key.action, Recalibrate):
             if pressed and not recal.busy:
@@ -455,6 +498,15 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             continue
         if not state.up:
             print(f"{key.name}: ignored — server down", flush=True)
+            continue
+
+        if isinstance(key.action, MenuToggle):
+            # The page changes under every finger: a hold begun on one page
+            # must not mature on the other.
+            holds.clear()
+            menu_until = None if menu_until is not None else time.monotonic() + MENU_IDLE_S
+            state = replace(state, menu=menu_until is not None)
+            _draw_all(deck, state, skip=frozenset(flashes))
             continue
 
         if isinstance(key.action, SceneToggle):

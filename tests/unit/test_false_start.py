@@ -10,7 +10,7 @@ settle's ball list knows better: the rack is standing where it stood.
 
 import asyncio
 
-from cueclock.clock import get_ruleset
+from cueclock.clock import Settings
 from cueclock.clock.state import ShotClock, State
 from cueclock.server.hub import FROZEN_WATCHDOG_SECONDS, SETTLE_LIST_WAIT_S, Hub
 from cueclock.server.scratch import RACK_MIN_BALLS, RestLists, holds_rack, rack_stands
@@ -35,7 +35,7 @@ def _table(
 
 
 def test_the_break_can_be_taken_back_and_nothing_else() -> None:
-    clock = ShotClock(get_ruleset("wnt_9ball"), now=0.0)
+    clock = ShotClock(Settings(after_break="60"), now=0.0)
     clock.new_rack(0.0)
     assert not clock.break_reverted(1.0)  # nothing fired
     clock.shot_taken()

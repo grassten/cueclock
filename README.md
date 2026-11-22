@@ -29,8 +29,8 @@ recorded clips that replay deterministically through the vision core.
 | Basler a2A1920-160ucBAS + Kowa 3.5 mm, ceiling mount | live, settings locked in UserSet1 |
 | Vision pipeline (`cueclock run`): detect → track → events → clock | live |
 | OBS: Syphon table feed + clock overlay → wall TV (Hisense 55" CanvasTV) | live |
-| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Session / Mode / Start N / Push / Extension / Ruleset / New Rack / score. Keys that the current mode can't use go dark rather than dim (`hardware.md` §C) |
-| Session modes: match · run out · no clock — orthogonal to the ruleset | live |
+| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Session / Mode / Start N / Push / Extension / Setup / New Rack / score; SETUP opens a menu of the clock's six settings (game, shot, after the break, extension, push, clock). Keys that the current mode can't use go dark rather than dim (`hardware.md` §C) |
+| Session modes: match · run out · no clock — orthogonal to the clock's settings | live |
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
 | Ball list: which balls are on a still table, by number, drawn as a test strip on the bar (`docs/design.md` §13) | live, being judged |
@@ -98,7 +98,7 @@ uv run python -m cueclock.cli session maintain  # verify, cut, archive to the T7
   broadcast-style clock scene), and `http://localhost:8000/bracket` (the
   double-elimination bracket, its own scene, built by
   `scripts/setup_obs_bracket.py`). Phone control page: `/control` — two tabs:
-  Play (clock keys, scores) and Setup (players, race, ruleset — or the whole
+  Play (clock keys, scores) and Setup (players, race, clock settings — or the whole
   tournament behind its Single match / Tournament toggle).
 - **Tournament nights** (issue #43): the Setup tab's Tournament side on
   `/control` builds a

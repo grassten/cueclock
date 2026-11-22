@@ -39,15 +39,3 @@ def get_json(base: str, path: str, timeout: float = 1.5) -> dict[str, object] | 
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
-
-
-def active_rulesets(base: str) -> tuple[str, list[str]] | None:
-    """(active, available) from /api/rulesets, or None when the server is down."""
-    data = get_json(base, "/api/rulesets")
-    if data is None:
-        return None
-    active = data.get("active")
-    available = data.get("available")
-    if not isinstance(active, str) or not isinstance(available, list):
-        return None
-    return active, [name for name in available if isinstance(name, str)]

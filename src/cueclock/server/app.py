@@ -13,7 +13,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
-from cueclock.clock import ALIASES, MODES, RULESETS
+from cueclock.clock import MODES, OPTIONS
 from cueclock.server import fargo, lan
 from cueclock.server.bracket import BracketError
 from cueclock.server.hub import Hub
@@ -42,12 +42,14 @@ def create_app(
     journal_path: Path | None = None,
     bracket_path: Path | None = None,
     archive_dir: Path | None = None,
+    settings_path: Path | None = None,
 ) -> FastAPI:
     hub = Hub(  # every path None = in-memory only
         score_path=score_path,
         journal_path=journal_path,
         bracket_path=bracket_path,
         archive_dir=archive_dir,
+        settings_path=settings_path,
     )
 
     @asynccontextmanager
@@ -153,10 +155,19 @@ def create_app(
     async def api_extension() -> dict[str, bool]:
         return {"ok": True, "accepted": await hub.extension()}
 
-    @app.post("/api/ruleset/{name}")
-    async def api_set_ruleset(name: str) -> JSONResponse:
-        if not await hub.set_ruleset(name):
-            return JSONResponse({"ok": False, "error": f"unknown ruleset: {name}"}, status_code=404)
+    @app.post("/api/setting/{name}/{value}")
+    async def api_set_setting(name: str, value: str) -> JSONResponse:
+        """Change one clock setting (#74): `GET /api/settings` lists them.
+
+        It replaced `POST /api/ruleset/{name}` in checkpoint 145; that URL
+        404s, per the `/score` rule, so a client left on the old build fails
+        visibly.
+        """
+        if not await hub.set_setting(name, value):
+            return JSONResponse(
+                {"ok": False, "error": f"unknown setting or value: {name}={value}"},
+                status_code=404,
+            )
         return JSONResponse({"ok": True})
 
     @app.post("/api/mode/{name}")
@@ -166,24 +177,13 @@ def create_app(
             return JSONResponse({"ok": False, "error": f"unknown mode: {name}"}, status_code=404)
         return JSONResponse({"ok": True})
 
-    @app.get("/api/rulesets")
-    async def api_rulesets() -> dict[str, object]:
-        """The listing plus per-ruleset facts, so the control page can caption
-        the pick (shot time, first-shot allowance, extension length, untimed)
-        without hardcoding the rulebook."""
+    @app.get("/api/settings")
+    async def api_settings() -> dict[str, object]:
+        """The current value of each setting and the values it offers, so the
+        control page lists them without hardcoding them."""
         return {
-            "active": hub.clock.ruleset.name,
-            "available": list(RULESETS),
-            "aliases": ALIASES,
-            "details": {
-                name: {
-                    "base_seconds": r.base_seconds,
-                    "first_shot_seconds": r.first_shot_seconds,
-                    "extension_seconds": r.extension_seconds,
-                    "timed": r.timed,
-                }
-                for name, r in RULESETS.items()
-            },
+            "values": hub.clock.settings.as_dict(),
+            "options": {name: list(options) for name, options in OPTIONS.items()},
         }
 
     @app.get("/api/modes")

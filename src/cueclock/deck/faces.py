@@ -97,7 +97,7 @@ def _fit(
 
     Splits on '\\n' here rather than at the call sites: Pillow's `textlength`
     raises on a string containing a newline, and *every* face field can carry
-    one — `FINAL\\n10` reaches a cycle key's `sub` as the next ruleset. Doing it
+    one — `FINAL\\n10` once reached a cycle key's `sub` as the next ruleset. Doing it
     once is what keeps that from being a per-field trap.
 
     Falls through to the smallest size rather than failing: a clipped face is

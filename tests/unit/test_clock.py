@@ -4,19 +4,25 @@ import pytest
 
 from cueclock.clock import (
     MODES,
-    RULESETS,
-    Ruleset,
+    OPTIONS,
+    Settings,
     ShotClock,
     State,
     get_mode,
-    get_ruleset,
+    legacy_ruleset,
     next_mode,
 )
 from cueclock.clock.modes import MATCH_BREAK_FLOOR_MMS
+from cueclock.clock.settings import GRACE_SECONDS
+
+# WNT 9-ball's clock (Event Rules §5): 30 s a shot, 60 s after the break or a
+# push out, 30 s extensions, push outs called.
+WNT = Settings(after_break="60", extension="30", push="on")
+NO_CLOCK = Settings(clock="off")
 
 
-def make_clock(name: str = "ultimate_pool_8ball") -> ShotClock:
-    return ShotClock(RULESETS[name], now=0.0)
+def make_clock(settings: Settings | None = None) -> ShotClock:
+    return ShotClock(settings if settings is not None else Settings(), now=0.0)
 
 
 def test_initial_state() -> None:
@@ -85,8 +91,8 @@ def test_buzzer_outranks_an_urgency_cue_crossed_in_the_same_tick() -> None:
 
 
 def test_grace_is_the_measured_strike_window() -> None:
-    # 1 s (#68): stroke-to-confirm is ~0.5 s at p99 (rulesets.GRACE_SECONDS).
-    assert {r.grace_seconds for r in RULESETS.values()} == {1.0}
+    # 1 s (#68): stroke-to-confirm is ~0.5 s at p99 (settings.GRACE_SECONDS).
+    assert GRACE_SECONDS == 1.0
 
 
 def test_shot_confirmed_inside_grace_saves_the_countdown() -> None:
@@ -210,7 +216,7 @@ def test_pause_drops_to_idle_and_start_restarts_full() -> None:
     assert clock.remaining == 30
 
 
-def test_reset_and_set_ruleset() -> None:
+def test_reset_keeps_the_rack_scope() -> None:
     clock = make_clock()
     clock.start(now=0.0)
     clock.extension()
@@ -219,45 +225,123 @@ def test_reset_and_set_ruleset() -> None:
     assert clock.state is State.IDLE
     assert clock.remaining == 30
     assert clock.extensions_used == 1  # reset is the foul button — no refill
-    clock.set_ruleset(RULESETS["ultimate_pool_8ball_final10"])
-    assert clock.snapshot().display == 15
-    assert clock.snapshot().ruleset == "ultimate_pool_8ball_final10"
-    assert clock.extensions_used == 0  # ruleset switch is a full fresh state
 
 
-def test_rulesets_validated_values() -> None:
-    assert set(RULESETS) == {
-        "ultimate_pool_8ball",
-        "ultimate_pool_8ball_final10",
-        "wnt_9ball",
-        "freestyle",
+def test_defaults_are_an_8_ball_match_on_ultimate_pools_clock() -> None:
+    settings = Settings()
+    assert settings.as_dict() == {
+        "game": "8ball",
+        "shot": "30",
+        "after_break": "same",
+        "extension": "15",
+        "push": "off",
+        "clock": "on",
     }
-    default = RULESETS["ultimate_pool_8ball"]
-    # extensions_per_frame is the whole-rack pool: one per player, two players.
-    assert default == Ruleset("ultimate_pool_8ball", 30, 30, 15, 2, 1.0, 2.0)
-    assert RULESETS["ultimate_pool_8ball_final10"] == Ruleset(
-        "ultimate_pool_8ball_final10", 15, 15, 15, 2, 1.0, 2.0
+    assert (settings.base_seconds, settings.first_shot_seconds) == (30, 30)
+    assert settings.extension_seconds == 15 and settings.timed
+
+
+def test_after_break_is_same_as_shot_or_its_own_number() -> None:
+    # Final 10 stays one change: SHOT to 15 carries AFTER BREAK with it.
+    assert Settings(shot="15").first_shot_seconds == 15
+    assert Settings(shot="15", after_break="60").first_shot_seconds == 60
+
+
+def test_a_value_a_setting_does_not_offer_is_refused() -> None:
+    with pytest.raises(ValueError):
+        Settings(shot="45")
+    with pytest.raises(ValueError):
+        Settings().with_("shot", "45")
+    with pytest.raises(KeyError):
+        Settings().with_("ruleset", "wnt_9ball")
+    assert Settings().with_("shot", "15").shot == "15"
+
+
+def test_every_option_is_a_valid_setting() -> None:
+    for name, options in OPTIONS.items():
+        for value in options:
+            assert getattr(Settings().with_(name, value), name) == value
+
+
+def test_a_saved_set_with_a_stale_value_falls_back_to_the_default() -> None:
+    # A removed option must not stop a session from starting.
+    read = Settings.from_dict({"shot": "45", "push": "on", "colour": "blue"})
+    assert read == Settings(push="on")
+    assert Settings.from_dict(None) == Settings()
+    assert Settings.from_dict(Settings(game="9ball").as_dict()) == Settings(game="9ball")
+
+
+def test_a_settings_change_waits_for_the_next_countdown() -> None:
+    """SHOT 30 → 15 mid-rack: the running shot keeps its time, the rack keeps
+    its count (no second 60 s window), and the next countdown is 15."""
+    clock = make_clock(WNT)
+    clock.shot_taken()  # the break
+    clock.balls_settled(now=1.0)  # 60 s window
+    clock.shot_taken()
+    clock.balls_settled(now=2.0)  # an ordinary shot: 30
+    clock.extension()
+    clock.tick(now=12.0)
+    clock.change_settings(clock.settings.with_("shot", "15"))
+    assert clock.state is State.RUNNING
+    assert clock.remaining == 30 + 30 - 10  # untouched
+    assert clock.rack_shots == 2 and clock.extensions_used == 1
+    clock.shot_taken()
+    clock.balls_settled(now=13.0)
+    assert clock.remaining == 15
+
+
+def test_an_idle_clock_shows_a_changed_setting_at_once() -> None:
+    clock = make_clock()
+    clock.change_settings(clock.settings.with_("shot", "15"))
+    assert clock.snapshot().display == 15
+    assert clock.snapshot().settings["shot"] == "15"
+
+
+def test_turning_the_clock_off_parks_it() -> None:
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.tick(now=5.0)
+    clock.change_settings(clock.settings.with_("clock", "off"))
+    assert clock.state is State.IDLE
+    assert clock.snapshot().timed is False
+    clock.change_settings(clock.settings.with_("clock", "on"))
+    assert clock.state is State.IDLE and clock.remaining == 30
+
+
+def test_the_old_rulesets_replay_as_they_ran() -> None:
+    """Logs from before checkpoint 145 name rulesets; replay must reproduce them."""
+    assert legacy_ruleset("ultimate_pool_8ball") == Settings()
+    final10 = legacy_ruleset("ultimate_pool_8ball_final10")
+    assert (final10.base_seconds, final10.first_shot_seconds, final10.extension_seconds) == (
+        15,
+        15,
+        15,
     )
-    # WNT Event Rules §5: 30 s shot, 60 s first shot, 30 s extension;
-    # the pool of 2 is one-per-player, self-policed (no turn tracking).
-    assert RULESETS["wnt_9ball"] == Ruleset("wnt_9ball", 30, 60, 30, 2, 1.0, 2.0)
-    # Freestyle (2026-08-13): match play with no shot clock. The clock fields
-    # are inert while `timed` is False.
-    assert RULESETS["freestyle"] == Ruleset("freestyle", 30, 30, 0, 0, 1.0, 2.0, timed=False)
+    assert legacy_ruleset("wnt_9ball") == WNT
+    assert legacy_ruleset("ultimate_9ball") == WNT  # the old app's alias
+    assert legacy_ruleset("matchroom_9ball") == WNT
+    assert legacy_ruleset("freestyle") == NO_CLOCK
+    # No ruleset named a game: applying one keeps the game that is set.
+    assert legacy_ruleset("wnt_9ball", game="10ball").game == "10ball"
+    with pytest.raises(KeyError):
+        legacy_ruleset("nine_ball")
 
 
-def test_ruleset_aliases_resolve() -> None:
-    # The old app's identifier keeps working (Stream Deck compatibility).
-    assert get_ruleset("ultimate_9ball") is RULESETS["wnt_9ball"]
-    assert get_ruleset("matchroom_9ball") is RULESETS["wnt_9ball"]
-    assert get_ruleset("ultimate_pool_8ball") is RULESETS["ultimate_pool_8ball"]
+def test_a_legacy_ruleset_switch_rescopes_the_rack_as_it_did() -> None:
+    clock = make_clock()
+    clock.start(now=0.0)
+    clock.extension()
+    clock.apply_legacy_ruleset(legacy_ruleset("ultimate_pool_8ball_final10"))
+    assert clock.state is State.IDLE
+    assert clock.snapshot().display == 15
+    assert clock.extensions_used == 0  # a ruleset switch was a full fresh state
 
 
 def test_freestyle_never_runs() -> None:
     # No shot clock at all: every operator key that starts a countdown is a
     # no-op, so a stray press on the phone's Play tab cannot start one either.
     # (Vision events are gated in the hub, same as `no_clock` mode.)
-    clock = make_clock("freestyle")
+    clock = make_clock(NO_CLOCK)
     clock.start(now=0.0)
     assert clock.state is State.IDLE
     clock.restart(now=1.0)
@@ -271,7 +355,7 @@ def test_freestyle_never_runs() -> None:
     assert clock.tick(now=100.0).time == 30  # nothing ever drains
 
 
-def test_timed_rulesets_say_so_in_the_snapshot() -> None:
+def test_a_clock_with_a_countdown_says_so_in_the_snapshot() -> None:
     assert make_clock().snapshot().timed is True
 
 
@@ -279,7 +363,7 @@ def test_timed_rulesets_say_so_in_the_snapshot() -> None:
 
 
 def test_wnt_rack_flow_first_shot_gets_60() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     assert clock.state is State.IDLE
     assert clock.snapshot().display == 60  # first-shot window shown pre-break
@@ -293,7 +377,7 @@ def test_wnt_rack_flow_first_shot_gets_60() -> None:
 
 
 def test_shot_taken_in_motion_does_not_double_count() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()
     clock.shot_taken()  # vision re-fires while balls still moving — one shot
@@ -314,7 +398,7 @@ def test_8ball_behavior_unchanged_by_rack_context() -> None:
 
 def test_wnt_extension_pool_of_two_per_rack(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("cueclock.clock.state.ENFORCE_EXTENSION_LIMIT", True)
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.start(now=0.0)
     assert clock.extension()
@@ -326,7 +410,7 @@ def test_wnt_extension_pool_of_two_per_rack(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_restart_runs_immediately_at_current_base() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.start(now=0.0)
     clock.extension()
@@ -346,7 +430,7 @@ def test_restart_after_a_missed_break_counts_the_break() -> None:
     # Live, twice (2026-08-05 19:59, 2026-08-06 01:53): the break was gated in
     # IDLE, Start recovered the clock, and the first shot after it got 60 s a
     # second time because the rack was still one shot short.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.balls_settled(now=1.0)  # the missed break's settle — no-op in IDLE
     assert clock.rack_shots == 0
@@ -359,7 +443,7 @@ def test_restart_after_a_missed_break_counts_the_break() -> None:
 
 
 def test_restart_mid_rack_leaves_the_shot_count_alone() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -370,7 +454,7 @@ def test_restart_mid_rack_leaves_the_shot_count_alone() -> None:
 
 def test_restart_without_a_rack_does_not_invent_a_break() -> None:
     # run_out has no break to count, so the press is a plain fresh countdown.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.set_mode(get_mode("run_out"))
     clock.restart(now=1.0)
     assert clock.rack_shots == 0
@@ -378,7 +462,7 @@ def test_restart_without_a_rack_does_not_invent_a_break() -> None:
 
 
 def test_reset_keeps_rack_shots_and_extensions() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -393,7 +477,7 @@ def test_reset_keeps_rack_shots_and_extensions() -> None:
 
 
 def test_push_out_restarts_at_60_and_rearms_the_window() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -412,7 +496,7 @@ def test_push_out_restarts_at_60_and_rearms_the_window() -> None:
 
 
 def test_push_during_motion_arms_the_following_settle() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -428,7 +512,7 @@ def test_push_during_motion_arms_the_following_settle() -> None:
 def test_settle_in_idle_is_ignored() -> None:
     # Racking after New Rack genuinely moves and settles balls; the countdown
     # must wait for the break (2026-07-31 live failure).
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.balls_settled(now=1.0)  # rack lifted, balls at rest
     assert clock.state is State.IDLE
@@ -443,7 +527,7 @@ def test_settle_without_shot_still_counts_the_shot() -> None:
     # A missed strike (or a sub-impulse touch shot) must not replay the WNT
     # 60 s window: balls moved and settled, so a shot happened (2026-07-31
     # live failure — 60 s again on the shot after the break).
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break, detected
     clock.balls_settled(now=1.0)
@@ -458,7 +542,7 @@ def test_suppressed_settle_leaves_the_countdown_untouched() -> None:
     # Nothing is counted and the running countdown is not reset — the live
     # failure was exactly "the clock reset on pretty much every ball in hand"
     # (2026-08-10 journal: rack_shots 3->4 and 7->8 on placement settles).
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -476,7 +560,7 @@ def test_suppression_refused_after_a_committed_grace_shot() -> None:
     # A GRACE fire commits immediately (it saved the countdown at the buzzer);
     # the settle that follows starts the next countdown regardless of what the
     # placement predicate thinks — committed shots do not un-happen here.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=0.0)
@@ -493,7 +577,7 @@ def test_suppression_refused_after_a_committed_grace_shot() -> None:
 def test_running_fire_defers_and_settle_counts_exactly_once() -> None:
     # #33 Part B: a RUNNING fire freezes the clock but its count is the
     # settle's decision — one shot per episode, fired or compensated.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -509,7 +593,7 @@ def test_deferred_fire_reverts_with_suppression() -> None:
     # The 2026-08-10 20:58:17 phantom: the placement itself fired a newborn
     # ShotTaken at 399 mm/s. The settle's placement verdict reverts the whole
     # episode — no count, and the countdown resumes at the frozen remaining.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=0.0)
@@ -525,7 +609,7 @@ def test_deferred_fire_reverts_with_suppression() -> None:
 
 def test_provisional_freeze_and_revert_restore_time_exactly() -> None:
     # Part B's felt contract: a wrong provisional must never cost time.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=0.0)
@@ -541,7 +625,7 @@ def test_provisional_freeze_and_revert_restore_time_exactly() -> None:
 
 
 def test_motion_started_declines_outside_running() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     assert clock.motion_started(now=1.0) is False  # IDLE is the break's domain
     assert clock.state is State.IDLE
@@ -558,7 +642,7 @@ def test_pause_drops_the_deferred_fire() -> None:
     # Pause pressed over a live motion episode abandons it; the deferred
     # fire must not survive into a later IDLE-fire cycle, where the stale
     # flag would make that break's settle count a second shot.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -574,7 +658,7 @@ def test_pause_drops_the_deferred_fire() -> None:
 def test_motion_reverted_refused_after_a_committed_shot() -> None:
     # A GRACE fire counted on the spot; a late pickup-discard must not yank
     # the committed shot's freeze out from under it.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=0.0)
@@ -588,7 +672,7 @@ def test_push_then_missed_shot_consumes_the_window() -> None:
     # The push-incident bug: push re-arms 60 s; the shot under that window is
     # missed by vision; the settle must still burn the window so the
     # following shot gets 30 s.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.new_rack(now=0.0)
     clock.shot_taken()  # break
     clock.balls_settled(now=1.0)
@@ -607,7 +691,7 @@ def test_run_out_has_no_first_shot_allowance() -> None:
     # The WNT 60 s exists for the shot after a break-off. Throw fifteen balls
     # up with no rack and there is no break for it to follow, so every shot —
     # including the opener — gets the base countdown.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     assert clock.current_base() == 60
     clock.set_mode(get_mode("run_out"))
     assert clock.current_base() == 30
@@ -617,7 +701,7 @@ def test_run_out_has_no_first_shot_allowance() -> None:
 
 
 def test_match_keeps_the_first_shot_allowance() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.set_mode(get_mode("run_out"))
     clock.set_mode(get_mode("match"))
     assert clock.current_base() == 60
@@ -626,7 +710,7 @@ def test_match_keeps_the_first_shot_allowance() -> None:
 def test_push_outside_a_rack_scoped_mode_gives_base_time() -> None:
     # push() re-enters the first-shot window; without one there is nothing to
     # re-enter, so it must not hand out 60 s anyway.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.set_mode(get_mode("run_out"))
     clock.push(now=0.0)
     assert clock.remaining == 30
@@ -636,7 +720,7 @@ def test_push_outside_a_rack_scoped_mode_gives_base_time() -> None:
 def test_switching_mode_zeroes_the_rack_scope() -> None:
     # Same scope change as switching rulebooks: a rack in progress means
     # nothing once there is no rack, and the extension pool is per rack.
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     clock.shot_taken()
     clock.balls_settled(now=1.0)
     clock.extension()
@@ -651,7 +735,7 @@ def test_switching_mode_zeroes_the_rack_scope() -> None:
 def test_no_clock_parks_the_countdown() -> None:
     # Gating vision alone would leave whatever was already counting to run
     # down and fire the urgency cues and EXPIRED mid-drill.
-    clock = make_clock("ultimate_pool_8ball")
+    clock = make_clock()
     clock.start(now=0.0)
     clock.tick(now=25.0)
     assert clock.state is State.RUNNING
@@ -664,7 +748,7 @@ def test_no_clock_parks_the_countdown() -> None:
 
 
 def test_snapshot_carries_mode_and_the_countdown_a_start_would_give() -> None:
-    clock = make_clock("wnt_9ball")
+    clock = make_clock(WNT)
     snap = clock.snapshot()
     assert snap.mode == "match"
     assert snap.base == 60  # first-shot window: what the deck's START key says
@@ -708,7 +792,7 @@ def test_time_on_zero_is_fixed() -> None:
     while clock.state is State.GRACE:
         t = round(t + 0.1, 1)
         clock.tick(t)
-    assert t == 30.0 + clock.ruleset.grace_seconds
+    assert t == 30.0 + GRACE_SECONDS
 
 
 # ---------- post-scratch grace (#25, checkpoint 78) ----------

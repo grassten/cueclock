@@ -6,7 +6,7 @@ same commit.
 Three rules shape it (2026-08-02, layout v2):
 
 **A key that can't be pressed goes dark, it doesn't dim.** Visibility is
-declared per key against the session mode and the ruleset, so what is lit is
+declared per key against the session mode and the clock's settings, so what is lit is
 always exactly what is pressable. Nothing reflows when a key leaves: every
 survivor keeps its cell, so position stays learnable even though the set
 changes. Dimming survives only as typography (`Face.sub`), never as state.
@@ -38,7 +38,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
-from cueclock.clock import MODES, RULESETS
+from cueclock.clock import MODES, OPTIONS
 from cueclock.deck.faces import (
     BG,
     BG_ARMED,
@@ -57,7 +57,7 @@ class Group(Enum):
     """What a key's stripe colour says about how much time you have."""
 
     CLOCK = STRIPE_CLOCK  # seconds matter — extension, push, start
-    MATCH = STRIPE_MATCH  # between racks, no pressure — score, new rack, ruleset
+    MATCH = STRIPE_MATCH  # between racks, no pressure — score, new rack, setup
     SYSTEM = STRIPE_SYSTEM  # session, mode, scene, recal
 
     @property
@@ -70,10 +70,9 @@ class Group(Enum):
 # outside them. Named from the modes table so a rename fails loudly here.
 CLOCKED = frozenset({"match", "run_out"})
 RACKED = frozenset({"match"})
-NINE_BALL = frozenset({"wnt_9ball"})
-# Rulesets with a countdown — derived, so a new untimed ruleset (freestyle)
-# darkens the clock keys without another edit here.
-TIMED = frozenset(name for name, ruleset in RULESETS.items() if ruleset.timed)
+# The settings (`clock/settings.py`) a key can be conditioned on: (setting, value).
+CLOCK_ON = ("clock", "on")
+PUSH_ON = ("push", "on")
 
 
 @dataclass(frozen=True)
@@ -86,7 +85,11 @@ class DeckState:
 
     up: bool = False
     mode: str | None = None
-    ruleset: str | None = None
+    # The clock's six settings by name (#74); empty until the server answers.
+    settings: Mapping[str, str] = field(default_factory=dict)
+    # The SETUP menu is open: the deck shows `MENU` instead of `LAYOUT`. Kept by
+    # the daemon, like `on_bracket`, because the server knows nothing of pages.
+    menu: bool = False
     base: int = 30  # what a fresh countdown gives you now — the START N face
     extensions_used: int = 0
     extensions_allowed: int = 0
@@ -135,7 +138,29 @@ class ApiPost:
 class Cycle:
     """Advance a context axis; the face shows current over next."""
 
-    kind: str  # "mode" | "ruleset"
+    kind: str  # "mode"
+
+
+@dataclass(frozen=True)
+class SettingCycle:
+    """Move one clock setting to its next value, applied at once (#74).
+
+    The face is the setting's name over its current value, the shape START 30
+    and the score keys already have: on a page of six such keys the value alone
+    (`30`, `15`, `ON`) would not say which setting it is.
+    """
+
+    setting: str  # a key of `clock.OPTIONS`
+
+
+@dataclass(frozen=True)
+class MenuToggle:
+    """Open the SETUP menu, or close it: SETUP on the main page, DONE on the menu.
+
+    One cell, so opening and closing is the same key. DONE rather than BACK,
+    because the deck's BACK already means taking the TV back (`BACK TO PLAY`),
+    and closing a page is not that.
+    """
 
 
 @dataclass(frozen=True)
@@ -210,7 +235,17 @@ class SceneToggle:
     """
 
 
-Action = ApiPost | Cycle | SessionToggle | ScoreAdjust | BracketConfirm | SceneToggle | Recalibrate
+Action = (
+    ApiPost
+    | Cycle
+    | SettingCycle
+    | MenuToggle
+    | SessionToggle
+    | ScoreAdjust
+    | BracketConfirm
+    | SceneToggle
+    | Recalibrate
+)
 
 
 # ---------- cycle label tables ----------
@@ -221,18 +256,45 @@ MODE_FACES: dict[str, str] = {
     "no_clock": "NO CLOCK",
 }
 
-RULESET_FACES: dict[str, str] = {
-    "ultimate_pool_8ball": "8-BALL",
-    "ultimate_pool_8ball_final10": "FINAL\n10",
-    "wnt_9ball": "9-BALL",
-    "freestyle": "FREE\nSTYLE",
-}
-
 _CYCLES: dict[str, tuple[Mapping[str, str], tuple[str, ...], str, str]] = {
     # kind -> (label table, cycle order, listing endpoint, POST prefix)
     "mode": (MODE_FACES, tuple(MODES), "/api/modes", "/api/mode/"),
-    "ruleset": (RULESET_FACES, tuple(RULESETS), "/api/rulesets", "/api/ruleset/"),
 }
+
+# The SETUP menu's keys: each setting's name on the key, and how its values read.
+SETTING_LABELS: dict[str, str] = {
+    "game": "GAME",
+    "shot": "SHOT",
+    "after_break": "BREAK",  # the countdown after the break (and a push out)
+    "extension": "EXT TIME",  # not "EXT": that is the key that grants one
+    "push": "PUSH",
+    "clock": "CLOCK",
+}
+SETTING_FACES: dict[str, str] = {
+    "8ball": "8-BALL",
+    "9ball": "9-BALL",
+    "10ball": "10-BALL",
+    "other": "OTHER",
+    "same": "SAME",
+    "on": "ON",
+    "off": "OFF",
+}
+
+
+def setting_value_face(value: str | None) -> str:
+    """How a setting's value reads on its key; numbers read as themselves."""
+    if value is None:
+        return "—"
+    return SETTING_FACES.get(value, value.upper())
+
+
+def setting_next(setting: str, value: str | None) -> str:
+    """The value after ``value`` in the setting's own order, wrapping."""
+    options = OPTIONS[setting]
+    try:
+        return options[(options.index(value or "") + 1) % len(options)]
+    except ValueError:
+        return options[0]
 
 
 def first_name(name: str) -> str:
@@ -287,7 +349,7 @@ class Key:
     group: Group
     action: Action
     modes: frozenset[str] | None = None  # None = every mode
-    rulesets: frozenset[str] | None = None  # None = every ruleset
+    when: tuple[str, str] | None = None  # (setting, value) it needs; None = always
     needs_bracket: bool = False  # dark unless a bracket is loaded (#43)
     offline: bool = False  # survives a server-down deck (Session only)
     # The inverse: lit only while the server is down and the session is at
@@ -311,11 +373,10 @@ class Key:
             return False
         if self.modes is not None and state.mode is not None and state.mode not in self.modes:
             return False
-        return not (
-            self.rulesets is not None
-            and state.ruleset is not None
-            and state.ruleset not in self.rulesets
-        )
+        if self.when is None:
+            return True
+        setting, value = self.when
+        return state.settings.get(setting, value) == value  # unknown: shown
 
     def face(self, state: DeckState) -> Face:
         """What this key looks like under the current state."""
@@ -329,8 +390,16 @@ class Key:
                 stripe=stripe,
                 bg=state.session_bg,
             )
+        if isinstance(action, SettingCycle):
+            return Face(
+                text=SETTING_LABELS[action.setting],
+                big=setting_value_face(state.settings.get(action.setting)),
+                stripe=stripe,
+            )
+        if isinstance(action, MenuToggle):
+            return Face(text="DONE" if state.menu else "SETUP", stripe=stripe)
         if isinstance(action, Cycle):
-            active = state.mode if action.kind == "mode" else state.ruleset
+            active = state.mode
             return Face(
                 text=cycle_label(action.kind, active),
                 sub=cycle_label(action.kind, cycle_next(action.kind, active)),
@@ -383,9 +452,24 @@ class Key:
         return Face(text=self.text, stripe=stripe)
 
 
+# The three keys both pages share, in the same cells: the key that starts and
+# stops a night, the one a player under the clock hunts for, and the one that
+# opens and closes the menu.
+_SESSION = Key(1, 1, "session", Group.SYSTEM, SessionToggle(), offline=True)
+_EXT = Key(
+    1,
+    5,
+    "extension",
+    Group.CLOCK,
+    ApiPost("/api/extension", "OK", "NO EXT"),
+    modes=CLOCKED,
+    when=CLOCK_ON,
+)
+_SETUP = Key(3, 1, "setup", Group.MATCH, MenuToggle(), modes=CLOCKED)
+
 LAYOUT: tuple[Key, ...] = (
     # --- the spine: top-left 2x2, present in every mode, never moves ---
-    Key(1, 1, "session", Group.SYSTEM, SessionToggle(), offline=True),
+    _SESSION,
     Key(1, 2, "mode", Group.SYSTEM, Cycle("mode")),
     # --- the clock: top-right, absent once the clock is off ---
     # Start replaced Reset + Force 30, which differed by exactly one bit: both
@@ -399,10 +483,10 @@ LAYOUT: tuple[Key, ...] = (
         Group.CLOCK,
         ApiPost("/api/restart", "GO", "ERROR"),
         modes=CLOCKED,
-        rulesets=TIMED,
+        when=CLOCK_ON,
     ),
     # Push outs are a 9-ball rule and need a break to follow, so the key is
-    # absent under 8-ball and outside a rack.
+    # there only with PUSH on, and only in a rack.
     Key(
         1,
         4,
@@ -410,26 +494,19 @@ LAYOUT: tuple[Key, ...] = (
         Group.CLOCK,
         ApiPost("/api/push", "PUSH", "ERROR"),
         modes=RACKED,
-        rulesets=NINE_BALL,
+        when=PUSH_ON,
         text="PUSH",
     ),
     # Top-right corner: the one key a player under the clock hunts for — it
     # must be findable without reading faces (Steven, 2026-08-01 match day).
-    # It never goes dark inside a clocked mode with a clock to extend (under
-    # freestyle there is no countdown, so it leaves with the other clock
+    # It never goes dark inside a clocked mode with a clock to extend (with
+    # CLOCK off there is no countdown, so it leaves with the other clock
     # keys); while the extension limit is unenforced the pool reads 0 and the
-    # face shows no pips.
-    Key(
-        1,
-        5,
-        "extension",
-        Group.CLOCK,
-        ApiPost("/api/extension", "OK", "NO EXT"),
-        modes=CLOCKED,
-        rulesets=TIMED,
-    ),
+    # face shows no pips. It is on the SETUP menu too, in the same cell.
+    _EXT,
     # --- the match: bottom row, blue block ---
-    Key(3, 1, "ruleset", Group.MATCH, Cycle("ruleset"), modes=CLOCKED),
+    # SETUP (#74) took the ruleset key's cell: it opens the menu below.
+    _SETUP,
     # One key for both clocked modes: racking a fresh rack and throwing
     # fifteen balls back up are the same act to the clock. Clock parks,
     # extensions refill, shot count zeroes.
@@ -459,6 +536,29 @@ LAYOUT: tuple[Key, ...] = (
     Key(2, 5, "recal", Group.SYSTEM, Recalibrate(), offline_only=True),
     Key(2, 3, "scene", Group.SYSTEM, SceneToggle(), needs_bracket=True),
 )
+
+# The SETUP menu (#74): the clock's settings, one key each, the first page the
+# deck has. SESSION and EXT keep their cells and their function, so an open
+# menu never costs the key a player under the clock hunts for; the cell
+# REPLAY held until checkpoint 144 stays empty. It closes on DONE, or by
+# itself `daemon.MENU_IDLE_S` after the last press in it.
+MENU: tuple[Key, ...] = (
+    _SESSION,
+    Key(1, 2, "setting_game", Group.MATCH, SettingCycle("game")),
+    Key(1, 3, "setting_shot", Group.MATCH, SettingCycle("shot")),
+    Key(1, 4, "setting_after_break", Group.MATCH, SettingCycle("after_break")),
+    _EXT,
+    Key(2, 2, "setting_extension", Group.MATCH, SettingCycle("extension")),
+    Key(2, 3, "setting_push", Group.MATCH, SettingCycle("push")),
+    Key(2, 4, "setting_clock", Group.MATCH, SettingCycle("clock")),
+    _SETUP,
+)
+
+
+def page(state: DeckState) -> tuple[Key, ...]:
+    """The keys of the page the deck is showing."""
+    return MENU if state.menu else LAYOUT
+
 
 # A confirm does four things across two processes (result, next match, rack,
 # scene) and takes as long as the slowest — so the key says it is working.

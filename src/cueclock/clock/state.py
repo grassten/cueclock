@@ -21,8 +21,9 @@ the break-off or a push out, 30 s otherwise. ``new_rack`` resets the rack
 scope (shot count + extension pool); ``reset`` stays the foul/bug button and
 deliberately does not.
 
-Session mode (added 2026-08-02, ``modes.py``) is a second, orthogonal axis: a
-ruleset says which rulebook, a mode says what you are doing at the table. Only
+Session mode (added 2026-08-02, ``modes.py``) is a second, orthogonal axis:
+the settings (``settings.py``, which replaced rulesets in checkpoint 145) say
+how long each countdown is, a mode says what you are doing at the table. Only
 ``match`` is rack-scoped, so ``run_out`` gets the base countdown on every shot
 including the first, and ``no_clock`` doesn't run at all.
 """
@@ -32,7 +33,13 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 
 from cueclock.clock.modes import DEFAULT_MODE, Mode, get_mode
-from cueclock.clock.rulesets import ENFORCE_EXTENSION_LIMIT, Ruleset
+from cueclock.clock.settings import (
+    ENFORCE_EXTENSION_LIMIT,
+    EXTENSIONS_PER_RACK,
+    GRACE_SECONDS,
+    POST_EXPIRY_SECONDS,
+    Settings,
+)
 
 
 class State(Enum):
@@ -50,9 +57,9 @@ class Snapshot:
     state: str
     time: float
     display: int
-    ruleset: str
+    settings: dict[str, str]  # the six values (`settings.OPTIONS`)
     mode: str
-    timed: bool  # False = untimed ruleset (freestyle): no countdown exists
+    timed: bool  # False = CLOCK off: no countdown exists
     base: int  # what a fresh countdown gives you now — the deck's START N face
     extensions_used: int
     extensions_allowed: int  # 0 while the extension limit is unenforced
@@ -63,8 +70,8 @@ class Snapshot:
 
 
 class ShotClock:
-    def __init__(self, ruleset: Ruleset, now: float, mode: Mode | None = None) -> None:
-        self.ruleset = ruleset
+    def __init__(self, settings: Settings, now: float, mode: Mode | None = None) -> None:
+        self.settings = settings
         self.mode = mode if mode is not None else get_mode(DEFAULT_MODE)
         self.state = State.IDLE
         self._rack_shots = 0  # shots taken this rack; the break is shot 1
@@ -87,6 +94,11 @@ class ShotClock:
         self._hold_until = 0.0
 
     @property
+    def extensions_allowed(self) -> int:
+        """The rack's pool: two with a clock, none without one."""
+        return EXTENSIONS_PER_RACK if self.settings.timed else 0
+
+    @property
     def rack_shots(self) -> int:
         """Shots counted this rack (diagnostics — the session journal)."""
         return self._rack_shots
@@ -103,14 +115,14 @@ class ShotClock:
         shot gets the base countdown.
         """
         if self.mode.rack_scoped and self._rack_shots < 2:
-            return self.ruleset.first_shot_seconds
-        return self.ruleset.base_seconds
+            return self.settings.first_shot_seconds
+        return self.settings.base_seconds
 
     # ---------- operator commands (HTTP API / Stream Deck) ----------
 
     def start(self, now: float) -> None:
-        if not self.ruleset.timed:
-            return  # freestyle: there is no countdown to start
+        if not self.settings.timed:
+            return  # CLOCK off: there is no countdown to start
         if self.state in (State.IDLE, State.EXPIRED):
             self.remaining = float(self.current_base())
             self._cues_fired.clear()
@@ -172,7 +184,7 @@ class ShotClock:
         60 s window replays on the shot after (live, 2026-08-05 19:59 and
         2026-08-06 01:53: break missed, Start pressed, 60 s handed out twice).
         """
-        if not self.ruleset.timed:
+        if not self.settings.timed:
             return
         if self.mode.rack_scoped and self._rack_shots == 0:
             self._rack_shots = 1
@@ -195,7 +207,7 @@ class ShotClock:
         only the window is re-armed, so the following settle starts at 60 s.
         Extensions untouched.
         """
-        if not self.ruleset.timed:
+        if not self.settings.timed:
             return
         self._rack_shots = 1  # as if the break just happened
         if self.state is not State.MOTION:
@@ -216,10 +228,31 @@ class ShotClock:
             self._episode_fired = False
             self._shot_since_settle = True
 
-    def set_ruleset(self, ruleset: Ruleset) -> None:
-        # Switching game types is a bigger scope change than a new rack:
-        # zero everything, then normalize the timer.
-        self.ruleset = ruleset
+    def change_settings(self, settings: Settings) -> None:
+        """Apply new settings; they take effect on the next countdown.
+
+        A countdown already running keeps its time, and the rack keeps its
+        count: changing SHOT to 15 for the last ten minutes of a match must
+        not hand the next player the 60 s after-break window again, which a
+        rack reset would. An IDLE clock shows the new number straight away.
+        Turning the clock on or off parks it, as choosing the untimed ruleset
+        did, so a countdown never runs on under CLOCK off.
+        """
+        clock_changed = settings.timed != self.settings.timed
+        self.settings = settings
+        if clock_changed:
+            self.reset()
+        elif self.state is State.IDLE:
+            self.remaining = float(self.current_base())
+
+    def apply_legacy_ruleset(self, settings: Settings) -> None:
+        """A pre-checkpoint-145 ruleset switch, as session logs recorded it.
+
+        Kept for `cueclock session replay` only, so a logged `set_ruleset`
+        replays to the clock it produced live: switching rulesets zeroed the
+        rack and the extension pool, then parked the clock.
+        """
+        self.settings = settings
         self._rack_shots = 0
         self.extensions_used = 0
         self.reset()
@@ -243,15 +276,15 @@ class ShotClock:
         """Grant an extension if allowed; returns True when accepted.
 
         The pool cap applies only while ``ENFORCE_EXTENSION_LIMIT`` is on
-        (`rulesets.py` — off since 2026-08-13, so every call over a live
+        (`settings.py` — off since 2026-08-13, so every call over a live
         countdown is granted).
         """
         if self.state not in (State.RUNNING, State.GRACE):
             return False
-        if ENFORCE_EXTENSION_LIMIT and self.extensions_used >= self.ruleset.extensions_per_frame:
+        if ENFORCE_EXTENSION_LIMIT and self.extensions_used >= self.extensions_allowed:
             return False
         self.extensions_used += 1
-        self.remaining += float(self.ruleset.extension_seconds)
+        self.remaining += float(self.settings.extension_seconds)
         # Re-arm urgency cues so the extended countdown fires them again.
         self._cues_fired.clear()
         self.last_cue = None
@@ -471,7 +504,7 @@ class ShotClock:
                 self._cues_fired.add("five")
             if self.remaining <= 0.0:
                 self.state = State.GRACE
-                self._grace_left = self.ruleset.grace_seconds
+                self._grace_left = GRACE_SECONDS
                 # The buzzer outranks an urgency cue crossed in the same tick:
                 # zero is the one that must be heard.
                 cue = "buzzer"
@@ -484,7 +517,7 @@ class ShotClock:
             # Loss of turn — flash EXPIRED briefly, then auto-restart the
             # clock for the next player's shot.
             self._expired_for += dt
-            if self._expired_for >= self.ruleset.post_expiry_seconds:
+            if self._expired_for >= POST_EXPIRY_SECONDS:
                 self.remaining = float(self.current_base())
                 self._cues_fired.clear()
                 self.state = State.RUNNING
@@ -498,15 +531,13 @@ class ShotClock:
             state=self.state.value,
             time=round(self.remaining, 2),
             display=0 if self.state is State.EXPIRED else math.ceil(self.remaining),
-            ruleset=self.ruleset.name,
+            settings=self.settings.as_dict(),
             mode=self.mode.name,
-            timed=self.ruleset.timed,
+            timed=self.settings.timed,
             base=self.current_base(),
             extensions_used=self.extensions_used,
             # 0 while unenforced: no surface draws pips or an "x of y" for a
             # pool that cannot run out.
-            extensions_allowed=(
-                self.ruleset.extensions_per_frame if ENFORCE_EXTENSION_LIMIT else 0
-            ),
+            extensions_allowed=self.extensions_allowed if ENFORCE_EXTENSION_LIMIT else 0,
             cue=cue,
         )
