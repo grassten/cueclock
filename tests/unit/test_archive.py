@@ -105,21 +105,21 @@ def test_one_recording_over_the_whole_budget_goes_too() -> None:
     assert [f.path.name for f in prune_plan([_f("big", 11, 1)], int(10e9))] == ["big"]
 
 
-def test_footage_is_only_listed_recordings_and_replay_key_saves(tmp_path: Path) -> None:
+def test_footage_is_only_listed_recordings(tmp_path: Path) -> None:
     movies = tmp_path / "Movies"
     movies.mkdir()
     for name in (
         "2026-11-16 22-00-00.mov",  # the session recording (listed below)
         "2025-12-02 15-00-33.mov",  # an old personal recording: never touched
-        "Replay 2026-11-14 20-35-46.mov",  # the Replay key's save
+        "Replay 2026-11-14 20-35-46.mov",  # an old Replay-key save: never touched
         "Replay notes.txt",
         "Screenshot 2026-09-01 14-13-55.png",
     ):
         (movies / name).write_bytes(b"x")
     recs = [Recording(movies / "2026-11-16 22-00-00.mov", T0, T0)]
     recs.append(Recording(movies / "already-pruned.mov", T0, T0))
-    names = sorted(f.path.name for f in archive.footage(recs, movies))
-    assert names == ["2026-11-16 22-00-00.mov", "Replay 2026-11-14 20-35-46.mov"]
+    names = sorted(f.path.name for f in archive.footage(recs))
+    assert names == ["2026-11-16 22-00-00.mov"]
 
 
 # --- a whole pass -----------------------------------------------------------
@@ -151,7 +151,6 @@ class Tree:
             root=self.root,
             archive_root=self.t7 if archive_mounted else None,
             logs=self.logs,
-            movies=self.movies,
             budget_bytes=10_000,
             run=self._run,
             say=self.lines.append,

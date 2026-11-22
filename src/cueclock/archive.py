@@ -27,8 +27,8 @@ Then footage is pruned oldest-first until it fits a byte budget (10 GB by
 default), and the T7's retention rules run (`Maintainer.retain`): judged cuts
 go, footage lasts the newest 10 sessions, logs + stills, pinned sessions and
 journals each have a budget. Nothing grows without bound. "Footage" on the
-internal disk is exactly the files the deck listed plus the deck's own
-Replay-key saves; nothing else in `~/Movies` is ever looked at.
+internal disk is exactly the files the deck listed; nothing else in `~/Movies`
+is ever looked at.
 
 Every step skips work that is already done, so a pass is safe to repeat — the
 launchd agent runs one every 15 minutes. And nothing happens at all while a
@@ -60,7 +60,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSIONS_ROOT = REPO_ROOT / "sessions.nosync"
 RECORDINGS_LOG = SESSIONS_ROOT / "recordings.jsonl"
 ARCHIVE_ROOT = Path("/Volumes/T7/cueclock_sessions")
-MOVIES = Path.home() / "Movies"
 FFMPEG = "/opt/homebrew/bin/ffmpeg"  # absolute: launchd's PATH has no Homebrew
 
 DEFAULT_BUDGET_GB = 10.0
@@ -100,11 +99,6 @@ HOOK_TIMEOUT_S = 600.0
 
 _STAMP = re.compile(r"^\d{8}-\d{6}$")  # the journal's `session-<stamp>.jsonl`
 _MOMENT_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")  # a safe file name
-# OBS names a replay-buffer save `<RecRBPrefix> <date> <time>`; the prefix is
-# OBS's default "Replay". The deck's Replay key made them until it was removed
-# in checkpoint 144 (#75); the leftovers stay under the budget so they age out
-# like any footage instead of sitting in ~/Movies forever.
-_REPLAY_SAVE = re.compile(r"^Replay \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.(mov|mp4|mkv)$")
 
 
 @dataclass(frozen=True)
@@ -269,13 +263,10 @@ class Footage:
     mtime: float
 
 
-def footage(recordings: Sequence[Recording], movies: Path) -> list[Footage]:
-    """What the budget covers: logged recordings plus any old Replay-key saves."""
-    paths = {rec.path for rec in recordings}
-    with contextlib.suppress(OSError):  # no ~/Movies: only the listed files count
-        paths |= {p for p in movies.iterdir() if _REPLAY_SAVE.match(p.name)}
+def footage(recordings: Sequence[Recording]) -> list[Footage]:
+    """What the budget covers: the recordings the deck logged, and only those."""
     out = []
-    for path in paths:
+    for path in {rec.path for rec in recordings}:
         try:
             st = path.stat()
         except OSError:
@@ -363,7 +354,6 @@ class Maintainer:
     root: Path = SESSIONS_ROOT
     archive_root: Path | None = ARCHIVE_ROOT  # None: the drive isn't mounted
     logs: Path = REPO_ROOT / "logs"
-    movies: Path = MOVIES
     recordings_log: Path | None = None  # default: <root>/recordings.jsonl
     budget_bytes: int = int(DEFAULT_BUDGET_GB * 1e9)
     keep_full: int = DEFAULT_KEEP_FULL
@@ -752,7 +742,7 @@ class Maintainer:
         return True
 
     def prune(self, recordings: Sequence[Recording]) -> bool:
-        files = footage(recordings, self.movies)
+        files = footage(recordings)
         doomed = prune_plan(files, self.budget_bytes)
         total = sum(f.size for f in files)
         verb = "would delete" if self.dry_run else "deleted"

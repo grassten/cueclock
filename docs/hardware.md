@@ -240,8 +240,9 @@ actually runs — the original plan called them *Table* / *Clock*):
 - **Canvas**: standby card shown between sessions (still image, no cueclock
   sources).
 - **Replay**: removed with the Replay key in checkpoint 144 (§C4a). The scene
-  and its two sources (**Replay Media**, **Replay Badge**) may still be in the
-  collection; nothing switches to them, and they can be deleted.
+  and its two sources (**Replay Media**, **Replay Badge**) were deleted from
+  the collection on 2026-11-22 (backup:
+  `basic/scenes/Untitled.json.pre-replay-removal`).
 
 **Settings:**
 - On every cueclock browser source, tick **"Refresh browser when scene
@@ -701,8 +702,9 @@ page are the footage now.
 What went with it: `deck/replay.py`, the key and its faces,
 `scripts/setup_obs_replay.py`, the `/replay` page, the rack anchor in the hub,
 and `GET /api/replay_anchors`, which now 404s (the idle stop reads
-`GET /api/shot_age`). Old `Replay …` saves in `~/Movies` stay under the footage
-budget (§C7), so they age out with everything else. Two lessons from it are
+`GET /api/shot_age`). The five old `Replay …` saves in `~/Movies` (1.8 GB)
+were deleted the same day, and the footage budget (§C7) no longer looks for
+them. Two lessons from it are
 kept where they still apply: continuous 4K encoding starves detection, so the
 output stays 1080p (§B3); and a stop has to loop, because an OBS output can
 start after a stop has looked (§C4).
@@ -769,8 +771,7 @@ OBS → Settings → Audio → Global Audio Devices → **Mic/Auxiliary Audio** 
 **`cueclock session maintain`** (`archive.py`, `cli.md`) does the rest after
 the session: journal copy, parity check, moments, footage cuts into each
 session directory, then moves the directory to `/Volumes/T7/cueclock_sessions/`
-and prunes footage to a 10 GB budget (the listed recordings plus the old
-Replay-key saves, which nothing pruned before). It refuses to do
+and prunes footage to a 10 GB budget (the listed recordings). It refuses to do
 anything while a session is live, because a multi-GB T7 copy mid-session is the
 USB stall in §C5.
 

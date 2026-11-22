@@ -346,6 +346,13 @@ survive unchanged in `design.md`.
     passed before the merge), plus ruff and mypy --strict. Docs: `hardware.md`
     §C4a is a removal stub (numbers kept), Part C map and counts, §B3, §C4,
     §C7; `design.md` §2.1 amendment; `cli.md`; `README.md`. Closes #75.
+  - **Follow-up, same day (Steven: delete them):** the OBS Replay scene and
+    its two sources are deleted from the `Untitled` collection (edited with
+    OBS closed; backup `Untitled.json.pre-replay-removal`), and the five
+    `Replay …` saves (1.8 GB) are deleted from `~/Movies`. With them gone, the
+    footage budget's scan of `~/Movies` for Replay saves and
+    `session maintain --movies` (which only that scan read) are removed. The
+    budget is the logged recordings, nothing else.
 
 - **2026-11-22 (checkpoint 143: the session-review golden test, run; #70
   step 2):** both halves were run headless (`claude -p`, dry run, GitHub

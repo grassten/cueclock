@@ -548,9 +548,8 @@ stays local until it does. Without the T7 the session is finished in place and
 moved on a later pass.
 
 Then the **footage budget**: the recordings the deck listed in
-`recordings.jsonl`, plus any saves left by the removed Replay key
-(`~/Movies/Replay <date> <time>.mov`, checkpoint 144), are deleted oldest-first until they
-total ≤ `--budget-gb`. Nothing else in `~/Movies` is ever touched. One
+`recordings.jsonl` are deleted oldest-first until they total ≤
+`--budget-gb`. Nothing else in `~/Movies` is ever touched. One
 recording larger than the whole budget goes too, once its moments are cut.
 
 Then **retention on the T7** — every kind of evidence has a purge rule, so
@@ -575,7 +574,6 @@ nothing grows without bound:
 | `--root` | `sessions.nosync/` | local session root |
 | `--archive-root` | `/Volumes/T7/cueclock_sessions` | under `/Volumes` it must be a mounted volume, or sessions stay local |
 | `--logs` | `logs/` | where the session journals are |
-| `--movies` | `~/Movies` | OBS's recording folder (Simple output → Recording Path) |
 | `--server` | `http://127.0.0.1:8000` | a server answering here means a session is live |
 
 ```bash

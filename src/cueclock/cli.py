@@ -1315,7 +1315,6 @@ def _cmd_maintain(args: argparse.Namespace) -> int:
         root=Path(args.root).expanduser(),
         archive_root=root if mounted else None,
         logs=Path(args.logs).expanduser(),
-        movies=Path(args.movies).expanduser(),
         budget_bytes=int(args.budget_gb * 1e9),
         keep_full=args.keep_full,
         archive_bytes=int(args.archive_gb * 1e9),
@@ -1626,9 +1625,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_maintain.add_argument(
         "--logs", default=str(archive.REPO_ROOT / "logs"), help="journal directory (logs/)"
-    )
-    p_maintain.add_argument(
-        "--movies", default=str(archive.MOVIES), help="OBS recording folder (default ~/Movies)"
     )
     p_maintain.add_argument(
         "--server",
