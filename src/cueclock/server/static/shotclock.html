@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Shot Clock</title>
     <style>
-        /* One palette for every cueclock overlay (issue #23). `/replay`'s
-           badge already used these; adopting them here makes the wall read as
-           one product instead of two. Accent is spent on exactly one thing —
+        /* One palette for every cueclock overlay (issue #23), first drawn for
+           the REPLAY badge (removed in checkpoint 144); sharing it makes the
+           wall read as one product. Accent is spent on exactly one thing —
            the drain — and there is exactly one red, escalated by *area*, not
            by hue: three reds a few percent apart are indistinguishable at
            twelve feet, and area is not. */
@@ -199,7 +199,7 @@
             background: linear-gradient(to bottom, rgba(0,0,0,0), rgba(0,0,0,0.41));
         }
 
-        /* ---- the drain: `/replay`'s bar reused, including its track ----
+        /* ---- the drain: the REPLAY badge's bar, including its track ----
            The track is the point. A bare fill shrinks to an 8 px nub at four
            seconds and reads as a stray mark; against a dim full-width track
            the same nub reads as an almost-empty gauge, which is the job. It

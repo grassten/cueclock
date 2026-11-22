@@ -203,17 +203,9 @@ grab thread (BayerRG8 @ 156 fps)
   the bar, crossing from the score area into the clock cell, and no overlay can
   span two OBS sources. It replaced two sources that were both defects: a
   193×193 corner clock sitting *on* the live side-angle video (so it was burned
-  into every replay — §C4a), and a `/score` bar centred on the canvas whose
+  into every replay and recording), and a `/score` bar centred on the canvas whose
   right third lay across the overhead strip's bottom-left pocket.
-- Browser source `http://localhost:8000/replay` — the REPLAY badge: scrim,
-  wordmark, countdown, drain bar, closing fade to black. Lives only in the
-  Replay scene; the deck rewrites its URL on every press with `?s=<seconds>`
-  (that replay's own length). It exists because the buffer records program
-  output, so the live shot clock is burned into every replayed frame and keeps
-  counting on the TV; saying REPLAY over it is what keeps that from reading as
-  a real countdown — same reasoning as the `no_clock` label (§C2a). It also
-  used to *cover* the burned-in clock with `?mask=` rectangles; that was
-  removed 2026-08-03 (§C4a) and the countdown is visible again.
+- `/replay`, the REPLAY badge, went with the Replay key in checkpoint 144 (§C4a).
 **Scenes** (scene collection `Untitled`; names below are what the rig
 actually runs — the original plan called them *Table* / *Clock*):
 - **Stream Detail** (default, the live table scene): Camo side angle + Syphon
@@ -238,8 +230,7 @@ actually runs — the original plan called them *Table* / *Clock*):
   re-applies the settings. The page is authored at 1920×1080 and scales itself
   to the source (`fitStage()`), the same trick the bar uses, so text rasterizes
   at the wall's own resolution instead of being upscaled by OBS. One setting is
-  the opposite of the Replay badge's: `restart_when_active: **true**` — this
-  page has no timeline to preserve and no pre-cut load, so reloading at the cut
+  load-bearing: `restart_when_active: **true**` — this page has no timeline to preserve and no pre-cut load, so reloading at the cut
   is the cheapest way to heal a source that first loaded while the server was
   down. The deck's scene key (2,3) switches to it and back, and a confirmed
   result flips to it for 30 seconds and then returns by itself, whether the
@@ -248,27 +239,9 @@ actually runs — the original plan called them *Table* / *Clock*):
   With none loaded the page says so rather than drawing an empty grid.
 - **Canvas**: standby card shown between sessions (still image, no cueclock
   sources).
-- **Replay**: replay-buffer playback (Stream Deck phase 3, built 2026-08-02).
-  Two sources, both filling the canvas: **Replay Media** (`ffmpeg_source`, the
-  file the buffer just wrote, muted) under **Replay Badge** (browser source
-  `http://localhost:8000/replay`). **Never build this scene by hand** —
-  `uv run python scripts/setup_obs_replay.py` creates it and re-applies the
-  settings, three of which are load-bearing and the opposite of the OBS default:
-  `restart_on_activate: false` (the seek happens *before* the scene switch, so
-  a restart would discard it and play the twenty seconds of chalking the seek
-  exists to skip), `close_when_inactive: false` (the source must hold the
-  file open while the scene is dark — that is when its duration is read), and
-  on the badge `restart_when_active: false` (the deck loads that page itself,
-  before the cut — a reload triggered *by* the cut shows the previous replay's
-  last frame, which is a blacked-out one, for the half second it takes).
-  Nothing is cropped: the buffer records the *output* resolution (1080p60 —
-  §B3), so a replay filling the 4K canvas is a plain 2× upscale of the whole
-  composed frame — same on-wall size, same recorded detail the pre-4K rig
-  had. The overhead inside it is still a ~590×1080 portrait strip; blowing
-  that strip up alone to fill 16:9 would be a further 3.3× upscale of a
-  downscale, so the composed frame plays whole and carries both angles. A full-screen overhead replay is available any time by
-  making the overhead the main *live* view — the buffer only ever holds what
-  was on the TV.
+- **Replay**: removed with the Replay key in checkpoint 144 (§C4a). The scene
+  and its two sources (**Replay Media**, **Replay Badge**) may still be in the
+  collection; nothing switches to them, and they can be deleted.
 
 **Settings:**
 - On every cueclock browser source, tick **"Refresh browser when scene
@@ -283,9 +256,9 @@ actually runs — the original plan called them *Table* / *Clock*):
   pixel became a soft 2×2 blob (the pixelated scoreboard). The canvas is
   what the Fullscreen Projector renders, so the wall now gets native 4K;
   the *output* resolution feeds the encoders, and it stays 1080p because
-  encoding the 4K60 canvas continuously (replay buffer) measurably starved
-  the detect loop (~72 → ~50 Hz). Replays therefore record 1080p60 and
-  upscale on playback — the same picture recordings had before. The crop
+  encoding the 4K60 canvas continuously (then the replay buffer, now the
+  session recording) measurably starved the detect loop (~72 → ~50 Hz).
+  Recordings are therefore 1080p60. The crop
   geometry is the 2026-08-02 judgement (1080p crop, not 1200p letterbox),
   doubled. Keep color range consistent end-to-end (Full/Full or
   Limited/Limited — a mismatch shows as crushed blacks on the blue cloth).
@@ -314,10 +287,8 @@ actually runs — the original plan called them *Table* / *Clock*):
   (`CloseExistingProjectors`) and **"Save projectors on exit" OFF**
   (`SaveProjectors`) — both are the opposite of the OBS default, and both are
   load-bearing (settled 2026-08-03, §C4).
-- Replay Buffer enabled (Settings → Output) — Stream Deck phase 2/3 owns the
-  lifecycle, and `scripts/setup_obs_replay.py` owns its **length**: 600 s, so a
-  held Replay key has a whole rack to play — even a long one (§C4a). Don't set
-  it by hand.
+- Replay Buffer: no longer started (checkpoint 144, §C4a). The deck launches
+  OBS without `--startreplaybuffer`, so the profile's buffer setting is inert.
 
 Latency budget end-to-end (camera → TV in Game Mode): on the order of 100 ms —
 well under the "few hundred ms is fine" bar; the detection path never leaves
@@ -334,12 +305,11 @@ commit as any `src/cueclock/deck/layout.py` change; the two must never
 disagree.
 
 **Status: layout v2 live (2026-08-02).** `cueclock deck` runs under launchd
-(`com.cueclock.deck`). Ten keys on a casual night, five spare (Flag left in
-checkpoint 114) — layout v2 itself went to eleven keys, down from
+(`com.cueclock.deck`). Nine keys on a casual night, six spare (Flag left in
+checkpoint 114, Replay in checkpoint 144) — layout v2 itself went to eleven keys, down from
 fourteen used and one spare, by consolidating the pairs that differed by one
-bit and splitting session *mode* out as its own axis. Phase 3 landed
-2026-08-02: Replay now cuts the saved buffer to the TV, seeked to the shot
-(§C5). The bracket (#43, 2026-08-13) adds two keys that exist **only while a
+bit and splitting session *mode* out as its own axis. Phase 3 (instant
+replay, 2026-08-02) was removed in checkpoint 144 (§C4a). The bracket (#43, 2026-08-13) adds two keys that exist **only while a
 tournament is loaded** — the deck is otherwise unchanged, which is the same
 governing constraint the pages follow.
 
@@ -352,12 +322,13 @@ Everything below follows from these; they are also the module docstring of
    declared per key against the session mode and the ruleset, so what is lit is
    always exactly what is pressable. **Nothing reflows** when a key leaves — it
    leaves a hole and every survivor keeps its cell, so position stays learnable
-   even though the set changes. The deck goes 10 keys in Match → 7 in Run out →
-   3 in No clock → 2 with the session off (Session and RECAL). Dimming survives only as typography
+   even though the set changes. The deck goes 9 keys in Match → 6 in Run out →
+   2 in No clock → 2 with the session off (Session and RECAL). Dimming survives only as typography
    (the small second line), never as state.
-2. **The spine sits top-left and never moves.** Session, Mode and Replay work
-   in every mode, so they hold the 2×2 corner (its fourth cell, 2,2, has been
-   empty since the Flag key was removed in checkpoint 114, #55). Position therefore answers
+2. **The spine sits top-left and never moves.** Session and Mode work in
+   every mode, so they hold the top of the 2×2 corner; its bottom row is
+   empty — 2,2 since the Flag key was removed in checkpoint 114 (#55), 2,1
+   since the Replay key was removed in checkpoint 144 (#75). Position therefore answers
    *does this key persist*, and colour answers *how much time do I have* — two
    questions, two channels, which is why the spine isn't one colour.
 3. **Face grammar.** The `OFF`-button confusion was never the word, it was a
@@ -365,12 +336,12 @@ Everything below follows from these; they are also the module docstring of
    nothing else (`START 30`, `PUSH`, `RECAL`); **cycles** put the current value
    bright over the next value dim, so both are on the face and neither can be
    mistaken for the other; a key carrying a **hold** names it on the second line
-   (`ON` / `HOLD 1s`, `REPLAY` / `HOLD RACK`) — a gesture nothing states is a
+   (`ON` / `HOLD 1s`) — a gesture nothing states is a
    feature only its author knows about. The score keys are the exception, and
    only because their inverse is self-evident and lands on the wall scoreboard.
-   The second line has one other legitimate job, which Replay has always done
-   and #43's scene key now does too: **naming where a press goes** when the
-   key's own word cannot (`BACK` / `TO LIVE`, `BACK` / `TO PLAY`) — `BACK`
+   The second line has one other legitimate job, which #43's scene key does:
+   **naming where a press goes** when the key's own word cannot
+   (`BACK` / `TO PLAY`) — `BACK`
    alone does not say back to what. What it may never be is *context*: a fact
    about the world with no press behind it. That is why the unarmed Confirm key
    puts its match and side on two main-tier lines instead.
@@ -405,8 +376,9 @@ flash stops reading.
   projector it opened afterwards came up with no renderer behind it
   (`obs_display_init: Failed to create swap chain`) — a grey wall that only a
   manual OBS restart cleared.
-- **Session toggle owns `run` AND OBS** (2026-07-31): the replay buffer keeps
-  OBS continuously encoding, and active outputs hold macOS power assertions
+- **Session toggle owns `run` AND OBS** (2026-07-31): the session recording
+  (then the replay buffer) keeps OBS continuously encoding, and active outputs
+  hold macOS power assertions
   that block sleep — so OBS dies with the session and relaunches into
   presentation on start.
 
@@ -420,7 +392,7 @@ keys outside the modes and rulesets named in **Present in**.
 row 1   SESSION      MODE         START 30     PUSH         EXT ••
         ▁▁grey▁▁     ▁▁grey▁▁     ▁▁▁▁▁▁▁▁▁▁▁▁amber▁▁▁▁▁▁▁▁▁▁▁▁▁
 
-row 2   REPLAY       (·)          BRACKET*     (·)          RECAL†
+row 2   (·)          (·)          BRACKET*     (·)          RECAL†
         ▁▁grey▁▁                  ▁▁grey▁▁                  ▁▁grey▁▁
 
 row 3   RULESET      NEW RACK     P1  3        P2  2        MATCH 4*
@@ -439,8 +411,7 @@ exactly when every other key but Session is dark, and the two never meet.
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — 60 inside the WNT first-shot window, 15 under Final 10, 30 otherwise. Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; timed rulesets |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the 60 s first-shot time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** 9-ball only |
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left** — but only while the pool is enforced (`rulesets.ENFORCE_EXTENSION_LIMIT`, **off since 2026-08-13**: the verbal extension can mishear table-side talk, and against an unlimited pool a false grant costs nothing; the snapshot reports the pool as 0, so the face is a bare `EXT` and every press over a live countdown is granted). Flip the flag back on and the pips return | `EXT` (+ pips while enforced), flashes `OK` / `NO EXT` | match, run out; timed rulesets |
-| 2,1 | **Replay** | Save the buffer and cut to it on the TV (§C4a). **Tap** starts `1.5 s` before the last shot; **hold 0.6 s** starts at the last break and plays that rack — including after a New Rack press, until the new rack is broken. Press again to go back to live; it returns by itself when the file runs out | `REPLAY`+`HOLD RACK` → `CUEING…` / `RACK…` → `BACK`+`TO LIVE`; flashes `ERROR` and stays live if OBS can't | always |
-| 2,3 | **Scene** | Swap the TV between the play scene and the bracket (#43). The deck remembers the scene it left rather than naming one, exactly as Replay does, so the play scene can be renamed in OBS without touching code | `BRACKET`+`TO TV` ⇄ `BACK`+`TO PLAY` | **bracket loaded** |
+| 2,3 | **Scene** | Swap the TV between the play scene and the bracket (#43). The deck remembers the scene it left rather than naming one, so the play scene can be renamed in OBS without touching code | `BRACKET`+`TO TV` ⇄ `BACK`+`TO PLAY` | **bracket loaded** |
 | 2,5 | **RECAL** | **Hold 2 s** (longer than Session's 1 s, so neither is mistaken for the other): run `cueclock recalibrate`, which records a fresh empty-table reference, refits undistort + calibration, and swaps the three files in only if every check passes (§E2). Takes ~10–20 s, polled, so the deck keeps drawing; a Session press meanwhile is refused. The result **stays on the key** until the next hold or the next session start | `RECAL`+`HOLD 2s` → `HOLD…` → `RECAL…` → `OK 0.8PX`/`DRIFT 2` on green, or the refusal on red (`BALLS`/`ON CLOTH`, `BAD`/`FIT 2.4px`, `CAMERA`/`BUSY`, `NO`/`TABLE`), each over `HOLD 2s` | **session off** only (server down, not mid-start/stop) |
 | 3,1 | **Ruleset** | Cycle rulebooks via `POST /api/ruleset/{next}` — 8-ball → Final 10 → 9-ball → **Freestyle** (2026-08-13: match play with no shot clock; the amber clock keys go dark with the countdown, the wall shows `FREE STYLE` where the digits were, and vision journals without ever moving a clock) | current over next: `8-BALL`/`FINAL 10`/`9-BALL`/`FREE STYLE` | match, run out |
 | 3,2 | **New Rack** | `POST /api/rack` — you're not shooting, you're building the next rack: clock parks, extensions refill, shot count zeroes. One key for both clocked modes, because racking and throwing fifteen balls back up are the same act to the clock | `NEW RACK`, flashes `RACK` / `ERROR` | match, run out |
@@ -548,7 +519,7 @@ distrust.
 ```
 Stream Deck MK.2 ── USB HID ── cueclock deck (launchd agent, always on)
                                    ├─ HTTP → localhost:8000/api/*   (clock, score, ruleset)
-                                   ├─ obs-websocket → OBS           (projector, replay, quit — phase 2+)
+                                   ├─ obs-websocket → OBS           (projector, recording, scenes, quit)
                                    ├─ osascript                     (Music.app, volume — backlog)
                                    └─ subprocess                    (owns `cueclock run` — phase 2)
 ```
@@ -581,7 +552,7 @@ fire-and-forget: the assertion expires by itself and the TV confirms on a later
 poll, so neither can hold up the camera. Then spawn the canonical `run` command
 (README, built by `session.run_command()`) and a `caffeinate -d` assertion →
 face reads `STARTING…` → on the first poll where `/api/rulesets` answers, launch OBS
-(`open -a OBS --args --startreplaybuffer --disable-shutdown-check`) and go
+(`open -a OBS --args --disable-shutdown-check`) and go
 `ON` → then set the rig up for this session, retried on the poll (20 attempts,
 ~40 s) because nothing is ready when first asked — the TV is still waking and
 OBS's WebSocket answers ~10 s after launch: **confirm the TV is on**
@@ -631,15 +602,15 @@ tap does nothing), in this order — every step learned from live presses on
    streaming and cools). Nothing OBS does may delay the camera: a blocked quit
    once held the signal for 20 s and burned its whole grace window, forcing a
    pointless SIGTERM.
-2. **Drive every OBS output to stopped over obs-websocket** (replay buffer,
-   record, stream, virtual cam). The session recording is stopped on its own
+2. **Drive every OBS output to stopped over obs-websocket** (record, stream,
+   virtual cam, and a replay buffer if one was started by hand). The session recording is stopped on its own
    just before, because `StopRecord` is the one request that names the file
    (§C7). Quitting OBS with *any* output active raises
    a modal *"OBS is still currently active"* dialog, and there is no keyboard
    at the table to click it. This **loops** rather than checking once, because
-   `--startreplaybuffer` arms the buffer asynchronously — a stop pressed a few
-   seconds after launch sees "not active", skips, and the buffer starts
-   anyway. It also distinguishes *"nothing running"* from *"couldn't ask"*
+   an output can start asynchronously — on 2026-08-02 the replay buffer, then
+   armed at launch, was seen "not active" by a stop pressed a few seconds after
+   launch and started anyway. It also distinguishes *"nothing running"* from *"couldn't ask"*
    (OBS gone, WebSocket off): unknown is reported, never assumed quiet.
 3. **Quit OBS gracefully** by AppleScript — never `kill`, which reopens it in
    safe mode without the projector, exactly what a headless rig can't fix.
@@ -667,7 +638,7 @@ same shutdown path) — never SIGKILL.
 shot** (`IDLE_STOP_S`) runs the same stop as the hold, steps 1–5, with no
 warning. A session never played counts from its start, and one re-adopted
 after a daemon restart counts from the restart. The deck asks
-`GET /api/replay_anchors` for the last shot's age only once its own clock says
+`GET /api/shot_age` for the last shot's age only once its own clock says
 the limit may have passed (about once per 10 min of play), and only an answer
 stops it, so a server that misses a poll can't end a live session. Every
 ShotTaken counts, before every gate (phantoms, `no_clock` drills and the
@@ -707,230 +678,34 @@ finished posting the last frame.
 
 **OBS one-time settings — all done 2026-08-02:** WebSocket server enabled
 (Tools → WebSocket Server Settings; credentials copied to gitignored
-`config/obs_websocket.json`), replay buffer enabled (20 s then; 600 s since
-2026-08-05, and the setup script sets it — §C4a), "Save projectors
+`config/obs_websocket.json`), replay buffer enabled (no longer started since
+checkpoint 144 — §C4a), "Save projectors
 on exit" on, and OBS was never in Login Items. The client is
 `deck/obsws.py` — one request per connection (open, authenticate, send, read,
 close), every call best-effort so OBS being closed or the WebSocket server
 being off can never raise into the deck loop. The Session key uses it to stop
-the outputs, bind Syphon and open the projector; the **Replay** key drives
-playback (§C4a).
+the outputs, bind Syphon, open the projector and run the session recording;
+the scene key uses it to switch to the bracket and back.
 
-### C4a. Instant replay (phase 3 — built 2026-08-02)
+### C4a. Instant replay (removed in checkpoint 144)
 
-Code: `deck/replay.py` (cue-point arithmetic + the obs-websocket sequence) and
-the `ReplayShow` branch in `deck/daemon.py`. The scene is built by
-`scripts/setup_obs_replay.py`, never by hand (§B3).
+From 2026-08-02 to 2026-11-22 the deck's Replay key (2,1) saved OBS's replay
+buffer and cut it to the TV: a tap played the last shot, a hold played the
+rack from its break. OBS launched with `--startreplaybuffer`, holding up to
+600 s of program output, and the `/replay` page badged the Replay scene.
+Steven removed it (#75): *"I don't really use it in its current form and we're
+saving the full sessions so we don't need to save replays in this way."* It
+had saved five times since August. The session recording (§C7) and the review
+page are the footage now.
 
-**Where playback starts.** The buffer holds the last `RecRBTime` seconds of
-program output, so the interesting part is always at the *end* — playing from
-the start is minutes of someone chalking. The vision core already timestamps
-every ShotTaken to ~20 ms of contact, the server reports how long ago that was
-(`GET /api/replay_anchors`), and the file ends at the save, which makes the cue
-point arithmetic:
-
-```
-cursor = duration − anchor_age + display_lag − lead      (20 − 4 + 0.1 − 1.5 = 14.5 s)
-```
-
-**Two spans, one key** (2026-08-05, checkpoint 65). A **tap** anchors on the
-last shot; a **hold** (0.6 s, the score keys' dwell) anchors on the rack — the
-last break there has been — and plays from there to now. Same file, same seek, same badge: a span is just which of the two ages
-`/api/replay_anchors` returns gets fed to the same arithmetic (`replay.Span`,
-whose value *is* the field name). The one behavioural difference is the ceiling:
-`MAX_PLAY_S` caps a tap at 20 s so a stale anchor can't strand the TV on the
-whole buffer, and a hold lifts that to the file's length, because "play the
-rack" is exactly the request to lift it.
-
-Tap/hold rather than a chooser page because the common press
-has to stay one press with nothing to read; the cost is that a tap now fires on
-**release**, while a mature hold fires under the finger and says `RACK…` so the
-gesture is acknowledged before the TV changes.
-
-**The rack anchor is the break, and only ever the break** (amended 2026-08-05,
-checkpoint 67). New Rack **arms** the next shot to become it rather than stamping
-itself, so a rack replay opens on the break instead of on a minute of building a
-triangle — *and* keeps pointing at the rack you just played until the new one is
-actually broken. That second half is the common press: you run out, you rack up,
-then you hold Replay to see how you did it. Taking the press as the anchor made
-that press show the empty table you had just cleared (live failure below).
-`no_clock` has no New Rack key, so out there the anchor is the session's first shot
-until something racks — and a null anchor (or one older than the buffer) plays as
-much of the buffer as there is, the same fallback a stale shot anchor already had.
-
-> **Live failure, 2026-08-05.** `setup: POST /api/rack` and then, 2.0 s later,
-> `replay: rack 2.0s ago, 598.5s file, cue 595.1s, 3.4s on air` — a correct hold,
-> a correct 10-minute buffer, a seek that landed, and 3.4 s of an already-run-out
-> table on the wall. The rack Steven wanted had broken ~266 s earlier and was
-> sitting comfortably inside the file. Nothing about the failure looked like a
-> wrong anchor from the deck's side, which is why the log line prints the age.
-
-**The buffer has to be long enough to hold a rack, and 20 s never was.** This is
-the one part of the feature that is an OBS setting rather than code:
-`RecRBTime`, now **600 s** (`replay.BUFFER_TARGET_S`), written into the active
-profile by `scripts/setup_obs_replay.py --buffer-seconds N` so the length the
-deck assumes and the length OBS keeps can't drift. **OBS reads it when the
-buffer starts**, so a change lands at the next Session start (or a manual
-`Stop`/`StartReplayBuffer`), not immediately.
-
-Ten rather than five minutes because the buffer is sized for the *worst* rack,
-not the average one (Steven, 2026-08-05: *just in case there's a safety battle
-and a long rack*). A rack that outruns the buffer doesn't fail — the cue point
-clamps to the file's start — it silently begins mid-rack, which is the failure
-here that looks most like the feature working. A safety battle is precisely the
-rack worth replaying.
-
-The cost is linear, and it is disk more than RAM. Measured 2026-08-05 (`ffprobe`
-on real saves: 12.2 MB / 18.4 s and 43 MB / 77.6 s ⇒ **0.55–0.66 MB/s**), ten
-minutes is ~400 MB held in OBS — nothing on 24 GB — and **~400 MB written to
-`~/Movies` on every press**, up from 12 MB. Twenty presses is 8 GB and nothing
-prunes that directory. It is also why `SAVE_TIMEOUT_S` went 3 → 8 s.
-
-OBS caps the buffer by memory *and* by time, honouring whichever binds first and
-saying nothing about it — so the setup script now sets `RecRBSize` from the time
-target (×1.5 headroom for a busier scene: 594 MB ≈ 900 s) rather than leaving it
-where it was. A memory cap that was fine for the old length is exactly how a
-ten-minute buffer silently becomes a seven-minute one, and that reads as a bug
-in the seek, not as a setting.
-
-**Measured live, 2026-08-05** (both spans driven against the real OBS with the
-server up but no camera, so the shot anchor was deliberately null; taken while
-the buffer was still set to 300 s, and it had been running 68 s): a 68.2 s
-buffer — itself the proof the setting took, since the old 20 s one capped the
-file at 20 — gave `rack 37.2s ago → cue 29.6s, 38.6s on air` (68.2 − 37.2 + 0.1
-− 1.5 ✓) and `no anchor → cue 48.2s, 20.0s on air` (the `MAX_PLAY_S` fallback).
-Both seeks landed on a keyframe just before the target, both cut to **Replay**
-and both returned to **Stream Detail**. `show()` blocked **1.2–1.4 s** — up from
-the 0.34–0.63 s of checkpoint 49, which is the bigger file being written and
-opened, and why the pending face matters more than it did.
-
-The deck loop's own half of this — a tap firing on release, a hold firing under
-the finger, a mature hold *not* also firing a tap on the lift — is covered by
-`tests/unit/test_deck_loop.py`, which drives `_loop` with a fake device. That is
-the one deck path that had never been testable without a finger, and the gesture
-that made it worth building: a Replay key that silently plays the wrong span is
-indistinguishable from one that works.
-
-**A rack replay runs in real time**, and stays that way until someone verifies
-that OBS honours `speed_percent` on a hardware-decoded media source. Fast
-forward is honest at 30 fps (unlike slow-mo, which needs frames that were never
-recorded), so 2× is one per-press setting away — but if OBS ignores it, `play_s`
-is half the real airtime and the deck cuts back to live mid-rack. Until then the
-bound is the Replay key itself, which says `BACK` for the whole time it runs.
-The badge stops counting `LIVE IN n` above 20 s for the same reason: over a
-five-minute replay that number is one nobody can use.
-
-Constants live at the top of `deck/replay.py`: `LEAD_S` 1.5 (runway before the
-shot), `DISPLAY_LAG_S` 0.1 (camera→Syphon→OBS, §B3's ~100 ms budget — the
-detector's stamp is when *vision* saw the shot, the recording shows it later),
-`MAX_PLAY_S` 20 and `MIN_PLAY_S` 2 (a stale anchor can't strand the TV on the
-whole buffer; an instant press still shows something), `SPEED` 1.0,
-`BUFFER_TARGET_S` 600 (what the setup script writes into OBS).
-
-**Why 1.0 and not slow-mo.** OBS records at 30 fps, so half speed is
-frame-doubled mush. Real slow-mo needs OBS set to 60 fps first; then `SPEED`
-becomes 0.5 and the setup script's `speed_percent` follows it. The camera's 160
-fps never reaches the recording — it only reaches detection.
-
-**No cue-stick detection, deliberately.** The detector discards the stick/arm
-blob by design (it is the oversized occluder), so
-finding it would be new detection work with no ground truth, to answer a
-question the shot timestamp already answers. It would also answer the wrong
-question: the stick appears at *address*, which can be ten seconds of standing
-still.
-
-**The anchor is stamped before every gate** (`Hub.shot_taken`) — ahead of the
-kill switch, the mode check and the IDLE break floor. Those decide whether a
-shot moves the *clock*; replay asks what is on the *video*. So the seek still
-works in `no_clock`, which is exactly where drills happen. Accepted cost: a
-phantom shot anchors a phantom replay, which is a bug worth seeing anyway.
-
-**Order is the feature.** Load the file → read its duration → seek → switch
-scene. Seeking after the switch would cut the TV to frame 0 and then jump;
-unit-tested as such (`tests/unit/test_replay.py`).
-
-**The seek proves itself, because OBS drops seeks silently.** Measured against
-OBS 32 on 2026-08-02: `SetMediaInputCursor` issued in the ~70 ms after the media
-source first reports a duration is **accepted and ignored** — success code, no
-movement. Unverified, that failure is invisible: the replay just plays from the
-top and reads as the lead being wrong rather than the seek being lost. So the
-seek is re-asked until the cursor proves it landed, and if it never does the cut
-is refused (TV stays live) rather than showing a wrong replay.
-
-**Effective lead is 1.5–3.5 s, not 1.5.** A media source seeks to a *keyframe*,
-so it always lands early; the recordings carry keyframes every **1.90–1.97 s**
-(`ffprobe` on real replay files, 2026-08-02). Lowering `LEAD_S` alone therefore
-cannot tighten the framing past the keyframe grid — that needs a shorter
-keyframe interval in OBS's encoder settings.
-
-**The burned-in shot clock is visible again — the mask is gone** (removed
-2026-08-03, checkpoint 60; added 2026-08-02, checkpoint 49). For one day the
-badge painted the countdown out with opaque `?mask=` rectangles it measured
-from OBS at each press. The mechanism was sound and never misfired: identity
-was the *page*, so a renamed, moved or duplicated overlay stayed covered and a
-hidden one was skipped. It was removed for how it looked, not for what it did.
-On the rig the clock is a **193×193 browser source at (1141, 0)**, sitting on
-the Camo side angle — so the mask was a 197×195 black rectangle punched into
-live footage, which is the clock's own black square with its white border and
-its digits deleted. That reads as damage (Steven, 2026-08-03: *the black square
-over the clock in replay view looks bad*).
-
-Removing it restored the checkpoint-46 problem for one checkpoint: a replay
-showed a countdown that wasn't real, under a badge that said REPLAY.
-
-**The fix was upstream, and it was not a mask** (landed 2026-08-03, checkpoint
-61, issue #23). The buffer records program output, so a clean replay requires a
-clean *program*; stock OBS 32.1.1 has no per-scene or per-source recording
-(checked — the bundled plugin set only; a "record a different scene" path needs
-Exeldro's `obs-source-record`, plus hotkey-triggered saves and file discovery,
-because obs-websocket cannot save a filter-owned buffer). So the clock stopped
-being drawn over live video at all: it is now the right-hand cell of the bar
-along the bottom of the side-angle column (§B3). A replayed countdown is still
-in the recorded pixels, but it is on a plinth rather than over the table, and
-the REPLAY badge sits above it — the same relationship a broadcast has with its
-own lower third. Whether that still wants covering is now a judgement on the
-wall, not a code question.
-
-The alternative — taking the clock out of OBS entirely and floating it over the
-projector — was not needed, and would have cost the chime routing (§B3,
-"Control audio via OBS").
-
-One tail worth knowing, and the reason a mask is a bad strategy rather than
-just an ugly one: pressing Replay from the **Shot Clock** scene used to mask
-69.6% × 69.8% of the canvas, because that scene's clock *is* the canvas.
-
-**The return to live is a fade to black, not a transition.** OBS's Fade is
-already set and it is invisible here by construction: a replay is a pixel-exact
-rewind of the TV, so a 300 ms cross-fade dissolves one picture of the table into
-a nearly identical one and reads as "nothing happened" (Steven, 2026-08-02:
-*hard to tell when we're back on the live view*). The badge instead fades the
-whole frame to black over its last 0.45 s, so black separates the two pictures.
-The `.secs` slot became a `LIVE IN n` countdown to the same moment — it says
-*when*, never *that* we are live, because the page only ever sits over old
-footage.
-
-**The badge is loaded before the cut, and its timeline is longer than the
-replay.** Two instants that look like one, both measured 2026-08-02: the page's
-clock starts **0.03–0.05 s** after `SetInputSettings`, but its first frame
-reaches OBS **0.567–0.570 s** later (three trials each, repeatable to 3 ms).
-Cut instantly and the badge is invisible — clock unmasked — for half a second;
-give it time to paint and it is already half a second into its own animation.
-So the deck does both: it sets the URL and presses the source's own refresh
-button early (behind the seek, whose round trips hide most of the wait), sleeps
-out the remainder of `BADGE_PAINT_S`, *then* switches; and it hands the page
-`play_s + BADGE_PAINT_S`, so the drain bar, the countdown and the fade all land
-on the deck's actual return. The explicit refresh is why the source has
-`restart_when_active` off — see §B3.
-
-**Measured live, 2026-08-02** (four consecutive presses, camera not running):
-`show()` took **0.34–0.63 s** end to end, which is how long the deck blocks;
-saved files come out at **18.6–20.0 s** against the 20 s buffer setting. The
-badge pre-warm adds up to `BADGE_PAINT_S` (0.7 s) minus whatever the seek
-already spent, so a press now blocks on the order of a second.
-
-Every failure leaves the program scene alone — unreachable OBS, missing Replay
-scene, a save that never lands all mean the TV keeps showing live, which is
-always the safe state for a key pressed mid-session.
+What went with it: `deck/replay.py`, the key and its faces,
+`scripts/setup_obs_replay.py`, the `/replay` page, the rack anchor in the hub,
+and `GET /api/replay_anchors`, which now 404s (the idle stop reads
+`GET /api/shot_age`). Old `Replay …` saves in `~/Movies` stay under the footage
+budget (§C7), so they age out with everything else. Two lessons from it are
+kept where they still apply: continuous 4K encoding starves detection, so the
+output stays 1080p (§B3); and a stop has to loop, because an OBS output can
+start after a stop has looked (§C4).
 
 ### C5. Corpus-clip flow (removed in checkpoint 114)
 
@@ -951,7 +726,7 @@ Flag path went is in §C2.
       sleep stays enabled (an M2 mini idles ~5 W); Amphetamine holds system
       sleep off, and screen lock is off so nothing covers the projector.
 - [ ] `pmset -g assertions` clean after session stop.
-- [ ] OBS relaunch restores projector + replay buffer, twice in a row.
+- [ ] OBS relaunch restores the projector, twice in a row.
 
 ### C7. Session recording + after-session housekeeping (#57, built 2026-11-16)
 
@@ -974,16 +749,16 @@ What gets recorded is the profile's Simple-mode recording (read 2026-11-16 from
 `basic/profiles/Untitled/basic.ini`): `~/Movies`, `hybrid_mov`, Apple H.264
 (`RecQuality=HQ`), OBS's default `%CCYY-%MM-%DD %hh-%mm-%ss` file name, the
 program output at 1920×1080/60 — both angles with the overlay burned in.
-The replay buffer (600 s) shares that encoder in Simple mode, so recording
-should add a disk write, not a second encode. **Unmeasured**: the recording's
+Since checkpoint 144 the recording is the only encode (the replay buffer that
+shared its encoder is no longer started). **Unmeasured**: the recording's
 cost to OBS frame stats and detection `hz` — read both off the first recorded
 session (journal heartbeats; OBS log's "frames missed/skipped") before trusting it.
-At the replay saves' measured ~6.6 Mbps it is ~3 GB an hour.
+At the old replay saves' measured ~6.6 Mbps it is ~3 GB an hour.
 
 **The side-angle mic is in the mix** (checked 2026-11-16, read-only, OBS
 closed): the scene collection's global `Mic/Aux` input is the
 `Insta360 Link 2C Pro` CoreAudio device, unmuted, volume 1.0, on every audio
-tracks, and Simple mode records track 1. The newest Replay-key save
+tracks, and Simple mode records track 1. The last Replay-key save
 (2026-11-14, after the Insta360 switchover) carries a stereo AAC track
 peaking at −12.9 dB (mean −59.5 dB) — real room sound, not digital silence.
 The voice listener opens the same mic through CoreAudio, which shares input
@@ -994,8 +769,8 @@ OBS → Settings → Audio → Global Audio Devices → **Mic/Auxiliary Audio** 
 **`cueclock session maintain`** (`archive.py`, `cli.md`) does the rest after
 the session: journal copy, parity check, moments, footage cuts into each
 session directory, then moves the directory to `/Volumes/T7/cueclock_sessions/`
-and prunes footage to a 10 GB budget (the listed recordings plus the Replay
-key's saves — §C4a notes nothing pruned those before). It refuses to do
+and prunes footage to a 10 GB budget (the listed recordings plus the old
+Replay-key saves, which nothing pruned before). It refuses to do
 anything while a session is live, because a multi-GB T7 copy mid-session is the
 USB stall in §C5.
 

@@ -11,10 +11,11 @@ always exactly what is pressable. Nothing reflows when a key leaves: every
 survivor keeps its cell, so position stays learnable even though the set
 changes. Dimming survives only as typography (`Face.sub`), never as state.
 
-**The spine sits top-left and never moves.** Session, Mode and Replay work in
-every mode, so they hold the 2x2 corner (its fourth cell, (2,2), has been empty
-since the Flag key was removed in checkpoint 114); everything to the right of
-them is mode-dependent. Position therefore answers "does this key persist" while colour
+**The spine sits top-left and never moves.** Session and Mode work in every
+mode, so they hold the top of the 2x2 corner; its bottom row is empty, (2,2)
+since the Flag key was removed in checkpoint 114 and (2,1) since the Replay key
+was removed in checkpoint 144. Everything to the right of them is
+mode-dependent. Position therefore answers "does this key persist" while colour
 answers "how much time do I have" — two questions, two channels.
 
 **Face grammar** — the `OFF`-button confusion was never the word, it was a
@@ -22,14 +23,13 @@ answers "how much time do I have" — two questions, two channels.
 else; cycle keys put the current value bright over the next value dim, so both
 are on the face and neither can be mistaken for the other; a key with a hold on
 it says so on its second line, because a gesture nothing names is a feature only
-its author knows about (Session states where it is, Replay names the span a hold
-would reach — the score keys are the exception, and only because their inverse
-is self-evident and their result is already on the wall). The second line has
-one other legitimate job, which Replay has always done and #43's scene key now
-does too: **naming where a press goes** when the key's own word cannot. `BACK`
-alone does not say back to what. What the second line may never be is context —
-a fact about the world with no press behind it — because that is the promise
-the whole grammar rests on.
+its author knows about (Session states where it is — the score keys are the
+exception, and only because their inverse is self-evident and their result is
+already on the wall). The second line has one other legitimate job, which
+#43's scene key does: **naming where a press goes** when the key's own word
+cannot. `BACK` alone does not say back to what. What the second line may never
+be is context — a fact about the world with no press behind it — because that
+is the promise the whole grammar rests on.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ class Group(Enum):
 
     CLOCK = STRIPE_CLOCK  # seconds matter — extension, push, start
     MATCH = STRIPE_MATCH  # between racks, no pressure — score, new rack, ruleset
-    SYSTEM = STRIPE_SYSTEM  # session, mode, replay
+    SYSTEM = STRIPE_SYSTEM  # session, mode, scene, recal
 
     @property
     def stripe(self) -> Rgb:
@@ -92,7 +92,6 @@ class DeckState:
     extensions_allowed: int = 0
     p1: int = 0
     p2: int = 0
-    replaying: bool = False  # a replay is on the TV — the Replay key says BACK
     session_face: str = "START"
     session_sub: str | None = None
     session_dot: Rgb | None = None
@@ -169,27 +168,6 @@ class ScoreAdjust:
 
 
 @dataclass(frozen=True)
-class ReplayShow:
-    """Save the OBS replay buffer and cut to it on the TV; press again for live.
-
-    One key for both directions because there is only ever one thing to do with
-    it: while live it starts a replay, while a replay is on it ends one. The
-    face says which (`deck/replay.py` owns the sequence).
-
-    Tap plays the last shot, hold plays the whole rack — the same tap/hold rule
-    the score keys follow, and for the same reason: the common press has to stay
-    instant. Putting the rare span behind a hold rather than behind a chooser
-    page is what keeps "watch that shot" at one press with
-    nothing to read. Cost is that a tap now fires on *release*; a hold that
-    matures fires while the key is still down, so the answer never waits for a
-    finger to come off. Held length matches `ScoreAdjust`, deliberately: one
-    hold dwell to learn for the whole deck.
-    """
-
-    hold_s: float = 0.6
-
-
-@dataclass(frozen=True)
 class BracketConfirm:
     """Commit the armed bracket result — one press, four effects (#43).
 
@@ -227,21 +205,12 @@ class SceneToggle:
     """Swap the TV between the play scene and the bracket.
 
     Reads its state from the deck rather than from OBS: the daemon remembers
-    the scene it left, exactly as the Replay key does, so the face never costs
-    an obs-websocket round trip on a 2 s poll.
+    the scene it left, so the face never costs an obs-websocket round trip on a
+    2 s poll.
     """
 
 
-Action = (
-    ApiPost
-    | Cycle
-    | SessionToggle
-    | ScoreAdjust
-    | ReplayShow
-    | BracketConfirm
-    | SceneToggle
-    | Recalibrate
-)
+Action = ApiPost | Cycle | SessionToggle | ScoreAdjust | BracketConfirm | SceneToggle | Recalibrate
 
 
 # ---------- cycle label tables ----------
@@ -397,8 +366,8 @@ class Key:
         if isinstance(action, Recalibrate):
             return replace(state.recal_face, stripe=stripe)
         if isinstance(action, SceneToggle):
-            # Same shape as the Replay key's two faces, and for the same
-            # reason: one key, two directions, and the face says which.
+            # One key, two directions, and the face says which. "BACK" alone
+            # would not say where, so the second line names it (rule 3).
             if state.on_bracket:
                 return Face(text="BACK", sub="TO PLAY", stripe=stripe)
             return Face(text="BRACKET", sub="TO TV", stripe=stripe)
@@ -407,15 +376,6 @@ class Key:
             # current_base(): 60 s inside the WNT first-shot window, 15 under
             # Final 10, 30 otherwise. A plain "Reset" can't say which.
             return Face(text="START", big=str(state.base), stripe=stripe)
-        if self.name == "replay":
-            if state.replaying:
-                # "BACK" alone would not say where, and "LIVE" alone is a
-                # *state* on a key read as a command — the exact confusion
-                # rule 3 exists to prevent.
-                return Face(text="BACK", sub="TO LIVE", stripe=stripe)
-            # Live: the verb, then the gesture that gets the other span. A hold
-            # is invisible on a key that doesn't say it has one (rule 3).
-            return Face(text=self.text, sub="HOLD RACK", stripe=stripe)
         if self.name == "extension":
             left = max(0, state.extensions_allowed - state.extensions_used)
             pips = (left, state.extensions_allowed) if state.extensions_allowed else None
@@ -427,7 +387,6 @@ LAYOUT: tuple[Key, ...] = (
     # --- the spine: top-left 2x2, present in every mode, never moves ---
     Key(1, 1, "session", Group.SYSTEM, SessionToggle(), offline=True),
     Key(1, 2, "mode", Group.SYSTEM, Cycle("mode")),
-    Key(2, 1, "replay", Group.SYSTEM, ReplayShow(), text="REPLAY"),
     # --- the clock: top-right, absent once the clock is off ---
     # Start replaced Reset + Force 30, which differed by exactly one bit: both
     # set the countdown to full and both are rack-aware; one landed IDLE, the
@@ -501,11 +460,6 @@ LAYOUT: tuple[Key, ...] = (
     Key(2, 3, "scene", Group.SYSTEM, SceneToggle(), needs_bracket=True),
 )
 
-REPLAY_PENDING_FACE = "CUEING…"  # while the buffer is written and seeked
-# A held press says what it heard, not just that it is working: the hold fires
-# under the finger, and this face is the only confirmation the gesture landed
-# before the TV changes a second or two later.
-RACK_PENDING_FACE = "RACK…"
 # A confirm does four things across two processes (result, next match, rack,
 # scene) and takes as long as the slowest — so the key says it is working.
 CONFIRM_PENDING_FACE = "SAVING…"

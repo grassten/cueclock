@@ -24,7 +24,6 @@ from cueclock.deck.layout import (
     DeckState,
     Group,
     Key,
-    ReplayShow,
     ScoreAdjust,
     SessionToggle,
     cycle_label,
@@ -77,15 +76,17 @@ def test_key_index_is_row_major_from_top_left() -> None:
 
 # --- the spine: top-left 2x2, present in every mode, never moves ---
 
-SPINE = {"session", "mode", "replay"}
+SPINE = {"session", "mode"}
 # With "I shot" retired (#19, 2026-08-05) the spine is the whole of what has no
 # mode condition at all — nothing else survives every mode.
 ALWAYS_ON = set(SPINE)
 
 
 def test_spine_holds_the_top_left_block() -> None:
-    # (2,2) has been empty since Flag was removed (checkpoint 114).
-    assert {BY_NAME[name].index for name in SPINE} == {0, 1, 5}
+    # The block's bottom row is empty: (2,2) since Flag was removed
+    # (checkpoint 114), (2,1) since Replay was (checkpoint 144).
+    assert {BY_NAME[name].index for name in SPINE} == {0, 1}
+    assert not {key.index for key in LAYOUT} & {5, 6}
 
 
 def test_spine_survives_every_mode() -> None:
@@ -255,7 +256,6 @@ SUB_LINE_KEYS = {
     "mode": "value",
     "ruleset": "value",
     "session": "gesture",
-    "replay": "gesture",
     "confirm": "gesture",  # only once armed — see below
     "scene": "destination",
 }
@@ -375,11 +375,10 @@ def test_every_key_actually_renders_in_every_mode_and_rulebook() -> None:
     """
     for mode in MODES:
         for ruleset in RULESETS:
-            for replaying in (False, True):
-                state = replace(MATCH, mode=mode, ruleset=ruleset, replaying=replaying)
-                for key in LAYOUT:
-                    image = faces.render(key.face(state))
-                    assert image.size == (faces.SIZE, faces.SIZE), (key.name, mode, ruleset)
+            state = replace(MATCH, mode=mode, ruleset=ruleset)
+            for key in LAYOUT:
+                image = faces.render(key.face(state))
+                assert image.size == (faces.SIZE, faces.SIZE), (key.name, mode, ruleset)
 
 
 def test_render_survives_a_newline_in_every_field() -> None:
@@ -572,37 +571,6 @@ def test_score_post_picks_the_direction(monkeypatch: pytest.MonkeyPatch) -> None
     _score_post(action, "p1", "http://x", decrement=False)
     _score_post(action, "p1", "http://x", decrement=True)
     assert posted == ["/api/score/p1/increment", "/api/score/p1/decrement"]
-
-
-# --- the Replay key: one key, both directions ---
-
-
-def test_replay_key_offers_the_verb_that_applies() -> None:
-    live = BY_NAME["replay"].face(MATCH)
-    mid_replay = BY_NAME["replay"].face(replace(MATCH, replaying=True))
-    assert live.text == "REPLAY"
-    # The hold is on the face or it does not exist — nothing else on the deck
-    # would tell you the key has a second span.
-    assert live.sub == "HOLD RACK"
-    # "LIVE" alone would be a state on a key read as a command (rule 3), so the
-    # face names the destination on its second line instead.
-    assert mid_replay.text == "BACK"
-    assert mid_replay.sub == "TO LIVE"
-
-
-def test_replay_hold_matches_the_other_deck_holds() -> None:
-    # One dwell to learn: the rare span sits behind the same hold as the rare
-    # score direction, and both are shorter than the session's deliberate stop.
-    replay_key, p1, session = (BY_NAME[n].action for n in ("replay", "p1", "session"))
-    assert isinstance(replay_key, ReplayShow) and isinstance(p1, ScoreAdjust)
-    assert isinstance(session, SessionToggle)
-    assert replay_key.hold_s == p1.hold_s < session.hold_s
-
-
-def test_replay_key_stays_on_the_spine_mid_replay() -> None:
-    for mode in MODES:
-        state = replace(MATCH, mode=mode, replaying=True)
-        assert BY_NAME["replay"].visible(state), mode
 
 
 # --- MODE_FACES is the deck's copy of the modes table ---

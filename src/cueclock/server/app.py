@@ -66,9 +66,7 @@ def create_app(
 
     @app.get("/")
     async def index() -> JSONResponse:
-        return JSONResponse(
-            {"endpoints": ["/shotclock", "/replay", "/control", "/bracket", "/ws", "/api/*"]}
-        )
+        return JSONResponse({"endpoints": ["/shotclock", "/control", "/bracket", "/ws", "/api/*"]})
 
     @app.get("/shotclock")
     async def shotclock_page() -> FileResponse:
@@ -84,11 +82,6 @@ def create_app(
     @app.get("/control")
     async def control_page() -> FileResponse:
         return _page("control.html")
-
-    @app.get("/replay")
-    async def replay_page() -> FileResponse:
-        """REPLAY badge for the OBS Replay scene (`?s=<seconds>` drains the bar)."""
-        return _page("replay.html")
 
     @app.get("/bracket")
     async def bracket_page() -> FileResponse:
@@ -201,30 +194,17 @@ def create_app(
     async def api_state() -> dict[str, object]:
         return hub.payload()  # same composed payload the WS broadcasts
 
-    @app.get("/api/replay_anchors")
-    async def api_replay_anchors() -> dict[str, object]:
-        """Both points the instant replay can seek to, as ages in seconds.
+    @app.get("/api/shot_age")
+    async def api_shot_age() -> dict[str, object]:
+        """Seconds since the last ShotTaken, or null if none this session.
 
-        `shot_age_s` is the last ShotTaken (a tapped Replay key), `rack_age_s`
-        is where this rack began (a held one) — either may be null, which the
-        deck reads as "play as far back as the buffer goes".
-        The deck's idle stop reads `shot_age_s` too (#60): a session with no
-        shot for 10 min is stopped as if the Session key had been held.
-
-        Its own endpoint rather than fields of `/api/state` because the deck
-        polls state every 2 s and these answers are only worth having at the
-        instant of the press: two seconds of staleness is two seconds of the
-        replay starting in the wrong place. Both in one response because a
-        press only ever needs one round trip, and it wants them measured
-        against the same instant — the save that ends the file.
-
-        Replaced `GET /api/last_shot` (2026-08-05) rather than growing a second
-        field onto it: an endpoint named for one anchor that returns two is a
-        name that lies. The old URL 404s deliberately — a deck daemon left on
-        the old build should fail visibly, not quietly cue every replay to the
-        top of the buffer.
+        The deck's idle stop reads it (#60): a session with no shot for 10 min
+        is stopped as if the Session key had been held. It replaced
+        `GET /api/replay_anchors` in checkpoint 144, when the instant replay
+        that needed the second (rack) anchor was removed; the old URL 404s
+        deliberately, so a deck left on an old build fails visibly.
         """
-        return {"shot_age_s": hub.last_shot_age(), "rack_age_s": hub.rack_age()}
+        return {"shot_age_s": hub.last_shot_age()}
 
     @app.get("/api/score")
     async def api_score() -> dict[str, object]:

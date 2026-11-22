@@ -102,7 +102,7 @@ class Harness:
         self.record_path = record_path
         self.recordings: list[dict[str, str]] = []
         self.adoptable: dict[int, FakeProcess] = {}
-        # What `GET /api/replay_anchors` says: no shot yet, until a test sets one.
+        # What `GET /api/shot_age` says: no shot yet, until a test sets one.
         self.shot_age: float | None = math.inf
         self.shot_age_asks = 0
         self.manager = SessionManager(
@@ -926,7 +926,7 @@ def test_an_adopted_session_gets_a_fresh_idle_limit() -> None:
     assert reborn.manager.tick(server_up=True) is SessionState.STOPPING
 
 
-def test_the_idle_stop_reads_the_replay_anchors_endpoint() -> None:
+def test_the_idle_stop_reads_the_shot_age_endpoint() -> None:
     assert shot_age_of(None) is None  # server down
-    assert shot_age_of({"shot_age_s": None, "rack_age_s": None}) == math.inf
-    assert shot_age_of({"shot_age_s": 12.5, "rack_age_s": 40.0}) == 12.5
+    assert shot_age_of({"shot_age_s": None}) == math.inf
+    assert shot_age_of({"shot_age_s": 12.5}) == 12.5

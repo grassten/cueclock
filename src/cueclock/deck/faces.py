@@ -54,7 +54,7 @@ FG_DIM: Rgb = (90, 90, 90)
 # an outcome flash, and far enough apart to tell at a glance on a lit tile.
 STRIPE_CLOCK: Rgb = (224, 160, 32)  # amber — seconds matter
 STRIPE_MATCH: Rgb = (61, 134, 216)  # blue — between racks, no pressure
-STRIPE_SYSTEM: Rgb = (102, 114, 126)  # grey — session, mode, replay
+STRIPE_SYSTEM: Rgb = (102, 114, 126)  # grey — session, mode, scene, recal
 
 DOT_OK: Rgb = (63, 191, 106)
 DOT_WARN: Rgb = (224, 160, 32)

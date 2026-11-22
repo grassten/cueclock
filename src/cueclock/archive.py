@@ -101,8 +101,9 @@ HOOK_TIMEOUT_S = 600.0
 _STAMP = re.compile(r"^\d{8}-\d{6}$")  # the journal's `session-<stamp>.jsonl`
 _MOMENT_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")  # a safe file name
 # OBS names a replay-buffer save `<RecRBPrefix> <date> <time>`; the prefix is
-# OBS's default "Replay" and the only thing that saves the buffer is the deck's
-# Replay key (deck/replay.py), which nothing else ever pruned.
+# OBS's default "Replay". The deck's Replay key made them until it was removed
+# in checkpoint 144 (#75); the leftovers stay under the budget so they age out
+# like any footage instead of sitting in ~/Movies forever.
 _REPLAY_SAVE = re.compile(r"^Replay \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.(mov|mp4|mkv)$")
 
 
@@ -269,7 +270,7 @@ class Footage:
 
 
 def footage(recordings: Sequence[Recording], movies: Path) -> list[Footage]:
-    """What the budget covers: logged recordings plus the Replay-key saves."""
+    """What the budget covers: logged recordings plus any old Replay-key saves."""
     paths = {rec.path for rec in recordings}
     with contextlib.suppress(OSError):  # no ~/Movies: only the listed files count
         paths |= {p for p in movies.iterdir() if _REPLAY_SAVE.match(p.name)}

@@ -199,15 +199,14 @@ def run_command(reference: str | None = None) -> tuple[str, ...]:
 
 
 # `open` returns as soon as OBS is handed the launch, so this is a `call`, not
-# a spawn. --startreplaybuffer arms the buffer the Replay key needs (phase 3);
-# --disable-shutdown-check skips the "OBS didn't shut down properly" nag when a
-# previous session ended badly.
+# a spawn. --disable-shutdown-check skips the "OBS didn't shut down properly"
+# nag when a previous session ended badly. (--startreplaybuffer went with the
+# Replay key in checkpoint 144: the session recording is the footage now.)
 OBS_OPEN = (
     "/usr/bin/open",
     "-a",
     "OBS",
     "--args",
-    "--startreplaybuffer",
     "--disable-shutdown-check",
 )
 # Graceful quit only — never kill(1). A killed OBS reopens in safe mode and
@@ -288,11 +287,11 @@ def _shot_age() -> float | None:
     """Seconds since the session's last ShotTaken over the CLI's default server
     URL (`--server` in `run_deck` swaps in the real base): `math.inf` if the
     session has had none, None if the server did not answer."""
-    return shot_age_of(client.get_json("http://127.0.0.1:8000", "/api/replay_anchors"))
+    return shot_age_of(client.get_json("http://127.0.0.1:8000", "/api/shot_age"))
 
 
 def shot_age_of(anchors: dict[str, object] | None) -> float | None:
-    """Read `GET /api/replay_anchors` for the idle stop; see `_shot_age`."""
+    """Read `GET /api/shot_age` for the idle stop; see `_shot_age`."""
     if anchors is None:
         return None
     age = anchors.get("shot_age_s")
@@ -503,9 +502,9 @@ class SessionManager:
         session that could not come up leaves nothing of itself behind.
         """
         if self._obs_launched:
-            # Outputs first, same as `stop()`: the replay buffer is armed at
-            # launch (`--startreplaybuffer`), and quitting over a live output
-            # raises the modal dialog nobody is at the table to click.
+            # Outputs first, same as `stop()`: the recording may already be
+            # running, and quitting over a live output raises the modal dialog
+            # nobody is at the table to click.
             self._close_recording()
             self.stop_outputs()
             self.call(OBS_QUIT)

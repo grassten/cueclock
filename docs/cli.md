@@ -548,8 +548,8 @@ stays local until it does. Without the T7 the session is finished in place and
 moved on a later pass.
 
 Then the **footage budget**: the recordings the deck listed in
-`recordings.jsonl`, plus the Replay key's saves (`~/Movies/Replay <date>
-<time>.mov`, which nothing else prunes), are deleted oldest-first until they
+`recordings.jsonl`, plus any saves left by the removed Replay key
+(`~/Movies/Replay <date> <time>.mov`, checkpoint 144), are deleted oldest-first until they
 total ≤ `--budget-gb`. Nothing else in `~/Movies` is ever touched. One
 recording larger than the whole budget goes too, once its moments are cut.
 
@@ -668,9 +668,8 @@ frame).
 - `scripts/live_view.py` — camera bring-up viewer with focus/WB/grade
   hotkeys (`hardware.md` §A3); pylon Viewer doesn't exist on Apple Silicon.
 - `scripts/fetch_vosk_model.sh` — downloads the Vosk voice model.
-- `scripts/setup_obs_replay.py` / `scripts/setup_obs_bracket.py` — build the
-  Replay and Bracket scenes over obs-websocket. Idempotent; never assemble
-  either by hand (`hardware.md` §B3).
+- `scripts/setup_obs_bracket.py` — builds the Bracket scene over
+  obs-websocket. Idempotent; never assemble it by hand (`hardware.md` §B3).
 - The HTTP/WebSocket API the deck and overlays speak: `design.md` §2.1.
 - Tournament nights have no CLI at all: the bracket is built, driven and
   archived from `/control`'s Bracket tab and the Stream Deck (`design.md` §10).

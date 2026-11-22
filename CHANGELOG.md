@@ -319,6 +319,34 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 144: instant replay removed; #75):** Steven:
+  *"I don't really use it in its current form and we're saving the full
+  sessions so we don't need to save replays in this way."* It had saved five
+  times since August (1.8 GB in `~/Movies`). The session recording (#57) and
+  the review page are the footage now.
+  - **Deck:** the Replay key (2,1) is gone, with `deck/replay.py`, its tap and
+    hold routing in the daemon, the `replaying` face state, and the
+    `CUEING…` / `RACK…` faces. (2,1) stays empty: nothing reflows. Casual
+    match night is nine keys.
+  - **OBS:** launched without `--startreplaybuffer`, so the buffer no longer
+    encodes the program output all session. `scripts/setup_obs_replay.py` is
+    deleted. The Replay scene and its two sources are still in the collection,
+    unused.
+  - **Server:** the rack anchor (`Hub.rack_age`, `_rack_break_mono`,
+    `_rack_pending`) is gone. It had no other reader. `GET /api/replay_anchors`
+    and `/replay` 404 per the `/score` rule. The idle stop (#60) reads
+    `GET /api/shot_age` instead. Its stamp is unchanged, before every gate.
+  - **Kept:** the footage budget still counts old `Replay …` saves, so they
+    age out. obs-websocket's stop still covers a replay buffer started by
+    hand.
+  - **Knock-on:** #72 no longer arms a replay anchor at an automatic rack end,
+    so the risk of a racking strike taking the held-Replay anchor is moot.
+    #74's menu needs no Replay handling.
+  - **Verified:** no detection code touched, so the unit tests gate it (815
+    passed before the merge), plus ruff and mypy --strict. Docs: `hardware.md`
+    §C4a is a removal stub (numbers kept), Part C map and counts, §B3, §C4,
+    §C7; `design.md` §2.1 amendment; `cli.md`; `README.md`. Closes #75.
+
 - **2026-11-22 (checkpoint 143: the session-review golden test, run; #70
   step 2):** both halves were run headless (`claude -p`, dry run, GitHub
   writes and edits denied in its permissions) on 20261121-153046.
@@ -339,6 +367,7 @@ survive unchanged in `design.md`.
     stats did (`report.Racking(min_returns=math.inf)`): 47, matching the
     session, and 39 of them inside the two racking stretches. #69's "45"
     was an estimate; the other 8 are today's row.
+
 
 - **2026-11-22 (checkpoint 142: the session review's tools, and the skill
   that uses them; #70 steps 1 and 2):** what was done by hand for #69 (wrong

@@ -541,25 +541,13 @@ class Hub:
         # adjudicated settle reads it as its fired-tier evidence; operator
         # commands that move the clock clear it.
         self._idle_fire: tuple[float, float | None] | None = None
-        # When the last shot was seen, monotonic — the instant replay's anchor
-        # (`GET /api/replay_anchors`). Stamped for every ShotTaken the vision core
-        # emits, *before* the kill switch / mode / break gates: those decide
-        # whether a shot moves the clock, and replay asks a different question —
-        # what is on the video. So the anchor still works in `no_clock` mode,
-        # which is exactly where drills happen. Cost: a phantom shot anchors a
-        # phantom replay, which is a bug you would want to see anyway.
+        # When the last shot was seen, monotonic — what the deck's idle stop
+        # reads (`GET /api/shot_age`, #60) and where solo pace measures to.
+        # Stamped for every ShotTaken the vision core emits, *before* the kill
+        # switch / mode / break gates: those decide whether a shot moves the
+        # clock, and the idle stop asks a different question — is anybody
+        # playing. So a `no_clock` drill keeps the session alive.
         self._last_shot_mono: float | None = None
-        # Where the rack worth replaying starts — the other anchor the Replay
-        # key seeks to, on a *held* press ("play the whole rack" rather than
-        # "play that shot"). It is the **break**, never the racking: New Rack only
-        # *arms* the next shot to become it. So between racking and breaking the
-        # anchor is still the rack that just ended, which is the whole point —
-        # you run out, you rack up, and then you ask to see how you did it.
-        # None until the session's first break, which the deck reads as "as far
-        # back as the buffer goes" — the same answer it already gives for an
-        # anchor older than the buffer.
-        self._rack_break_mono: float | None = None
-        self._rack_pending = False  # New Rack seen: the next shot is the break
         # #25/#63 bookkeeping: this shot's scratch question (None until a
         # call, a clear or a refutation touches it), the motion episode it
         # belongs to, and whether that episode is still open. A new episode
@@ -650,29 +638,6 @@ class Hub:
         if self._last_shot_mono is None:
             return None
         return self._now() - self._last_shot_mono
-
-    def rack_age(self) -> float | None:
-        """Seconds since the last break, or None if none has been seen.
-
-        Always the break, never the New Rack press — see the stamps in
-        `__init__`. An age rather than a timestamp for the same reason
-        `last_shot_age` is one: the caller is another process.
-
-        Between a New Rack press and the break that answers it this still reports
-        the *previous* rack, deliberately. A table that has just been racked has
-        nothing on it to watch, and the rack you want at that moment is the one
-        you just played. Reporting the press instead was the live failure of
-        2026-08-05: New Rack, then a held Replay 2.0 s later, cued 595.1 s into a
-        598.5 s file and put 3.4 s of an empty table on the wall.
-
-        `no_clock` has no New Rack key at all, so out there this is the first
-        shot of the session until something racks. That is the honest answer:
-        a drill has no racks, and the deck's fallback (the whole buffer) is
-        what "the rack" means when nothing has declared one.
-        """
-        if self._rack_break_mono is None:
-            return None
-        return self._now() - self._rack_break_mono
 
     @property
     def clock_live(self) -> bool:
@@ -842,7 +807,6 @@ class Hub:
             # the wall). Back to the armed rack, as the settle's list would
             # have decided it.
             self._break_fired = False
-            self._rack_pending = True
             self._log(
                 "shot_provisional_reverted",
                 reason="rack_standing",
@@ -1007,11 +971,6 @@ class Hub:
         self._idle_fire = None
         self._abandon_provisional()
         self._end_ball_in_hand("new_rack")
-        # New Rack *arms* the next shot to become the replay anchor; it does not
-        # retire the old one. Until the break lands there is nothing on the
-        # table to watch, so the rack worth replaying is still the one that
-        # just ended — see `rack_age`.
-        self._rack_pending = True
         # In run_out a New Rack is a fresh fifteen thrown up — the panel's
         # pace numbers describe one run, so they restart with it.
         self._reset_pace()
@@ -1573,17 +1532,10 @@ class Hub:
         detail: dict[str, object] = {"t": t, "frame_t": t, "ball": ball_id, "newborn": newborn}
         if speed_mms is not None:
             detail["speed"] = round(speed_mms)
-        self._last_shot_mono = now  # replay anchor — before every gate
+        self._last_shot_mono = now  # the idle stop's anchor — before every gate
         if not self._episode_open:
             self._begin_episode(t)  # a strike the latch never saw is still a shot (#63)
         self._episode_struck = True
-        if self._rack_pending or self._rack_break_mono is None:
-            # The break: the first shot after a New Rack press, or the session's
-            # first shot (a `no_clock` drill has no New Rack key at all). From
-            # here on the rack replay opens on it, and the previous rack is
-            # released. Ungated for the same reason as above.
-            self._rack_break_mono = self._last_shot_mono
-            self._rack_pending = False
         if not self.vision_enabled:
             self._log("vision_shot_taken_killed", **detail)
             return False  # kill switch: misbehaving vision must not move the clock
@@ -1774,9 +1726,8 @@ class Hub:
             if refusal is not None and self.clock.break_reverted(now):
                 # §17: the strike that started this rack was not the break —
                 # the rack is standing where it stood. Back to the armed
-                # rack: the count is undone, and the real break will anchor
-                # the rack (and its replay) when it comes.
-                self._rack_pending = True
+                # rack: the count is undone, and the real break counts when
+                # it comes.
                 detail["rejected"] = refusal
                 self._log("shot_provisional_reverted", t=t, frame_t=t, reason=refusal)
                 self._log("vision_balls_settled", **detail)
@@ -1789,9 +1740,6 @@ class Hub:
             # nothing was ever lost by deciding here). Count the shot, then
             # let the settle below start the first-shot window.
             self.clock.shot_taken()
-            if self._rack_pending or self._rack_break_mono is None:
-                self._rack_break_mono = now  # replay anchor, as in shot_taken
-                self._rack_pending = False
         reverting = self._provisional_open_mono is not None
         moved_clock = self.clock.balls_settled(now, suppress=phantom or refusal is not None)
         if self._settle_facts is not None and self._settle_facts.t == t:

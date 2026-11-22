@@ -4,9 +4,9 @@ Everything the bracket *is* lives on the server (`server/bracket.py`); this is
 only the scene switch, which has to be here because obs-websocket is the deck's
 to talk to (`docs/hardware.md` §C3).
 
-It remembers the scene it left rather than naming one, exactly as `replay.py`
-does — the play scene is called `Stream Detail` on this rig and there is no
-reason for that name to be compiled into two places.
+It remembers the scene it left rather than naming one — the play scene is
+called `Stream Detail` on this rig and there is no reason for that name to be
+compiled in here.
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ DWELL_S = 30.0
 class Showing:
     """The bracket is on the TV; `live_scene` is what to go back to.
 
-    ``until`` is the monotonic deadline for the automatic return, as
-    ``replay.Playing`` uses — or ``None`` for "stay until a human says
+    ``until`` is the monotonic deadline for the automatic return — or
+    ``None`` for "stay until a human says
     otherwise", which is what the scene key means and a timer must not
     second-guess.
     """

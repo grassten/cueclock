@@ -186,7 +186,7 @@ def test_pages_are_revalidated_on_every_load() -> None:
     """OBS's browser kept drawing a cached bar after a new `run` (2026-11-17):
     without this header a page untouched for weeks is cached for days."""
     with make_client() as client:
-        for page in ("/shotclock", "/control", "/replay", "/bracket"):
+        for page in ("/shotclock", "/control", "/bracket"):
             assert client.get(page).headers["cache-control"] == "no-cache", page
 
 
@@ -863,78 +863,36 @@ def test_ruleset_listing_carries_details_for_the_picker() -> None:
         assert listing["details"]["freestyle"]["timed"] is False
 
 
-def test_both_replay_anchors_are_null_until_something_happens() -> None:
+def test_the_shot_age_is_null_until_a_shot() -> None:
     with make_client() as client:
-        assert client.get("/api/replay_anchors").json() == {
-            "shot_age_s": None,
-            "rack_age_s": None,
-        }
+        assert client.get("/api/shot_age").json() == {"shot_age_s": None}
 
 
-def test_last_shot_reports_how_long_ago_the_shot_was() -> None:
+def test_the_replay_urls_are_gone() -> None:
+    """Instant replay was removed in checkpoint 144 (#75). Its URLs 404 rather
+    than redirect, so a deck or an OBS source left on an old build fails
+    visibly — the rule `/score` and `/api/last_shot` set."""
+    with make_client() as client:
+        assert client.get("/api/replay_anchors").status_code == 404
+        assert client.get("/replay").status_code == 404
+
+
+def test_shot_age_reports_how_long_ago_the_shot_was() -> None:
     app = create_app()
     hub: Hub = app.state.hub
     with TestClient(app) as client:
         asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))
-        age = client.get("/api/replay_anchors").json()["shot_age_s"]
+        age = client.get("/api/shot_age").json()["shot_age_s"]
     assert age is not None
     assert 0.0 <= age < 1.0
 
 
-def test_the_rack_anchor_is_the_break_and_stays_there_for_the_rack() -> None:
-    """A rack replay opens on the break, not on a minute of racking."""
-    app = create_app()
-    hub: Hub = app.state.hub
-    with TestClient(app) as client:
-        client.post("/api/rack")
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] is None  # nothing yet
+def test_the_shot_age_is_stamped_before_every_gate() -> None:
+    """The idle stop asks whether anybody is playing, not what moved the clock.
 
-        asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))  # the break
-        hub._rack_break_mono -= 60.0
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 59.0
-
-        asyncio.run(hub.shot_taken(t=2.0, speed_mms=3000.0))  # the next shot
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 59.0  # still the break
-
-
-def test_setting_up_keeps_the_rack_you_just_played_until_the_next_break() -> None:
-    """The live failure of 2026-08-05, which is the common press.
-
-    You run out, you press New Rack, you hold Replay to watch how you did it.
-    Retiring the anchor on the press cued 595.1 s into a 598.5 s file and put
-    3.4 s of the empty table you had just cleared on the wall.
-    """
-    app = create_app()
-    hub: Hub = app.state.hub
-    with TestClient(app) as client:
-        asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))  # the break
-        hub._rack_break_mono -= 300.0  # five minutes of rack
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 299.0
-
-        client.post("/api/rack")  # ran out, racked up
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] > 299.0
-
-        asyncio.run(hub.shot_taken(t=2.0, speed_mms=5000.0))  # the new break retires it
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] < 1.0
-
-
-def test_the_rack_anchor_survives_the_gates_the_shot_anchor_does() -> None:
-    # Same reasoning as the shot anchor: a drill in `no_clock` has no New Rack
-    # key, so its first shot is what "this rack" can mean out there.
-    app = create_app()
-    hub: Hub = app.state.hub
-    with TestClient(app) as client:
-        client.post("/api/mode/no_clock")
-        asyncio.run(hub.shot_taken(t=1.0, speed_mms=5000.0))
-        assert client.get("/api/replay_anchors").json()["rack_age_s"] is not None
-
-
-def test_the_replay_anchor_is_stamped_before_every_gate() -> None:
-    """Replay asks what is on the video, not what moved the clock.
-
-    So the anchor survives the two gates that discard a shot — `no_clock`
-    (where drills live, and where a replay is most wanted) and the vision kill
-    switch — and the IDLE break floor, which drops racking lookalikes.
+    So the stamp survives the two gates that discard a shot — `no_clock`
+    (where drills live: a drill must not be stopped as idle) and the vision
+    kill switch — and the IDLE break floor, which drops racking lookalikes.
     """
     for setup in (
         lambda c: c.post("/api/mode/no_clock"),
@@ -945,9 +903,9 @@ def test_the_replay_anchor_is_stamped_before_every_gate() -> None:
         hub: Hub = app.state.hub
         with TestClient(app) as client:
             setup(client)
-            assert client.get("/api/replay_anchors").json()["shot_age_s"] is None
+            assert client.get("/api/shot_age").json()["shot_age_s"] is None
             asyncio.run(hub.shot_taken(t=1.0, speed_mms=800.0))
-            assert client.get("/api/replay_anchors").json()["shot_age_s"] is not None
+            assert client.get("/api/shot_age").json()["shot_age_s"] is not None
 
 
 def test_run_out_lets_a_slow_opener_start_the_clock() -> None:

@@ -22,19 +22,16 @@ from typing import Any
 
 from PIL import Image
 
-from cueclock.deck import bracket, client, faces, replay
+from cueclock.deck import bracket, client, faces
 from cueclock.deck.layout import (
     CONFIRM_PENDING_FACE,
     LAYOUT,
-    RACK_PENDING_FACE,
-    REPLAY_PENDING_FACE,
     ApiPost,
     BracketConfirm,
     Cycle,
     DeckState,
     Key,
     Recalibrate,
-    ReplayShow,
     SceneToggle,
     ScoreAdjust,
     SessionToggle,
@@ -107,7 +104,6 @@ def build_state(
     data: dict[str, object] | None,
     session: SessionState,
     *,
-    replaying: bool = False,
     on_bracket: bool = False,
     recal_face: faces.Face | None = None,
 ) -> DeckState:
@@ -116,14 +112,13 @@ def build_state(
     Server down is a `DeckState` too, not an exception: every key but Session
     goes dark, and the Session key still says how to bring the server back.
 
-    ``replaying`` and ``on_bracket`` are the face inputs the server knows
-    nothing about — both live entirely between the deck and OBS — so the loop
-    passes its own answers in rather than inventing a second source of state.
+    ``on_bracket`` is the face input the server knows nothing about — it lives
+    entirely between the deck and OBS — so the loop passes its own answer in
+    rather than inventing a second source of state.
     """
     if data is None:
         return DeckState(
             up=False,
-            replaying=replaying,
             on_bracket=on_bracket,
             session_face=session.face,
             session_sub=session.sub,
@@ -149,7 +144,6 @@ def build_state(
         extensions_allowed=_int("extensions_allowed", 0),
         p1=_score_of(data.get("score"), "p1"),
         p2=_score_of(data.get("score"), "p2"),
-        replaying=replaying,
         on_bracket=on_bracket,
         session_face=session.face,
         session_sub=session.sub,
@@ -227,18 +221,6 @@ def _dwell_done(showing: bracket.Showing, now: float, clock_state: str | None) -
     return now >= showing.until or (clock_state or "IDLE") != "IDLE"
 
 
-def _start_replay(deck: Any, index: int, base: str, span: replay.Span) -> replay.Playing | None:
-    """Cue and cut to a replay, saying on the key which span is being cued.
-
-    Blocks the loop for as long as OBS takes to write the file and open it —
-    same deal as a ring dump, and longer now that a rack-length buffer is a
-    couple of hundred megabytes. The face is what makes that wait legible.
-    """
-    pending = RACK_PENDING_FACE if span is replay.Span.RACK else REPLAY_PENDING_FACE
-    _set_key(deck, index, faces.Face(pending))
-    return replay.show(base, span=span)
-
-
 def _score_post(action: ScoreAdjust, name: str, base: str, *, decrement: bool) -> Image.Image:
     result = client.post(base, action.path(decrement=decrement))
     print(f"{name}: {'-' if decrement else '+'}1 -> {result.status}", flush=True)
@@ -290,7 +272,6 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
         lambda _deck, k, pressed: events.put((int(k), bool(pressed), time.monotonic()))
     )
 
-    playing: replay.Playing | None = None  # a replay currently on the TV
     showing: bracket.Showing | None = None  # the bracket is on the TV
     # The clock's own state, kept beside the poll rather than in `DeckState`:
     # no face draws it, and adding it there would repaint all fifteen keys on
@@ -316,7 +297,6 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
         return build_state(
             data,
             session.tick(data is not None),
-            replaying=playing is not None,
             on_bracket=showing is not None,
             recal_face=recal.face(),
         )
@@ -327,16 +307,6 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
     holds: dict[int, tuple[float, str]] = {}  # index -> (deadline, kind)
     # What the Session key says, and since when (see the Session branch below).
     session_face, session_face_since = state.session_face, time.monotonic()
-
-    def begin_replay(index: int, span: replay.Span) -> None:
-        """Cue a replay and repaint what it changed — tap and hold share this."""
-        nonlocal playing, state
-        playing = _start_replay(deck, index, base, span)
-        if playing is None:
-            _set_key(deck, index, faces.flash_err("ERROR"))
-            flashes[index] = time.monotonic() + FLASH_S
-        state = replace(state, replaying=playing is not None)
-        _draw_all(deck, state, skip=frozenset(flashes))
 
     next_poll = time.monotonic() + POLL_S
     while True:
@@ -369,17 +339,9 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
             # on the next 2 s poll.
             state = poll()
             _draw_all(deck, state, skip=frozenset(flashes))
-        if playing is not None and now >= playing.until:
-            # The file ran out — cut back to whatever was live when it started.
-            # A failed cut still clears the handle: leaving the key saying BACK
-            # forever would be worse than one press that does nothing.
-            replay.stop(playing)
-            playing = None
-            state = replace(state, replaying=False)
-            _draw_all(deck, state, skip=frozenset(flashes))
         if showing is not None and _dwell_done(showing, now, clock_state):
-            # A failed cut still clears the handle, exactly as the replay return
-            # does: a stuck key is worse than one press that does nothing.
+            # A failed cut still clears the handle: a stuck key is worse than
+            # one press that does nothing.
             bracket.hide(showing)
             showing = None
             state = replace(state, on_bracket=False)
@@ -404,12 +366,6 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 if not state.up and state.session_idle and recal.start():
                     state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes))
-                continue
-            if kind == "replay":
-                # Held past the threshold: the whole rack, not the last shot.
-                # It fires here, under the finger, rather than on release —
-                # a hold that waited for the lift would feel like a slow tap.
-                begin_replay(index, replay.Span.RACK)
                 continue
             # A score key held past its threshold: take the point back.
             action = _BY_INDEX[index].action
@@ -495,24 +451,6 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 flashes[index] = time.monotonic() + FLASH_S
             continue
 
-        if isinstance(key.action, ReplayShow):
-            if playing is not None:
-                # Mid-replay the key is BACK, and has no spans: one press ends
-                # it, on the press rather than the release, and the matching
-                # release finds nothing armed.
-                if pressed:
-                    replay.stop(playing)
-                    playing = None
-                    state = replace(state, replaying=False)
-                    _draw_all(deck, state, skip=frozenset(flashes))
-            elif pressed:
-                holds[index] = (time.monotonic() + key.action.hold_s, "replay")
-            elif holds.pop(index, None) is not None:
-                # Released before the hold matured: the ordinary tap, the last
-                # shot. A `None` here means the hold already fired the rack.
-                begin_replay(index, replay.Span.SHOT)
-            continue
-
         if not pressed:
             continue
         if not state.up:
@@ -522,8 +460,7 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
         if isinstance(key.action, SceneToggle):
             if showing is not None:
                 # A failed cut back still clears the handle: a key stuck saying
-                # BACK forever is worse than one press that does nothing — the
-                # same rule the Replay key follows.
+                # BACK forever is worse than one press that does nothing.
                 bracket.hide(showing)
                 showing = None
             else:
@@ -601,7 +538,7 @@ def run_deck(base: str, brightness: int, reference: str | None) -> int:
         # The daemon's --server base, not session.py's default — the one deck
         # talking to a non-default port must clear the match on that port too.
         clear_match=lambda: client.post(base, "/api/match/clear", timeout=3.0).ok,
-        shot_age=lambda: shot_age_of(client.get_json(base, "/api/replay_anchors")),
+        shot_age=lambda: shot_age_of(client.get_json(base, "/api/shot_age")),
     )
 
     while True:

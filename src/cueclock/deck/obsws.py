@@ -232,34 +232,6 @@ def bind_syphon(source: str = SYPHON_SOURCE, server: str = SYPHON_SERVER) -> boo
     return True
 
 
-def save_replay_buffer() -> bool:
-    """Write the replay buffer's last ~20 s to disk. True when OBS took it.
-
-    The buffer is armed by the Session key's `--startreplaybuffer` launch, so
-    the clip is already in memory and this is just the "keep that" command —
-    it lands in OBS's recording folder. Playing it back on the TV is
-    `deck/replay.py`; this stays the one-line save.
-    """
-    if request("SaveReplayBuffer") is None:
-        return False
-    print("obsws: replay buffer saved", flush=True)
-    return True
-
-
-def last_replay_path() -> str | None:
-    """Path of the most recently saved replay, or None if OBS has none/can't say.
-
-    `SaveReplayBuffer` returns the moment OBS accepts the command, not when the
-    file exists — so the only way to know a save landed is to watch this value
-    change. `deck/replay.py` polls it.
-    """
-    data = request("GetLastReplayBufferReplay")
-    if data is None:
-        return None
-    path = data.get("savedReplayPath")
-    return path if isinstance(path, str) and path else None
-
-
 def start_record() -> float | None:
     """Make sure OBS is recording; return how many seconds it already has.
 
@@ -311,12 +283,12 @@ def stop_record() -> str | None:
 
 
 def current_scene() -> str | None:
-    """The program scene's name — what to return to when a replay finishes."""
+    """The program scene's name — what to return to when the bracket comes off."""
     data = request("GetCurrentProgramScene")
     if data is None:
         return None
-    # OBS 30 renamed the field; accept both so an OBS upgrade can't strand a
-    # replay in the Replay scene with nowhere recorded to go back to.
+    # OBS 30 renamed the field; accept both so an OBS upgrade can't strand the
+    # bracket on the TV with nowhere recorded to go back to.
     for field in ("currentProgramSceneName", "sceneName"):
         value = data.get(field)
         if isinstance(value, str) and value:
@@ -334,41 +306,6 @@ def set_input_settings(name: str, settings: dict[str, Any], *, overlay: bool = T
     return request("SetInputSettings", payload) is not None
 
 
-def refresh_browser(name: str) -> bool:
-    """Reload a browser source now, whether or not its URL changed.
-
-    The Replay badge is loaded while its scene is still dark, so it cannot rely
-    on OBS's own "refresh when scene becomes active" — that fires at the cut,
-    which is half a second too late (`replay.BADGE_PAINT_S`). Pressing the
-    source's own refresh button is also honest about repeats: two presses can
-    compute the same URL, and an unchanged URL reloads nothing.
-    """
-    payload = {"inputName": name, "propertyName": "refreshnocache"}
-    return request("PressInputPropertiesButton", payload) is not None
-
-
-def media_status(name: str) -> tuple[float, float] | None:
-    """``(cursor_s, duration_s)`` for a media source, or None until it is ready.
-
-    OBS reports a null/negative duration while the file is still opening, which
-    is indistinguishable from "no file" in the payload — both come back here as
-    None, so the caller polls rather than trusting the first answer.
-    """
-    data = request("GetMediaInputStatus", {"inputName": name})
-    if data is None:
-        return None
-    duration_ms, cursor_ms = data.get("mediaDuration"), data.get("mediaCursor")
-    if not isinstance(duration_ms, int | float) or duration_ms <= 0:
-        return None
-    cursor = float(cursor_ms) if isinstance(cursor_ms, int | float) else 0.0
-    return cursor / 1000.0, float(duration_ms) / 1000.0
-
-
-def set_media_cursor(name: str, seconds: float) -> bool:
-    payload = {"inputName": name, "mediaCursor": int(max(0.0, seconds) * 1000)}
-    return request("SetMediaInputCursor", payload) is not None
-
-
 def stop_all_outputs(attempts: int = 6, settle_s: float = 0.4) -> bool:
     """Drive OBS to zero active outputs. True when it got there.
 
@@ -376,10 +313,12 @@ def stop_all_outputs(attempts: int = 6, settle_s: float = 0.4) -> bool:
     any output active raises a modal "OBS is still currently active" dialog,
     and there is no keyboard at the table to dismiss it.
 
-    It loops rather than checking once, because `--startreplaybuffer` arms the
-    buffer *asynchronously*: a stop pressed a few seconds after launch sees
-    "not active", skips the stop, and then the buffer starts anyway — measured
-    2026-08-02, and the reason the first fix for this didn't take.
+    It loops rather than checking once, because an output can start
+    *asynchronously*: on 2026-08-02 the replay buffer, then armed at launch
+    (`--startreplaybuffer`, dropped in checkpoint 144), was seen "not active"
+    by a stop pressed a few seconds after launch and then started anyway. The
+    recording is started over obs-websocket today, but the loop costs nothing
+    and keeps the stop honest about anything OBS starts late.
     """
     for _ in range(attempts):
         running = active_outputs()
