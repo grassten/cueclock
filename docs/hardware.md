@@ -648,10 +648,11 @@ tap does nothing), in this order — every step learned from live presses on
    itself. The grace matters — a clean quit takes 0.3–3 s, so checking
    immediately reads *every* healthy quit as stuck.
 
-5. **Long-press POWER on the TV, last of all** — once `run` has exited and OBS
+5. **Tap the TV down to standby, last of all** — once `run` has exited and OBS
    is gone, so the wall keeps reading `STOPPING…` until the session really is
-   over rather than going black mid-shutdown. Long, not short: a tap lands in
-   art mode with the panel still lit (§E1). Only an *explicit* stop does this
+   over rather than going black mid-shutdown. One checked tap at a time, until
+   the TV itself reports standby: a single tap only reaches art mode with the
+   panel still lit, and a long press is unpredictable (§E1). Only an *explicit* stop does this
    — a `run` that crashed on its own leaves the TV on, because the wall is the
    one place that failure is visible from the table.
 
@@ -1356,6 +1357,64 @@ Pairing is one-time: `uv run python scripts/pair_tv.py`. The TV shows a
 cert + key land in gitignored `config/tv_cert.pem` / `tv_key.pem` beside
 `config/tv.json`, which holds the host and MAC. Losing them just means pairing
 again.
+
+**Since 2026-11-22 the deck reaches the TV over a cable, not Wi-Fi (#62).**
+Steven turned the TV's Wi-Fi off to keep it off the home network, and a patch
+cable now runs from the Mac mini's Ethernet port (`en0`, unused because the
+Mac runs on Wi-Fi) to the TV's. The two make a private link with no router and
+no internet, on fixed addresses:
+
+- **Mac** — System Settings → Network → Ethernet → Manual: `10.77.0.1`, mask
+  `255.255.255.0`, **no router** (`networksetup -setmanual Ethernet 10.77.0.1
+  255.255.255.0`). With no router the default route stays on Wi-Fi (`en1`), so
+  the Mac's internet is untouched; `route -n get default` must still say `en1`.
+- **TV** — Settings → Network → Ethernet → IP settings → Static: `10.77.0.2`,
+  mask `255.255.255.0`, gateway blank. It reports "no internet", as intended.
+- **`config/tv.json`** — host `10.77.0.2`, MAC `74:D0:82:76:4A:35`, the wired
+  port's own MAC, read from `arp -an -i en0`. The TV still reports its Wi-Fi
+  MAC (`64:6B:E7:FE:46:97`) over the protocol, so `pair_tv.py`'s printout is
+  the wrong one to copy here.
+
+Left on automatic, both ends fall back to self-assigned `169.254.x.x`
+addresses, which work until the TV picks a new one. That is the drift below
+again, so the addresses are fixed. The pairing certificate carried over from
+Wi-Fi unchanged; no re-pair was needed.
+
+**On the cable, standby keeps the network up, and that showed how the TV
+really behaves (measured 2026-11-22).** On Wi-Fi a TV in standby could not be
+asked anything. On the cable it can, and the remote protocol reports both the
+power state and the foreground app:
+
+| State | `is_on` | app |
+|---|---|---|
+| on | true | `com.vt.tv.tvcenter` |
+| art mode | **true** | `com.vt.arttv.artmode` |
+| standby (panel black) | false | `com.vt.arttv.artmode` or none |
+
+- **POWER steps through the three: on → art mode → standby.** Each tap moves
+  one step, and about one tap in five does nothing. The tap's effect is pushed
+  back 1.0 to 1.2 s later.
+- **The long press was never reliable.** It steps an unknown number of times:
+  from on it reached standby 2 times in 3 and art mode once, and from art mode
+  it stayed there once and went back on once. Art mode reports *on*, so a
+  stop that left the wall in art mode looked like a successful one. That is
+  probably what "the TV stays lit after a stop" was all along.
+- **Settled in standby the TV ignores key presses** (ten taps on the deck's
+  2 s poll did nothing), though one tap seconds into standby turned it back
+  on. A magic packet to the wired MAC (at `10.77.0.255`) woke it in about a
+  second, 6 times in 6. **Art mode ignores the magic packet.**
+- `SLEEP` and `WAKEUP`, the Android keys that aren't toggles, do nothing in
+  any state.
+
+So `deck/tv.py` now works by the TV's report. **Off** taps POWER on one
+connection, waits for the TV to push its new state, and taps again only while
+the TV still isn't in standby (at most 4 taps; a dropped tap gets no push and
+is simply sent again). **On** sends the magic packet unless the TV says it is
+on; from art mode it first taps down to standby, because that is the only way
+up. Live, 5 off/on cycles in a row: standby confirmed in 6.4 s every time and
+on again 2.3 s later. Waking from art mode took 6 s, twice in 2.
+
+What follows was written for the Wi-Fi link and stays as the record of it.
 
 **The host in `tv.json` is a hint, not an address.** DHCP moved the TV from
 `192.168.4.27` to `.29` across a power cycle (2026-09-01), and from a closed

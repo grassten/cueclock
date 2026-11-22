@@ -121,9 +121,9 @@ async def pair(host: str) -> int:
         print("paired")
 
     name, mac = await remote.async_get_name_and_mac()
-    # The MAC is worth recording: if the TV can't be woken over the remote
-    # protocol from standby, a Wake-on-LAN magic packet to this address is the
-    # fallback power-on path.
+    # This is the Wi-Fi MAC, whatever link the TV is on. On the cable (#62)
+    # `config/tv.json` needs the wired port's MAC instead, which is what the
+    # magic packet must name: read it with `arp -an -i en0` (hardware.md §E1).
     print(f"TV: {name}  mac={mac}  is_on={remote.is_on}")
     remote.disconnect()
     return 0

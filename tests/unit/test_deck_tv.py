@@ -11,10 +11,11 @@ is a change that would put the wall TV in the wrong state.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -115,65 +116,160 @@ def test_a_sleeping_tv_gets_a_packet_and_is_not_waited_for(
     assert sent == [CONFIG.mac]
 
 
-def test_a_tv_already_on_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
-    # POWER is a toggle: pressing it here would switch the TV *off*, which is
-    # exactly the bug that made the first working version look broken.
-    log: list[str] = []
-    monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: True)
-    monkeypatch.setattr(tv, "is_on", lambda _config=None: True)
-    monkeypatch.setattr(tv, "_run", record(log))
+class FakeTv:
+    """The CanvasTV's power states as `AndroidTVRemote` shows them (2026-11-22).
 
-    assert tv.ensure_on(CONFIG) is True
-    assert log == []
+    A tap steps on → art mode → standby and pushes the new state; `drops` taps
+    first do nothing, as some real ones did. Art mode reports on — only the app
+    differs. A tap in standby raises, because nothing here may send one.
+    """
+
+    STEP: ClassVar[dict[str, str]] = {"on": "art", "art": "off"}
+
+    def __init__(self, state: str, drops: int = 0) -> None:
+        self.state, self.drops, self.taps = state, drops, 0
+        self.disconnected = False
+        self._callbacks: list[Callable[[Any], None]] = []
+
+    @property
+    def is_on(self) -> bool:
+        return self.state != "off"
+
+    @property
+    def current_app(self) -> str:
+        return "com.vt.tv.tvcenter" if self.state == "on" else tv.ART_MODE_APP
+
+    def add_is_on_updated_callback(self, callback: Callable[[Any], None]) -> None:
+        self._callbacks.append(callback)
+
+    def add_current_app_updated_callback(self, callback: Callable[[Any], None]) -> None:
+        self._callbacks.append(callback)
+
+    def send_key_command(self, key: str) -> None:
+        assert key == tv.POWER
+        self.taps += 1
+        if self.drops:
+            self.drops -= 1
+            return
+        self.state = self.STEP[self.state]
+        loop = asyncio.get_running_loop()
+        for callback in self._callbacks:
+            loop.call_soon(callback, self.state)
+
+    def disconnect(self) -> None:
+        self.disconnected = True
 
 
-def test_a_tv_awake_but_reporting_off_gets_a_short_press(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.fixture
+def wired(monkeypatch: pytest.MonkeyPatch) -> Callable[[FakeTv], list[str]]:
+    """Put a FakeTv on the cable: reachable, fast clocks, magic packets logged."""
+
+    def attach(fake: FakeTv) -> list[str]:
+        async def connect(_config: tv.TvConfig) -> FakeTv:
+            return fake
+
+        sent: list[str] = []
+        monkeypatch.setattr(tv, "_connect", connect)
+        monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: True)
+        monkeypatch.setattr(tv, "send_wol", lambda config: bool(sent.append(config.mac)) or True)
+        for name in ("APP_WAIT_S", "TAP_ANSWER_S", "SETTLE_S"):
+            monkeypatch.setattr(tv, name, 0.01)
+        return sent
+
+    return attach
+
+
+def test_art_mode_reports_on_and_is_told_apart_by_its_app(
+    wired: Callable[[FakeTv], list[str]],
 ) -> None:
-    # Art mode, or a magic packet that revived only the NIC. A *short* press is
-    # what leaves art mode; a long one would drive it to standby — backwards.
-    log: list[str] = []
-    monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: True)
-    monkeypatch.setattr(tv, "is_on", lambda _config=None: False)
-    monkeypatch.setattr(tv, "_run", record(log))
+    wired(FakeTv("art"))
+    assert tv.power_state(CONFIG) == "art"
 
+
+def test_a_tv_already_on_is_left_alone(wired: Callable[[FakeTv], list[str]]) -> None:
+    # POWER is a toggle: pressing it here would step the TV *off*, which is
+    # exactly the bug that made the first working version look broken.
+    fake = FakeTv("on")
+    sent = wired(fake)
+    assert tv.ensure_on(CONFIG) is True
+    assert (fake.taps, sent) == (0, [])
+
+
+def test_a_tv_in_standby_on_the_cable_gets_a_packet_never_a_press(
+    wired: Callable[[FakeTv], list[str]],
+) -> None:
+    # On the cable standby keeps the network up: the TV answers, reports off,
+    # and ignores POWER (ten presses, 2026-11-22). The packet woke it in ~1 s.
+    fake = FakeTv("off")
+    sent = wired(fake)
     assert tv.ensure_on(CONFIG) is False  # confirmed on a later poll
-    assert log == ["power on"]
+    assert (fake.taps, sent) == (0, [CONFIG.mac])
+
+
+def test_art_mode_is_left_downwards_then_woken(wired: Callable[[FakeTv], list[str]]) -> None:
+    # A tap from art mode reaches standby, not on, and art mode ignores the
+    # magic packet — so the only way up is one step down, then the packet.
+    fake = FakeTv("art")
+    sent = wired(fake)
+    assert tv.ensure_on(CONFIG) is False
+    assert (fake.state, fake.taps, sent) == ("off", 1, [CONFIG.mac])
 
 
 def test_a_tv_that_cannot_be_asked_is_unknown_not_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     log: list[str] = []
+    sent: list[str] = []
     monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: True)
-    monkeypatch.setattr(tv, "is_on", lambda _config=None: None)
+    monkeypatch.setattr(tv, "power_state", lambda _config=None: None)
     monkeypatch.setattr(tv, "_run", record(log))
+    monkeypatch.setattr(tv, "send_wol", lambda config: bool(sent.append(config.mac)) or True)
 
-    # Unknown must never be read as "off" and pressed against.
+    # Unknown must never be read as "off" and pressed against; the packet is
+    # no toggle, so it is still sent.
     assert tv.ensure_on(CONFIG) is False
-    assert log == []
+    assert (log, sent) == ([], [CONFIG.mac])
 
 
-def test_power_off_holds_the_key_because_a_tap_only_reaches_art_mode(
-    monkeypatch: pytest.MonkeyPatch,
+def test_power_off_taps_down_to_standby_never_long_presses(
+    wired: Callable[[FakeTv], list[str]],
 ) -> None:
-    holds: list[float] = []
-
-    async def fake_press(config: tv.TvConfig, hold_s: float) -> bool:
-        holds.append(hold_s)
-        return True
-
-    monkeypatch.setattr(tv, "_async_press_power", fake_press)
-    monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: True)  # no resolve detour
-
+    # A long press stepped an unknown number of times on the real set and left
+    # the wall in art mode a third of the time. Two checked taps always land.
+    fake = FakeTv("on")
+    wired(fake)
     assert tv.power_off(CONFIG) is True
-    # A short press would land in art mode: panel lit, TV still on the network,
-    # and every check downstream reporting success while the wall glows.
-    assert holds == [tv.HOLD_S]
-    assert tv.HOLD_S >= 2.0
+    assert (fake.state, fake.taps, fake.disconnected) == ("off", 2, True)
 
 
-def test_a_failed_press_is_reported_rather_than_assumed(
+def test_a_dropped_tap_is_sent_again_rather_than_assumed(
+    wired: Callable[[FakeTv], list[str]],
+) -> None:
+    fake = FakeTv("on", drops=1)
+    wired(fake)
+    assert tv.power_off(CONFIG) is True
+    assert (fake.state, fake.taps) == ("off", 3)
+
+
+def test_a_tv_already_in_standby_is_not_tapped(wired: Callable[[FakeTv], list[str]]) -> None:
+    # A tap seconds into standby switched the real TV back on.
+    fake = FakeTv("off")
+    wired(fake)
+    assert tv.power_off(CONFIG) is True
+    assert fake.taps == 0
+
+
+def test_a_tv_that_ignores_every_tap_is_reported_not_assumed(
+    wired: Callable[[FakeTv], list[str]], capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeTv("on", drops=99)
+    wired(fake)
+    assert tv.power_off(CONFIG) is False
+    assert fake.taps == tv.MAX_TAPS
+    assert "not confirmed" in capsys.readouterr().out
+
+
+def test_a_failed_connect_is_reported_rather_than_assumed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(tv, "_run", lambda coro, _what: coro.close())
@@ -188,7 +284,7 @@ def test_nothing_is_attempted_without_a_config(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(tv, "port_open", lambda *_a, **_k: False)
     assert tv.ensure_on() is False
     assert tv.power_off() is False
-    assert tv.is_on() is None
+    assert tv.power_state() is None
 
 
 # --- the TV moves (2026-09-01) --------------------------------------------
@@ -238,7 +334,9 @@ def test_a_moved_tv_is_woken_and_powered_off_at_the_new_address(
     seen: list[str] = []
     monkeypatch.setattr(tv, "port_open", lambda host, *_a, **_k: host == "192.168.4.29")
     monkeypatch.setattr(tv, "arp_host", lambda _macs: "192.168.4.29")
-    monkeypatch.setattr(tv, "is_on", lambda config=None: bool(seen.append(config.host)) or True)
+    monkeypatch.setattr(
+        tv, "power_state", lambda config=None: bool(seen.append(config.host)) or "on"
+    )
     monkeypatch.setattr(tv, "_run", record(log))
 
     # Both halves of the session key: the start confirms instead of packeting

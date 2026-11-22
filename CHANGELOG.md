@@ -319,6 +319,32 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 141 — the TV on a cable, switched by its own
+  report; #62):** Steven ran Ethernet from the Mac mini to the TV, whose
+  Wi-Fi he had turned off (2026-11-16) to keep it off the home network.
+  - **The link** (`docs/hardware.md` §E1): Mac `en0` manual `10.77.0.1/24`
+    with no router, so the default route and the internet stay on Wi-Fi
+    (`en1`, checked); TV static `10.77.0.2/24`; `config/tv.json` host
+    `10.77.0.2`, MAC the wired port's `74:D0:82:76:4A:35`. The pairing
+    certificate carried over. Fixed addresses on a cable no router controls
+    cannot drift, which was the cause of #62.
+  - **What the cable showed**: in standby the TV stays reachable, so for the
+    first time every state could be read. Art mode reports *on* and differs
+    only by its app (`com.vt.arttv.artmode`). POWER taps step on → art →
+    standby and about one in five does nothing; the long press stepped an
+    unknown number of times (from on: standby 2 of 3, art mode 1). Settled in
+    standby the TV ignores keys, the magic packet wakes it (6 of 6), and art
+    mode ignores the packet. `SLEEP`/`WAKEUP` do nothing in any state.
+  - **`deck/tv.py`**: off is taps on one connection, each sent only while
+    the TV's pushed state is still not standby (at most 4); on is the magic
+    packet unless the TV says on, tapping down out of art mode first. The
+    long press and the "reachable but off → tap" branch are gone: on the
+    cable that branch tapped a sleeping TV ten times for nothing. `power_off`
+    returns True only on a reported standby. Live: 5 off/on cycles, standby
+    in 6.4 s and on 2.3 s later every time; art mode → on in ~6 s, 2 of 2.
+  - `pair_tv.py` now says its printed MAC is the Wi-Fi one, not the one
+    `tv.json` needs on the cable.
+
 - **2026-11-21 (checkpoint 140 — a cue ball moved by hand counts no shot;
   #67):** Steven: "if I'm moving the cue ball by hand the clock should keep
   running, that's the whole idea". Until now only a recognised scratch (#64)

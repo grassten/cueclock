@@ -4,22 +4,25 @@ The TV is a Hisense CanvasTV running **Google TV**, so it speaks the Android TV
 Remote protocol — TLS + protobuf on 6466. Pairing is one-time and its
 certificate lives in `config/`; see `scripts/pair_tv.py`.
 
-Three measurements shape everything here (2026-08-02), and none of them are
-guessable from the outside:
+What shapes everything here was measured on the real set (2026-08-02 on
+Wi-Fi, 2026-11-22 on the cable, #62), and none of it is guessable:
 
-  * A **short** POWER press only drops a CanvasTV into **art mode**, which
-    keeps the panel lit and the whole network stack up. A **long** press is
-    what reaches true standby. Every early attempt to switch the TV off with
-    short presses looked like "the key did nothing".
-  * POWER is a **toggle**. Retrying it undoes it, so it is only ever sent when
-    the TV's own reported state disagrees with where we want to be.
-  * In standby the TV leaves the network completely — 6466 dies within ~4 s —
-    so nothing can be *told* to wake up. A **Wake-on-LAN** magic packet revives
-    it, screen included, in about a second.
+  * POWER is a **toggle** that steps through three states: on → art mode →
+    standby. **Art mode** keeps the panel lit and the TV reports itself *on*;
+    only its foreground app (`ART_MODE_APP`) tells the two apart. A long press
+    makes an unpredictable number of steps (on the cable it landed in standby,
+    in art mode and back on), so it is never sent.
+  * A tap sometimes does nothing. So every tap is checked against the state
+    the TV pushes back about a second later, and another is sent only while
+    that state still disagrees with the target.
+  * Settled in standby, the TV ignores key presses (on Wi-Fi it leaves the
+    network entirely). A **Wake-on-LAN** magic packet brings it back, screen
+    included, in about a second, and the packet is no toggle. Art mode
+    ignores the packet, so waking from there means tapping down first.
 
-Hence: off is a long press, on is a magic packet. Same contract as `obsws.py`
-— every call is best-effort, returns a bool (or `None` for "couldn't ask"),
-and nothing here may raise into the deck loop.
+Hence: off is taps until the TV reports standby, on is a magic packet. Same
+contract as `obsws.py` — every call is best-effort, returns a bool (or `None`
+for "couldn't ask"), and nothing here may raise into the deck loop.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ import subprocess  # nosec B404: fixed argv, no shell, no user input
 from collections.abc import Coroutine, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from androidtvremote2 import AndroidTVRemote
 
@@ -45,11 +48,18 @@ POWER = "POWER"
 # The remote API port. Its being open is the cheapest proof the TV is out of
 # standby, and unlike a connect it costs nothing when the TV is gone.
 PORT = 6466
-# A thumb on the remote holds power for about this long to reach true standby.
-HOLD_S = 2.5
-# `send_key_command` only buffers the key and returns; disconnecting on the next
-# line drops it before it is flushed (measured — the TV sat awake for 25 s).
-FLUSH_S = 2.0
+# The Canvas TV's art-mode app: the only sign of art mode, which reports "on".
+ART_MODE_APP = "com.vt.arttv.artmode"
+# The foreground app is pushed just after connecting (0.07 s measured).
+APP_WAIT_S = 1.0
+# A tap's effect is pushed 1.0-1.2 s after it (measured 2026-11-22). Silence
+# for this long means the TV dropped the press, so it is safe to send another.
+TAP_ANSWER_S = 3.0
+# One transition can push its two fields 1.26 s apart (standby → on: the app,
+# then the power state), so the state is read only after this much quiet.
+SETTLE_S = 2.0
+# on → art mode → standby is two taps; the rest is room for dropped presses.
+MAX_TAPS = 4
 # Short, because this runs on the deck's 2 s poll: a TV that needs longer than
 # this to answer is one we should give up on until the next tick, not block for.
 CONNECT_TIMEOUT_S = 4.0
@@ -210,40 +220,69 @@ async def _connect(config: TvConfig) -> AndroidTVRemote:
     return remote
 
 
-async def _async_is_on(config: TvConfig) -> bool:
-    remote = await _connect(config)
+type PowerState = Literal["on", "art", "off"]
+
+
+def _state(remote: AndroidTVRemote) -> PowerState:
+    if not remote.is_on:
+        return "off"
+    return "art" if remote.current_app == ART_MODE_APP else "on"
+
+
+async def _wait(event: asyncio.Event, timeout: float) -> bool:
     try:
-        return bool(remote.is_on)
+        await asyncio.wait_for(event.wait(), timeout)
+    except TimeoutError:
+        return False
+    return True
+
+
+async def _open(config: TvConfig) -> tuple[AndroidTVRemote, asyncio.Event]:
+    """Connect, and return an event the TV's state pushes set."""
+    remote = await _connect(config)
+    pushed = asyncio.Event()
+    remote.add_is_on_updated_callback(lambda _on: pushed.set())
+    remote.add_current_app_updated_callback(lambda _app: pushed.set())
+    if not remote.current_app:  # art mode or not is only known once it lands
+        await _wait(pushed, APP_WAIT_S)
+    return remote, pushed
+
+
+async def _async_power_state(config: TvConfig) -> PowerState:
+    remote, _ = await _open(config)
+    try:
+        return _state(remote)
     finally:
         remote.disconnect()
 
 
-async def _async_press_power(config: TvConfig, hold_s: float) -> bool:
-    remote = await _connect(config)
+async def _async_tap_to_standby(config: TvConfig) -> bool:
+    """Tap POWER, one checked step at a time, until the TV reports standby."""
+    remote, pushed = await _open(config)
     try:
-        if hold_s > 0.0:
-            remote.send_key_command(POWER, "START_LONG")
-            await asyncio.sleep(hold_s)
-            remote.send_key_command(POWER, "END_LONG")
-        else:
+        for _ in range(MAX_TAPS):
+            if _state(remote) == "off":
+                return True
+            pushed.clear()
             remote.send_key_command(POWER)
-        await asyncio.sleep(FLUSH_S)  # let the buffered write leave the socket
-        return True
+            if await _wait(pushed, TAP_ANSWER_S):
+                await asyncio.sleep(SETTLE_S)  # the rest of the transition
+        return _state(remote) == "off"
     finally:
         remote.disconnect()
 
 
-def is_on(config: TvConfig | None = None) -> bool | None:
-    """Does the TV say it is on?
+def power_state(config: TvConfig | None = None) -> PowerState | None:
+    """Is the TV on, in art mode, or in standby, by its own report?
 
-    **None means unknown** — in standby it isn't on the network at all, so a
-    failed connect is not the same as a confident "off", and a caller must not
-    read it as one.
+    **None means unknown** — on Wi-Fi a TV in standby isn't on the network at
+    all, so a failed connect is not the same as a confident "off", and a
+    caller must not read it as one.
     """
     cfg = config or load_config()
     if cfg is None:
         return None
-    return _run(_async_is_on(cfg), "is_on")
+    return _run(_async_power_state(cfg), "power state")
 
 
 def ensure_on(config: TvConfig | None = None) -> bool:
@@ -251,9 +290,9 @@ def ensure_on(config: TvConfig | None = None) -> bool:
 
     Idempotent, and deliberately unwilling to block: the deck calls this from
     `start()` and then again on each poll until it returns True, exactly like
-    the OBS setup beside it. When the TV is in standby there is nothing to
-    connect to, so this fires the magic packet and leaves rather than sitting
-    on the deck loop waiting for a panel to light.
+    the OBS setup beside it. When the TV is asleep this fires the magic packet
+    and leaves rather than sitting on the deck loop waiting for a panel to
+    light; only art mode costs a few seconds, tapping down to standby first.
     """
     cfg = config or load_config()
     if cfg is None:
@@ -262,35 +301,33 @@ def ensure_on(config: TvConfig | None = None) -> bool:
     # asked the right address. `resolve` reports reachability so the port is
     # probed once, not twice — this runs on the deck's 2 s poll.
     cfg, reachable = resolve(cfg)
-    if not reachable:
-        send_wol(cfg)
-        return False
-    state = is_on(cfg)
-    if state is None:
-        return False
-    if state:
+    state = power_state(cfg) if reachable else None
+    if state == "on":
         return True
-    # On the network but reporting off — art mode, or a magic packet that woke
-    # only the NIC (a documented mode on this family of TVs). A short press is
-    # what leaves art mode, and `state` being false means it cannot toggle the
-    # wrong way.
-    print("tv: awake but reporting off — pressing POWER", flush=True)
-    _run(_async_press_power(cfg, hold_s=0.0), "power on")
+    if state == "art":
+        # A tap from art mode goes to standby, not on, and art mode ignores the
+        # magic packet, so the way up is down first.
+        print("tv: in art mode — stepping down to standby to wake it", flush=True)
+        _run(_async_tap_to_standby(cfg), "leave art mode")
+    # Standby, or unknown: only the magic packet wakes it, and unlike POWER it
+    # is no toggle, so sending it to a TV that is already awake costs nothing.
+    send_wol(cfg)
     return False
 
 
 def power_off(config: TvConfig | None = None) -> bool:
-    """Long-press POWER to reach true standby. True when the press went out.
+    """Tap POWER down to standby. True once the TV reports standby.
 
-    A short press here would land in art mode with the panel still lit and the
-    TV still on the network — which reads as success to everything downstream
-    and leaves the wall glowing all night.
+    Taps, never a long press: a long press steps an unpredictable number of
+    times, and on this set it left the wall lit in art mode a third of the time.
     """
     cfg = config or load_config()
     if cfg is None:
         return False
     cfg, _ = resolve(cfg)  # the stop is the call that most needs to land
-    if _run(_async_press_power(cfg, hold_s=HOLD_S), "power off") is None:
-        return False
-    print("tv: POWER long-press sent", flush=True)
-    return True
+    reached = _run(_async_tap_to_standby(cfg), "power off")
+    if reached:
+        print("tv: standby confirmed", flush=True)
+    elif reached is False:
+        print(f"tv: power off not confirmed after {MAX_TAPS} taps", flush=True)
+    return bool(reached)
