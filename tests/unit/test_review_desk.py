@@ -143,6 +143,10 @@ def test_racking_on_a_live_clock_is_one_stretch_until_new_rack() -> None:
     assert stretch.returned == 3
     assert stretch.settles == 2
     assert stretch.end is not None and stretch.end["kind"] == "cmd_new_rack"
+    # Pre-136 stats counted every number back: the misread 2 and the three
+    # that began racking. Only the three are the stretch's.
+    assert stretch.raw_back == 3
+    assert dossier.raw_numbers_back(found) == 4
 
 
 # ----------------------------------------------------------------- the page

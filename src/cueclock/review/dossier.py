@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import statistics
 import subprocess  # nosec B404: fixed argv lists, no shell
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
@@ -132,30 +133,53 @@ class Stretch:
     returned: int  # numbers back on that list
     settles: int  # settles the clock journaled during it (not shots)
     end: Record | None  # the record whose rack count fell; None = the session ended
+    raw_back: int = 0  # numbers back from its first list on, as pre-136 stats counted them
 
 
 def racking_stretches(records: Sequence[Record]) -> list[Stretch]:
-    """`report.Racking`'s stretches, with what began and ended each one."""
+    """`report.Racking`'s stretches, with what began and ended each one.
+
+    `raw_back` is what "numbers back after leaving" read during the stretch
+    before checkpoint 136, when racking was not told apart: in session
+    20261121-153046, 39 of the 47 it reported (`raw_numbers_back`); the
+    other 8 are what `session-stats` reads today."""
     racking = report.Racking()
+    raw = report.Racking(min_returns=math.inf)
     out: list[Stretch] = []
     for record in records:
         rack = _num(record, "rack_shots")
         if rack is not None:
             was = racking.on
             racking.note_rack(int(rack))
+            raw.note_rack(int(rack))
             if was and not racking.on:
-                last = out[-1]
-                out[-1] = Stretch(last.start, last.returned, last.settles, record)
+                out[-1] = replace(out[-1], end=record)
         kind = record.get("kind")
         if kind == report.BALL_LIST_KIND:
             was = racking.on
             racking.feed(record)
+            back = raw.feed(record)
             if racking.on and not was:
                 out.append(Stretch(record, racking.returned, 0, None))
+            if racking.on:
+                out[-1] = replace(out[-1], raw_back=out[-1].raw_back + back)
         elif kind in SETTLE_KINDS and racking.on and record.get("state") != "IDLE":
-            last = out[-1]
-            out[-1] = Stretch(last.start, last.returned, last.settles + 1, last.end)
+            out[-1] = replace(out[-1], settles=out[-1].settles + 1)
     return out
+
+
+def raw_numbers_back(records: Sequence[Record]) -> int:
+    """ "Numbers back after leaving" as `session-stats` counted it before
+    checkpoint 136: every number back, racking included."""
+    raw = report.Racking(min_returns=math.inf)
+    total = 0
+    for record in records:
+        rack = _num(record, "rack_shots")
+        if rack is not None:
+            raw.note_rack(int(rack))
+        if record.get("kind") == report.BALL_LIST_KIND:
+            total += raw.feed(record)
+    return total
 
 
 @dataclass(frozen=True)
@@ -444,7 +468,15 @@ def build(session: sess.Session, journal: Path) -> str:
             f"settle[{_brief(miss.settle, ('moved', 'vanished', 'appeared', 'moved_mm', 'held'))}] "
             f"list[{_brief(miss.listing, ('row', 'cue_px', 'hand', 'counted'))}]"
         )
-    for stretch in racking_stretches(records):
+    stretches = racking_stretches(records)
+    raw_back = raw_numbers_back(records)
+    if raw_back:
+        inside = sum(s.raw_back for s in stretches)
+        page.add(
+            f'ball list "numbers back", counted as before checkpoint 136: {raw_back}, '
+            f"{inside} of them inside the racking stretches below"
+        )
+    for stretch in stretches:
         start = _wall(stretch.start)
         end = (
             f"until New Rack {_local(_wall(stretch.end))}"
@@ -453,7 +485,8 @@ def build(session: sess.Session, journal: Path) -> str:
         )
         page.add(
             f"racking on a live clock from {_local(start)} (rec {position(start)}): "
-            f"{stretch.returned} numbers back on its first list, {stretch.settles} settle(s), {end}"
+            f"{stretch.returned} numbers back on its first list ({stretch.raw_back} while it "
+            f"lasted), {stretch.settles} settle(s), {end}"
         )
     revert_reasons = Counter(
         str(r.get("reason")) for r in records if r.get("kind") == report.PROVISIONAL_REVERTED_KIND

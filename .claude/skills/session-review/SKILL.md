@@ -17,9 +17,13 @@ normal checkpoint session implements what Steven accepts.
 
 - `<stamp>`: the session, e.g. `20261121-153046`. Missing → the newest session
   directory that has a `verdicts.json`.
-- `--as-of-session`: review as if the session's own code were HEAD. Read code
-  with `git show <session sha>:<path>`, skip `review check`, and drop nothing
-  as "already changed". This is the golden test's first half (below).
+- `--as-of-session`: review as if the session's own code were HEAD, and
+  stay **blind to everything after it**. Read every repo file (code, design,
+  CHANGELOG, the session-stats script) with `git show <session sha>:<path>`,
+  never from the working tree. Don't open issues filed after the session
+  (`gh issue view`), and skip `review check`. Drop nothing as "already
+  changed". The `review` tools themselves run at HEAD; that's expected. This
+  is the golden test's first half (below).
 - `--dry-run`: write the issue body and print its path; file nothing and
   comment nothing. **Always use it for the golden test**, or it files a
   duplicate of #69.
@@ -312,7 +316,8 @@ as checkpoint 136.
 
 - `/session-review 20261121-153046 --as-of-session --dry-run` must reproduce
   #69's mechanisms for changes 1–3 and the evidence for 5 and 6, without
-  help. Compare the draft with `gh issue view 69`.
+  help. Whoever started the run compares the draft with #69 afterwards; the
+  run itself never reads #69 (that would be the answer key).
 - `/session-review 20261121-153046 --dry-run` (at HEAD) must report those
   verdicts as already changed by checkpoint 136 and propose nothing for them.
 - Run against the live issue list (no `--dry-run`), a second run files

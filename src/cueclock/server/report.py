@@ -214,7 +214,10 @@ class Racking:
     read.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, min_returns: float = RACKING_MIN_RETURNS) -> None:
+        # `min_returns=math.inf` never turns on: every number back is counted,
+        # as the ball list's checks did before checkpoint 136.
+        self.min_returns = min_returns
         self.on = False
         self.returned = 0  # numbers back on the list that turned `on`
         self._seen: set[str] = set()
@@ -237,7 +240,7 @@ class Racking:
             return 0
         now = self._numbers(record)
         back = now & self._gone
-        if len(back) >= RACKING_MIN_RETURNS:
+        if len(back) >= self.min_returns:
             self.on = True
             self.returned = len(back)
             self._seen, self._gone = set(), set()

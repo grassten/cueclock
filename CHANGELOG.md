@@ -319,6 +319,27 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 143: the session-review golden test, run; #70
+  step 2):** both halves were run headless (`claude -p`, dry run, GitHub
+  writes and edits denied in its permissions) on 20261121-153046.
+  - **As of the session's code:** the draft reproduced #69's mechanisms
+    for changes 1-3 (same `hub.py` lines, same 32 ms / 47 ms, same
+    9-of-10 and 38-vs-42 mm measurements), the conflict for 6, the racking
+    stretches for 5, and "worked as designed" for `reverted-1718077079`.
+    Two of its rules differ from what shipped: change 2 is wider, and
+    change 1 misses `shot_taken`. It had read HEAD's `report.py`, so
+    `--as-of-session` now reads every repo file at the session's sha and
+    never opens #69.
+  - **At HEAD:** nothing filed. 4 verdicts were changed by checkpoint 136,
+    and 1 worked as designed. A third REGRESSED,
+    `reverted-1718748001`, is a label diff only (`row` still since
+    checkpoint 138).
+  - **The one gap, closed:** #69's racking evidence was a stats figure the
+    dossier could not show. It now recounts "numbers back" as pre-136
+    stats did (`report.Racking(min_returns=math.inf)`): 47, matching the
+    session, and 39 of them inside the two racking stretches. #69's "45"
+    was an estimate; the other 8 are today's row.
+
 - **2026-11-22 (checkpoint 142: the session review's tools, and the skill
   that uses them; #70 steps 1 and 2):** what was done by hand for #69 (wrong
   verdicts → mechanisms → rules measured across every journal → one issue)
