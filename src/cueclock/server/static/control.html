@@ -563,6 +563,15 @@
                     overhead camera reads on the table whenever it is still. A test
                     graphic &mdash; it shows its mistakes as read, on purpose.</p>
             </section>
+            <!-- Spoken control (#76): off = only this page and the deck drive
+                 the clock. The mic still listens and journals what it heard. -->
+            <section>
+                <h2>Voice</h2>
+                <button class="ghost" id="voice-btn" onclick="toggleVoice()">Turn voice off</button>
+                <p class="hint">Saying &ldquo;extension&rdquo; at the table grants one.
+                    Turn it off for a noisy room: then only this page and the deck run
+                    the clock. Back on with every session.</p>
+            </section>
             <!-- Rig health (#52): reference drift at launch, detect rate, balls
                  tracked. Three months of drift warnings went unread in a log
                  behind the TV; this is where somebody looks. -->
@@ -616,6 +625,15 @@
         ballStripShown = strip.shown;
         document.getElementById('ball-strip-btn').innerText =
             ballStripShown ? 'Hide ball strip' : 'Show ball strip';
+    }
+    let voiceOn = true;
+    function toggleVoice() {
+        post('/api/voice/' + (voiceOn ? 'off' : 'on'));
+    }
+    function renderVoice(on) {
+        if (typeof on !== 'boolean') return;
+        voiceOn = on;
+        document.getElementById('voice-btn').innerText = on ? 'Turn voice off' : 'Turn voice on';
     }
     // ---- Clock settings (#74) ----
     // The options come from the server; only how they read lives here. A
@@ -1307,6 +1325,7 @@
     function render(s) {
         renderHealth(s.health);
         renderBallStrip(s.ball_strip);
+        renderVoice(s.voice);
         // Clock off (`timed: false`): there is no countdown, so the number
         // and every key about one leave and the pill says why.
         const untimed = s.timed === false;

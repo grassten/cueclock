@@ -628,15 +628,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
             )
         else:
 
-            def _extension_done(future: "Future[bool]") -> None:
+            def _extension_done(future: "Future[bool | None]") -> None:
                 exc = future.exception()
                 if exc is not None:
                     print(f"voice extension dispatch failed: {exc!r}", file=sys.stderr)
+                elif future.result() is None:
+                    print('voice: "extension" -> ignored (voice off)')
                 else:
                     print(f'voice: "extension" -> accepted={future.result()}')
 
             def _voice_extension() -> None:
-                asyncio.run_coroutine_threadsafe(hub.extension(), loop).add_done_callback(
+                asyncio.run_coroutine_threadsafe(hub.voice_extension(), loop).add_done_callback(
                     _extension_done
                 )
 

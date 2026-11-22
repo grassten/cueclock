@@ -903,6 +903,17 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.
    grammar holds one word. That was always so; the gain moves how far away
    someone can stand and do it. Practice-room evidence only: no recording
    has talking or music in it.
+   **The Voice switch** (checkpoint 146, #76): the control page's Setup tab
+   turns spoken control off for a noisy room (`POST /api/voice/{on,off}`,
+   `voice` in the payload). Off, a heard "extension" reaches
+   `Hub.voice_extension`, is journaled as `voice_ignored` and goes no
+   further; the deck's EXT key and `/api/extension` still grant. The mic
+   keeps listening and `voice_final` records keep being written, so a call
+   made while it was off is still in the journal. It is on with every
+   `run`, like the Vision and Ball strip switches, and has no deck key.
+   A spoken "push out" was looked at in the same issue and dropped (Push is
+   two presses when the other player passes it back, and the pass-back has no word);
+   the measurements are in #76.
 2. **Disqualified for good 2026-11-18 — audio for detection.** A broadband
    transient detector coincident with the cue-ball velocity impulse (the
    acoustic strike-click corroborator) was the long-standing designed answer

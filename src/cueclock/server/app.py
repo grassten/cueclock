@@ -445,6 +445,17 @@ def create_app(
         await hub.set_ball_strip(False)
         return {"ok": True}
 
+    @app.post("/api/voice/on")
+    async def api_voice_on() -> dict[str, object]:
+        await hub.set_voice(True)
+        return {"ok": True, "voice": True}
+
+    @app.post("/api/voice/off")
+    async def api_voice_off() -> dict[str, object]:
+        """Spoken calls off (#76): only the deck and the control page drive the clock."""
+        await hub.set_voice(False)
+        return {"ok": True, "voice": False}
+
     @app.post("/api/vision/on")
     async def api_vision_on() -> dict[str, object]:
         await hub.set_vision(True)

@@ -633,6 +633,10 @@ class Hub:
         # `cueclock run` through `ball_list`; the switch starts on.
         self._ball_strip: list[str] | None = None
         self.ball_strip_shown = True
+        # Spoken control (#76): off = a heard "extension" is journaled and
+        # dropped, so the clock takes commands only from the deck and the
+        # control page. On with every `run`, like the vision and strip switches.
+        self.voice_enabled = True
         # Called after a *granted* extension has been broadcast, because the
         # overlay answers that broadcast by speaking "Extension called" out of
         # the TV. `cueclock run` points it at the mic listener's mute window:
@@ -682,6 +686,7 @@ class Hub:
         return {
             **snap.as_dict(),
             "vision": self.vision_enabled,
+            "voice": self.voice_enabled,
             "score": self.score.as_dict(),
             "solo": self._solo(),
             "bracket": self._bracket_summary(),
@@ -1045,6 +1050,20 @@ class Hub:
         return accepted
 
     @hub_input
+    async def voice_extension(self) -> bool | None:
+        """A spoken "extension": the deck key's call, unless voice is off.
+
+        None = ignored (voice off), journaled as `voice_ignored` and never
+        reaching the clock. The gate is here rather than in the listener
+        thread so it is a logged input, and a session replay decides it the
+        same way the live session did (#76).
+        """
+        if not self.voice_enabled:
+            self._log("voice_ignored", call="extension", reason="voice_off")
+            return None
+        return await self.extension()
+
+    @hub_input
     async def set_setting(self, name: str, value: str) -> bool:
         """Change one of the clock's settings (#74); False if unknown.
 
@@ -1127,6 +1146,13 @@ class Hub:
     async def set_vision(self, enabled: bool) -> None:
         self.vision_enabled = enabled
         self._log("cmd_vision", enabled=enabled)
+        await self.broadcast(self.clock.snapshot())
+
+    @hub_input
+    async def set_voice(self, enabled: bool) -> None:
+        """Turn spoken control on or off (#76); the deck and the page are unaffected."""
+        self.voice_enabled = enabled
+        self._log("cmd_voice", enabled=enabled)
         await self.broadcast(self.clock.snapshot())
 
     @hub_input

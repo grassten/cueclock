@@ -46,6 +46,8 @@ def test_state_snapshot_shape() -> None:
             "extensions_allowed",
             "cue",
             "vision",
+            # Spoken control's switch (#76): on with every run.
+            "voice",
             "score",
             # The solo panel (#30): null in match, pace numbers in run_out,
             # rep counters in no_clock.
@@ -63,6 +65,7 @@ def test_state_snapshot_shape() -> None:
         assert snap["mode"] == "match"
         assert snap["base"] == 30
         assert snap["vision"] is True
+        assert snap["voice"] is True
         assert snap["solo"] is None
         assert snap["bracket"] is None
         assert snap["health"] is None
@@ -147,6 +150,52 @@ def test_only_a_granted_extension_deafens_the_mic() -> None:
     asyncio.run(hub.pause())
     asyncio.run(hub.extension())  # refused — a denial speaks no words to hear
     assert len(muted) == 2
+
+
+def test_voice_off_drops_a_spoken_extension_and_keeps_the_key() -> None:
+    """With voice off a heard "extension" never reaches the clock (#76).
+
+    It is journaled as ignored, nothing is announced or muted, and the deck's
+    key (`Hub.extension`) still grants. Back on, the voice grants again.
+    """
+    hub = Hub()
+    ws = RecordingWS()
+    asyncio.run(hub.connect(cast(WebSocket, ws)))
+    muted: list[int] = []
+    hub.on_extension_granted = lambda: muted.append(1)
+    asyncio.run(hub.start())
+    asyncio.run(hub.set_voice(False))
+    assert ws.messages[-1]["voice"] is False
+    before = hub.clock.remaining
+    assert asyncio.run(hub.voice_extension()) is None
+    assert hub.clock.remaining == before
+    assert muted == []
+    ignored = [r for r in hub.journal.tail(60.0) if r["kind"] == "voice_ignored"]
+    assert [(r["call"], r["reason"]) for r in ignored] == [("extension", "voice_off")]
+    assert asyncio.run(hub.extension()) is True  # the key is never gated
+    asyncio.run(hub.set_voice(True))
+    assert asyncio.run(hub.voice_extension()) is True
+    assert len(muted) == 2
+
+
+def test_voice_switch_over_the_api_is_an_input() -> None:
+    """The switch rides the payload, and a spoken call is a logged input, so a
+    session replay re-decides it under the same switch (#76)."""
+    app = create_app()
+    hub: Hub = app.state.hub
+    inputs: list[dict[str, object]] = []
+    hub.on_input = inputs.append
+    with TestClient(app) as client:
+        assert client.post("/api/voice/off").json() == {"ok": True, "voice": False}
+        assert client.get("/api/state").json()["voice"] is False
+        assert client.post("/api/voice/on").json() == {"ok": True, "voice": True}
+        assert client.get("/api/state").json()["voice"] is True
+    asyncio.run(hub.voice_extension())
+    assert [(r["method"], r["kwargs"]) for r in inputs] == [
+        ("set_voice", {"enabled": False}),
+        ("set_voice", {"enabled": True}),
+        ("voice_extension", {}),
+    ]
 
 
 def test_voice_asset_is_served_when_generated_and_404s_when_not(

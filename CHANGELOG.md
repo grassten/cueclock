@@ -319,6 +319,27 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 146: the Voice switch; #76):** Steven asked for a
+  spoken "push" like "extension", then for a control-page switch that turns
+  spoken control off, so in a noisy room only the page and the deck run the
+  clock. The switch shipped. The spoken push was dropped after talking
+  through how Push works: a push out is two presses when the other player
+  passes it back, the pass-back has no word to say, and Push has been pressed
+  once in every journal on disk. The measurements (a lone "push" fired by "bush",
+  "hush" and "put" said alone and by 6% of sentences; "push out" by none of
+  the sentences) are in the issue.
+  - **Server:** `Hub.voice_enabled`, `POST /api/voice/{on,off}`
+    (`cmd_voice`), `voice` in the payload. A heard "extension" now calls
+    `Hub.voice_extension`, a logged input that journals `voice_ignored` and
+    returns None with voice off, and otherwise calls `extension()`. The gate
+    is in the hub, not the listener thread, so a replay decides it the same
+    way. On with every `run`; no deck key.
+  - **Control page:** a Voice section on the Setup tab, after Ball strip: one
+    button that reads its state.
+  - **Tests:** unit only (no detection change): voice off drops the call,
+    announces and mutes nothing, the key still grants; the switch rides the
+    payload and both it and the call are logged inputs. 841 unit tests pass.
+
 - **2026-11-22 (checkpoint 145: the clock's settings instead of rulesets;
   #74):** Steven: *"What if we just had buttons on the deck for those? … Then
   there's no ambiguity and we don't have to worry about adding new rulesets
