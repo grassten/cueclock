@@ -216,6 +216,7 @@ class Racking:
 
     def __init__(self) -> None:
         self.on = False
+        self.returned = 0  # numbers back on the list that turned `on`
         self._seen: set[str] = set()
         self._gone: set[str] = set()
         self._rack = 0
@@ -238,6 +239,7 @@ class Racking:
         back = now & self._gone
         if len(back) >= RACKING_MIN_RETURNS:
             self.on = True
+            self.returned = len(back)
             self._seen, self._gone = set(), set()
             return 0
         self._gone = (self._gone | (self._seen - now)) - now

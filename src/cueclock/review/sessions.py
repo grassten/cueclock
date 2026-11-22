@@ -21,8 +21,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cueclock import archive
-from cueclock.archive import FULL_INDEX, RECORDINGS_LOG, SESSIONS_ROOT
-from cueclock.review.moments import MOMENTS_FILE, write_json
+from cueclock.archive import ARCHIVE_ROOT, FULL_INDEX, RECORDINGS_LOG, SESSIONS_ROOT
+from cueclock.review.moments import MOMENTS_FILE, session_journal, write_json
 
 LOCAL_ROOT = SESSIONS_ROOT
 RECORDINGS_FILE = RECORDINGS_LOG.name
@@ -132,6 +132,23 @@ def discover(roots: list[Path]) -> list[Session]:
             if STAMP.match(entry.name) and entry.name not in found and entry.is_dir():
                 found[entry.name] = Session(entry.name, entry)
     return sorted(found.values(), key=lambda s: s.stamp, reverse=True)
+
+
+def locate(stamp: str, roots: list[Path] | None = None) -> Session | None:
+    """One session by its stamp: the local copy, else the T7's."""
+    if not STAMP.match(stamp):
+        return None
+    found = discover(roots if roots is not None else [LOCAL_ROOT, ARCHIVE_ROOT])
+    return next((s for s in found if s.stamp == stamp), None)
+
+
+def journal_of(stamp: str, logs_dir: Path = Path("logs")) -> Path | None:
+    """A session's journal: its directory's copy, else the live one in `logs/`."""
+    found = locate(stamp)
+    if found is not None:
+        return session_journal(found.path, logs_dir)
+    live = logs_dir / f"session-{stamp}.jsonl"
+    return live if STAMP.match(stamp) and live.is_file() else None
 
 
 @dataclass(frozen=True)

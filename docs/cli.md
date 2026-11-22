@@ -54,7 +54,7 @@ Ground rules that apply to every command:
 | `recalibrate` | Record a fresh empty-table reference, refit both, swap them in only if good (the deck's RECAL key) | owns it |
 | `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
 | `report` | Journal report: shots, strikes that did not fire, phantom candidates, breaks, scratches | no |
-| `review` | Session review (#57): find a session's candidate moments, or serve the always-up review page | no |
+| `review` | Session review (#57): find a session's candidate moments, serve the always-up review page, replay verdicts (`check`), and read a session for a review of its verdicts (`dossier`, `timeline`, `frames`; #70) | no |
 | `deck` | Stream Deck control-surface daemon | no |
 | `sidecam` | Side-angle camera settings: show, save the current ones, apply the saved ones | side camera only |
 | `session maintain` | After-session housekeeping: journal copy, parity check, moments, footage cuts, move to the T7, footage budget (refuses while a session is live) | no |
@@ -360,7 +360,7 @@ and covers every session ever recorded, including the two that carry presses.
 
 ### `review`
 
-**Desk-side review of a session (#57).** Two actions, neither touches the
+**Desk-side review of a session (#57, #70).** None of the actions touches the
 camera or needs `run`:
 
 - `review moments <session dir>` reads the session's journal (`journal.jsonl`
@@ -431,15 +431,47 @@ camera or needs `run`:
   Always up under launchd as `com.cueclock.review`
   (`scripts/install_review_agent.sh`).
 
+Three more read what a review of Steven's verdicts needs (#70, the
+`session-review` skill, `.claude/skills/session-review/`). All three only
+read files, so they are safe while a session is live:
+
+- `review dossier <stamp>` prints everything a review starts from on one
+  page (about 2.5k tokens). It gives the session's code against HEAD and the
+  checkpoints landed since, parity, footage, presses, and every verdict
+  joined to its moment in local time with its full-recording position. It
+  lists unjudged ids, co-located moments (same episode within 2 s; shared
+  window, which `review check` grades together), and a fingerprint of
+  `verdicts.json`. Shots are classified: each one counted with no strike is
+  named (after the watchdog / cue ball on its spot / nothing seen to move /
+  unexplained), and racking on a live clock is listed as stretches. It also
+  gives held-by counts, freeze shapes, scratches and ball in hand, detect Hz
+  and voice.
+- `review timeline <stamp> <moment id | mono>` prints the journal from 12 s
+  before to 8 s after (`--before`, `--after`), one line per record. Each line
+  has the offset, local time, the clock, the rack's shot count, the kind, and
+  every other field as JSON. It drops heartbeats, wordless voice finals and a
+  ball list that repeats the one before (`--all` keeps them). A moment id's
+  number is mono × 1000.
+- `review frames <stamp> <moment id | ISO wall | mono>` writes 6 s of
+  footage (`--span`) at 2 frames a second (`--fps`) as one tiled JPEG, 4
+  tiles a row, centred on the moment unless `--before` says otherwise. It
+  prints the path and a legend of which tile is which second. The footage is
+  the session's kept recording, else a listed one still in `~/Movies`, else
+  the moment's cut. A cut's times can be up to a GOP early, and the legend
+  says so. The JPEG goes to the temp directory unless `--out` says otherwise.
+
 | Flag | Default | What |
 |---|---|---|
-| `--logs DIR` | `logs` | where the live journals live (both actions) |
+| `--logs DIR` | `logs` | where the live journals live (`moments`, `serve`, `timeline`, `dossier`) |
 | `--host` | `0.0.0.0` | `serve` only: bind address |
 | `--port` | `8001` | `serve` only — never 8000, which is `run`'s |
 
 ```bash
 uv run python -m cueclock.cli review moments sessions.nosync/20261116-225226
 uv run python -m cueclock.cli review serve
+.venv/bin/python3 -m cueclock.cli review dossier 20261121-153046
+.venv/bin/python3 -m cueclock.cli review timeline 20261121-153046 in_hand_shot-1717566108
+.venv/bin/python3 -m cueclock.cli review frames 20261121-153046 reverted-1718077079 --before 3
 ```
 
 ### `deck`

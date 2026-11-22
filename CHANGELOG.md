@@ -319,6 +319,52 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 142: the session review's tools, and the skill
+  that uses them; #70 steps 1 and 2):** what was done by hand for #69 (wrong
+  verdicts → mechanisms → rules measured across every journal → one issue)
+  is now a skill, `/session-review <stamp>`
+  (`.claude/skills/session-review/SKILL.md`), and three `review` subcommands
+  so it doesn't re-derive its inputs each run. The "Review done" button and
+  the launchd launch (step 3) come once the skill's output is trusted.
+  - **`review dossier <stamp>`** (`review/dossier.py`): one page, about 2.5k
+    tokens on 20261121-153046. It joins verdicts to moments in local time
+    with their full-recording position, and lists co-located moments with
+    their conflicts: the in_hand_shot/phantom pair 1 ms apart reads CONFLICT.
+    It gives code against HEAD (the checkpoints since), parity, presses,
+    footage, and a fingerprint of `verdicts.json` so a re-run can tell
+    nothing changed. It also states what the raw rows really were. On that
+    session HEAD's `report` reads 5 shots counted with no strike: 1 after the
+    watchdog (the real settle 1 s after the synthesized one), 1 with the
+    cue ball on its spot, 1 with nothing seen to move, and 2 unexplained.
+    It also finds the two racking stretches on a live clock (5 and 6
+    numbers back). The recurring counts are named functions (`held_by`,
+    `freeze_shapes`, `racking_stretches`, `classify_misses`) for
+    cross-journal measurement. `report.Racking` now keeps `returned`, the
+    numbers back on the list that started a stretch; nothing it decides
+    changed.
+  - **`review timeline <stamp> <moment | mono>`** (`review/timeline.py`):
+    #69's `tl.py`, promoted, using the page's `clock_after`. It drops
+    heartbeats, wordless voice finals, and a ball list repeating the one
+    before it inside the window.
+  - **`review frames <stamp> <moment | wall | mono>`** (`review/frames.py`):
+    a tiled JPEG and a legend of which tile is which second, in under 1 s.
+    A recording comes before the cut, unlike the issue's order: a cut is a
+    stream copy that starts up to a GOP early, so only a recording's times
+    are exact. Images go to the temp directory, never the session directory
+    (nothing there without a purge rule).
+  - **The skill** runs on demand only, interactively for now. It writes only
+    an issue draft under `$TMPDIR`. It files one issue per session, marked
+    with the stamp and the verdicts fingerprint: a re-run with the same
+    fingerprint files nothing, and a changed one comments on that issue.
+    `--dry-run` files nothing, and `--as-of-session` reads the session's own
+    code. Its standing decisions are restated word for word to every
+    subagent.
+  - Tests: `tests/unit/test_review_desk.py` (9) covers the miss
+    classification, racking stretches, held-by and freeze shapes, the
+    timeline filter, frames' source order and seek, and the dossier's
+    conflicts and fingerprint. Unit suite 849 → 858 passed. No detection
+    code touched, so no battery.
+
 - **2026-11-22 (checkpoint 141 — the TV on a cable, switched by its own
   report; #62):** Steven ran Ethernet from the Mac mini to the TV, whose
   Wi-Fi he had turned off (2026-11-16) to keep it off the home network.

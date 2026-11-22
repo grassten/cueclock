@@ -1069,6 +1069,8 @@ def _cmd_review(args: argparse.Namespace) -> int:
                 for d in r.diffs[:3]:
                     print(f"      {d['summary']}")
         return 1 if regressed else 0
+    if args.action in ("timeline", "frames", "dossier"):
+        return _cmd_review_desk(args)
     if args.action == "moments":
         from collections import Counter
 
@@ -1091,6 +1093,46 @@ def _cmd_review(args: argparse.Namespace) -> int:
     url = join_url(args.port, "/") or f"http://127.0.0.1:{args.port}/"
     print(f"review page: {url}", flush=True)
     uvicorn.run(create_app(logs_dir=args.logs), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
+def _cmd_review_desk(args: argparse.Namespace) -> int:
+    """#70: what a session review reads — a journal window, a tiled still, the dossier."""
+    from cueclock.review import dossier, frames, sessions, timeline
+
+    if args.action == "dossier":
+        try:
+            print(dossier.for_stamp(args.stamp, args.logs), end="")
+        except FileNotFoundError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
+    if args.action == "timeline":
+        journal = sessions.journal_of(args.stamp, args.logs)
+        if journal is None:
+            print(f"no journal for session {args.stamp}", file=sys.stderr)
+            return 2
+        try:
+            center = timeline.center_of(args.at)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        found = timeline.window(
+            timeline.records(journal), center, args.before, args.after, everything=args.all
+        )
+        print(timeline.render(found, center))
+        return 0
+    session = sessions.locate(args.stamp)
+    if session is None:
+        print(f"no session directory {args.stamp} (is the T7 mounted?)", file=sys.stderr)
+        return 2
+    try:
+        path, legend = frames.tile(session, args.at, args.span, args.fps, args.before, args.out)
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(path)
+    print(legend)
     return 0
 
 
@@ -1424,7 +1466,41 @@ def main(argv: list[str] | None = None) -> int:
     p_check.add_argument(
         "stamps", nargs="*", help="only these sessions (default: every judged one)"
     )
-    for p in (p_moments, p_serve):
+    p_timeline = review_sub.add_parser(
+        "timeline", help="a session's journal around one moment, every field kept (#70)"
+    )
+    p_timeline.add_argument("stamp", help="session stamp, e.g. 20261121-153046")
+    p_timeline.add_argument("at", help="a moment id (in_hand_shot-1717566108) or a mono time")
+    p_timeline.add_argument(
+        "--before", type=float, default=12.0, help="seconds before (default 12)"
+    )
+    p_timeline.add_argument("--after", type=float, default=8.0, help="seconds after (default 8)")
+    p_timeline.add_argument(
+        "--all",
+        action="store_true",
+        help="keep heartbeats, wordless voice finals and repeated ball lists",
+    )
+    p_frames = review_sub.add_parser(
+        "frames", help="a few seconds of a session's footage as one tiled JPEG (#70)"
+    )
+    p_frames.add_argument("stamp", help="session stamp, e.g. 20261121-153046")
+    p_frames.add_argument("at", help="a moment id, an ISO wall time, or a mono time")
+    p_frames.add_argument("--span", type=float, default=6.0, help="seconds shown (default 6)")
+    p_frames.add_argument("--fps", type=float, default=2.0, help="tiles per second (default 2)")
+    p_frames.add_argument(
+        "--before",
+        type=float,
+        default=None,
+        help="seconds of the span before the moment (default: half the span)",
+    )
+    p_frames.add_argument(
+        "--out", type=Path, default=None, help="output JPEG (default: the temp directory)"
+    )
+    p_dossier = review_sub.add_parser(
+        "dossier", help="everything a session review starts from, on one page (#70)"
+    )
+    p_dossier.add_argument("stamp", help="session stamp, e.g. 20261121-153046")
+    for p in (p_moments, p_serve, p_timeline, p_dossier):
         p.add_argument(
             "--logs", type=Path, default=Path("logs"), help="journal directory (default logs/)"
         )
