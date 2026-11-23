@@ -27,6 +27,7 @@ a path from the URL.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections.abc import Callable, Sequence
@@ -38,6 +39,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.requests import ClientDisconnect
+from starlette.types import Message, Receive, Scope, Send
 
 from cueclock import archive
 from cueclock.review import findings
@@ -639,7 +642,7 @@ def create_app(
     async def full_file(stamp: str, index: int) -> FileResponse:
         for rec in session(stamp).full_recordings():
             if rec.index == index:
-                return FileResponse(rec.path, media_type=_media_type(rec.path))
+                return _Footage(rec.path, media_type=_media_type(rec.path))
         raise HTTPException(404, "no such recording")
 
     @app.post("/api/verdict/{stamp}/{moment_id}")
@@ -704,16 +707,51 @@ def create_app(
             path = s.cut(moment_id)
         if path is None:
             raise HTTPException(404, "no cut")
-        return FileResponse(path, media_type="video/mp4")
+        return _Footage(path, media_type="video/mp4")
 
     @app.get("/recording/{index}")
     async def recording(index: int) -> FileResponse:
         for rec in sess.recordings(local_root):
             if rec.index == index:
-                return FileResponse(rec.path, media_type=_media_type(rec.path))
+                return _Footage(rec.path, media_type=_media_type(rec.path))
         raise HTTPException(404, "no such recording")
 
     return app
+
+
+class _Footage(FileResponse):
+    """A video file that stops being read when the player hangs up.
+
+    A player asks for a recording "from here to the end", takes a few seconds
+    of it and closes the connection: at every seek, and again whenever it has
+    buffered enough. uvicorn drops what is sent to a closed connection without
+    raising, so a plain `FileResponse` goes on reading the rest of the file for
+    nobody. On 2026-11-23 that was up to 5.6 GB off the T7 per request and some
+    200 requests at once: the one request still being watched got a sliver of
+    the server (the video froze), then the process ran out of file descriptors
+    (launchd allows 256) and refused new ones.
+    """
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        gone = asyncio.Event()
+
+        async def watch() -> None:
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            gone.set()
+
+        async def send_while_there(message: Message) -> None:
+            if gone.is_set():
+                raise ClientDisconnect
+            await send(message)
+
+        watcher = asyncio.create_task(watch())
+        try:
+            await super().__call__(scope, receive, send_while_there)
+        except ClientDisconnect:
+            pass  # the file is closed on the way out; there is nobody to answer
+        finally:
+            watcher.cancel()
 
 
 _VIDEO = "controls playsinline"

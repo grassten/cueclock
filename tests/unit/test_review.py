@@ -1,5 +1,6 @@
 """#57 review: the moments finder, verdicts, and the review page's file serving."""
 
+import asyncio
 import json
 import re
 import shutil
@@ -533,6 +534,53 @@ def test_full_session_falls_back_to_the_listed_recording(
     video.unlink()
     assert "No full recording" in app.get(f"/s/{STAMP}/full").text
     assert "/full" not in app.get(f"/s/{STAMP}").text.split("<details")[0]
+
+
+def test_a_player_that_hangs_up_stops_the_read(roots: tuple[Path, Path], tmp_path: Path) -> None:
+    """A player asks for "from here to the end" and leaves after a few seconds,
+    at every seek. uvicorn drops what is sent to a closed connection without
+    raising, so the response has to notice for itself or it reads the rest of
+    a multi-GB recording for nobody (2026-11-23: ~200 at once, video frozen)."""
+    local, _ = roots
+    video = tmp_path / "obs.mov"
+    list_recording(local, video)
+    size = 64 * 1024 * 200
+    video.write_bytes(b"\0" * size)
+    app = create_app([local], local_root=local, logs_dir=tmp_path / "logs")
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/recording/0",
+        "raw_path": b"/recording/0",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"review"), (b"range", b"bytes=0-")],
+        "client": ("127.0.0.1", 50000),
+        "server": ("127.0.0.1", 8001),
+    }
+
+    async def play_a_little() -> int:
+        hung_up = asyncio.Event()
+        read = 0
+
+        async def receive() -> dict[str, Any]:
+            await hung_up.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:  # uvicorn's: never raises
+            nonlocal read
+            if message["type"] == "http.response.body":
+                read += len(message.get("body", b""))
+                hung_up.set()
+            await asyncio.sleep(0)
+
+        await app(scope, receive, send)
+        return read
+
+    assert asyncio.run(play_a_little()) < size / 10
 
 
 def test_one_moment_is_open_and_it_is_the_first_still_to_judge(

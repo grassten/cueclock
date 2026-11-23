@@ -319,6 +319,37 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-23 (checkpoint 151: the full-session video stops freezing):**
+  Steven, watching today's 42-minute session on the review page: "the video
+  keeps freezing. It doesn't seem like a bandwidth issue". It was the review
+  server, not the network.
+  - **What the server showed.** `~/Library/Logs/cueclock-review.log` held 52
+    `OSError: [Errno 24] Too many open files`, some on opening the recording
+    for a request and some on `socket.accept()`. The process had 206 read
+    handles open on `2026-11-23 13-01-49.mov` (5.6 GB, on the T7) and no
+    client connected, at 150% CPU. Left alone the count fell (123, 114, 85 in
+    17 s): requests nobody was waiting for, still being read to the end.
+  - **Cause.** A player asks for a recording "from here to the end", takes a
+    few seconds and closes the connection, at every seek and whenever it has
+    buffered enough. uvicorn drops what is sent to a closed connection
+    without raising, so Starlette's `FileResponse` read on to the end of the
+    file. Every abandoned request cost up to 5.6 GB of T7 reads and a share
+    of the one event loop, so the request being watched slowed to a stall;
+    at launchd's 256 descriptors new requests were refused outright. Every
+    error in the log that names a file names today's recording; the kept
+    recordings before it are 1.7 GB at most, so a stray read of one ended
+    three times sooner or more (the likely reason it went unseen).
+  - **Fix.** `review/app.py` `_Footage`, a `FileResponse` that listens for
+    the disconnect and stops at the next 64 KB piece. The three routes that
+    serve video use it (`/full`, `/recording`, `/media`).
+  - **Verified.** A new unit test hangs up after the first piece: 13 MB of
+    13 MB read before the change, under a tenth after. On the restarted
+    server, 30 open-ended requests into today's recording, each dropped after
+    0.4 s, left 0 handles and 0.3% CPU; a 5 MB range from the middle matches
+    the file byte for byte. 860 unit tests, ruff, mypy (macOS and Linux).
+  - **Not checked.** Playback on the phone itself: the server-side test above
+    is a script, not Safari.
+
 - **2026-11-22 (checkpoint 150: CI green again):** CI had failed on 75 of its
   76 runs, every push since 2026-08-02 (the one pass is 2026-07-27), with a
   failure email for each. No run ever failed on an Actions limit: 74 stopped
