@@ -31,6 +31,7 @@ import os
 import re
 import signal
 import subprocess  # nosec B404: fixed argv lists, no shell
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Sequence
@@ -352,8 +353,9 @@ def launch(
             stderr=err,
             start_new_session=True,  # its own process group, so a stop takes its children
         )
-        with contextlib.suppress(OSError, AttributeError):
-            os.setpriority(os.PRIO_DARWIN_PROCESS, proc.pid, 0)  # out of the background band
+        if sys.platform == "darwin":  # the constant exists nowhere else
+            with contextlib.suppress(OSError):
+                os.setpriority(os.PRIO_DARWIN_PROCESS, proc.pid, 0)  # out of the background band
         deadline = time.monotonic() + RUN_LIMIT_S
         while True:
             try:

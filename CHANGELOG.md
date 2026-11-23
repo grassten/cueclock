@@ -403,7 +403,10 @@ survive unchanged in `design.md`.
     page, `session maintain`), `hardware.md` §C7, `README.md`, the skill.
     Under launchd with the token in place (2026-11-23): a press on
     `20261123-004951` ended "Already filed as #78" in 17 s (4 turns, $0.65),
-    and nothing new was filed.
+    and nothing new was filed. CI's type-check then failed on the push:
+    `os.PRIO_DARWIN_PROCESS` exists only on macOS, so the call that takes the
+    run out of the Background band is now behind `sys.platform == "darwin"`
+    (follow-up commit). `mypy --platform linux` shows it locally.
 
 - **2026-11-22 (checkpoint 148: on a live clock, a settle with no motion
   behind it counts no shot; #78):** the first `/session-review` issue built
