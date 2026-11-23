@@ -115,6 +115,9 @@ class RearrangeSummary:
 # cycles 1-3; a ball-in-hand replacement exactly 1, and a settle on one of
 # those in RUNNING would reset a live clock — §9 constraint 1), so placement
 # and racking stay exactly as event-silent as checkpoints 28-56 left them.
+# The floor does not make a backstop settle a break: a stance or an arm
+# hiding five balls passes it (session 20261123-004951, 39.03 s). What it is
+# worth on a live clock is the hub's call, and the hub refuses it (§23).
 SETTLE_BACKSTOP_MIN_INVOLVED = 5
 
 # REMOVED 2026-08-29 (checkpoint 104, this file's half of the #41 removal):

@@ -319,6 +319,49 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 148: on a live clock, a settle with no motion
+  behind it counts no shot; #78):** the first `/session-review` issue built
+  as filed. In session 20261123-004951 Steven got down on a shot, his stance
+  hid five balls, and the countdown went from 25.0 s back to 30 with a shot
+  counted that nobody played (his verdict: "Getting down on a shot, none
+  taken"). Design: `docs/design.md` §23.
+  - **Mechanism.** The pipeline's backstop settle (built for a break whose
+    every track dies) fires on any quiet layout that differs by five balls,
+    and the hub decided it at once as "break-scale by construction". With a
+    countdown running, a settle with no strike is a missed shot.
+  - **The rule (`Hub._balls_settled`).** A backstop settle with the clock not
+    IDLE and no motion episode behind it is refused as `backstop`, through
+    the same branch as the list's refusals: `rejected: backstop` on the
+    settle, a `compensation_suppressed` before it, nothing counted, the
+    countdown left alone. IDLE (break adjudication) is unchanged, and so is a
+    backstop settle with an episode open.
+  - **Measured.** Ten backstop settles in 112 journals (2,520 shots). Four
+    arrived on a live clock (two in play, two racking); none was a shot and
+    all four restarted the countdown. The one right call was a break with the
+    clock idle (2026-08-11).
+  - **The list it is compared with.** A settle with no episode carried the
+    previous shot's motion start, so its row was judged against the list from
+    before that shot (`cue_px: 213.7`, `row: shot` for a cue ball that had not
+    moved, and `session-stats` read Detection 100.00% for the session). It
+    now carries its own time: `cue_px: 0.0`, `row: still`.
+  - **`report`** names the new reason in "settles refused". No review card
+    for it: two of the four on record were racking.
+  - **Verified.** 846 unit tests (5 new in `tests/unit/test_backstop.py`).
+    All eight logged sessions replay decision for decision as under
+    checkpoint 147 (822 records) except at the two backstop settles on a live
+    clock and the strike after each. `review check`: `no_strike-1837149548`
+    goes from still wrong to changed; `cue_only-1718069707` (judged right,
+    racking) reads REGRESSED on the countdown value alone, because the false
+    reset 11 s before it is gone; every other row is as before. Cached
+    battery green (951 passed; no `events.py`, `track.py` or `detect.py`
+    change, so no cold run).
+  - **Correction to the issue.** It says the countdown stood at 25.8 s; that
+    was the value 0.87 s earlier. It stood at 25.0 s.
+  - **Next-session check.** `settles refused` in `cueclock report`: every
+    `backstop` one should be a stance, an arm or racking. A countdown that
+    does not restart after a real shot, with `rejected: backstop` at its
+    settle, sends this back.
+
 - **2026-11-22 (checkpoint 147: the side camera in 1920×1440, zoom 120,
   focus 90; #77):** Steven asked whether zooming the side camera would make
   the balls clearer, since its sensor is 4K. It does, and the saved focus

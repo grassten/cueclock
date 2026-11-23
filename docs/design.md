@@ -1566,7 +1566,7 @@ behind them was already refused by an earlier rule. The evidence reads
 under 0.1 s at 16 settles and 0.28 s or more at 154; the 171st,
 20261121-153046 at 886.74 s (racking), is the pipeline's backstop and
 carries none, so it counts as before (the research had read it 0.000 s and
-expected it to stop counting). `review check` is line for line as at
+expected it to stop counting; since checkpoint 148 it is refused, §23). `review check` is line for line as at
 checkpoint 139.
 
 **Journal.** `cue_roll_s` on every `vision_balls_settled` record (null with
@@ -1673,3 +1673,99 @@ SHOT 30 / 15, a 10 s menu, DONE in SETUP's cell.
 **What would send this back:** a settings change mid-rack that moved the
 running countdown or the rack's shot count, or a session that did not start on
 the settings the last one ended with.
+
+## 23. On a live clock, a settle with no motion behind it counts no shot (issue #78, 2026-11-22)
+
+In session 20261123-004951 at 39.03 s the countdown went from 25.0 s back to
+30 and the rack from one shot to two, with no shot played. Steven's note on
+the review card: "Getting down on a shot, none taken".
+
+**Mechanism.** The settle was the pipeline's backstop
+(`SETTLE_BACKSTOP_MIN_INVOLVED`, `vision/pipeline.py`): pixels moved, the
+table sat quiet for the settle dwell, and the quiet layout differed from the
+last one by five balls or more, with no strike and no motion latch in
+between. The difference was five balls gone, none moved, none new. His arm
+and body hid them: the lists read `arm: true`, the 1, 2, 7 and 14 left the
+list, and the next settle read `appeared: 4`. The cue ball read (867, 758) px
+before and after. The hub decided a backstop settle at once ("break-scale by
+construction"), and with a countdown running a settle with no strike is a
+missed shot: count one, start a fresh countdown.
+
+The backstop was built for a break whose every track dies (`flag_missed_4`,
+2026-08-06), and its floor of five was set against placing (one ball) and
+racking (one to three). A body hiding five balls was not considered.
+
+**The rule.** A backstop settle that arrives with the clock not IDLE and no
+motion episode behind it (no latch and no strike since the settle before) is
+refused as `backstop`: nothing counted, the countdown and a scratch hold left
+as they are. It goes through the same branch as the list's refusals
+(`Hub._decide_settle`), so the journal reads `vision_balls_settled` with
+`rejected: backstop` after a `compensation_suppressed` with that reason. With
+the clock IDLE nothing changes: break adjudication (E8,
+`Hub._adjudicate_break`) decides as before. With an episode open the settle counts as
+before: the engine never discards a fired episode, so this cannot happen
+today, and refusing it could leave a clock frozen.
+
+**Measured.** The 112 journals (2,520 shots) hold ten backstop settles.
+
+| Clock when it arrived | n | What it was | What it did |
+|---|---|---|---|
+| Live | 4 | In play, 2: balls hidden (this one; 2026-09-18 12:59:43, six of seven balls gone 1.9 s after a real settle). Racking, 2: 2026-11-21 10:45:33 (five gone), 2026-08-13 13:53:11 (eight new, four by hand) | All four counted a shot and restarted the countdown |
+| Idle, clock on | 4 | One real break (2026-08-11 14:47:42: one moved, seven new). Three racking (six gone each) | The break counted; racking did nothing |
+| Clock off | 2 | Not examined | Nothing |
+
+None of the four on a live clock was a shot. The one right call was a break
+with the clock idle, which the rule leaves alone. Since checkpoint 88 the
+engine settles a dark break itself (`test_break_dark_total_settles_at_the_rest`):
+the 51 journals from 2026-08-12 on hold 9 adjudicated breaks, none through the
+backstop, and 6 backstop settles, none a shot or a break. And the backstop was
+never the net for a missed ordinary shot, since it ignores anything under
+five balls. All four cases are solo practice; a match adds people leaning
+over the table, which is the same shape.
+
+**Each step of the real sequence.** Getting down on a shot with five or more
+balls hidden: nothing now. Standing back up without shooting (five or more
+balls back in view, the 2026-08-13 shape): nothing. Someone else leaning over
+the table: nothing. Placing with ball in hand: one ball, under the floor, as
+before. Racking on a live clock: nothing (it counted twice on record). The
+break with the clock idle: as before. A break on a clock left live from the
+last rack, with every track dead: no longer counted by this path; none on
+record.
+
+**Rejected.** Refusing only "balls gone, none moved, none new" covers three of
+the four, leaves standing back up, and a sleeve tracked as a ball during the
+cover turns one hidden ball into `moved: 1`. Holding the settle for its list
+and refusing a cue ball on its spot (§19) fails when the stance hides the cue
+ball. A higher floor separates nothing: the hidden-ball cases read 5, 5 and 6,
+racking 6 to 8, the real break 8. Deleting the backstop was not proposed: with
+the clock idle it has one catch and no false start on record.
+
+**The list such a settle is compared with.** `SettleFacts.motion_t` was the
+last episode's motion start whatever the settle, so a settle with no episode
+was compared with the list from before the *previous* shot: its row read
+`cue_px: 213.7`, `row: shot` for a cue ball that had not moved, and
+`session-stats` (which takes "counted with the cue ball on its spot" off
+Detection) read 100.00% for the session. A settle with no episode behind it
+now carries its own time, so its list is compared with the newest arm-free
+one before the settle: `cue_px: 0.0`, `row: still`. Of the 149 settles with a
+list row, two had no episode, both backstop settles, both read `shot`, both
+with the cue ball 0.0 px from the newest arm-free list before them.
+
+**Logged sessions.** All eight replay decision for decision as under
+checkpoint 147 (822 decision records) except at the two backstop settles on
+a live clock: 20261123-004951 at 39.03 s (refused, row `still`, and the next
+strike freezes at 21.6 s instead of 26.7) and 20261121-153046 at 886.74 s
+(racking: refused, row `still`, and the next strike freezes at 5.5 s instead
+of 18.9). `review check`: `no_strike-1837149548` goes from *still wrong* to
+*changed*; `cue_only-1718069707` (judged right, "mid racking it's fine") now
+reads REGRESSED on that 5.5 s, which is racking on a live clock and not a
+regression; every other row is as before.
+
+**Journal.** `rejected: backstop` on the settle, `compensation_suppressed`
+with `reason: backstop`, and `report`'s "settles refused" names it. No review
+card is raised: two of the four on record were racking (in-game only), and a
+refusal of a real shot would show as a countdown that ran through it.
+
+**What would send this back:** a `rejected: backstop` settle in a journal
+with a shot behind it, which Steven would see as a countdown that did not
+restart after a shot.

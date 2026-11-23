@@ -340,6 +340,10 @@ REJECTION_BLURBS = {
     # #67 (checkpoint 140): open play, the cue ball never seen rolling and no
     # object ball missing from the list before. A hand moved it.
     "by_hand": "cue ball moved by hand (never seen rolling, no other ball moved)",
+    # §23 (checkpoint 148): the pipeline's backstop settle on a live clock,
+    # with no strike and no motion latch behind it. Balls hidden by a stance
+    # or an arm, or racking; never a shot on record.
+    "backstop": "balls hidden or shown, no motion seen (the backstop on a live clock)",
 }
 
 
@@ -396,7 +400,8 @@ class SessionReport:
     # Reasons emitted today: `phantom` (#37), the table provably unchanged
     # against a real quiet baseline *and* no tracked mover having travelled;
     # `ball_in_hand` (#64), a placing after a scratch; `rack_standing` and
-    # `nothing_moved` (§16, §17); `by_hand` (#67), a hand move in open play.
+    # `nothing_moved` (§16, §17); `by_hand` (#67), a hand move in open play;
+    # `backstop` (§23), a settle with no motion behind it on a live clock.
     # `hand_placement` (#41) was removed in checkpoint 104 and survives only
     # in journals recorded before it; both are still tallied separately here,
     # because the whole point of the breakdown is to catch a predicate that

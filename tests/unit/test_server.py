@@ -1557,11 +1557,12 @@ def test_grace_settle_is_never_rejected(monkeypatch: pytest.MonkeyPatch) -> None
     assert hub.clock.state is State.RUNNING
 
 
-def test_backstop_settle_is_never_rejected() -> None:
-    # The pipeline's identity-free backstop carries no episode at all, so
-    # there is no mover evidence behind its summary. It cannot read zero today
-    # (SETTLE_BACKSTOP_MIN_INVOLVED), and the verdict says so out loud rather
-    # than relying on that staying true.
+def test_backstop_settle_is_never_a_phantom() -> None:
+    # The pipeline's identity-free backstop has no mover evidence behind its
+    # summary. It cannot read zero today (SETTLE_BACKSTOP_MIN_INVOLVED), and
+    # #37's verdict says so out loud rather than relying on that staying true.
+    # With an episode open it counts; with none, on a live clock, §23 refuses
+    # it (`test_backstop.py`).
     hub = _running_hub()
     shots = hub.clock.rack_shots
     asyncio.run(hub.episode_started(t=10.0))

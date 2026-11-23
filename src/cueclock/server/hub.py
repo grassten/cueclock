@@ -1717,14 +1717,18 @@ class Hub:
         # the list arrives (20-75 ms later live). Before every gate, so a
         # killed or untimed settle still journals what the list said.
         self._note_settle_unlisted()
-        self._episode_open = False
+        # §23: was there a motion episode (a latch or a strike) behind this
+        # settle? On record only the pipeline's backstop settles without one
+        # (2 of 149 list rows), and then the last motion on record is the shot
+        # before: its list is compared with the newest one before the settle.
+        episode, self._episode_open = self._episode_open, False
         facts = SettleFacts(
             t=t,
             epoch=self._episode_epoch,
             counted=False,
             travel_mm=max(m.travel_mm for m in movers) if movers else None,
             tracker_cue=tracker_cue,
-            motion_t=self._episode_motion_t,
+            motion_t=self._episode_motion_t if episode else t,
             cue_roll_s=cue_roll_s,
         )
         self._settle_facts = facts
@@ -1788,7 +1792,13 @@ class Hub:
             self._held_settle = _HeldSettle(now, t, detail, rearrange, backstop)
             self._settle_was_held = True
             return False
-        self._decide_settle(now, t, detail, rearrange, backstop)
+        # §23: the backstop is the break's evidence. With a clock that is not
+        # IDLE and no motion episode behind it, it is balls hidden or shown
+        # (a stance, an arm, racking), never a shot: all four on a live clock
+        # in 112 journals restarted a countdown nobody had shot on. With an
+        # episode open it counts as before, the failing-open side.
+        unseen = backstop and not episode and self.clock.state is not State.IDLE
+        self._decide_settle(now, t, detail, rearrange, backstop, "backstop" if unseen else None)
         return True
 
     def _decide_settle(
@@ -1805,7 +1815,9 @@ class Hub:
         verdict that it was not a shot: ``ball_in_hand`` (#64: it moved only
         the cue, during ball in hand), ``rack_standing`` (§17), ``nothing_moved``
         (§16, §19: the cue ball was read on its spot) or ``by_hand`` (§21: the
-        cue ball moved by hand in open play). True when the settle counted a shot."""
+        cue ball moved by hand in open play). ``backstop`` (§23) is not a
+        list's verdict: the pipeline's backstop settle on a live clock, with
+        no motion behind it. True when the settle counted a shot."""
         # Both settle-time refusals are decided here, before anything touches
         # the clock, and against the state the settle ARRIVED in. That is what
         # keeps them disjoint from the break adjudication below: E8 acts only
@@ -1857,7 +1869,8 @@ class Hub:
             )
         elif refusal is not None and not moved_clock:
             # The list's refusal: placing the cue during ball in hand (#64),
-            # or a freeze on a table where nothing moved (§16). Same
+            # or a freeze on a table where nothing moved (§16). Or §23's: a
+            # backstop settle on a live clock with no motion behind it. Same
             # resolution as a phantom: nothing counted, a frozen countdown
             # resumes at the remaining it froze with, a running one (and a
             # scratch hold in progress) is left alone. Two kinds, as #41
@@ -1939,7 +1952,7 @@ class Hub:
         """Could this settle's list show the cue ball moved by hand (§21)?
         The cue ball was never seen rolling in the motion it ends, and there
         is an arm-free list from before the motion to compare with. The
-        backstop settle is break-scale by construction and never held."""
+        backstop settle is never held: §23 decides it at once."""
         return (
             not backstop
             and not facts.seen_rolling
@@ -1956,7 +1969,7 @@ class Hub:
         merely lost or found reads the same whether a pot or a sleeve did
         it), or one ball in an episode with no strike; and there is an
         arm-free list from before the motion to compare with. The pipeline's
-        backstop settle is break-scale by construction and never held.
+        backstop settle is never held: §23 decides it at once.
 
         One ball and no strike (#69): in session 20261121-153046 at 712 s the
         tracker moved one ball 38 mm while he stood over the shot, the settle
