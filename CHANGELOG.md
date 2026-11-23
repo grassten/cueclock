@@ -319,6 +319,33 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 150: CI green again):** CI had failed on 75 of its
+  76 runs, every push since 2026-08-02 (the one pass is 2026-07-27), with a
+  failure email for each. No run ever failed on an Actions limit: 74 stopped
+  at the Test step and one at the format check. Lands ahead of checkpoint
+  149, which is committed and waiting on its launchd run (#70).
+  - **The test.** `test_sub_line_renders_dimmer_than_the_main_line` looks for
+    a pixel of exactly `FG_DIM`. The Linux runner has no Helvetica, and the
+    fallback `ImageFont.load_default()` ignored the size it was asked for and
+    drew every line at 10 px, where no pixel of the sub line is fully
+    covered. `faces._font` now passes the size (`load_default(px)`). Nothing
+    changes on the rig, which has Helvetica.
+  - **The audit.** The step sat behind Test, so it had not run since August,
+    and it would have failed too: 82 advisories in five locked packages.
+    Bumped in `uv.lock`: pillow 12.3.0 → 13.0.0, virtualenv 21.7.0 →
+    21.15.12, filelock 3.32.0 → 4.3.0, urllib3 2.7.0 → 2.8.0, certifi
+    2026.7.22 → 2026.11.20 (packaging and python-discovery moved with them).
+    `pip-audit` now finds nothing.
+  - **Not done.** The audit is still a step of every push, so the next
+    advisory against a locked package turns CI red again until that package
+    is bumped. Moving it to a weekly workflow of its own was built and the
+    push was refused: the `gh` token on this Mac has no `workflow` scope, so
+    it cannot change anything under `.github/workflows/`
+    (`gh auth refresh -s workflow` grants it).
+  - **Verified.** 847 unit tests, ruff, mypy. Ten deck faces rendered under
+    Pillow 12.3.0 and 13.0.0 are pixel-identical. With the font candidates
+    removed (the runner's case) the test fails before the change and passes
+    after it.
 - **2026-11-22 (checkpoint 148: on a live clock, a settle with no motion
   behind it counts no shot; #78):** the first `/session-review` issue built
   as filed. In session 20261123-004951 Steven got down on a shot, his stance

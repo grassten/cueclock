@@ -83,7 +83,7 @@ def _font(px: int) -> _Font:
             return ImageFont.truetype(path, px)
         except OSError:
             continue
-    return ImageFont.load_default()  # CI fallback; production Macs have Helvetica
+    return ImageFont.load_default(px)  # CI fallback; production Macs have Helvetica
 
 
 def _fit(
