@@ -337,7 +337,9 @@ survive unchanged in `design.md`.
     the saved 94 the table scored half to two-thirds of the peak, in the old
     1080p mode too. The numbers are in `hardware.md` Part F.
   - **Limits found.** Zoom moves in steps of 10. Zoom 130 clips the far corner
-    pockets with today's aim. UYVY gave no gain.
+    pockets with today's aim. UYVY gave no gain. Zoom falls back to 100 when
+    the stream closes; the session-start step restores it (rehearsed after
+    the first commit of this checkpoint).
   - **Tested two ways.** In the dark, with Steven away (1/30 s, top gain, 24
     stills averaged): zoom geometry, real detail, mode field of view, 60 fps.
     With the lights on and balls staged: framing, ball size, focus, colour

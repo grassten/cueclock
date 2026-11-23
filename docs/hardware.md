@@ -1666,4 +1666,8 @@ builds the helper there. `deck/sidecam.py` runs the helper, and
   all three tries. `apply` can briefly read `video_mode` back as 255 while the
   mode switches. It reads 0 a second later.
 - **Settings survive a stream close.** With OBS quit, `sidecam` read every saved
-  value back. Not yet tested across an unplug or a reboot.
+  value back. Not yet tested across an unplug or a reboot. **Zoom is the
+  exception** (found 2026-11-22): it falls back to 100 whenever the stream
+  closes, so `sidecam` with OBS quit shows `zoom 100 (saved: 120)`. That is
+  expected. The session-start step puts it back once OBS has the camera open
+  (rehearsed: fresh OBS launch, one `ensure()`, zoom read 120).
