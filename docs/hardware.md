@@ -166,7 +166,10 @@ grab thread (BayerRG8 @ 156 fps)
 **Sources:**
 - Syphon Client — the overhead table feed.
 - Video Capture Device → **Insta360 Link 2C Pro** (since 2026-11-12, Part F)
-  — the side angle, 1920×1080 NV12 at **60000240/1000000** fps, with an Apply
+  — the side angle, **1920×1440** NV12 at **60000240/1000000** fps (since
+  2026-11-22, #77; 1920×1080 before). In the Stream Detail scene it sits at
+  (0, 0), scale 1.3896 (2668 / 1920), bottom crop 116, which fills the
+  2668×1840 column above the plinth exactly. It carries an Apply
   LUT filter ("Side colour", `assets/obs/cueclock-sidecam.cube`) that corrects
   the camera's colour (Part F, 2026-11-15). That odd frame
   rate is deliberate: the camera reports its 60 fps mode as 60.00024 fps, so
@@ -1553,7 +1556,9 @@ builds the helper there. `deck/sidecam.py` runs the helper, and
 - **Formats:** 1280×720, 1280×960, 1920×1080 and 1920×1440 at up to 60 fps;
   3840×2160 at up to 30 fps; NV12 (`420v`) and UYVY each. 60 fps is really
   60.00024 fps (see §B3 for why that matters to OBS).
-- **1080p60 is full width:** OBS frames at 1080p60 and 4K30 match.
+- **1080p60 is full width:** OBS frames at 1080p60 and 4K30 match. (Measured
+  again 2026-11-22: 1080p60 is about 5% tighter than 4K30. The spacing between
+  two fixed targets was 0.408 of the frame height against 0.388.)
 - **Mic:** silent until Link Controller had run once, then live with the app
   closed (Part D). Vosk at the rails and "Original" mode are still open.
 - **Coexistence:** OBS captured the camera with Link Controller both running and
@@ -1576,7 +1581,7 @@ builds the helper there. `deck/sidecam.py` runs the helper, and
   OBS (`SaveSourceScreenshot`) while one setting was swept. #47 item 1.
   - **Focus 94**, not 85. Laplacian sharpness over the table peaked there at both
     ends (far 538 / mid 360 / near 572, against 149 / 93 / 188 at 85). Ball
-    numbers are readable now.
+    numbers are readable now. (Superseded 2026-11-22: the peak is at 90, below.)
   - **Manual exposure: 1/240 s at ISO 1440**, anti-flicker **60 Hz** (2). That is
     4× less motion blur than auto's 1/60. Four frames showed no LED banding, the
     same brightness as 1/120 at ISO 720, and no visible extra grain. Anti-flicker
@@ -1591,6 +1596,44 @@ builds the helper there. `deck/sidecam.py` runs the helper, and
     clipping.
   - EV -1.1, contrast **58** (deeper rails), sharpness **60** (80 puts halos
     around the balls), brightness 45.
+- **Sharper mode, zoom and focus, 2026-11-22** (#77; stills through OBS, room
+  lights on, balls staged at both ends, saved exposure). The balls are 1.32×
+  bigger than before and the side column carries 1920 real camera pixels
+  across, where it had about 1550.
+  - **Why the old picture was soft.** OBS drew the 1080p frame at 1.72× and let
+    370 px of its width run off the column, so the TV saw 1550 camera pixels
+    stretched to 2668. Enlarging in OBS adds no detail. The camera's own zoom
+    does, because it crops the 4K sensor before scaling down: at zoom 200 a
+    target is exactly 2× wider and visibly crisper than the zoom-100 frame
+    enlarged 2× in software.
+  - **1920×1440 at 60 fps.** This mode keeps the full height and the middle 73%
+    of the width, at 1.36× the pixel density of 1080p. It is a real 60 fps mode:
+    about 57 distinct frames per second reached OBS, against 30 in 4K. The 4:3
+    frame also fits the column (2668×1840) far better than 16:9 did.
+  - **Zoom 120.** Zoom is anchored on the frame centre and moves in steps of
+    10 (a request for 125 lands on 130). With the camera aimed where it is, 120
+    is the tightest that keeps the far corner pockets; 130 clips them. Measured
+    size against the old picture: 1.10× at zoom 100, 1.21× at 110, 1.32× at
+    120, 1.43× at 130. Going past 120 means tilting the camera up first.
+  - **Focus 90**, not 94. Laplacian sharpness (far / mid / near) at zoom 120:
+    88 = 528 / 287 / 376, 89 = 624 / 308 / 366, **90 = 672 / 311 / 331**,
+    91 = 660 / 275 / 266, 94 = 330 / 134 / 110. The 1080p mode peaks at the
+    same place (90 = 846 / 478 / 424 against 550 / 289 / 254 at 94). The sweep
+    read the same going down and coming back up. Why the peak sat at 94 on
+    2026-11-15 is not known.
+  - **UYVY was tried and dropped.** It scored no better than NV12 on colour
+    edges and slightly worse on overall sharpness.
+  - **What you lose.** The picture is the table and a little floor. A player
+    shows only at the table or leaning over it.
+  - **Not measured: what 1440 costs detection.** OBS handles 33% more pixels per
+    frame from this source. Read the heartbeat `hz` of the first session
+    against an earlier one.
+  - **Changing the format over obs-websocket** takes `supported_format` (the
+    value from `GetInputPropertiesListPropertyItems`) as well as `resolution`;
+    `resolution` alone leaves the old format running. A zoom write sent in the
+    same moment as a format switch was dropped once, so wait a few seconds.
+    Capturing straight from the camera with ffmpeg hangs on a macOS
+    camera-permission prompt; go through OBS.
 - **The side camera's colour lives in OBS**: an Apply LUT filter named **Side
   colour** on Video Capture Device, at amount 1.0, running
   `assets/obs/cueclock-sidecam.cube` (generated by `scripts/make_obs_lut.py`).

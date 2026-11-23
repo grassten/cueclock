@@ -319,6 +319,33 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-22 (checkpoint 147: the side camera in 1920×1440, zoom 120,
+  focus 90; #77):** Steven asked whether zooming the side camera would make
+  the balls clearer, since its sensor is 4K. It does, and the saved focus
+  turned out to be off as well. No code changed: this is the OBS scene, the
+  gitignored `config/sidecam.json`, and `docs/hardware.md` (§B3, Part F).
+  - **What was wrong.** OBS drew the camera's 1080p frame at 1.72× and cropped
+    its sides, so the side column showed about 1550 camera pixels stretched to
+    2668. Enlarging in OBS adds nothing. The camera's zoom is a sensor crop,
+    so it adds real detail.
+  - **What shipped.** OBS source 1920×1440 NV12 at 60000240/1000000 fps, drawn
+    at (0, 0), scale 1.3896, bottom crop 116. Camera `zoom: 120`,
+    `focus: 90`. Balls are 1.32× bigger than before and the column carries
+    1920 camera pixels across. Steven picked this from four options shown as
+    stills (no zoom 1.10×, zoom 110 1.21×, zoom 120 1.32×).
+  - **Focus.** Sharpness peaks at 90 and repeats in both sweep directions; at
+    the saved 94 the table scored half to two-thirds of the peak, in the old
+    1080p mode too. The numbers are in `hardware.md` Part F.
+  - **Limits found.** Zoom moves in steps of 10. Zoom 130 clips the far corner
+    pockets with today's aim. UYVY gave no gain.
+  - **Tested two ways.** In the dark, with Steven away (1/30 s, top gain, 24
+    stills averaged): zoom geometry, real detail, mode field of view, 60 fps.
+    With the lights on and balls staged: framing, ball size, focus, colour
+    format.
+  - **Next-session check.** Detection `hz` in 1440 mode is not measured; OBS
+    handles 33% more pixels per frame from this source. Compare the first
+    session's heartbeat against an earlier one.
+
 - **2026-11-22 (checkpoint 146: the Voice switch; #76):** Steven asked for a
   spoken "push" like "extension", then for a control-page switch that turns
   spoken control off, so in a noisy room only the page and the deck run the
