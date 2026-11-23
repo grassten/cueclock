@@ -17,6 +17,7 @@ from cueclock.server import create_app
 from cueclock.server.hub import Hub
 from cueclock.vision.ball_list import (
     CENTROIDS,
+    STRIPE_WHITE,
     BallList,
     ListedBall,
     assign_numbers,
@@ -32,6 +33,8 @@ CLOTH_BGR = (190, 120, 40)  # blue cloth
 R_PRED = 24.0  # predicted radius everywhere; visible edge ~20 px
 WHITE = (235, 235, 235)
 YELLOW = (40, 200, 235)  # BGR, nearest the yellow centroid (1 and 9)
+ORANGE = (74, 143, 237)  # the orange centroid (5 and 13)
+EDGE_BLEND = (128, 128, 168)  # the solid 5's last pixels against the cloth (#79)
 
 
 def _mosaic(bgr: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
@@ -85,6 +88,27 @@ def test_reads_cue_solid_stripe_and_a_white_cap_with_no_number() -> None:
     assert found.labels == ["cue", "1", "9", "?"]  # strip order
     for b in found.balls:
         assert abs(b.cx - round(b.cx / 100) * 100) <= 1 and abs(b.cy - 300) <= 1
+
+
+def test_a_pale_edge_is_not_a_stripe() -> None:
+    """A solid's last pixels blend with the cloth into a colour pale enough
+    to pass the rim-wrap floor; a stripe showing its band holds white further
+    in. The rim ring stops short of the edge, so it counts the second and not
+    the first (#79: a solid 5 at rest read 13 on one list and 5 on the next)."""
+    img = _cloth()
+    cv2.circle(img, (300, 300), 20, ORANGE, -1)  # the 5 ...
+    cv2.circle(img, (300, 300), 19, EDGE_BLEND, 2)  # ... pale from 18 px out
+    cv2.circle(img, (600, 300), 20, ORANGE, -1)  # the 13: band up, a cap each side
+    img[280:286, 580:621] = WHITE
+    img[315:321, 580:621] = WHITE
+    cv2.circle(img, (600, 300), 21, CLOTH_BGR, 2)  # keep the outline round
+    found = read_ball_list(_mosaic(img), _reference())
+    by_x = {round(b.cx / 100): b for b in found.balls}
+    assert sorted(by_x) == [3, 6]
+    assert by_x[3].number == 5 and by_x[3].wrap == 0
+    # Too little white inside for the disc test: the rim decides the stripe.
+    assert by_x[6].number == 13 and by_x[6].white < STRIPE_WHITE
+    assert by_x[3].own is None and by_x[6].own is None  # each read alone, no clash
 
 
 def test_the_cue_is_listed_once() -> None:

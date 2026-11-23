@@ -794,7 +794,9 @@ the refit (`8.13 + 0.497 r`) sizes the cue ring and rim wrap.
 **Labels.** Cue: rim whiteness ≥ 0.65 on a ring 0.70–0.97 of the edge radius
 (corpus: the cue's lowest reading 0.72, a pole-up stripe's highest 0.57).
 Otherwise the nearest of eight Lab colour centroids over the inner disc, and
-a stripe when the disc is ≥ 20 % white or white wraps 16 of 36 rim sectors.
+a stripe when the disc is ≥ 20 % white or white wraps 10 of 36 sectors of a
+rim ring 0.70–0.83 of the edge radius (16 sectors of a ring out to 0.95
+until #79, below).
 A ball with under 10 coloured pixels gets no number (`?`): a stripe resting
 white cap up shows no colour, and calling it anything doubles a number.
 `arm` is the detector's intrusion test on the same frame; a list with an arm
@@ -832,7 +834,8 @@ view of them was removed at Steven's request. He asks for timestamps when he
 wants to see one, and reads them off the recording.
 
 **Known limits.** A stripe showing only white gets no number until it rolls.
-A solid 5 can read 13 (its orange rim passes the rim-wrap floor). Labels were
+A solid 5 could read 13 (its orange rim passed the rim-wrap floor) until
+checkpoint 152 (#79, below). Labels were
 measured almost entirely on older mounts read with the 1115 colour
 references. A cue in a pocket jaw reads 0.75–0.84 against the 0.65 floor. The
 arm test misses some hands, and a hand holding the cue on the cloth can read
@@ -912,6 +915,77 @@ scratch" was the rack's own flag. The hand test misses real arms; where a
 rack stands, its flag was covering for that. Known and left: fingers on the
 rail can still be read as one or two unnumbered balls for a second, which a
 pack list now shows on the strip (one such list in that session).
+
+**Amended 2026-11-23 (checkpoint 152, #79): the rim ring stops short of the
+ball's edge.** Session `20261123-180144`, eight racks of 9-ball, read 20
+numbers back within a rack. Read off the stills, 16 were the solid 5 called
+13 (15 at one spot, where it lay untouched through six shots and read 5 on
+some lists and 13 on others, and 1 at another), and 4 were Steven's bridge
+hand read as a ball on a list with no arm.
+
+The 5's inner disc was 3–6 % white, so the rim ring decided it. The ring ran
+0.70–0.95 of the edge radius, and at the edge an orange or yellow ball blends
+with the blue cloth into pixels (about B 128, G 128, R 168) that pass the
+ring's floor of 110. An orange solid holds 10 such pixels inside 0.85 of the
+edge and 28 outside it; a stripe holds white evenly at every radius. Against
+a threshold of 16 the 5 at rest read 10–12 sectors when its whole-pixel
+centre fell on column 1483 and 13–16 on column 1484. Over that session's
+solids, orange read a median of 11 sectors (highest 16), yellow 8 (16), every
+other colour 0–4 (12).
+
+`RIM_WRAP_RING` is now 0.70–0.83 and `RIM_WRAP_STRIPE` 10. Measured on every
+written list of the six sessions logged by then, on the balls this test
+decides (inner white under 0.20), by the ring's outer bound:
+
+| Outer bound | Highest solid (1,335 arm-free readings, 275 resting spots) | Lowest stripe (161 readings, 31 spots) |
+|---|---|---|
+| 0.95 | 17 | 12 |
+| 0.84 | 11 | 12 |
+| **0.83** | **8** | **12** |
+| 0.82 | 8 | 11 |
+
+0.83 has the widest gap and 10 is its middle. The 162 corpus rests, older
+mounts that were not used to choose, read 9 and 11 on the new ring (15 and
+16 on the old one): right on both, by one sector each way. Raising the floor
+instead (#54's stricter test, floor 140 and 12 sectors) read 13 of the 161
+stripes as solids.
+
+`WRAP_SPREAD` stays 11 although the same median on the new ring is 8: at 8 a
+hand read as a 14 takes the number from the real 14 on `power_shot` at
+4.33 s, one of the two clashes checkpoint 131 settled.
+
+Before → after, all through `read_ball_list`:
+
+- #65's sets (1,837 readings: the truth stills, the game sequence,
+  `all_balls_still_1115`, and 1,482 at the 162 corpus rests): every score
+  unchanged, and one label differs, a solid 5 on `break_outrun_0805` that
+  read 13.
+- Numbers back within a rack: 20 → 4 in that session (the four hands),
+  1 → 0 in `20261123-004951`, the other sessions unchanged (16).
+- A ball that has not moved changing between a solid and its stripe on
+  consecutive lists, all sessions: 45 → 25. The 20 gone are all the 5. Of
+  the 25 left, 23 are the inner-white test on a list with an arm (below) and
+  2 are a real 15 that lost its number to another circle for one list.
+- The clock: the session replayed through the hub with the new lists, and
+  again with the 15 lists that only the changing 5 had caused to be written
+  left out. 0 of 464 decisions differ. The numbers never reach the clock's
+  rules (§14, §15), but they decide which rest lists are written.
+
+What it costs, from every ball whose number changes over about 1,000 logged
+lists (31 spots, each looked at): better, the 5 at 3 spots and 6 real
+stripes showing one white cap that had read as solids; worse, 3 solids with
+a hand on them while racking, which now read as their stripes (lists with an
+arm); and where a hand or glove is read as a ball, which real ball loses its
+number shifts (the real 8 named 4 on 3 lists, a real 10 named 2 on 1). The
+stripes that need this test are thin evidence, 31 resting spots and 8
+readings of an orange one, so the first 8-ball session is the check.
+
+Left alone: the hand read as a ball (checkpoint 131 measured two ways to
+drop it and rejected both); and a 5 or a 1 lying number up in the rack,
+whose inner white reads 0.198–0.216 against 0.20, so it changes number while
+racking on lists with an arm. Six of the session's stills are in the corpus
+(`stills_20261123-180144`). Measurements and scripts: issue #79 and
+`~/cueclock-research/79-solid-stripe/`.
 
 ## 14. The ball list's say in the scratch hold (issue #63, 2026-11-17)
 

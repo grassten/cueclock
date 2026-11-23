@@ -319,6 +319,67 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-23 (checkpoint 152: a solid 5 no longer reads as a 13; #79):**
+  `session-stats` on session `20261123-180144` (13:01 local, 106 shots, 8
+  racks of 9-ball) read 20 numbers back within a rack, over half of the 38
+  ever counted. The clock was right all session; this is the ball list.
+  - **What the 20 were**, read off the stills. 16 were the solid 5 called 13:
+    15 at one spot in rack 3, where it lay untouched through six shots
+    (13:13:51 to 13:15:42) and read 5 on some lists and 13 on others, and 1
+    at another spot at 13:20:26. The other 4 were Steven's bridge hand read
+    as a ball on a list with no arm (a 10 twice, a 14 twice). The issue had
+    guessed those were the 2 and the 6 read as their stripes; the 2 and the
+    6 are on the same lists, and the issue text is corrected.
+  - **Cause.** A ball is a stripe when its inner disc is 20% white or white
+    shows in enough of the 36 sectors of a ring at its rim. The ring ran
+    0.70 to 0.95 of the ball's edge, and at the edge orange and yellow blend
+    with the blue cloth into pixels that pass the ring's floor. The 5 at
+    rest read 10 to 16 sectors against a threshold of 16, by which pixel
+    column its fitted centre fell on. The limit `docs/design.md` §13 has
+    carried since #54.
+  - **Fix.** `vision/ball_list.py`: `RIM_WRAP_RING` 0.70 to 0.83,
+    `RIM_WRAP_STRIPE` 10. Over the written lists of all six logged sessions,
+    on balls under 20% inner white: the old ring's highest solid is 17 and
+    its lowest stripe 12 (1,335 arm-free solid readings at 275 resting
+    spots; 161 stripe readings at 31 spots), so no count separates them; out
+    to 0.83 they are 8 and 12, the widest gap of any outer bound, and 10 is
+    its middle. `WRAP_SPREAD` stays 11: re-measured on the new ring it is 8,
+    and at 8 a hand takes the 14 from the real 14 on `power_shot` (a
+    checkpoint 131 gain).
+  - **Measured, before to after.** #65's sets (1,837 readings, 1,482 of
+    them at the 162 corpus rests, older mounts the numbers were not chosen
+    on): every score the same, one label differs, a solid 5 on
+    `break_outrun_0805` that read 13. The corpus rests read 9 for the
+    highest solid and 11 for the lowest stripe on the new ring (15 and 16
+    before): one sector of room each way, where the sessions have two.
+    Numbers back: 20 to 4 in this session (the hands), 1 to 0 in
+    `20261123-004951`, the rest unchanged. Unmoved balls changing between a
+    solid and its stripe on consecutive lists, all sessions: 45 to 25, none
+    of the 25 the rim ring's doing. The session replayed through the hub
+    with the new lists: 0 of 464 clock decisions differ.
+  - **What it costs.** Every ball whose number changes over about 1,000
+    logged lists was looked at (31 spots). Better: the 5 at 3 spots, and 6
+    real stripes showing one white cap that had read as solids. Worse: 3
+    solids with his hand on them while racking now read as their stripes
+    (lists with an arm). Shifted: where a hand or glove is read as a ball,
+    which real ball loses its number (the real 8 named 4 on 3 lists, a real
+    10 named 2 on 1).
+  - **Tests.** A synthetic solid with a pale edge beside a stripe showing
+    its band (unit); six of the session's stills, in the corpus as
+    `stills_20261123-180144`; the `break_outrun_0805` frame. All three fail
+    on the old constants. Cold corpus battery: 968 passed in 7:39, none
+    skipped; ruff, mypy (macOS and Linux).
+  - **Not checked.** A stripe that needs the rim test rests on 31 spots and
+    8 readings of an orange one, so the first 8-ball session is the check
+    on the 13 itself. Rest lists the old reader never wrote have no stills,
+    so lists the new reader would write for the first time were not
+    simulated.
+  - **Left alone.** The hand read as a ball (checkpoint 131 measured two
+    fixes and rejected both). How the stat counts a flickering ball (every
+    change counts; with the 5 fixed it no longer inflates the row). A 5 or a
+    1 lying number up in the rack, whose inner white reads 0.198 to 0.216
+    against 0.20 and changes number while racking, on lists with an arm.
+
 - **2026-11-23 (checkpoint 151: the full-session video stops freezing):**
   Steven, watching today's 42-minute session on the review page: "the video
   keeps freezing. It doesn't seem like a bandwidth issue". It was the review

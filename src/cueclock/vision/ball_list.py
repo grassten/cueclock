@@ -109,10 +109,23 @@ CUE_RIM_FLOOR = 0.65
 WHITE_FLOOR = 127  # darkest channel at or above this reads white (inner disc)
 MIN_COLOUR_PX = 10  # fewer coloured pixels than this: no number (a stripe white cap up)
 STRIPE_WHITE = 0.20  # inner-disc white fraction that makes a stripe
-# Rim wrap: 36 ten-degree sectors in 0.70-0.95 of the edge radius, each
-# counting when it holds 2+ pixels whose darkest channel is >= 110. 16 or more
-# is a stripe (1 error over 400 ball sites with white fraction 0.06-0.24).
-RIM_WRAP_FLOOR, RIM_WRAP_RING, RIM_WRAP_NEED, RIM_WRAP_STRIPE = 110, (0.70, 0.95), 2, 16
+# Rim wrap: 36 ten-degree sectors in 0.70-0.83 of the edge radius, each
+# counting when it holds 2+ pixels whose darkest channel is >= 110. 10 or more
+# is a stripe.
+#
+# The ring stops short of the ball's edge (#79). Out there an orange or yellow
+# solid blends with the blue cloth into pixels that pass the floor (an orange
+# solid holds 10 of them inside 0.85 of the edge and 28 outside it; a stripe
+# holds white evenly), and with the ring at 0.70-0.95 and a stripe at 16 a
+# solid 5 at rest read 10 to 16 sectors, 5 on one list and 13 on the next.
+# Measured on the written lists of the six sessions logged by 2026-11-23, on
+# balls under STRIPE_WHITE (the only ones this test decides): with the ring
+# out to 0.95 the highest of 1,335 arm-free solid readings (275 resting spots)
+# is 17 and the lowest of 161 stripe readings (31 spots) is 12, so no count
+# separates them. Out to 0.83 they are 8 and 12, the widest gap of any outer
+# bound (0.84: 11 and 12; 0.82: 8 and 11), and 10 is its middle. The 162
+# corpus rests, older mounts not used to choose: 9 and 11 (they were 15 and 16).
+RIM_WRAP_FLOOR, RIM_WRAP_RING, RIM_WRAP_NEED, RIM_WRAP_STRIPE = 110, (0.70, 0.83), 2, 10
 
 # Lab centroids (L 0-100, a and b centred on 0), each the mean of a solid and
 # its stripe twin read off one frame of `all_balls_still_1115` labelled by
@@ -138,6 +151,12 @@ CENTROIDS = np.array(
 # that decision's boundary: the colour margin (second-nearest centroid minus
 # nearest, Lab), |white - STRIPE_WHITE| and |wrap - RIM_WRAP_STRIPE|. Measured
 # on the corpus, confirmed on the two real sessions' truth sets.
+#
+# WRAP_SPREAD did not move when #79 moved the rim ring. Re-measured on the
+# new ring the same median is 8, and at 8 a hand read as a 14 takes the number
+# from the real 14 on `power_shot` at 4.33 s, one of the two clashes #65
+# settled. At 11 every label of #65's sets reads as it did but one, a solid 5
+# that had read 13.
 COLOUR_SPREAD, WHITE_SPREAD, WRAP_SPREAD = 19.6, 0.175, 11.0
 
 ARM_CONFIG = DetectConfig(export_intrusions=True)  # the detector's hand test, this frame only

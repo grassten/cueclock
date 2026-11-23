@@ -124,6 +124,42 @@ def test_the_cue_is_listed_once_on_the_stills_that_held_two() -> None:
         assert found.cues_dropped == 1 and found.arm == truth["arm"]
 
 
+# Six stills of session 20261123-180144 (1115 mount, 9-ball) with truth.json:
+# where the solid 5 lies on each, looked at on 2026-11-23 (#79).
+FIVE_STILLS = CLIPS / "stills_20261123-180144"
+
+
+def test_a_solid_five_at_rest_reads_five() -> None:
+    """The 5 lay untouched and the list called it 13 on five of these stills
+    and 5 on the sixth, as its fitted centre moved by a pixel: the rim ring
+    reached the ball's edge, where orange blends with the cloth. Nine-ball,
+    so nothing on these lists is numbered above 9."""
+    _need("stills_20261123-180144", "empty_table_1115")
+    ref = _reference_model("empty_table_1115")
+    frames = json.loads((FIVE_STILLS / "truth.json").read_text())["frames"]
+    assert len(frames) == 6
+    for frame in frames:
+        bayer = cv2.imread(str(FIVE_STILLS / f"{frame['frame_i']:09d}.png"), cv2.IMREAD_UNCHANGED)
+        found = read_ball_list(bayer, ref)
+        numbers = [b.number for b in found.balls if b.number is not None]
+        assert max(numbers) <= 9, frame["t"]
+        (five,) = [b for b in found.balls if b.number == 5]
+        assert np.hypot(five.cx - frame["five"][0], five.cy - frame["five"][1]) <= 2, frame["t"]
+        assert five.own is None, frame["t"]  # read as a 5, not handed the number
+
+
+def test_a_solid_five_reads_five_on_an_older_mount() -> None:
+    """`break_outrun_0805` at rest (0801 mount): the 5, alone on the cloth
+    and looked at on 2026-11-23, read 13 until the rim ring was pulled in
+    from the ball's edge (#79). The frame was not used to choose the ring."""
+    clip = "break_outrun_0805"
+    _need(clip, REFERENCES[clip])
+    found = read_ball_list(_frame_at(clip, 13.26), _reference_model(REFERENCES[clip]))
+    (five,) = [b for b in found.balls if b.number == 5]
+    assert np.hypot(five.cx - 389, five.cy - 527) <= 2 and five.own is None
+    assert 13 not in [b.number for b in found.balls]
+
+
 def _largest_cluster(balls: tuple[ListedBall, ...], link: float = 2.0) -> int:
     """Balls chained by centre gaps under ``link`` predicted radii: the rack."""
     best, seen = 0, set()
