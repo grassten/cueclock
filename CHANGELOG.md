@@ -346,6 +346,65 @@ survive unchanged in `design.md`.
     Pillow 12.3.0 and 13.0.0 are pixel-identical. With the font candidates
     removed (the runner's case) the test fails before the change and passes
     after it.
+
+- **2026-11-22 (checkpoint 149: Review done runs the session review; #70
+  step 3):** the last piece of #70. Steven presses **Review done** on a
+  session's review page, and the next `session maintain` pass runs
+  `/session-review <stamp>` headless and files its issue. Nothing runs
+  without a press. Code: `review/findings.py`.
+  - **Page.** Under the last moment: the button, and the run's state beside
+    it (queued, running, filed #N linked, updated #N, already filed, nothing
+    to file, paused for a live session, failed with the run's last line).
+    The press writes `findings/request.json` (time + verdicts fingerprint)
+    and nothing else. Pressing on verdicts a finished run already saw queues
+    nothing. The page polls every 30 s while queued or running.
+  - **Maintain.** Last in the pass, for sessions on the T7 only
+    (`Maintainer.review_pressed`). It writes `findings/status.json`, the run's
+    `settings.json`, `run.json` (claude's result, with cost and turns) and
+    `run.log`. A session with no wrong verdict (and no issue of its own to
+    update) is answered "nothing to file" without a run. The run stops if a
+    session starts (`live_session` every 30 s) and runs again after it; it is
+    stopped at 2 h. A failed or cut-off run is never retried unattended: a
+    press retries. It is taken out of launchd's Background band, since no
+    session can be live while it runs and `review check` inside it is a
+    replay (384 s vs 62 s in the background).
+  - **Permissions (`findings.settings`, enforced, not prose).** `claude -p`
+    with `--permission-mode dontAsk --permission-prompts none`, user settings
+    only (not the repo's local ones), no MCP, built-in tools
+    Bash/Read/Glob/Grep/Write/Agent, and a structured result
+    (`--json-schema`: outcome, issue, summary). The Write tool may write only
+    the drafts dir in the per-user temp dir. Bash runs in the macOS sandbox
+    with the repo and `/Volumes` write-denied and no network, so the skill's
+    Python one-offs are confined too. `gh` runs outside it (Go TLS under
+    Seatbelt), held to `issue list/view/create/comment`. Commits, pushes,
+    other `gh issue` verbs, `gh pr`/`api` and `launchctl` are denied
+    outright. Probed in the repo with a cheap model before wiring it in: a
+    Python write into the repo failed with EPERM, Write into the repo and
+    `touch /Volumes/T7/…` were refused, `git commit --dry-run` was denied,
+    and `gh issue list`, a heredoc'd Python, `git show` and `review dossier`
+    ran. `pgrep` can't read the process table inside the sandbox, which is
+    why maintain does the skill's preflight.
+  - **Skill.** `--headless` skips step 0 (maintain did it) and ends with the
+    structured result. New for every non-as-of-session run: right after the
+    dossier, an issue whose marker carries the same fingerprint ends the run
+    as "already filed", before any analysis.
+  - **Login.** The first launchd run failed at auth ("this login reached its
+    time limit and cannot be renewed"); the same command with launchd's bare
+    environment authenticates from a terminal, so it's the launchd context.
+    The run now passes a `claude setup-token` token from
+    `~/.config/cueclock/claude-token` (mode 600, outside the repo) as
+    `CLAUDE_CODE_OAUTH_TOKEN`; setup is in `hardware.md` §C7. That failure
+    did prove the path end to end: the status, the reason and the page line
+    were all written as designed.
+  - **Moved:** the verdicts fingerprint is `sessions.Session.fingerprint()`
+    (the dossier and the press share it).
+  - **Verified.** 859 unit tests (13 new in `tests/unit/test_findings.py`),
+    ruff, mypy --strict. No detection code touched. Docs: `cli.md` (review
+    page, `session maintain`), `hardware.md` §C7, `README.md`, the skill.
+    Under launchd with the token in place (2026-11-23): a press on
+    `20261123-004951` ended "Already filed as #78" in 17 s (4 turns, $0.65),
+    and nothing new was filed.
+
 - **2026-11-22 (checkpoint 148: on a live clock, a settle with no motion
   behind it counts no shot; #78):** the first `/session-review` issue built
   as filed. In session 20261123-004951 Steven got down on a shot, his stance

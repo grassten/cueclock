@@ -12,7 +12,7 @@ every journal, and files **one** issue of changes. It never changes code: a
 normal checkpoint session implements what Steven accepts.
 
 ```
-/session-review <stamp> [--as-of-session] [--dry-run]
+/session-review <stamp> [--as-of-session] [--dry-run] [--headless]
 ```
 
 - `<stamp>`: the session, e.g. `20261121-153046`. Missing → the newest session
@@ -27,13 +27,22 @@ normal checkpoint session implements what Steven accepts.
 - `--dry-run`: write the issue body and print its path; file nothing and
   comment nothing. **Always use it for the golden test**, or it files a
   duplicate of #69.
+- `--headless`: this run was started by `session maintain` after Steven
+  pressed **Review done** on the review page (`review/findings.py`). Nobody
+  is watching and nobody can answer a question. Maintain did step 0's checks
+  just before the launch, and stops this run if a session starts, so skip
+  step 0. Its permissions enforce the scope of action below: a refused tool
+  call is the boundary, not an obstacle to work around. Questions for Steven
+  go in the issue. The final answer is the structured result the run asks
+  for (see "The result", at the end).
 
 ## Scope of action: hard limits
 
 - **Read** anything. **Write** only to `$TMPDIR/cueclock-review/` (the issue
   draft) and the temp files `review frames` makes. No edits to the repo, no
   commits, no pushes, no closing or editing issues, no daemon restarts, no
-  `launchctl`.
+  `launchctl`. A `--headless` run is held to this by its permissions
+  (`review/findings.py`, `settings`); an interactive run by you.
 - GitHub: `gh issue create` once per session, `gh issue comment` only on the
   issue this skill filed for that session. Read anything with `gh`.
 - **No replays or batteries while a session is live** (step 0 checks). `review
@@ -106,6 +115,20 @@ the checkpoints landed since), parity, footage, presses, every verdict joined
 to its moment in local time with its full-recording position, unjudged ids,
 co-located moments, shots classified, racking stretches, held-by counts,
 freeze shapes, scratches and ball in hand, detect rate and voice.
+
+**Already filed on these verdicts?** Unless `--as-of-session`, look for this
+skill's issue for the session now, before any analysis (the search is step
+8's):
+
+```sh
+gh issue list --state all --search "<stamp> in:body \"session-review\"" --json number,title,body
+```
+
+An issue whose body holds the marker line `<!-- session-review <stamp>
+verdicts <fingerprint> -->` with the dossier's fingerprint means nothing
+changed since it was filed. Stop: say "already filed as #N" and do nothing
+else. A marker with a different fingerprint means the verdicts changed;
+carry on, and step 8 comments on that issue.
 
 Then read the context: the newest `CHANGELOG.md` checkpoint and its "next
 session checks", the memory note of the live test it names, and
@@ -306,6 +329,19 @@ With `--dry-run`, stop after writing the file and print its path.
 End the body with the `🤖 Generated with Claude Code` attribution line. Keep it
 plain: short sentences, tables where they help, no hedging. Steven reads it
 on his phone.
+
+## The result (`--headless`)
+
+The run's last answer is a structured result, which the review page shows
+beside the Review done button:
+
+- `outcome`: `filed` (a new issue), `commented` (on this skill's earlier
+  issue for the session), `already filed` (step 1 found the same
+  fingerprint), `nothing to file` (step 8), or `stopped` (anything that
+  ended the run early: the T7 missing, a session's files unreadable).
+- `issue`: the issue's number for the first three, else null.
+- `summary`: one plain sentence Steven reads on his phone, e.g. "3 changes
+  from 4 wrong verdicts; 1 worked as designed", or why it stopped.
 
 ## The golden test
 

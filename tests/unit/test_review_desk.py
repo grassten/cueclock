@@ -198,10 +198,10 @@ def test_the_dossier_joins_verdicts_and_names_conflicts(tmp_path: Path) -> None:
     assert "gone-1" in page  # a verdict whose moment is no longer listed is named
     assert dossier.CUE_ON_SPOT in page
     assert "Landed since the session" in page  # an unknown sha is not HEAD
-    before = dossier.verdicts_fingerprint(sessions.Session(STAMP, path))
+    before = sessions.Session(STAMP, path).fingerprint()
     assert f"verdicts fingerprint {before}" in page
     (path / "verdicts.json").write_text("{}")
-    assert dossier.verdicts_fingerprint(sessions.Session(STAMP, path)) != before
+    assert sessions.Session(STAMP, path).fingerprint() != before
 
 
 # ------------------------------------------------------------------- frames

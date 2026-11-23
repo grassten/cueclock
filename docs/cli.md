@@ -426,8 +426,15 @@ camera or needs `run`:
   kept copy (`recording.json`), else the listed recording while it is still in
   `~/Movies` — above a list of strikes, settles, reverts and key presses: tap
   one to watch it from 2 s before, and the list follows the video. Each
-  moment links to its place there. The page serves only those cuts, kept
-  copies and listed recordings, and writes only verdicts and missing cuts.
+  moment links to its place there. **Review done**, under the last moment,
+  is the press that says the judging is finished (#70): it writes
+  `findings/request.json`, and the next `session maintain` pass runs the
+  `session-review` skill on the session and files its issue (see `session
+  maintain`). Beside the button is the run's state: queued, running, filed
+  #N (linked), updated #N, already filed, nothing to file, paused for a live
+  session, or failed with the reason. Pressing again on unchanged verdicts
+  queues nothing. The page serves only those cuts, kept copies and listed
+  recordings, and writes only verdicts, missing cuts and the press.
   Always up under launchd as `com.cueclock.review`
   (`scripts/install_review_agent.sh`).
 
@@ -553,7 +560,8 @@ Then the **footage budget**: the recordings the deck listed in
 recording larger than the whole budget goes too, once its moments are cut.
 
 Then **retention on the T7** — every kind of evidence has a purge rule, so
-nothing grows without bound:
+nothing grows without bound (a session's `findings/`, a few kB, goes with
+its session):
 
 | What | Rule |
 |---|---|
@@ -563,9 +571,24 @@ nothing grows without bound:
 | pinned sessions | `--pinned-gb`, oldest first |
 | journals in `logs/` | `--journals-gb`, oldest `session-*.jsonl` first |
 
+Last, the **session review** (#70, `review/findings.py`): for each session
+on the T7 whose **Review done** was pressed and not yet answered, it runs
+`claude -p "/session-review <stamp> --headless"` in the repo and writes the
+outcome to `findings/status.json`, which the review page shows. Only a press
+starts one; a session with no wrong verdicts (and no earlier issue of its
+own) is answered "nothing to file" without a run. The run's permissions
+enforce the skill's scope of action (`findings.settings`, kept as
+`findings/settings.json`): read anything, write only the drafts directory
+in the temp dir, Bash inside the macOS sandbox (no writes to the repo or
+the T7, no network), `gh issue list/view/create/comment` only, and every
+other call refused (`--permission-mode dontAsk`). It is stopped if a session
+starts, and runs again after it; a run is stopped at 2 hours, and a failed
+one waits for another press. Its login is a token from `claude setup-token`
+in `~/.config/cueclock/claude-token` (`hardware.md` §C7).
+
 | Flag | Default | Notes |
 |---|---|---|
-| `--dry-run` | off | print every action, change nothing (hooks and ffmpeg aren't run) |
+| `--dry-run` | off | print every action, change nothing (hooks, ffmpeg and session reviews aren't run) |
 | `--budget-gb` | `10` | footage kept on the internal disk, in GB (10⁹ bytes); ~3 GB per hour of recording |
 | `--keep-full` | `10` | archived sessions that keep any footage (full recording, unjudged cuts), newest first |
 | `--archive-gb` | `100` | session logs + stills on the T7 (~2.4 GB per hour of play since the rest stills, #65: ~40 hours) |

@@ -820,6 +820,25 @@ and prunes footage to a 10 GB budget (the listed recordings). It refuses to do
 anything while a session is live, because a multi-GB T7 copy mid-session is the
 USB stall in §C5.
 
+**The session review runs from it too** (#70, `review/findings.py`): once
+Steven presses **Review done** on the review page, the next pass runs the
+`session-review` skill headless on that session (`claude -p`, permissions
+locked to the skill's scope of action) and the page shows the outcome. A run
+stops if a session starts and resumes after it. It takes the run out of the
+Background band (a session can't be live while it runs), because `review
+check` inside it is a replay. **One-time login:** under launchd, claude
+can't use the login an interactive session uses ("this login reached its
+time limit and cannot be renewed", 2026-11-22), so the run uses a long-lived
+token. In a terminal:
+
+```sh
+claude setup-token                     # sign in in the browser; copy the token it prints
+mkdir -p ~/.config/cueclock
+pbpaste > ~/.config/cueclock/claude-token && chmod 600 ~/.config/cueclock/claude-token
+```
+
+Without it a press ends as "Failed: Failed to authenticate…" on the page.
+
 **What the T7 holds.** Session logs + stills share a 100 GB budget, oldest
 session first (`--archive-gb`); pinned sessions get 5 GB of their own. From
 checkpoint 131 (#65) each ball list written at rest keeps its frame, so the

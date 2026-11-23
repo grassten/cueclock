@@ -74,7 +74,9 @@ uv run python -m cueclock.cli session maintain  # verify, cut, archive to the T7
   maintain` checks that replay reproduces the live journal, cuts the moments
   worth a look, and moves the session to the T7; the review page
   (`http://<mac>:8001/`) plays each moment for a right/wrong verdict
-  (`docs/design.md` §12, `docs/cli.md`).
+  (`docs/design.md` §12, `docs/cli.md`). **Review done** there has the next
+  maintenance pass run the `session-review` skill, which turns the wrong
+  verdicts into one GitHub issue of proposed changes (#70).
 
 - At the table there is no keyboard: the deck's **Session** key (top-left)
   runs that first command for you and launches OBS behind it — tap to start,

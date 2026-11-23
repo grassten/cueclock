@@ -23,7 +23,6 @@ measurement calls them rather than re-deriving them:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import statistics
@@ -270,14 +269,6 @@ def _jsonl(path: Path) -> list[Record]:
     return out
 
 
-def verdicts_fingerprint(session: sess.Session) -> str:
-    """Short sha256 of `verdicts.json`: any verdict or note changed, it changes."""
-    try:
-        return hashlib.sha256((session.path / sess.VERDICTS_FILE).read_bytes()).hexdigest()[:12]
-    except OSError:
-        return "none"
-
-
 def _git(*args: str) -> str:
     try:
         done = subprocess.run(  # nosec B603: fixed argv, shell=False
@@ -389,7 +380,7 @@ def build(session: sess.Session, journal: Path) -> str:
     found = session.moments() or []
     verdicts = session.verdicts()
     page.h("Moments and verdicts (local time, full-recording position)")
-    page.add(f"verdicts fingerprint {verdicts_fingerprint(session)} (a re-run compares it)")
+    page.add(f"verdicts fingerprint {session.fingerprint()} (a re-run compares it)")
     ids = {str(m.get("id")) for m in found}
     judged = [m for m in found if str(m.get("id")) in verdicts]
     wrong = [m for m in judged if verdicts[str(m["id"])].get("verdict") == "wrong"]

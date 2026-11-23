@@ -30,6 +30,10 @@ journals each have a budget. Nothing grows without bound. "Footage" on the
 internal disk is exactly the files the deck listed; nothing else in `~/Movies`
 is ever looked at.
 
+Last, a session on the T7 whose **Review done** Steven pressed on the review
+page gets its session review: the `session-review` skill, headless, filing
+one issue of proposed changes (`review/findings.py`, #70).
+
 Every step skips work that is already done, so a pass is safe to repeat — the
 launchd agent runs one every 15 minutes. And nothing happens at all while a
 session is live: the T7 copy is the kind of USB burst that stalled detection
@@ -363,6 +367,12 @@ class Maintainer:
     dry_run: bool = False
     run: Callable[[Sequence[str], float], tuple[int, str]] = _run_command
     say: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
+    # Why a session is live right now, or None: a running session review stops for one.
+    live: Callable[[], str | None] = field(default=lambda: None)
+    # Starts a session review run (`findings.launch`, or a fake); None = the real one.
+    review_launch: (
+        Callable[[Sequence[str], Path, Callable[[], str | None]], tuple[int | None, str]] | None
+    ) = None
 
     def sessions(self) -> list[Path]:
         try:
@@ -378,7 +388,32 @@ class Maintainer:
             ok &= self.maintain_session(session, recordings)
         ok &= self.prune(recordings)
         ok &= self.retain()
+        ok &= self.review_pressed()
         return 0 if ok else 1
+
+    def review_pressed(self) -> bool:
+        """The session review, for each session whose Review done was pressed (#70).
+
+        Last in the pass, and only on the T7: that is where the skill reads a
+        session, and a session still local has steps left above.
+        """
+        from cueclock.review import findings  # here: the review package imports this module
+
+        ok = True
+        for session in self.archived():
+            if findings.pending(session) is None:
+                continue
+            if self.dry_run:
+                self.say(f"{session.name}: would run the session review (Review done pressed)")
+                continue
+            try:
+                findings.review(
+                    session, self.live, self.say, run=self.review_launch or findings.launch
+                )
+            except OSError as exc:
+                self.say(f"{session.name}: session review: {exc}")
+                ok = False
+        return ok
 
     def archived(self) -> list[Path]:
         """Session directories on the T7, oldest first ([] when it isn't mounted)."""

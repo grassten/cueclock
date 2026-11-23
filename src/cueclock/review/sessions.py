@@ -14,6 +14,7 @@ budget, and the verdict can still be given from the journal.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -61,6 +62,17 @@ class Session:
         if not isinstance(data, dict):
             return {}
         return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+
+    def fingerprint(self) -> str:
+        """Short sha256 of `verdicts.json`: any verdict or note changed, it changes.
+
+        The session review records it with what it filed (#70), so a re-run
+        can tell whether anything changed since.
+        """
+        try:
+            return hashlib.sha256((self.path / VERDICTS_FILE).read_bytes()).hexdigest()[:12]
+        except OSError:
+            return "none"
 
     def unreviewed(self) -> int | None:
         moments = self.moments()

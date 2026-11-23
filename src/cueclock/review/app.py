@@ -15,9 +15,11 @@ The page states what the journal recorded and shows the footage; it never
 says whether the clock was right. That is Steven's call, and the only reason
 the page exists.
 
-It writes two things into a session directory: `verdicts.json`, and the cut
+It writes three things into a session directory: `verdicts.json`; the cut
 of a moment whose card is opened before the archive pass has made it (he
-reviews minutes after a session; the pass gets there later). Served files
+reviews minutes after a session; the pass gets there later); and
+`findings/request.json` when he presses **Review done**, which queues the
+session review the archive pass runs (`findings.py`, #70). Served files
 are limited to the sessions' own cuts and the recordings listed in
 `recordings.jsonl`, addressed by stamp, moment id and line number — never by
 a path from the URL.
@@ -29,7 +31,7 @@ import json
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from cueclock import archive
+from cueclock.review import findings
 from cueclock.review import moments as finder
 from cueclock.review import sessions as sess
 from cueclock.review.moments import session_journal
@@ -262,6 +265,9 @@ textarea { flex:1; min-width:0; font:inherit; padding:11px 12px; border-radius:1
 #tail { display:flex; align-items:center; justify-content:space-between; gap:12px;
         margin:14px 2px 0; min-height:44px; }
 #tail button { padding:8px 14px; }
+#done { margin:20px 2px 0; padding-top:14px; border-top:1px solid var(--line); }
+#done button { font-weight:600; padding:12px 18px; }
+#done p { margin:8px 0 0; font-size:.9rem; }
 
 /* The full-session player: the video stays put, the event list scrolls. */
 video.full { position:sticky; top:0; z-index:1; }
@@ -414,6 +420,33 @@ if (cards.length) {
   else if (open && open.getBoundingClientRect().top > window.innerHeight * 0.4) reveal(open);
 }
 
+// ---- Review done: the press, and the run's state beside it ----------------
+const done = document.getElementById('done');
+if (done) {
+  const button = done.querySelector('button'), line = done.querySelector('p');
+  let timer = null;
+  const show = v => {
+    line.textContent = '';
+    if (v.href) {
+      const a = document.createElement('a');
+      a.href = v.href; a.textContent = v.text; line.append(a);
+    } else line.append(v.text);
+    if (v.note) line.append(' ' + v.note);
+    button.disabled = v.busy;
+    clearTimeout(timer);
+    // Queued or running: look again now and then (a pass starts every 15 min).
+    if (v.busy) timer = setTimeout(poll, 30000);
+  };
+  const poll = () => fetch(done.dataset.url).then(r => r.json()).then(show).catch(() => {});
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    fetch(done.dataset.url, {method: 'POST'})
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(show).catch(() => { button.disabled = false; unsaved(); });
+  });
+  if (button.disabled) timer = setTimeout(poll, 30000);
+}
+
 // ---- the full-session player ----------------------------------------------
 document.querySelectorAll('video.full').forEach(video => {
   const list = document.querySelector(`ol[data-video="${video.id}"]`);
@@ -555,7 +588,7 @@ def create_app(
             '<p id="tail" class="dim"><span></span>'
             "<button hidden>Next to review &rsaquo;</button></p>"
         )
-        return _page(stamp, head + "".join(cards) + tail, script=True)
+        return _page(stamp, head + "".join(cards) + tail + _done(s), script=True)
 
     def full_sources(
         s: sess.Session, records: list[dict[str, object]]
@@ -632,6 +665,27 @@ def create_app(
                 continue
             return JSONResponse({"id": moment_id, **s.verdicts().get(moment_id, {"verdict": None})})
         raise HTTPException(503, "the session was being archived — save again")
+
+    @app.get("/api/review_done/{stamp}")
+    async def review_state(stamp: str) -> JSONResponse:
+        s = session(stamp)
+        return JSONResponse(asdict(findings.view(s.path, s.fingerprint())))
+
+    @app.post("/api/review_done/{stamp}")
+    async def review_done(stamp: str) -> JSONResponse:
+        """Steven has finished judging: queue the session review (#70).
+
+        Looked up again if the directory went away under the write, as a
+        verdict is: the archive pass may be moving the session to the T7.
+        """
+        for _ in range(2):
+            s = session(stamp)
+            try:
+                findings.press(s.path, s.fingerprint(), datetime.now(UTC))
+            except FileNotFoundError:
+                continue
+            return JSONResponse(asdict(findings.view(s.path, s.fingerprint())))
+        raise HTTPException(503, "the session was being archived — press again")
 
     @app.get("/media/{stamp}/{moment_id}.mp4")
     def cut(stamp: str, moment_id: str) -> FileResponse:
@@ -737,6 +791,20 @@ def _clip_span(
         return None
     start = next(r.start for r in sources if r.path == plan.source)
     return start + timedelta(seconds=plan.offset_s), plan.duration_s
+
+
+def _done(s: sess.Session) -> str:
+    """The Review done button and the run's state beside it (#70)."""
+    line = findings.view(s.path, s.fingerprint())
+    text = escape(line.text)
+    if line.href:
+        text = f'<a href="{escape(line.href)}">{text}</a>'
+    note = f" {escape(line.note)}" if line.note else ""
+    return (
+        f'<div id="done" data-url="/api/review_done/{s.stamp}">'
+        f"<button{' disabled' if line.busy else ''}>Review done</button>"
+        f'<p class="dim">{text}{note}</p></div>'
+    )
 
 
 def _card(

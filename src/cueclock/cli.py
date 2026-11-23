@@ -1326,6 +1326,7 @@ def _cmd_maintain(args: argparse.Namespace) -> int:
         pinned_bytes=int(args.pinned_gb * 1e9),
         journals_bytes=int(args.journals_gb * 1e9),
         dry_run=args.dry_run,
+        live=lambda: archive.live_session(args.server),
     ).pass_()
 
 
