@@ -6,6 +6,10 @@ decisions**. Not semver — cueclock is a continuously-evolving personal rig;
 dates and checkpoint numbers are the versioning. A fresh session (human or
 Claude) reads the newest entries to pick up without re-deriving anything.
 
+It is a log, not a description: an entry says what changed that day and why,
+and later entries reverse some earlier ones. What the system is today is in
+the README; `docs/design.md` holds the reasoning by topic.
+
 Entries older than 2026-07-31 reference the original doc layout
 (`cv-app-rewrite.md`, `basler-camera-setup.md`, `progress.md`, `todo.md`,
 `accuracy-ideas.md`, …). Those files were consolidated on 2026-07-31 into
@@ -318,6 +322,48 @@ survive unchanged in `design.md`.
   detection, and is unaffected. No code changed.
 
 ## Checkpoint log (append-only, newest first)
+
+- **2026-11-26 (checkpoint 156: the repo is ready to be made public; #82):**
+  Steven: "I basically just want a really thorough readme". No behaviour
+  changed.
+  - **README rewritten** for a stranger: the stream preview linking the
+    session video (`youtu.be/fJwlt1WiWNM`), the accuracy figure from all 117
+    journals (99.5% detection, 98.6% hands-off, 206 of 214 breaks), a diagram
+    of the five programs, every part with a picture, detection in eleven
+    stages as it runs today, the hard cases checked row by row against the
+    code, what was considered and rejected and whether it was measured, what
+    still goes wrong, the rig, what is tied to this room, the clock with no
+    hardware, and the first-time order. The detection facts were read from
+    the code, not from `design.md`, and the hard-case rows corrected where
+    the July wording was wrong (a scratch is refuted only by a white ball
+    already on the table; the break floor is 2,500 and slower breaks are
+    adjudicated at the settle; practice strokes fail on displacement, not
+    velocity).
+  - **Pictures** under `docs/media/`, all made without footage of anyone but
+    Steven: three photos of the room (his; the camera's serial label
+    blurred), a 9 s preview and a still of the stream, the three detection
+    figures and one with an arm over the table (`scripts/draw_detections.py`
+    draws them from any clip), the deck's key faces, a thumbnail, the control
+    page, overlay, bracket and review pages. The August demo video and GIF
+    left the tree (they stay in history).
+  - **`assets/obs/scene-collection.json`**: the OBS layout as it runs, paths
+    replaced with `/path/to/cueclock`. No key or password is in it.
+  - **Stale docs fixed:** ChArUco described as coming (it was never built,
+    #16), `design.md` and this file now say up front that they are records,
+    §4.1's diagram and §5's tree flagged as the July plan, `hardware.md`
+    Part F and the OBS version, `cli.md`'s "parked" voice command, launch
+    command, storage rate, battery times and tab name, the 3000 mm/s break
+    floor (2500), the deck plist's dead link, ball size in two comments.
+  - **Taken out at Steven's word:** the patent citations and the paragraph
+    on their legal standing (`design.md` §2.3, §4.2, §6, §8); a real
+    player's name from the tests, the bracket mockup, this file and #26;
+    FargoRate rows in a test that looked pasted from a live search. History
+    keeps all of them.
+  - **The rig, from Steven:** a perimeter LED billiards light, not dimmable;
+    Aramith Tournament balls; the Simonis cloth the Diamond came with; the
+    camera 56.5 inches above the cloth.
+  - `vision/calibration.py`'s `table_mm_to_raw_px` is public, for the new
+    script. Repo description and topics set on GitHub.
 
 - **2026-11-26 (checkpoint 155: a stream restarted inside a minute gets its own video; #81):**
   Steven, after the first real stream through checkpoint 154: "I did a live
@@ -4079,7 +4125,7 @@ survive unchanged in `design.md`.
   unchanged, no other golden moved. The false population still has no corpus
   representative — that is *why* the battery stayed green through a 6x live
   over-count — so the measure of this checkpoint is the next 1–2 sessions'
-  journals (prediction: a Hank-scale session's 29 raw drops to ≤8 confirmed,
+  journals (prediction: a session that logged 29 raw drops logs ≤8 confirmed,
   every refutation carrying auditable witness evidence). E7 (crown identity)
   remains the upstream cause; adjudication works regardless of why the crown
   was wrong. Unblocks #25 via "candidate un-refuted at its settle". Unit suite

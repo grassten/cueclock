@@ -69,8 +69,8 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Full tracebacks and a summary of every non-passing test, always. A cold
-# corpus battery is ~5 minutes and its golden diffs ARE the measurement, so a
-# short traceback that hides one is a 5-minute tax to re-read something already
+# corpus battery is ~9 minutes and its golden diffs ARE the measurement, so a
+# short traceback that hides one is a 9-minute tax to re-read something already
 # computed. `-ra` lists every failure at the end, where a truncated log keeps it.
 addopts = ["-ra", "--tb=long"]
 # Import from src/ directly: this Mac's pyenv-based venvs don't process .pth

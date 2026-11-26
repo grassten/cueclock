@@ -3,9 +3,10 @@
 The cloth/cushion boundary is four straight lines in reality and a crisp
 blue-vs-black edge in the image, so it doubles as a calibration target: fit
 Brown radial coefficients (k1, k2) that make the four undistorted boundaries
-straight. On the 2026-07-27 mount this lands ~0.9 px mean residual — plenty
-for the TV picture. It is NOT detection-grade: ChArUco calibration
-(design.md §4.3) replaces it after the final camera install.
+straight. On the 2026-07-27 mount this lands ~0.9 px mean residual (0.76 px
+on the 2026-11-15 mount). The table calibration embeds the same fit, so it is
+also what detection's coordinates run on; the ChArUco calibration once planned
+to replace it was never built (design.md §4.3, amendment of 2026-11-17).
 
 Focal-length note: fx is fixed at the lens's nominal value (3.5 mm / 3.45 µm
 pixels ≈ 1014 px) and only k1/k2 are fitted — for pure radial undistortion a

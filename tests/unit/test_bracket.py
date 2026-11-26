@@ -14,7 +14,7 @@ from cueclock.server import bracket as bk
 from cueclock.server.bracket import Bracket, BracketError, Player
 
 FIELD8 = [
-    Player("Hank Harrison", 563),
+    Player("Dale Mercer", 563),
     Player("Joel Braun", 495),
     Player("Steven Asten", 471),
     Player("Marcus Tran", 415),
@@ -170,7 +170,7 @@ def test_byes_go_to_the_top_seeds_and_land_in_different_halves() -> None:
     sat_out = [m.id for m in b.matches if m.side == "A" and m.round == 1 and bk.BYE in m.slots]
     assert len(sat_out) == 2
     resting = {names(b, mid)[0] or names(b, mid)[1] for mid in sat_out}
-    assert resting == {"Hank Harrison", "Joel Braun"}
+    assert resting == {"Dale Mercer", "Joel Braun"}
     # Different halves: Match 5 and Match 6 each inherit exactly one of them.
     assert {b.match(5).slots[0], b.match(6).slots[0]} == {0, 1}
 
@@ -189,7 +189,7 @@ def test_seven_players_leaves_one_bye() -> None:
     b = build(FIELD8[:7])
     byes = [m for m in b.matches if m.side == "A" and m.round == 1 and bk.BYE in m.slots]
     assert len(byes) == 1
-    assert names(b, byes[0].id) == ["Hank Harrison", None]
+    assert names(b, byes[0].id) == ["Dale Mercer", None]
 
 
 def test_three_players_builds_a_four_bracket() -> None:
@@ -382,8 +382,8 @@ def test_orphaned_results_are_cleared_when_the_draw_moves() -> None:
 
 def test_editing_a_round_one_matchup_rederives_downstream() -> None:
     b = build()
-    swapped = b.edit(1, 7, 0)  # Tom Whitley against Hank Harrison
-    assert [b.players[s].name for s in swapped.slots] == ["Tom Whitley", "Hank Harrison"]
+    swapped = b.edit(1, 7, 0)  # Tom Whitley against Dale Mercer
+    assert [b.players[s].name for s in swapped.slots] == ["Tom Whitley", "Dale Mercer"]
     # The player Tom vacated leaves a hole rather than a duplicate.
     assert sum(1 for m in b.matches if 7 in m.slots) == 1
 
@@ -462,7 +462,7 @@ def test_reaching_the_target_arms_but_does_not_advance() -> None:
     b.load(1)
     assert b.live_summary((4, 2))["armed"] is None
     armed = b.live_summary((5, 2))["armed"]
-    assert armed == {"slot": 0, "name": "Hank Harrison", "score": 5, "other": 2}
+    assert armed == {"slot": 0, "name": "Dale Mercer", "score": 5, "other": 2}
     assert not b.match(1).played  # the bracket has not moved
     # Taking the point back clears the arm by itself — no undo to find.
     assert b.live_summary((4, 2))["armed"] is None

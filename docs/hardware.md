@@ -4,8 +4,8 @@ Everything physical and everything between the sensor and the TV: camera
 bring-up and locked settings (Part A), the video path into OBS (Part B), the
 Stream Deck control surface (Part C — a living doc: keep it in sync with
 `deck/layout.py`), the microphone plan (Part D), the TV + post-move
-recalibration recipes (Part E), and the side-angle camera replacing the
-iPhone (Part F — ordered 2026-11-11, not yet live). References use the form
+recalibration recipes (Part E), and the side-angle camera that replaced the
+iPhone (Part F, live since 2026-11-12). References use the form
 "`hardware.md` camera §5" — part name + section number.
 
 Machine: Mac mini M2 (Mac14,3, 24 GB, macOS 26.x) — dev and production, runs
@@ -154,9 +154,9 @@ grab thread (BayerRG8 @ 156 fps)
   `uv run` invocations can block on uv's lock — one cueclock command at a
   time), then reopen source properties and re-pick.
 - **OBS version caveat**: Syphon Client broke in OBS 32.0.x
-  ([#12684](https://github.com/obsproject/obs-studio/issues/12684)); this Mac
-  runs 32.1.1 which includes the fix. Pin the version — it's production
-  equipment now.
+  ([#12684](https://github.com/obsproject/obs-studio/issues/12684)); 32.1.1
+  and later include the fix, and this Mac runs 33.0.3 (§B3). Pin the version:
+  it's production equipment now, and automatic updates are off.
 - Fallback if Syphon ever misbehaves: pyvirtualcam → OBS Virtual Camera
   (brittle path, historically lags OBS's camera-extension changes).
   NDI/RTSP rejected — network machinery this one-machine setup doesn't need.
@@ -213,7 +213,8 @@ grab thread (BayerRG8 @ 156 fps)
 - `/replay`, the REPLAY badge, went with the Replay key in checkpoint 144 (§C4a).
 **Scenes** (scene collection `Untitled`; names below are what the rig
 actually runs — the original plan called them *Table* / *Clock*):
-- **Stream Detail** (default, the live table scene): Camo side angle + Syphon
+- **Stream Detail** (default, the live table scene): the side angle (the
+  Insta360 Link 2C Pro since 2026-11-12, the iPhone over Camo before it) + Syphon
   overhead + the bar. Names and race-to are set from `/control`; scores from
   the Stream Deck score keys. The bar is hidden until the server answers, so a
   dead source shows no chrome at all rather than an empty plinth over the
@@ -615,7 +616,7 @@ you're doing at the table. `clock/modes.py` is the table.
 
 | Mode | What it is | Opening shot | Clock |
 |---|---|---|---|
-| **match** | A rack: break, rack boundaries, the AFTER BREAK allowance | must reach 3000 mm/s (the IDLE break gate) | live, rack-aware |
+| **match** | A rack: break, rack boundaries, the AFTER BREAK allowance | must reach 2500 mm/s (the IDLE break gate) | live, rack-aware |
 | **run out** | Fifteen balls thrown up, no rack, run them | any speed | live, base countdown on every shot |
 | **no clock** | Actual drills — repeat a shot as long as you like | — | off; vision still journals |
 
@@ -980,10 +981,11 @@ replays in about a minute from a terminal. Each hook may therefore run for
 (`archive.hook_timeout`, checkpoint 135); at a fixed 10 minutes no session
 past ~27 minutes could have been archived. It reads only the repo (pinned Keep
 Downloaded), `logs/`, `sessions.nosync/` and `~/Movies` — nothing iCloud can
-evict out from under a launchd job (see CLAUDE.md on EDEADLK). Install once:
+evict out from under a launchd job (see CLAUDE.md on EDEADLK). Install once,
+from the repo root (this agent has no install script of its own):
 
 ```sh
-sed -e "s|__REPO__|$HOME/Desktop/cueclock|g" -e "s|__HOME__|$HOME|g" \
+sed -e "s|__REPO__|$PWD|g" -e "s|__HOME__|$HOME|g" \
     scripts/com.cueclock.maintain.plist.template \
     > ~/Library/LaunchAgents/com.cueclock.maintain.plist
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.plist
@@ -1471,18 +1473,20 @@ and it will move again someday:
    `reference check ok` with drift near 2 (warn > 8 vs. same-mount noise ~2),
    and the control page's health line shows the same reading.
 6. Re-set the OBS crop; re-judge the LUT/grade on the actual TV.
-7. ChArUco intrinsics (`design.md` §4.3) only after a *final* install — void
-   the moment the camera moves or refocuses.
+7. Nothing else: step 4's fit is the only calibration there is. The ChArUco
+   intrinsics this step once pointed at were never built (`design.md` §4.3,
+   amendment of 2026-11-17).
 
 ---
 
-## Part F — Side-angle camera: Insta360 Link 2C Pro (ordered 2026-11-11, not yet installed)
+## Part F — Side-angle camera: Insta360 Link 2C Pro (live since 2026-11-12)
 
 **Status: live since 2026-11-12 as the side angle (§B3) and the mic (Part D);
-Camo is retired.** §F3 results so far are in F5; the §F2 apply step is
-not built yet. Work
-item: [#47](https://github.com/grassten/cueclock/issues/47). Nothing in the code
-knows about this camera yet; §F2's apply step is a design, not a build.
+Camo is retired.** The §F2 apply step is built (`cueclock sidecam`,
+`deck/sidecam.py`): the camera's settings are saved once and re-applied at
+every session start. §F3's arrival results are in F5. Work item:
+[#47](https://github.com/grassten/cueclock/issues/47), closed. F1, F3 and F4
+below are the record of the choice and the switchover, kept as written.
 
 ### F1. Why this camera (decision record, 2026-11-11)
 

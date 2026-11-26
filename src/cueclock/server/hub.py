@@ -401,7 +401,7 @@ DETECT_HZ_WARN = 78.0
 #
 # The speed floor below independently covers the failure this was reaching
 # for: design.md measures racking and placement lookalikes below 1000 mm/s
-# against breaks at 5845-7361, and the floor sits at 3000. Do not re-derive
+# against breaks at 5845-7361, and the floor sits at 2500. Do not re-derive
 # anything from flagged_9/flagged_14 — both were recorded during detect-loop
 # starvation (41.9 and 34.0 Hz against ~78 nominal) and have been deleted.
 

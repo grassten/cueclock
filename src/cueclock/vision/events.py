@@ -148,7 +148,7 @@ Event = ShotTaken | BallsSettled | Scratch | ScratchCandidate | ScratchRefuted
 
 @dataclass(frozen=True)
 class EventConfig:
-    """§4.2 thresholds. Defaults for a 7 ft UK table (1930 x 965 mm playing area)."""
+    """§4.2 thresholds. Defaults for a 7 ft table (1930 x 965 mm playing area)."""
 
     # Settle / table-moving — position-based, not speed-based (learned on the
     # real corpus 2026-07-27): the addressed cue ball's blob merges with the
@@ -323,7 +323,7 @@ class EventConfig:
     # the cue: its approach trips the same net-displacement criterion the
     # table-motion state uses (moving_enter_mm over moving_window_s, observed
     # positions only), and by physics its last such report lands next to the
-    # rest spot — centers touch at ~51 mm, plus at most a frame or two of
+    # rest spot — centers touch at ~57 mm, plus at most a frame or two of
     # travel and a short occlusion coast (~120 mm even at break speed). Both
     # conditions are needed: the player's stroke gear (grip hand / stick
     # fragments) also reads as a well-observed mover during the backswing and
@@ -571,7 +571,7 @@ class EventConfig:
     scratch_confirm_s: float = 1.0
     # 60 mm: above the 33 mm first sighting with margin, and well under the
     # 94 mm at which a genuinely different, stationary ball sat during that
-    # same episode — which must not cancel anything. Balls are ~51 mm.
+    # same episode — which must not cancel anything. Balls are ~57 mm.
     scratch_reappear_mm: float = 60.0
     # 120, not 80: a sinking ball's last observations come from the pocket-jaw
     # blob, whose centroid drifts past the table edge as the ball goes down

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Template for the always-on Stream Deck daemon (docs/stream-deck.md).
+<!-- Template for the always-on Stream Deck daemon (docs/hardware.md Part C).
      install_deck_agent.sh substitutes __REPO__/__HOME__ and installs it. -->
 <plist version="1.0">
 <dict>

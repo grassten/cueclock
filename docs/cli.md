@@ -52,7 +52,7 @@ Ground rules that apply to every command:
 | `fit-undistort` | Fit display undistort params from the table's rails | no |
 | `calibrate` | Fit the px→mm table homography from the rails | no |
 | `recalibrate` | Record a fresh empty-table reference, refit both, swap them in only if good (the deck's RECAL key) | owns it |
-| `listen` | Voice-"extension" bring-up/soak (parked until a mic exists) | no |
+| `listen` | Voice-"extension" bring-up/soak: prints every recognition and its verdict | no |
 | `report` | Journal report: shots, strikes that did not fire, phantom candidates, breaks, scratches | no |
 | `review` | Session review (#57): find a session's candidate moments, serve the always-up review page, replay verdicts (`check`), and read a session for a review of its verdicts (`dossier`, `timeline`, `frames`; #70) | no |
 | `deck` | Stream Deck control-surface daemon | no |
@@ -68,7 +68,7 @@ Ground rules that apply to every command:
 The canonical launch command lives in README ("Running it") — currently:
 
 ```bash
-uv run python -m cueclock.cli run --rectify --host 0.0.0.0
+uv run python -m cueclock.cli run --rectify --host 0.0.0.0 --fps 60
 ```
 
 At startup watch for `reference check ok (boundary drift X.X, noise ~2)`.
@@ -135,7 +135,7 @@ uv run python -m cueclock.cli replay --clip tests/clips/<label> --once
 uv run python -m cueclock.cli live                      # live framing check
 ```
 
-### Voice "extension" bring-up (parked — no mic yet)
+### Voice "extension" bring-up
 
 ```bash
 uv run python -m cueclock.cli listen --devices           # list input devices
@@ -595,7 +595,7 @@ in `~/.config/cueclock/claude-token` (`hardware.md` §C7).
 | `--dry-run` | off | print every action, change nothing (hooks, ffmpeg and session reviews aren't run) |
 | `--budget-gb` | `10` | footage kept on the internal disk, in GB (10⁹ bytes); ~3 GB per hour of recording |
 | `--keep-full` | `10` | archived sessions that keep any footage (full recording, unjudged cuts), newest first |
-| `--archive-gb` | `100` | session logs + stills on the T7 (~2.4 GB per hour of play since the rest stills, #65: ~40 hours) |
+| `--archive-gb` | `100` | session logs + stills on the T7 (~3.3 GB per hour of play since the rest stills, #65: ~30 hours) |
 | `--pinned-gb` | `5` | pinned sessions (judged, stripped to their detection log) |
 | `--journals-gb` | `1` | session journals in `logs/` (~1 MB each) |
 | `--root` | `sessions.nosync/` | local session root |
@@ -686,8 +686,8 @@ frame).
 
 ## Not in this CLI, but nearby
 
-- `uv run pytest -n 4` — the corpus checkpoint battery, ~5 min (needs the T7
-  mounted). Add `--detect-cache` for a ~21 s run while iterating on
+- `uv run pytest -n 4` — the corpus checkpoint battery, ~9 min (needs the T7
+  mounted). Add `--detect-cache` for a ~30 s run while iterating on
   `events.py`/`track.py`; cold is the gate before committing. Two-tier
   rationale in `tests/README.md`.
 - `scripts/live_view.py` — camera bring-up viewer with focus/WB/grade
@@ -697,6 +697,6 @@ frame).
   obs-websocket. Idempotent; never assemble it by hand (`hardware.md` §B3).
 - The HTTP/WebSocket API the deck and overlays speak: `design.md` §2.1.
 - Tournament nights have no CLI at all: the bracket is built, driven and
-  archived from `/control`'s Bracket tab and the Stream Deck (`design.md` §10).
+  archived from the Tournament side of `/control`'s Setup tab and the Stream Deck (`design.md` §10).
   A live one persists to `config/bracket.json` beside the score, so a server
   restart mid-tournament is survivable; finished ones archive into `logs/`.

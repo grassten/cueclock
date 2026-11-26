@@ -1,0 +1,929 @@
+{
+  "name": "Untitled",
+  "AuxAudioDevice1": {
+    "prev_ver": 553648131,
+    "name": "Mic/Aux",
+    "uuid": "ba19ddd0-761a-4a3f-8274-675d017be643",
+    "id": "coreaudio_input_capture",
+    "versioned_id": "coreaudio_input_capture",
+    "settings": {
+      "device_id": "AppleUSBAudioEngine:Insta360:Insta360 Link 2C Pro:1100000:3"
+    },
+    "mixers": 255,
+    "sync": 0,
+    "flags": 0,
+    "volume": 1.0,
+    "balance": 0.5,
+    "enabled": true,
+    "muted": false,
+    "push-to-mute": false,
+    "push-to-mute-delay": 0,
+    "push-to-talk": false,
+    "push-to-talk-delay": 0,
+    "hotkeys": {
+      "libobs.mute": [],
+      "libobs.unmute": [],
+      "libobs.monitor-on": [],
+      "libobs.monitor-off": [],
+      "libobs.push-to-mute": [],
+      "libobs.push-to-talk": []
+    },
+    "deinterlace_mode": 0,
+    "deinterlace_field_order": 0,
+    "monitoring_type": 0,
+    "monitoring_enabled": false,
+    "private_settings": {},
+    "filters": [
+      {
+        "prev_ver": 553648131,
+        "name": "Gain",
+        "uuid": "298d6813-9dc7-4f0d-9a05-1744d6212a2f",
+        "id": "gain_filter",
+        "versioned_id": "gain_filter",
+        "settings": {
+          "db": 25.0
+        },
+        "mixers": 0,
+        "sync": 0,
+        "flags": 0,
+        "volume": 1.0,
+        "balance": 0.5,
+        "enabled": true,
+        "muted": false,
+        "push-to-mute": false,
+        "push-to-mute-delay": 0,
+        "push-to-talk": false,
+        "push-to-talk-delay": 0,
+        "hotkeys": {},
+        "deinterlace_mode": 0,
+        "deinterlace_field_order": 0,
+        "monitoring_type": 0,
+        "monitoring_enabled": false,
+        "private_settings": {}
+      },
+      {
+        "prev_ver": 553648131,
+        "name": "Limiter",
+        "uuid": "bbf85452-0e2d-4c3a-ad61-58b6b4023e29",
+        "id": "limiter_filter",
+        "versioned_id": "limiter_filter",
+        "settings": {
+          "threshold": -1.0,
+          "release_time": 60
+        },
+        "mixers": 0,
+        "sync": 0,
+        "flags": 0,
+        "volume": 1.0,
+        "balance": 0.5,
+        "enabled": true,
+        "muted": false,
+        "push-to-mute": false,
+        "push-to-mute-delay": 0,
+        "push-to-talk": false,
+        "push-to-talk-delay": 0,
+        "hotkeys": {},
+        "deinterlace_mode": 0,
+        "deinterlace_field_order": 0,
+        "monitoring_type": 0,
+        "monitoring_enabled": false,
+        "private_settings": {}
+      }
+    ]
+  },
+  "sources": [
+    {
+      "prev_ver": 553648131,
+      "name": "Syphon Client",
+      "uuid": "ce710d67-ad10-4f84-9dcd-574e16b49676",
+      "id": "syphon-input",
+      "versioned_id": "syphon-input",
+      "settings": {
+        "uuid": "info.v002.Syphon.C6524E80-6938-4C1A-9805-5F47E6A8DB34",
+        "name": "cueclock",
+        "app_name": "python"
+      },
+      "mixers": 0,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": false,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {},
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 0,
+      "monitoring_enabled": false,
+      "private_settings": {},
+      "filters": [
+        {
+          "prev_ver": 553648131,
+          "name": "Apply LUT",
+          "uuid": "a59769e8-48be-432a-8028-8916f9eba968",
+          "id": "clut_filter",
+          "versioned_id": "clut_filter",
+          "settings": {
+            "image_path": "/path/to/cueclock/assets/obs/cueclock-overhead.cube",
+            "clut_amount": 1.0,
+            "passthrough_alpha": false
+          },
+          "mixers": 0,
+          "sync": 0,
+          "flags": 0,
+          "volume": 1.0,
+          "balance": 0.5,
+          "enabled": true,
+          "muted": false,
+          "push-to-mute": false,
+          "push-to-mute-delay": 0,
+          "push-to-talk": false,
+          "push-to-talk-delay": 0,
+          "hotkeys": {},
+          "deinterlace_mode": 0,
+          "deinterlace_field_order": 0,
+          "monitoring_type": 0,
+          "monitoring_enabled": false,
+          "private_settings": {}
+        }
+      ]
+    },
+    {
+      "prev_ver": 553648131,
+      "name": "Video Capture Device",
+      "uuid": "e4574683-ea8e-4635-a33a-c2ab7d707990",
+      "id": "macos-avcapture",
+      "versioned_id": "macos-avcapture",
+      "settings": {
+        "device_name": "Insta360 Link 2C Pro",
+        "resolution": "{\"width\": 1920, \"height\": 1440}",
+        "frame_rate": {
+          "denominator": 1000000.0,
+          "numerator": 60000240.0
+        },
+        "input_format": 875704438,
+        "color_space": 2,
+        "supported_format": "MTkyMHgxNDQwIDI0LjAwMC0yNC4wMDAyNS4wMDAtMjUuMDAwMzAuMDAwLTMwLjAwMDUwLjAwMC01MC4wMDA2MC4wMDAtNjAuMDAwIDIgODc1NzA0NDM4",
+        "video_range": 1,
+        "device": "0x11000002e1a4c05",
+        "use_preset": false,
+        "preset": "AVCaptureSessionPresetHigh"
+      },
+      "mixers": 255,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": false,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {
+        "libobs.mute": [],
+        "libobs.unmute": [],
+        "libobs.monitor-on": [],
+        "libobs.monitor-off": [],
+        "libobs.push-to-mute": [],
+        "libobs.push-to-talk": []
+      },
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 0,
+      "monitoring_enabled": false,
+      "private_settings": {},
+      "filters": [
+        {
+          "prev_ver": 553648131,
+          "name": "Side colour",
+          "uuid": "1b396662-0e0a-4e6a-904f-de1f8bd1314d",
+          "id": "clut_filter",
+          "versioned_id": "clut_filter",
+          "settings": {
+            "image_path": "/path/to/cueclock/assets/obs/cueclock-sidecam.cube",
+            "clut_amount": 1.0
+          },
+          "mixers": 0,
+          "sync": 0,
+          "flags": 0,
+          "volume": 1.0,
+          "balance": 0.5,
+          "enabled": true,
+          "muted": false,
+          "push-to-mute": false,
+          "push-to-mute-delay": 0,
+          "push-to-talk": false,
+          "push-to-talk-delay": 0,
+          "hotkeys": {},
+          "deinterlace_mode": 0,
+          "deinterlace_field_order": 0,
+          "monitoring_type": 0,
+          "monitoring_enabled": false,
+          "private_settings": {}
+        }
+      ]
+    },
+    {
+      "prev_ver": 553648131,
+      "name": "Browser",
+      "uuid": "4621e496-8848-49db-8705-0071fd1f7494",
+      "id": "browser_source",
+      "versioned_id": "browser_source",
+      "settings": {
+        "url": "http://localhost:8000/shotclock?view=full&audio=off",
+        "width": 2668,
+        "height": 1500
+      },
+      "mixers": 255,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": false,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {
+        "libobs.mute": [],
+        "libobs.unmute": [],
+        "libobs.monitor-on": [],
+        "libobs.monitor-off": [],
+        "libobs.push-to-mute": [],
+        "libobs.push-to-talk": [],
+        "ObsBrowser.Refresh": []
+      },
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 0,
+      "monitoring_enabled": false,
+      "private_settings": {}
+    },
+    {
+      "prev_ver": 553648131,
+      "name": "Clock + Score bar",
+      "uuid": "9adc9271-879a-48f7-9de8-4ddf98c8ee67",
+      "id": "browser_source",
+      "versioned_id": "browser_source",
+      "settings": {
+        "url": "http://localhost:8000/shotclock?view=bar",
+        "width": 2668,
+        "height": 2160,
+        "restart_when_active": true,
+        "reroute_audio": true
+      },
+      "mixers": 255,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": true,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {
+        "libobs.mute": [],
+        "libobs.unmute": [],
+        "libobs.monitor-on": [],
+        "libobs.monitor-off": [],
+        "libobs.push-to-mute": [],
+        "libobs.push-to-talk": [],
+        "ObsBrowser.Refresh": []
+      },
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 2,
+      "monitoring_enabled": true,
+      "private_settings": {}
+    },
+    {
+      "prev_ver": 553648131,
+      "name": "Bracket Page",
+      "uuid": "bf4ecd0e-0777-4986-a85e-f20f1e4c652e",
+      "id": "browser_source",
+      "versioned_id": "browser_source",
+      "settings": {
+        "url": "http://localhost:8000/bracket",
+        "width": 3840,
+        "height": 2160,
+        "shutdown": false,
+        "restart_when_active": true,
+        "reroute_audio": false
+      },
+      "mixers": 255,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": false,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {
+        "libobs.mute": [],
+        "libobs.unmute": [],
+        "libobs.monitor-on": [],
+        "libobs.monitor-off": [],
+        "libobs.push-to-mute": [],
+        "libobs.push-to-talk": [],
+        "ObsBrowser.Refresh": []
+      },
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 0,
+      "monitoring_enabled": false,
+      "private_settings": {}
+    },
+    {
+      "prev_ver": 553648131,
+      "name": "Shot Clock",
+      "uuid": "fde3c400-7fc8-4d57-a497-b2446286e2aa",
+      "id": "scene",
+      "versioned_id": "scene",
+      "settings": {
+        "id_counter": 4,
+        "custom_size": false,
+        "items": [
+          {
+            "name": "Browser",
+            "source_uuid": "4621e496-8848-49db-8705-0071fd1f7494",
+            "visible": true,
+            "locked": false,
+            "rot": 0.0,
+            "scale_ref": {
+              "x": 1920.0,
+              "y": 1080.0
+            },
+            "align": 5,
+            "bounds_type": 0,
+            "bounds_align": 0,
+            "bounds_crop": false,
+            "crop_left": 0,
+            "crop_top": 0,
+            "crop_right": 0,
+            "crop_bottom": 0,
+            "id": 1,
+            "group_item_backup": false,
+            "pos": {
+              "x": 0.0,
+              "y": 312.0
+            },
+            "pos_rel": {
+              "x": -1.7777777910232544,
+              "y": -0.7111110687255859
+            },
+            "scale": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "scale_rel": {
+              "x": 0.5,
+              "y": 0.5
+            },
+            "bounds": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "bounds_rel": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "scale_filter": "disable",
+            "blend_method": "default",
+            "blend_type": "normal",
+            "show_transition": {
+              "duration": 300
+            },
+            "hide_transition": {
+              "duration": 300
+            },
+            "private_settings": {}
+          },
+          {
+            "name": "Syphon Client",
+            "source_uuid": "ce710d67-ad10-4f84-9dcd-574e16b49676",
+            "visible": true,
+            "locked": false,
+            "rot": 90.0,
+            "scale_ref": {
+              "x": 1920.0,
+              "y": 1080.0
+            },
+            "align": 5,
+            "bounds_type": 0,
+            "bounds_align": 0,
+            "bounds_crop": false,
+            "crop_left": 0,
+            "crop_top": 0,
+            "crop_right": 0,
+            "crop_bottom": 0,
+            "id": 3,
+            "group_item_backup": false,
+            "pos": {
+              "x": 3856.0,
+              "y": -22.0
+            },
+            "pos_rel": {
+              "x": 1.7925926446914673,
+              "y": -1.020370364189148
+            },
+            "scale": {
+              "x": 1.1395833492279053,
+              "y": 1.1401151418685913
+            },
+            "scale_rel": {
+              "x": 0.5697916746139526,
+              "y": 0.5700575709342957
+            },
+            "bounds": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "bounds_rel": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "scale_filter": "disable",
+            "blend_method": "default",
+            "blend_type": "normal",
+            "show_transition": {
+              "duration": 300
+            },
+            "hide_transition": {
+              "duration": 300
+            },
+            "private_settings": {}
+          },
+          {
+            "name": "Clock + Score bar",
+            "source_uuid": "9adc9271-879a-48f7-9de8-4ddf98c8ee67",
+            "visible": true,
+            "locked": false,
+            "rot": 0.0,
+            "scale_ref": {
+              "x": 1920.0,
+              "y": 1080.0
+            },
+            "align": 5,
+            "bounds_type": 0,
+            "bounds_align": 0,
+            "bounds_crop": false,
+            "crop_left": 0,
+            "crop_top": 0,
+            "crop_right": 0,
+            "crop_bottom": 0,
+            "id": 4,
+            "group_item_backup": false,
+            "pos": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "pos_rel": {
+              "x": -1.7777777910232544,
+              "y": -1.0
+            },
+            "scale": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "scale_rel": {
+              "x": 0.5,
+              "y": 0.5
+            },
+            "bounds": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "bounds_rel": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "scale_filter": "disable",
+            "blend_method": "default",
+            "blend_type": "normal",
+            "show_transition": {
+              "duration": 0
+            },
+            "hide_transition": {
+              "duration": 0
+            },
+            "private_settings": {}
+          }
+        ]
+      },
+      "mixers": 0,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": false,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {
+        "OBSBasic.SelectScene": [],
+        "libobs.show_scene_item.1": [],
+        "libobs.hide_scene_item.1": [],
+        "libobs.show_scene_item.3": [],
+        "libobs.hide_scene_item.3": [],
+        "libobs.show_scene_item.4": [],
+        "libobs.hide_scene_item.4": []
+      },
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 0,
+      "monitoring_enabled": false,
+      "canvas_uuid": "6c69626f-6273-4c00-9d88-c5136d61696e",
+      "private_settings": {}
+    },
+    {
+      "prev_ver": 553648131,
+      "name": "Stream Detail",
+      "uuid": "a91adc76-e984-4307-8e47-ae93b0c7e4d2",
+      "id": "scene",
+      "versioned_id": "scene",
+      "settings": {
+        "id_counter": 25,
+        "custom_size": false,
+        "items": [
+          {
+            "name": "Video Capture Device",
+            "source_uuid": "e4574683-ea8e-4635-a33a-c2ab7d707990",
+            "visible": true,
+            "locked": false,
+            "rot": 0.0,
+            "scale_ref": {
+              "x": 1920.0,
+              "y": 1080.0
+            },
+            "align": 5,
+            "bounds_type": 0,
+            "bounds_align": 0,
+            "bounds_crop": false,
+            "crop_left": 0,
+            "crop_top": 0,
+            "crop_right": 0,
+            "crop_bottom": 116,
+            "id": 20,
+            "group_item_backup": false,
+            "pos": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "pos_rel": {
+              "x": -1.7777777910232544,
+              "y": -1.0
+            },
+            "scale": {
+              "x": 1.3895833492279053,
+              "y": 1.3895833492279053
+            },
+            "scale_rel": {
+              "x": 0.6947916746139526,
+              "y": 0.6947916746139526
+            },
+            "bounds": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "bounds_rel": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "scale_filter": "disable",
+            "blend_method": "default",
+            "blend_type": "normal",
+            "show_transition": {
+              "duration": 300
+            },
+            "hide_transition": {
+              "duration": 300
+            },
+            "private_settings": {}
+          },
+          {
+            "name": "Syphon Client",
+            "source_uuid": "ce710d67-ad10-4f84-9dcd-574e16b49676",
+            "visible": true,
+            "locked": false,
+            "rot": 90.0,
+            "scale_ref": {
+              "x": 1920.0,
+              "y": 1080.0
+            },
+            "align": 5,
+            "bounds_type": 0,
+            "bounds_align": 0,
+            "bounds_crop": false,
+            "crop_left": 0,
+            "crop_top": 0,
+            "crop_right": 0,
+            "crop_bottom": 0,
+            "id": 18,
+            "group_item_backup": false,
+            "pos": {
+              "x": 3856.0,
+              "y": 2166.0
+            },
+            "pos_rel": {
+              "x": 1.7925926446914673,
+              "y": 1.0055556297302246
+            },
+            "scale": {
+              "x": -1.1395833492279053,
+              "y": 1.1401151418685913
+            },
+            "scale_rel": {
+              "x": -0.5697916746139526,
+              "y": 0.5700575709342957
+            },
+            "bounds": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "bounds_rel": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "scale_filter": "disable",
+            "blend_method": "default",
+            "blend_type": "normal",
+            "show_transition": {
+              "duration": 300
+            },
+            "hide_transition": {
+              "duration": 300
+            },
+            "private_settings": {}
+          },
+          {
+            "name": "Clock + Score bar",
+            "source_uuid": "9adc9271-879a-48f7-9de8-4ddf98c8ee67",
+            "visible": true,
+            "locked": false,
+            "rot": 0.0,
+            "scale_ref": {
+              "x": 1920.0,
+              "y": 1080.0
+            },
+            "align": 5,
+            "bounds_type": 0,
+            "bounds_align": 0,
+            "bounds_crop": false,
+            "crop_left": 0,
+            "crop_top": 0,
+            "crop_right": 0,
+            "crop_bottom": 0,
+            "id": 25,
+            "group_item_backup": false,
+            "pos": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "pos_rel": {
+              "x": -1.7777777910232544,
+              "y": -1.0
+            },
+            "scale": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "scale_rel": {
+              "x": 0.5,
+              "y": 0.5
+            },
+            "bounds": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "bounds_rel": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "scale_filter": "disable",
+            "blend_method": "default",
+            "blend_type": "normal",
+            "show_transition": {
+              "duration": 0
+            },
+            "hide_transition": {
+              "duration": 0
+            },
+            "private_settings": {}
+          }
+        ]
+      },
+      "mixers": 0,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": false,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {
+        "OBSBasic.SelectScene": [],
+        "libobs.show_scene_item.20": [],
+        "libobs.hide_scene_item.20": [],
+        "libobs.show_scene_item.18": [],
+        "libobs.hide_scene_item.18": [],
+        "libobs.show_scene_item.25": [],
+        "libobs.hide_scene_item.25": []
+      },
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 0,
+      "monitoring_enabled": false,
+      "canvas_uuid": "6c69626f-6273-4c00-9d88-c5136d61696e",
+      "private_settings": {}
+    },
+    {
+      "prev_ver": 553648131,
+      "name": "Bracket",
+      "uuid": "0b5b0d66-4b8b-4a50-ade9-4f7a08697141",
+      "id": "scene",
+      "versioned_id": "scene",
+      "settings": {
+        "id_counter": 1,
+        "custom_size": false,
+        "items": [
+          {
+            "name": "Bracket Page",
+            "source_uuid": "bf4ecd0e-0777-4986-a85e-f20f1e4c652e",
+            "visible": true,
+            "locked": false,
+            "rot": 0.0,
+            "scale_ref": {
+              "x": 3840.0,
+              "y": 2160.0
+            },
+            "align": 5,
+            "bounds_type": 2,
+            "bounds_align": 0,
+            "bounds_crop": false,
+            "crop_left": 0,
+            "crop_top": 0,
+            "crop_right": 0,
+            "crop_bottom": 0,
+            "id": 1,
+            "group_item_backup": false,
+            "pos": {
+              "x": 0.0,
+              "y": 0.0
+            },
+            "pos_rel": {
+              "x": -1.7777777910232544,
+              "y": -1.0
+            },
+            "scale": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "scale_rel": {
+              "x": 1.0,
+              "y": 1.0
+            },
+            "bounds": {
+              "x": 3840.0,
+              "y": 2160.0
+            },
+            "bounds_rel": {
+              "x": 3.555555582046509,
+              "y": 2.0
+            },
+            "scale_filter": "disable",
+            "blend_method": "default",
+            "blend_type": "normal",
+            "show_transition": {
+              "duration": 0
+            },
+            "hide_transition": {
+              "duration": 0
+            },
+            "private_settings": {}
+          }
+        ]
+      },
+      "mixers": 0,
+      "sync": 0,
+      "flags": 0,
+      "volume": 1.0,
+      "balance": 0.5,
+      "enabled": true,
+      "muted": false,
+      "push-to-mute": false,
+      "push-to-mute-delay": 0,
+      "push-to-talk": false,
+      "push-to-talk-delay": 0,
+      "hotkeys": {
+        "OBSBasic.SelectScene": [],
+        "libobs.show_scene_item.1": [],
+        "libobs.hide_scene_item.1": []
+      },
+      "deinterlace_mode": 0,
+      "deinterlace_field_order": 0,
+      "monitoring_type": 0,
+      "monitoring_enabled": false,
+      "canvas_uuid": "6c69626f-6273-4c00-9d88-c5136d61696e",
+      "private_settings": {}
+    }
+  ],
+  "groups": [],
+  "scene_order": [
+    {
+      "name": "Stream Detail"
+    },
+    {
+      "name": "Bracket"
+    },
+    {
+      "name": "Shot Clock"
+    }
+  ],
+  "current_scene": "Stream Detail",
+  "current_program_scene": "Stream Detail",
+  "canvases": [],
+  "current_transition": "Fade",
+  "transition_duration": 300,
+  "transitions": [],
+  "quick_transitions": [
+    {
+      "name": "Cut",
+      "duration": 300,
+      "hotkeys": [],
+      "id": 1,
+      "fade_to_black": false
+    },
+    {
+      "name": "Fade",
+      "duration": 300,
+      "hotkeys": [],
+      "id": 2,
+      "fade_to_black": false
+    },
+    {
+      "name": "Fade",
+      "duration": 300,
+      "hotkeys": [],
+      "id": 3,
+      "fade_to_black": true
+    }
+  ],
+  "saved_projectors": [
+    {
+      "monitor": 0,
+      "type": 3,
+      "geometry": "AdnQywADAAAAAAAAAAAAAAAAB38AAAQ3AAAAAAAAAAAAAAd/AAAENwAAAAAABAAAB4AAAAAAAAAAAAAAB38AAAQ3",
+      "alwaysOnTopOverridden": false
+    }
+  ],
+  "preview_locked": false,
+  "scaling_enabled": false,
+  "scaling_level": -8,
+  "scaling_off_x": 0.0,
+  "scaling_off_y": 0.0,
+  "virtual-camera": {
+    "type2": 3
+  },
+  "modules": {
+    "scripts-tool": [],
+    "output-timer": {
+      "streamTimerHours": 0,
+      "streamTimerMinutes": 0,
+      "streamTimerSeconds": 30,
+      "recordTimerHours": 0,
+      "recordTimerMinutes": 0,
+      "recordTimerSeconds": 30,
+      "autoStartStreamTimer": false,
+      "autoStartRecordTimer": false,
+      "pauseRecordTimer": true
+    },
+    "auto-scene-switcher": {
+      "interval": 300,
+      "non_matching_scene": "",
+      "switch_if_not_matching": false,
+      "active": false,
+      "switches": []
+    }
+  },
+  "resolution": {
+    "x": 3840,
+    "y": 2160
+  },
+  "version": 2
+}

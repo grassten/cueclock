@@ -10,8 +10,9 @@ are mm/s). This module fits the mapping from the table's own cloth boundary
 
 This is corpus-grade: the cloth outline (not the cushion nose line) stands in
 for the playing area, so absolute scale is approximate at the few-percent
-level — harmless against §4.2's generous threshold margins. ChArUco intrinsics +
-a measured homography (§4.3) replace it after the final camera install.
+level — harmless against §4.2's generous threshold margins. This fit is what
+the live rig runs on: the ChArUco calibration once planned to replace it was
+never built (design.md §4.3, amendment of 2026-11-17).
 
 Coordinates: x runs along the table's long axis (0..length_mm), y across
 (0..width_mm), origin at the cloth corner that appears top-left in the image.
@@ -37,7 +38,7 @@ from cueclock.display.undistort_fit import (
 
 DEFAULT_CALIBRATION_PATH = Path("config/table_calibration.json")
 
-# 7 ft UK table playing area (matches EventConfig defaults).
+# 7 ft table playing area, 76 x 38 in (matches EventConfig defaults).
 TABLE_LENGTH_MM = 1930.0
 TABLE_WIDTH_MM = 965.0
 
@@ -131,7 +132,7 @@ class TableCalibration:
         )
 
 
-def _table_mm_to_raw_px(
+def table_mm_to_raw_px(
     calibration: TableCalibration, pts_mm: npt.NDArray[np.float64]
 ) -> npt.NDArray[np.float64]:
     """Inverse of `to_table_mm`: mm → undistorted px (H⁻¹) → raw distorted px.
@@ -177,7 +178,7 @@ def boundary_drift(
             stations.append((float(frac) * length, width - off))  # bottom
             stations.append((off, float(frac) * width))  # left
             stations.append((length - off, float(frac) * width))  # right
-    pts = _table_mm_to_raw_px(calibration, np.array(stations))
+    pts = table_mm_to_raw_px(calibration, np.array(stations))
     xs = np.clip(np.round(pts[:, 0]).astype(np.intp), 0, w - 1)
     ys = np.clip(np.round(pts[:, 1]).astype(np.intp), 0, h - 1)
     diff = np.abs(reference_gray[ys, xs].astype(np.int16) - live_gray[ys, xs].astype(np.int16))

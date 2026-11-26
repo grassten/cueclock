@@ -24,9 +24,9 @@ DEFAULT_UNDISTORT_PATH = Path("config/display_undistort.json")
 class UndistortParams:
     """Pinhole intrinsics + Brown radial distortion, fitted or calibrated.
 
-    v1 source is the rail-line fit (`cueclock fit-undistort`): display-grade,
-    good enough for straight rails on the TV. Detection-grade ChArUco
-    calibration replaces this after the final camera install.
+    The source is the rail-line fit (`cueclock recalibrate`, or
+    `cueclock fit-undistort` by hand). The same fit carries detection's
+    coordinates; no printed-target calibration exists (design.md §4.3).
     """
 
     fx: float

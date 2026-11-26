@@ -504,7 +504,7 @@ def test_score_fargo_set_and_cleared_by_rename() -> None:
         # Scores reset keeps the rating (next match, same players).
         assert client.post("/api/score/reset").json()["score"]["p1"]["fargo"] == 471
         # A different name means a different person: stale rating dropped.
-        resp = client.post("/api/score/config", json={"p1_name": "HANK"}).json()
+        resp = client.post("/api/score/config", json={"p1_name": "DALE"}).json()
         assert resp["score"]["p1"]["fargo"] is None
         # Name + rating in one update is the pick flow — both land.
         resp = client.post("/api/score/config", json={"p2_name": "SHANE", "p2_fargo": 847}).json()
@@ -518,21 +518,21 @@ def test_fargo_search_normalizes_upstream_rows(monkeypatch: pytest.MonkeyPatch) 
     """The proxy flattens FargoRate's rows to what the pick-list renders."""
 
     async def fake_fetch(q: str) -> dict[str, object]:
-        assert q == "John Smith"
+        assert q == "Pat Sample"
         return {
             "value": [
                 {
-                    "firstName": "John",
-                    "lastName": "Smith",
-                    "location": "Des Moines IA",
+                    "firstName": "Pat",
+                    "lastName": "Sample",
+                    "location": "Springfield IL",
                     "effectiveRating": "404",
                     "robustness": "1318",
                 },
                 # Provisional: under 200 recorded games.
                 {
-                    "firstName": "JOHNATHON",
-                    "lastName": "SMITH",
-                    "location": "OK",
+                    "firstName": "PATRICIA",
+                    "lastName": "SAMPLE",
+                    "location": "TX",
                     "effectiveRating": "365",
                     "robustness": "4",
                 },
@@ -543,11 +543,11 @@ def test_fargo_search_normalizes_upstream_rows(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(fargo, "_fetch", fake_fetch)
     with make_client() as client:
-        resp = client.get("/api/fargo/search", params={"q": "John Smith"}).json()
+        resp = client.get("/api/fargo/search", params={"q": "Pat Sample"}).json()
     assert resp["ok"] is True
     assert resp["players"] == [
-        {"name": "John Smith", "location": "Des Moines IA", "rating": 404, "established": True},
-        {"name": "JOHNATHON SMITH", "location": "OK", "rating": 365, "established": False},
+        {"name": "Pat Sample", "location": "Springfield IL", "rating": 404, "established": True},
+        {"name": "PATRICIA SAMPLE", "location": "TX", "rating": 365, "established": False},
     ]
 
 
@@ -1660,7 +1660,7 @@ BRACKET_BODY = {
     "handicap": "off",
     "seeding": "adjacent",
     "players": [
-        {"name": "Hank Harrison", "rating": 563},
+        {"name": "Dale Mercer", "rating": 563},
         {"name": "Joel Braun", "rating": 495},
         {"name": "Steven Asten", "rating": 471},
         {"name": "Marcus Tran", "rating": 415, "established": False},
@@ -1687,7 +1687,7 @@ def test_building_the_draw_puts_the_first_match_up() -> None:
         assert client.get("/api/bracket").json()["bracket"]["loaded"] == 1
         state = client.get("/api/state").json()
         assert state["bracket"]["match"]["id"] == 1
-        assert state["score"]["p1"]["name"] == "Hank Harrison"
+        assert state["score"]["p1"]["name"] == "Dale Mercer"
 
 
 def test_create_build_and_load_a_match() -> None:
@@ -1701,7 +1701,7 @@ def test_create_build_and_load_a_match() -> None:
         assert score["race_to"] is None  # a handicapped match has no single race
         # An unestablished rating seeds the draw but never reaches the wall.
         names = {score["p1"]["name"], score["p2"]["name"]}
-        assert names == {"Hank Harrison", "Joel Braun"}
+        assert names == {"Dale Mercer", "Joel Braun"}
         state = client.get("/api/state").json()["bracket"]
         assert state["match"]["header"] == "Match 1 · A Side · Race to 5"
         assert state["armed"] is None
@@ -1754,7 +1754,7 @@ def test_reaching_the_target_arms_the_deck_key_without_advancing() -> None:
         for _ in range(5):
             client.post("/api/score/p1/increment")
         armed = client.get("/api/state").json()["bracket"]["armed"]
-        assert armed["name"] == "Hank Harrison" and armed["score"] == 5
+        assert armed["name"] == "Dale Mercer" and armed["score"] == 5
         # The bracket has not moved: Match 1 is still the live match.
         assert client.get("/api/bracket").json()["bracket"]["loaded"] == 1
         client.post("/api/score/p1/decrement")  # the hold that takes a point back
@@ -1770,7 +1770,7 @@ def test_confirming_routes_loads_the_next_match_and_racks() -> None:
         client.post("/api/score/p2/increment")
         client.post("/api/start")  # a clock running under the match being played
         result = client.post("/api/bracket/match/1/result").json()
-        assert result["winner"] == "Hank Harrison"
+        assert result["winner"] == "Dale Mercer"
         assert result["loaded"] == 2  # the next ready match, loaded at 0-0
         score = client.get("/api/score").json()
         assert (score["p1"]["score"], score["p2"]["score"]) == (0, 0)
@@ -1814,7 +1814,7 @@ def test_editing_a_round_one_matchup_over_http() -> None:
         assert client.patch("/api/bracket/match/1", json={"p1": 3, "p2": 0}).json()["ok"]
         bracket = client.get("/api/bracket").json()["bracket"]
         first = next(m for m in bracket["matches"] if m["id"] == 1)
-        assert [first["p1"]["name"], first["p2"]["name"]] == ["Marcus Tran", "Hank Harrison"]
+        assert [first["p1"]["name"], first["p2"]["name"]] == ["Marcus Tran", "Dale Mercer"]
         # A derived slot is not editable — it is derived.
         assert client.patch("/api/bracket/match/3", json={"p1": 1}).status_code == 409
 
