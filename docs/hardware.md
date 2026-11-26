@@ -191,10 +191,12 @@ grab thread (BayerRG8 @ 156 fps)
   `shotclock.html` — so text rasterizes at the source's native resolution)
   along the bottom of the side-angle column with the clock in its right-hand
   cell (issue #23, 2026-08-03; resized for the 4K canvas 2026-08-07). Enable
-  **"Control audio via OBS"** *and* set its Audio Monitoring to **"Monitor Only
-  (mute output)"** — this is the source that sounds the cues on the TV, while
-  what gets *recorded* is the room, from Mic/Aux. Every other pairing of those
-  two switches fails somewhere (Part D). 2668 is the seam where the overhead strip
+  **"Control audio via OBS"**, turn its **audio monitoring on**, and **mute it
+  in the mixer** — this is the source that sounds the cues on the TV, while
+  what gets *recorded* is the room, from Mic/Aux. Muted with monitoring on is
+  OBS 33's way of saying what "Monitor Only (mute output)" said until 32.2
+  (Part D, "The bar is monitored and muted"). Every other pairing fails
+  somewhere (Part D). 2668 is the seam where the overhead strip
   begins, so nothing it draws can reach the table.
   Since 2026-11-17 (checkpoint 127, #54) the same page also draws the **ball
   strip**: one chip per ball the overhead reads on a still table (cue, 1–15,
@@ -307,8 +309,10 @@ actually runs — the original plan called them *Table* / *Clock*):
   - **Visibility** is **Unlisted**, set in YouTube Studio before the first
     stream; it carries over to the next. Nothing here changes it.
   - **What a viewer hears** is the room mic, Mic/Aux, and nothing else. The
-    bar's buzzer is monitor-only, so it reaches the stream the way music
-    does: out of the TV and into the room mic.
+    bar is muted in the mixer with its monitoring on (Part D), so the beeps
+    and buzzer reach the stream the way music does: out of the TV and into
+    the room mic. The 2026-11-25 test stream still carried the direct copy as
+    well; that was fixed the same night.
   - **The mic is boosted in OBS** (2026-11-25): a **Gain** filter at
     **+25 dB**, then a **Limiter** at **−1 dB** (60 ms release), on Mic/Aux.
     The camera's own input volume is already at its maximum (Part D), so OBS
@@ -332,8 +336,9 @@ actually runs — the original plan called them *Table* / *Clock*):
   in `global.ini`, and its Sparkle updater's `SUEnableAutomaticChecks` and
   `SUAutomaticallyUpdate` set to 0 (`defaults read com.obsproject.obs-studio`).
   That day Sparkle installed 33.0.3 over a running 33.0.2, and OBS segfaulted
-  70 ms after the next stream connected. Update OBS by hand, between sessions.
-  The rig runs **33.0.3**.
+  70 ms after the next stream connected. Update OBS by hand, between sessions,
+  and re-check the bar's audio afterwards (Part D, "The bar is monitored and
+  muted": the 33.0 update silently un-muted it). The rig runs **33.0.3**.
 
 Latency budget end-to-end (camera → TV in Game Mode): on the order of 100 ms —
 well under the "few hundred ms is fine" bar; the detection path never leaves
@@ -1014,8 +1019,10 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.cueclock.maintain.
 
    **How it reaches the TV** (settled 2026-08-03; this section previously
    described the opposite and the rig was set up that way). The bar source has
-   **"Control audio via OBS" on** (`reroute_audio: true`) and its monitoring at
-   **"Monitor Only (mute output)"** — page audio goes into the OBS mixer, and
+   **"Control audio via OBS" on** (`reroute_audio: true`), its **monitoring
+   on** and the source **muted in the mixer** (until OBS 33 this was one
+   setting, "Monitor Only (mute output)"; see "The bar is monitored and muted"
+   below) — page audio goes into the OBS mixer, and
    from there only down the monitoring path to the HDMI output. Settings →
    Audio → Monitoring Device is **`HISENSE`, by name** (since 2026-11-17,
    #68). It was `Default`, which follows the macOS default output, and that
@@ -1162,7 +1169,20 @@ switches and only one of them is dangerous:
   silent. This section previously said it "must stay that way", conflating the
   two switches.
 
-**The bar source is "Monitor Only (mute output)" for the same reason** — one
+**The bar is monitored and muted** (OBS 33; fixed 2026-11-25). OBS 33 dropped
+the "Monitor Only (mute output)" setting: a source now has monitoring on or
+off, and mute silences only the output mix. The Mac monitoring path ignores
+mute (`on_audio_playback` in `coreaudio-output.c` declares it unused), so
+**muted with monitoring on** is the old monitor-only. Nothing migrates the old
+setting. When OBS updated itself from 32.2.1 to 33.0.2 on 2026-11-22, the bar
+came up with monitoring on and *not* muted, and every session from then to
+2026-11-25 carried each cue twice. In the 2026-11-25 recording a beep's direct
+copy sits at about −20 dB, and the room's copy follows 0.42 s later at about
+−52 dB. The fix was `muted: true` on the source (backup:
+`basic/scenes/Untitled.json.bak-20261125-bar-mute`). **After any OBS update,
+check the bar is still muted with its monitoring on.**
+
+**It is monitor-only for the same reason the mic is unmonitored** — one
 sound, one copy. With it at "Monitor and Output" a chime landed in the
 recording **twice**: once clean from the browser and once as the room's echo of
 the TV a beat later. Monitor-only keeps the speaker path (the TV still beeps —

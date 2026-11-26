@@ -386,7 +386,21 @@ survive unchanged in `design.md`.
     LUFS, simulated on the recording). OBS was launched once to confirm the
     filters load, and they survived its save on quit (`docs/hardware.md`
     §B3).
+  - **Follow-up: every beep was in the stream twice.** Steven heard the
+    beeps and buzzer both directly and through the room mic. OBS 33 replaced
+    "Monitor Only (mute output)" with monitoring on or off plus an independent
+    mute, and migrates nothing. Since the 32.2.1 to 33.0.2 self-update on
+    2026-11-22 (the log line changes from `monitoring: monitor only` to
+    `monitoring: enabled`), the bar had monitoring on and was not muted. In
+    tonight's recording each beep's direct copy is at about −20 dB, and the
+    room's copy follows 0.42 s later at about −52 dB. The bar is now muted in
+    the mixer with monitoring on. OBS's macOS monitoring code ignores mute,
+    so the TV keeps beeping; that is read from the source at tag 33.0.3 and
+    not yet heard. OBS loads the setting and keeps it (`docs/hardware.md`
+    Part D).
   - **Not checked.**
+    - That the TV still beeps with the bar muted. First countdown of the next
+      session.
     - The key against the real OBS. It lights in the next session.
     - What OBS shows on the TV when a stream fails to connect, such as a bad
       key or YouTube refusing it.

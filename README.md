@@ -94,8 +94,9 @@ uv run python -m cueclock.cli session maintain  # verify, cut, archive to the T7
   only if the fit is good (`docs/hardware.md` §E2). The next start uses it.
 - OBS browser sources: `http://localhost:8000/shotclock?view=bar` (the live
   scene's bottom bar — clock *and* scoreboard in one 1334×1080 source at
-  (0, 0); enable "Control audio via OBS" **and** set Audio Monitoring to
-  "Monitor Only (mute output)" — that is what sounds the chimes on the TV;
+  (0, 0); enable "Control audio via OBS", turn its audio monitoring on
+  **and** mute it in the mixer (OBS 33's "monitor only") — that is what
+  sounds the chimes on the TV without putting a second copy in the recording;
   Settings → Audio → Monitoring Device names the TV (`HISENSE`), never
   `Default`.
   Recorded audio comes from the unmuted Mic/Aux source instead — the room, so
