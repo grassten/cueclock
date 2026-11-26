@@ -11,7 +11,7 @@ from dataclasses import replace
 import pytest
 
 from cueclock.clock import MODES, OPTIONS, Settings
-from cueclock.deck import client, faces
+from cueclock.deck import client, faces, live
 from cueclock.deck.daemon import _dispatch, _score_post, build_state
 from cueclock.deck.layout import (
     CLOCKED,
@@ -39,7 +39,15 @@ from cueclock.deck.session import SessionState
 
 WNT = Settings(after_break="60", extension="30", push="on").as_dict()
 
-MATCH = DeckState(up=True, mode="match", settings=WNT, base=60, extensions_allowed=2)
+# A session's deck, so OBS is answering and the LIVE key (#80) is lit off air.
+MATCH = DeckState(
+    up=True,
+    mode="match",
+    settings=WNT,
+    base=60,
+    extensions_allowed=2,
+    live_face=live.off_air_face(),
+)
 RUN_OUT = replace(MATCH, mode="run_out", settings=Settings().as_dict(), base=30)
 NO_CLOCK = replace(MATCH, mode="no_clock")
 DOWN = DeckState(up=False)
@@ -85,15 +93,18 @@ def test_key_index_is_row_major_from_top_left() -> None:
 
 SPINE = {"session", "mode"}
 # With "I shot" retired (#19, 2026-08-05) the spine is the whole of what has no
-# mode condition at all — nothing else survives every mode.
-ALWAYS_ON = set(SPINE)
+# mode condition at all, plus LIVE (#80): a stream does not care what the clock
+# is doing, so it survives every mode too. It is not spine, because it leaves
+# whenever OBS has no stream to offer.
+ALWAYS_ON = SPINE | {"live"}
 
 
 def test_spine_holds_the_top_left_block() -> None:
-    # The block's bottom row is empty: (2,2) since Flag was removed
-    # (checkpoint 114), (2,1) since Replay was (checkpoint 144).
+    # Under it, (2,1) is LIVE (checkpoint 153; Replay until checkpoint 144) and
+    # (2,2) has been empty since Flag was removed (checkpoint 114).
     assert {BY_NAME[name].index for name in SPINE} == {0, 1}
-    assert not {key.index for key in LAYOUT} & {5, 6}
+    assert BY_NAME["live"].index == 5
+    assert 6 not in {key.index for key in LAYOUT}
 
 
 def test_spine_survives_every_mode() -> None:
@@ -258,6 +269,7 @@ def test_an_unknown_cycle_value_still_renders_something() -> None:
 SUB_LINE_KEYS = {
     "mode": "value",
     "session": "gesture",
+    "live": "gesture",
     "confirm": "gesture",  # only once armed — see below
     "scene": "destination",
 }
@@ -600,6 +612,7 @@ def test_no_face_on_the_deck_overflows_its_tile() -> None:
         RUN_OUT,
         NO_CLOCK,
         DOWN,
+        *(replace(MATCH, live_face=face) for face in LIVE_FACES),
         TOURNEY,
         ARMED,
         replace(TOURNEY, on_bracket=True),
@@ -651,6 +664,41 @@ def test_recal_face_comes_from_the_recalibration_and_wears_the_system_stripe() -
     # Mid-start the camera is spoken for: the key goes dark.
     assert not recal.visible(build_state(None, SessionState.STARTING))
     assert recal.visible(build_state(None, SessionState.NO_CAMERA))
+
+
+# --- the LIVE key (#80): OBS's answer on the face, dark without one ---
+
+LIVE_FACES = (
+    live.off_air_face(),
+    live.on_air_face(28 * 60_000),
+    live.on_air_face(125 * 60_000),
+    live.reconnecting_face(),
+    live.failed_face(),
+    faces.Face("STARTING…"),
+    faces.Face("STOPPING…"),
+)
+
+
+def test_live_is_dark_without_an_answer_from_obs() -> None:
+    key = BY_NAME["live"]
+    assert key.visible(MATCH)
+    assert not key.visible(replace(MATCH, live_face=None))
+    assert not key.visible(replace(DOWN, live_face=live.off_air_face()))
+
+
+def test_live_shows_obs_answer_with_the_system_stripe() -> None:
+    key = BY_NAME["live"]
+    for face in LIVE_FACES:
+        shown = key.face(replace(MATCH, live_face=face))
+        assert (shown.text, shown.sub, shown.bg) == (face.text, face.sub, face.bg)
+        assert shown.stripe == Group.SYSTEM.stripe
+
+
+def test_on_air_and_a_failed_start_never_read_as_each_other() -> None:
+    on_air, failed = live.on_air_face(0), live.failed_face()
+    assert on_air.text.startswith("LIVE") and not failed.text.startswith("LIVE")
+    assert on_air.bg != failed.bg
+    assert live.on_air_face(28 * 60_000 + 59_000).text == "LIVE\n28 MIN"
 
 
 # --- the SETUP menu (#74): the clock's settings, one key each ---

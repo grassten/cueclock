@@ -29,13 +29,14 @@ recorded clips that replay deterministically through the vision core.
 | Basler a2A1920-160ucBAS + Kowa 3.5 mm, ceiling mount | live, settings locked in UserSet1 |
 | Vision pipeline (`cueclock run`): detect → track → events → clock | live |
 | OBS: Syphon table feed + clock overlay → wall TV (Hisense 55" CanvasTV) | live |
-| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Session / Mode / Start N / Push / Extension / Setup / New Rack / score; SETUP opens a menu of the clock's six settings (game, shot, after the break, extension, push, clock). Keys that the current mode can't use go dark rather than dim (`hardware.md` §C) |
+| Stream Deck MK.2 (`cueclock deck` daemon, no Elgato software) | live — Session / Live / Mode / Start N / Push / Extension / Setup / New Rack / score; SETUP opens a menu of the clock's six settings (game, shot, after the break, extension, push, clock). Keys that the current mode can't use go dark rather than dim (`hardware.md` §C) |
 | Session modes: match · run out · no clock — orthogonal to the clock's settings | live |
 | Match mode: WNT 9-ball rack context (60 s first shot, per-rack extensions), scoreboard overlay | live |
 | Voice "extension" (built-in mic, offline Vosk) | live |
 | Ball list: which balls are on a still table, by number, drawn as a test strip on the bar (`docs/design.md` §13) | live, being judged |
 | Session toggle (one key powers the TV on, brings up `run` + OBS + the projector — and takes it all back down) | live |
-| Music keys, drill tracking | planned — [open issues](https://github.com/grassten/cueclock/issues) |
+| Live streaming: OBS streams the table to YouTube (unlisted) beside the session recording; the deck's LIVE key starts and stops it | live |
+| Drill tracking | planned — [open issues](https://github.com/grassten/cueclock/issues) |
 
 ## How it works
 
@@ -81,6 +82,10 @@ uv run python -m cueclock.cli session maintain  # verify, cut, archive to the T7
 - At the table there is no keyboard: the deck's **Session** key (top-left)
   runs that first command for you and launches OBS behind it — tap to start,
   hold 1 s to stop (`docs/hardware.md` §C4).
+- To stream the session, hold the **LIVE** key under it for 1 s, and hold it
+  again to stop. Stopping the session ends the stream too. OBS streams to
+  YouTube with a stream key kept in its own profile, and the stream's
+  visibility (Unlisted) is set in YouTube Studio (`docs/hardware.md` §B3).
 - The empty-table reference is whatever `config/reference.json` names.
   After a camera bump, or when the startup drift check warns that the
   reference has gone stale: clear the cloth, stop the session and **hold the

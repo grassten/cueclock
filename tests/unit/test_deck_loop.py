@@ -7,8 +7,8 @@ told apart without a finger.
 
 It began with the Replay key's tap-and-hold routing (2026-08-05, removed in
 checkpoint 144); what it covers now is the rest of what only a running loop can
-show — the bracket's dwell, the holds on RECAL and Session, and presses that
-must do nothing.
+show — the bracket's dwell, the holds on RECAL, Session and LIVE, and presses
+that must do nothing.
 """
 
 from __future__ import annotations
@@ -24,19 +24,33 @@ import pytest
 
 from cueclock.clock import Settings
 from cueclock.deck import bracket as deck_bracket
-from cueclock.deck import client, daemon, faces
+from cueclock.deck import client, daemon, faces, obsws
 from cueclock.deck.layout import (
     LAYOUT,
     BracketConfirm,
+    LiveToggle,
     MenuToggle,
     Recalibrate,
     SceneToggle,
     SessionToggle,
 )
+from cueclock.deck.live import Stream
 from cueclock.deck.recal import Recalibrator
 from cueclock.deck.session import SessionManager, SessionState
 
 SETTLE_S = 2.0  # generous: the loop's event wait is 0.25 s
+
+
+@pytest.fixture(autouse=True)
+def _no_real_obs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No loop in this file may reach the rig's OBS.
+
+    The LIVE key asks OBS for the stream's state on every poll of a running
+    session (#80). A test that forgot to fake it would be asking the real
+    obs-websocket, and one hold away from putting the room on YouTube. OBS
+    "not answering" is what every test without its own fake sees.
+    """
+    monkeypatch.setattr(obsws, "request", lambda *a, **k: None)
 
 
 class FakeDeck:
@@ -85,6 +99,7 @@ def _start_loop(
     deck: FakeDeck,
     session: SessionManager | None = None,
     recal: Recalibrator | None = None,
+    live: Stream | None = None,
 ) -> threading.Thread:
     """`_loop` in a thread that ends quietly when `_STOP` is set."""
 
@@ -92,7 +107,7 @@ def _start_loop(
         # KeyboardInterrupt out of the poll is the loop's own documented exit;
         # swallowing it here is what keeps the thread from dying "unhandled".
         with contextlib.suppress(KeyboardInterrupt):
-            daemon._loop(deck, "http://x", session or SessionManager(), recal)
+            daemon._loop(deck, "http://x", session or SessionManager(), recal, live)
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
@@ -606,3 +621,104 @@ def test_opening_the_menu_drops_a_hold_in_progress(menu: tuple[FakeDeck, MenuRig
     deck.release(P1_KEY.index)
     time.sleep(0.2)
     assert rig.posted == []
+
+
+# --- the LIVE key (#80): both directions are holds, judged on the face pressed ---
+
+LIVE_KEY = next(k for k in LAYOUT if isinstance(k.action, LiveToggle))
+LIVE_HOLD_S = LIVE_KEY.action.hold_s if isinstance(LIVE_KEY.action, LiveToggle) else 1.0
+
+
+class FakeObs:
+    """obs-websocket's stream requests, with a stream a test can move."""
+
+    def __init__(self) -> None:
+        self.active = False
+        self.sent: list[str] = []
+        self.lock = threading.Lock()
+
+    def __call__(self, request_type: str, **_k: object) -> dict[str, object] | None:
+        with self.lock:
+            if request_type == "GetStreamStatus":
+                return {
+                    "outputActive": self.active,
+                    "outputReconnecting": False,
+                    "outputDuration": 0,
+                }
+            self.sent.append(request_type)
+            self.active = request_type == "StartStream"
+            return {}
+
+
+@pytest.fixture
+def streaming(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FakeDeck, FakeObs]]:
+    """A `_loop` on a running session whose OBS answers through `FakeObs`."""
+    _STOP.clear()
+    monkeypatch.setattr(client, "get_json", _stoppable({"state": "IDLE", "mode": "match"}))
+    monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)
+    obs = FakeObs()
+    deck = FakeDeck()
+    session = SlowStopSession(stop_s=0.0)  # ON until stopped
+    thread = _start_loop(deck, session, live=Stream(request=obs))  # type: ignore[arg-type]
+    time.sleep(0.2)  # a poll has asked OBS and lit the key
+    yield deck, obs
+    _stop(thread)
+
+
+def test_a_full_hold_goes_live_and_another_stops(
+    streaming: tuple[FakeDeck, FakeObs],
+) -> None:
+    deck, obs = streaming
+    deck.press(LIVE_KEY.index)
+    assert _wait(lambda: obs.sent == ["StartStream"], LIVE_HOLD_S + SETTLE_S)
+    deck.release(LIVE_KEY.index)
+    time.sleep(0.2)  # the poll sees it on air
+    deck.press(LIVE_KEY.index)
+    assert _wait(lambda: obs.sent == ["StartStream", "StopStream"], LIVE_HOLD_S + SETTLE_S)
+    deck.release(LIVE_KEY.index)
+
+
+def test_a_tap_on_live_does_nothing(streaming: tuple[FakeDeck, FakeObs]) -> None:
+    deck, obs = streaming
+    deck.press(LIVE_KEY.index)
+    time.sleep(LIVE_HOLD_S / 4)
+    deck.release(LIVE_KEY.index)
+    time.sleep(LIVE_HOLD_S + 0.3)
+    assert obs.sent == []
+
+
+def test_a_hold_to_stop_never_starts_a_stream_that_died_meanwhile(
+    streaming: tuple[FakeDeck, FakeObs],
+) -> None:
+    deck, obs = streaming
+    obs.active = True  # on air, started elsewhere
+    time.sleep(0.2)
+    deck.press(LIVE_KEY.index)  # held to stop...
+    with obs.lock:
+        obs.active = False  # ...and the stream ends on its own first
+    time.sleep(LIVE_HOLD_S + 0.4)
+    deck.release(LIVE_KEY.index)
+    assert obs.sent == []
+
+
+def test_live_is_dark_while_obs_is_not_answering(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no answer the key cannot do anything, so a hold must not either."""
+    _STOP.clear()
+    monkeypatch.setattr(client, "get_json", _stoppable({"state": "IDLE", "mode": "match"}))
+    monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)
+    sent: list[str] = []
+
+    def silent(request_type: str, **_k: object) -> None:
+        sent.append(request_type)
+
+    deck = FakeDeck()
+    thread = _start_loop(deck, SlowStopSession(stop_s=0.0), live=Stream(request=silent))  # type: ignore[arg-type]
+    try:
+        deck.press(LIVE_KEY.index)
+        time.sleep(LIVE_HOLD_S + 0.3)
+        deck.release(LIVE_KEY.index)
+        assert sent and set(sent) == {"GetStreamStatus"}
+    finally:
+        _stop(thread)

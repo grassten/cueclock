@@ -12,11 +12,12 @@ survivor keeps its cell, so position stays learnable even though the set
 changes. Dimming survives only as typography (`Face.sub`), never as state.
 
 **The spine sits top-left and never moves.** Session and Mode work in every
-mode, so they hold the top of the 2x2 corner; its bottom row is empty, (2,2)
-since the Flag key was removed in checkpoint 114 and (2,1) since the Replay key
-was removed in checkpoint 144. Everything to the right of them is
-mode-dependent. Position therefore answers "does this key persist" while colour
-answers "how much time do I have" — two questions, two channels.
+mode, so they hold the top of the 2x2 corner. Under Session, (2,1) is LIVE
+(#80, checkpoint 153; Replay held it until checkpoint 144), lit whenever the
+session's OBS can stream; (2,2) has been empty since the Flag key was removed
+in checkpoint 114. Everything to the right of them is mode-dependent.
+Position therefore answers "does this key persist" while colour answers "how
+much time do I have" — two questions, two channels.
 
 **Face grammar** — the `OFF`-button confusion was never the word, it was a
 *state* on a key read as a *command*. So: command keys say the verb and nothing
@@ -118,6 +119,9 @@ class DeckState:
     # (`deck/recal.py`), passed in like `session_face`.
     session_idle: bool = False
     recal_face: Face = field(default_factory=Face)
+    # The LIVE key's face (#80, `deck/live.py`), or None while it cannot be
+    # pressed: no deck-owned session, or OBS not answering.
+    live_face: Face | None = None
 
 
 # ---------- actions ----------
@@ -226,6 +230,18 @@ class Recalibrate:
 
 
 @dataclass(frozen=True)
+class LiveToggle:
+    """Go live on a deliberate hold, and stop on another (#80).
+
+    Both directions are holds, so a stray tap can neither put the room on the
+    internet nor end a stream mid-match. The face is OBS's own answer, polled
+    (`deck/live.py`), and the key is dark whenever there is no answer.
+    """
+
+    hold_s: float = 1.0
+
+
+@dataclass(frozen=True)
 class SceneToggle:
     """Swap the TV between the play scene and the bracket.
 
@@ -245,6 +261,7 @@ Action = (
     | BracketConfirm
     | SceneToggle
     | Recalibrate
+    | LiveToggle
 )
 
 
@@ -371,6 +388,8 @@ class Key:
             return False
         if self.needs_bracket and not state.bracket_loaded:
             return False
+        if isinstance(self.action, LiveToggle) and state.live_face is None:
+            return False
         if self.modes is not None and state.mode is not None and state.mode not in self.modes:
             return False
         if self.when is None:
@@ -434,6 +453,8 @@ class Key:
             )
         if isinstance(action, Recalibrate):
             return replace(state.recal_face, stripe=stripe)
+        if isinstance(action, LiveToggle):
+            return replace(state.live_face or Face(), stripe=stripe)
         if isinstance(action, SceneToggle):
             # One key, two directions, and the face says which. "BACK" alone
             # would not say where, so the second line names it (rule 3).
@@ -535,6 +556,10 @@ LAYOUT: tuple[Key, ...] = (
     # rewrites the calibration.
     Key(2, 5, "recal", Group.SYSTEM, Recalibrate(), offline_only=True),
     Key(2, 3, "scene", Group.SYSTEM, SceneToggle(), needs_bracket=True),
+    # LIVE (#80) takes (2,1), under the key whose session it streams. It is in
+    # every mode, like the spine, because a stream does not care what the
+    # clock is doing, and dark whenever OBS has no stream to offer.
+    Key(2, 1, "live", Group.SYSTEM, LiveToggle()),
 )
 
 # The SETUP menu (#74): the clock's settings, one key each, the first page the

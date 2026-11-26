@@ -129,8 +129,10 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
 
 ## Hardware / environment facts
 
-- Mac mini M2 (Mac14,3, 24 GB), macOS 26.x, is both dev and production. OBS **32.2.1**
-  installed (includes the Syphon Client fix — the 32.0.x regression is past).
+- Mac mini M2 (Mac14,3, 24 GB), macOS 26.x, is both dev and production. OBS **33.0.3**
+  installed, automatic updates **off** (it updated itself under a running OBS on
+  2026-11-25 and crashed it; update by hand between sessions, `docs/hardware.md`
+  §B3). 32.2.1 and later include the Syphon Client fix.
 - pylon Viewer GUI doesn't exist on Apple Silicon; camera verification goes through
   `scripts/live_view.py` (`docs/hardware.md` §A3). The pypylon wheel streams the camera
   without a system pylon install.

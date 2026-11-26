@@ -293,6 +293,34 @@ actually runs — the original plan called them *Table* / *Clock*):
   load-bearing (settled 2026-08-03, §C4).
 - Replay Buffer: no longer started (checkpoint 144, §C4a). The deck launches
   OBS without `--startreplaybuffer`, so the profile's buffer setting is inert.
+- **Streaming** (#80, set up 2026-11-24/25; the deck's LIVE key, §C2).
+  - **Encoder.** Output mode Simple. The stream uses the Apple hardware H.264
+    encoder at **6000 kbps** CBR (`StreamEncoder=apple_h264`, `VBitrate=6000`)
+    with AAC 160 audio, and the YouTube service applies 2 s keyframes. #80 has
+    the 6 vs 12 vs 18 Mbps quality measurement that picked 6.
+  - **Service.** **YouTube - RTMPS** with a **stream key**, not a connected
+    account. It is saved in the profile's `service.json`, outside the repo, and
+    was set over obs-websocket (`SetStreamServiceSettings`); OBS Settings →
+    Stream does the same. With a key, `StartStream` over the WebSocket goes
+    live with no dialog. OBS retries a dropped connection every 2 s, up to 25
+    times (`Reconnect`, `RetryDelay`, `MaxRetries`).
+  - **Visibility** is **Unlisted**, set in YouTube Studio before the first
+    stream; it carries over to the next. Nothing here changes it.
+  - **What a viewer hears** is the room mic plus the bar's buzzer. Music
+    reaches them only through the room mic.
+  - **Cost, measured** over a 29-minute session on 2026-11-25 (stream and
+    recording are two hardware encodes), against the 2026-11-23 session that
+    only recorded:
+    - detection median 150.7 Hz against 154.5;
+    - 47% of heartbeats under 150 Hz against 25%;
+    - OBS lagged frames 0.1% against 0.03%;
+    - 0.1% of stream frames dropped for bandwidth over WiFi.
+- **Automatic updates are off** (2026-11-25). OBS's `EnableAutoUpdates=false`
+  in `global.ini`, and its Sparkle updater's `SUEnableAutomaticChecks` and
+  `SUAutomaticallyUpdate` set to 0 (`defaults read com.obsproject.obs-studio`).
+  That day Sparkle installed 33.0.3 over a running 33.0.2, and OBS segfaulted
+  70 ms after the next stream connected. Update OBS by hand, between sessions.
+  The rig runs **33.0.3**.
 
 Latency budget end-to-end (camera → TV in Game Mode): on the order of 100 ms —
 well under the "few hundred ms is fine" bar; the detection path never leaves
@@ -309,8 +337,8 @@ commit as any `src/cueclock/deck/layout.py` change; the two must never
 disagree.
 
 **Status: layout v2 live (2026-08-02).** `cueclock deck` runs under launchd
-(`com.cueclock.deck`). Nine keys on a casual night, six spare (Flag left in
-checkpoint 114, Replay in checkpoint 144) — layout v2 itself went to eleven keys, down from
+(`com.cueclock.deck`). Ten keys on a casual night, five spare (Flag left in
+checkpoint 114, Replay in checkpoint 144, LIVE arrived in checkpoint 153) — layout v2 itself went to eleven keys, down from
 fourteen used and one spare, by consolidating the pairs that differed by one
 bit and splitting session *mode* out as its own axis. Phase 3 (instant
 replay, 2026-08-02) was removed in checkpoint 144 (§C4a). The bracket (#43, 2026-08-13) adds two keys that exist **only while a
@@ -326,13 +354,15 @@ Everything below follows from these; they are also the module docstring of
    declared per key against the session mode and the clock's settings, so what is lit is
    always exactly what is pressable. **Nothing reflows** when a key leaves — it
    leaves a hole and every survivor keeps its cell, so position stays learnable
-   even though the set changes. The deck goes 9 keys in Match → 6 in Run out →
-   2 in No clock → 2 with the session off (Session and RECAL). Dimming survives only as typography
+   even though the set changes. The deck goes 10 keys in Match → 7 in Run out →
+   3 in No clock → 2 with the session off (Session and RECAL). LIVE is in each
+   of the first three only while OBS answers it (§C2). Dimming survives only as typography
    (the small second line), never as state.
 2. **The spine sits top-left and never moves.** Session and Mode work in
-   every mode, so they hold the top of the 2×2 corner; its bottom row is
-   empty — 2,2 since the Flag key was removed in checkpoint 114 (#55), 2,1
-   since the Replay key was removed in checkpoint 144 (#75). Position therefore answers
+   every mode, so they hold the top of the 2×2 corner. Under Session, 2,1 is
+   **LIVE** (#80, checkpoint 153; the Replay key held it until checkpoint 144,
+   #75), in every mode but dark whenever OBS has no stream to offer; 2,2 has
+   been empty since the Flag key was removed in checkpoint 114 (#55). Position therefore answers
    *does this key persist*, and colour answers *how much time do I have* — two
    questions, two channels, which is why the spine isn't one colour.
 3. **Face grammar.** The `OFF`-button confusion was never the word, it was a
@@ -353,7 +383,9 @@ Everything below follows from these; they are also the module docstring of
 Colour groups (bottom stripe, `faces.STRIPE_*`): **amber** = on the clock
 (seconds matter) · **blue** = the match (no pressure) · **grey** = system. Red and green are reserved for the press-outcome flash, which
 is why the group colour is a stripe and not the tile: colour the tile and the
-flash stops reading.
+flash stops reading. The exceptions are states that must read from across
+the room: Confirm's armed blue, RECAL's result, and LIVE on air (a brighter
+red than the error red; amber while OBS reconnects).
 
 ### C1. Decision record
 
@@ -397,7 +429,7 @@ dark, as do listed keys outside the modes and settings named in **Present in**.
 row 1   SESSION      MODE         START 30     PUSH         EXT ••
         ▁▁grey▁▁     ▁▁grey▁▁     ▁▁▁▁▁▁▁▁▁▁▁▁amber▁▁▁▁▁▁▁▁▁▁▁▁▁
 
-row 2   (·)          (·)          BRACKET*     (·)          RECAL†
+row 2   GO LIVE‡     (·)          BRACKET*     (·)          RECAL†
         ▁▁grey▁▁                  ▁▁grey▁▁                  ▁▁grey▁▁
 
 row 3   SETUP        NEW RACK     P1  3        P2  2        MATCH 4*
@@ -408,6 +440,8 @@ row 3   SETUP        NEW RACK     P1  3        P2  2        MATCH 4*
 the casual deck is exactly the deck it has always been. `†` = only while the
 **session is off** (#49): RECAL needs the camera `run` holds, so it is lit
 exactly when every other key but Session is dark, and the two never meet.
+`‡` = only while the deck's own session is **on and OBS answers** (#80): the
+face is OBS's stream state, and with no answer there is nothing to press.
 
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
@@ -416,6 +450,7 @@ exactly when every other key but Session is dark, and the two never meet.
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — the AFTER BREAK time inside the first-shot window (60 when set), the SHOT time otherwise (30 or 15). Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; CLOCK on |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the AFTER BREAK time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** PUSH on |
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left** — but only while the pool is enforced (`settings.ENFORCE_EXTENSION_LIMIT`, **off since 2026-08-13**: the verbal extension can mishear table-side talk, and against an unlimited pool a false grant costs nothing; the snapshot reports the pool as 0, so the face is a bare `EXT` and every press over a live countdown is granted). Flip the flag back on and the pips return | `EXT` (+ pips while enforced), flashes `OK` / `NO EXT` | match, run out; CLOCK on |
+| 2,1 | **Live** | Stream the session to YouTube (#80). **Hold 1 s** to go live, **hold 1 s** again to stop, so a stray tap can neither put the room on the internet nor end a stream mid-match. The face is **OBS's own answer** (`GetStreamStatus`, asked on the deck's 2 s poll, `deck/live.py`), not what the deck last pressed, so it is right after a daemon restart and when a stream ends on its own. A hold does what the face said when the finger came down, and only if OBS still agrees when it matures: a hold begun to stop a stream that has since died starts nothing. **The recording keeps running** beside the stream (the review page cuts its clips from it), and **stopping the session ends the stream**, the idle stop included, because the session stops every OBS output before it quits OBS (§C4). The next start is a new YouTube video with a new link. Visibility stays YouTube's: Unlisted, set in Studio (§B3); no key makes a stream public | `GO LIVE`+`HOLD 1s` → `HOLD…` → `STARTING…` → **`LIVE`/`28 MIN`+`HOLD 1s` on red** (minutes on air) → `STOPPING…`. **Amber `LIVE`/`RETRYING`** while OBS reconnects. A start that is not on air within 20 s, or that OBS refuses, **stays on the key, red and named**: `STREAM`/`FAILED`+`HOLD 1s`, and the hold retries. It says STREAM, not LIVE, so the two reds are never read as each other. Pressed mid-start or mid-stop, it flashes that face | **session on** and OBS answering; every mode |
 | 2,3 | **Scene** | Swap the TV between the play scene and the bracket (#43). The deck remembers the scene it left rather than naming one, so the play scene can be renamed in OBS without touching code | `BRACKET`+`TO TV` ⇄ `BACK`+`TO PLAY` | **bracket loaded** |
 | 2,5 | **RECAL** | **Hold 2 s** (longer than Session's 1 s, so neither is mistaken for the other): run `cueclock recalibrate`, which records a fresh empty-table reference, refits undistort + calibration, and swaps the three files in only if every check passes (§E2). Takes ~10–20 s, polled, so the deck keeps drawing; a Session press meanwhile is refused. The result **stays on the key** until the next hold or the next session start | `RECAL`+`HOLD 2s` → `HOLD…` → `RECAL…` → `OK 0.8PX`/`DRIFT 2` on green, or the refusal on red (`BALLS`/`ON CLOTH`, `BAD`/`FIT 2.4px`, `CAMERA`/`BUSY`, `NO`/`TABLE`), each over `HOLD 2s` | **session off** only (server down, not mid-start/stop) |
 | 3,1 | **Setup** | Open the SETUP menu (§C2b); on the menu the same cell is **DONE** and closes it. Replaced the Ruleset key, which cycled 8-ball → Final 10 → 9-ball → Freestyle, in checkpoint 145 (#74) | `SETUP` ⇄ `DONE` | match, run out; on both pages |

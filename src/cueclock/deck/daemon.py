@@ -30,6 +30,7 @@ from cueclock.deck.layout import (
     Cycle,
     DeckState,
     Key,
+    LiveToggle,
     MenuToggle,
     Recalibrate,
     SceneToggle,
@@ -42,6 +43,7 @@ from cueclock.deck.layout import (
     page,
     setting_next,
 )
+from cueclock.deck.live import Stream
 from cueclock.deck.recal import Recalibrator
 from cueclock.deck.session import SessionManager, SessionState, shot_age_of
 
@@ -49,7 +51,7 @@ POLL_S = 2.0  # server/state poll cadence
 FLASH_S = 1.2  # how long a press outcome stays on the key
 RETRY_S = 3.0  # device reconnect cadence
 CONFIRM_S = 5.0  # a bracket confirm writes a result, loads a match and racks
-HOLD_FACE = "HOLD…"  # shown while the Session key is held toward a stop
+HOLD_FACE = "HOLD…"  # shown while a key is held toward its action (Session, RECAL, LIVE)
 # The SETUP menu closes by itself this long after the last press in it, so it
 # can never be left open over a game. Chosen, not measured: long enough to read
 # a key and press the next, short enough that a menu nobody closed is gone by
@@ -129,6 +131,7 @@ def build_state(
     on_bracket: bool = False,
     menu: bool = False,
     recal_face: faces.Face | None = None,
+    live_face: faces.Face | None = None,
 ) -> DeckState:
     """Turn one `GET /api/state` body into everything the faces need.
 
@@ -138,7 +141,8 @@ def build_state(
     ``on_bracket`` and ``menu`` are the face inputs the server knows nothing
     about — the scene lives between the deck and OBS, the page on the deck
     alone — so the loop passes its own answers in rather than inventing a
-    second source of state. The menu never survives the server going down.
+    second source of state. ``live_face`` is OBS's, through `deck/live.py`.
+    The menu and the LIVE key never survive the server going down.
     """
     if data is None:
         return DeckState(
@@ -177,6 +181,7 @@ def build_state(
         # server is answering (there is nothing to be healthy otherwise), and
         # amber when its health line warns.
         session_dot=_health_dot(data.get("health")),
+        live_face=live_face,
         **_bracket_fields(data.get("bracket")),  # type: ignore[arg-type]
     )
 
@@ -294,9 +299,16 @@ def _visible_key(index: int, state: DeckState) -> Key | None:
     return key
 
 
-def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | None = None) -> None:
+def _loop(
+    deck: Any,
+    base: str,
+    session: SessionManager,
+    recal: Recalibrator | None = None,
+    live: Stream | None = None,
+) -> None:
     """Poll + dispatch forever; raises TransportError on unplug, KeyboardInterrupt on stop."""
     recal = recal if recal is not None else Recalibrator()
+    live = live if live is not None else Stream()
     # Each key event with the moment it happened: the loop can be busy for
     # seconds (a session stop), and a press must be judged against what the
     # key said when the finger came down, not when the loop got to it.
@@ -330,12 +342,16 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
         # The session machine advances on this same poll: STARTING becomes ON
         # the moment the server answers (that is when OBS is launched), and
         # STOPPING becomes OFF when `run` finally exits.
+        session_state = session.tick(data is not None)
         return build_state(
             data,
-            session.tick(data is not None),
+            session_state,
             on_bracket=showing is not None,
             menu=menu_until is not None,
             recal_face=recal.face(),
+            # OBS is asked only while the deck's own session is up: that is
+            # the OBS the deck launched, and the only one it may stream from.
+            live_face=live.poll(data is not None and session_state is SessionState.ON),
         )
 
     state = poll()
@@ -403,6 +419,15 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes))
                 continue
+            if kind in ("live_start", "live_stop"):
+                # A LIVE hold. `act` asks OBS again first, so a hold begun to
+                # stop a stream that has since died starts nothing.
+                starting = kind == "live_start"
+                _set_key(deck, index, faces.Face("STARTING…" if starting else "STOPPING…"))
+                live.act("start" if starting else "stop")
+                state = poll()
+                _draw_all(deck, state, skip=frozenset(flashes))
+                continue
             if kind == "recal":
                 # Re-checked at the moment it fires: a session may have been
                 # started from a terminal while the key was held.
@@ -440,6 +465,21 @@ def _loop(deck: Any, base: str, session: SessionManager, recal: Recalibrator | N
                 holds[index] = (time.monotonic() + key.action.hold_s, "recal")
                 _set_key(deck, index, faces.Face(HOLD_FACE))
             elif not pressed and holds.pop(index, None) is not None:
+                _set_key(deck, index, key.face(state))  # let go early: nothing ran
+            continue
+
+        if isinstance(key.action, LiveToggle):
+            if pressed:
+                # What the hold will do is fixed by the face the finger came
+                # down on, never by whatever the stream is doing a second later.
+                intent = live.intent()
+                if intent is None:  # STARTING… or STOPPING…: nothing to hold for
+                    _set_key(deck, index, faces.flash_err(key.face(state).text))
+                    flashes[index] = time.monotonic() + FLASH_S
+                    continue
+                holds[index] = (time.monotonic() + key.action.hold_s, f"live_{intent}")
+                _set_key(deck, index, faces.Face(HOLD_FACE))
+            elif holds.pop(index, None) is not None:
                 _set_key(deck, index, key.face(state))  # let go early: nothing ran
             continue
 

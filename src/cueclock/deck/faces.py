@@ -47,6 +47,13 @@ BG_ERR: Rgb = (140, 30, 30)
 # Blue is not in the flash vocabulary, so it can't be read as an outcome — and
 # the face still says the verb ("PRESS TO CONFIRM"), so rule 3 holds.
 BG_ARMED: Rgb = (24, 74, 118)
+# The second exception (#80): the LIVE key on air. The room being on the
+# internet is the one state that must read from across the room, and red is
+# what "on air" looks like everywhere. It is brighter than BG_ERR, and the
+# failure face says STREAM where this one says LIVE, so the two reds are never
+# read as each other. Amber is the stream retrying.
+BG_LIVE: Rgb = (200, 16, 16)
+BG_WARN: Rgb = (156, 104, 8)
 FG: Rgb = (235, 235, 235)
 FG_DIM: Rgb = (90, 90, 90)
 

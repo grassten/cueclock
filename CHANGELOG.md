@@ -319,6 +319,69 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-25 (checkpoint 153: the LIVE key streams the session to YouTube; #80):**
+  Steven wanted to stream play from the same Mac mini over WiFi, tested
+  without going public, then a deck key to go live and an indicator on the
+  deck.
+  - **The test (step 1), 2026-11-25, session `20261126-000733`, 19:07 to
+    19:37 local, 71 shots.** OBS streamed Unlisted to YouTube for 28:52 beside
+    the recording, and Steven checked it on his phone: "It looks good on the
+    phone." Measured against the 2026-11-23 session, which only recorded:
+    - detection median 150.7 Hz against 154.5;
+    - 47% of heartbeats under 150 Hz against 25%;
+    - lowest 73 Hz against 134, in one 20 s dip at 19:12:42 with the balls at
+      rest and no cause in the journal or OBS's log;
+    - OBS lagged frames 0.1% against 0.03%;
+    - 0.1% of stream frames dropped for bandwidth, so the WiFi upload held.
+    The first 2 minutes after OBS starts ran at 100 to 140 Hz; every 5-minute
+    window after that had a median of 149 to 154. Details are on #80.
+  - **OBS's updater crashed the first try.** OBS launched as 33.0.2 at
+    19:02:45. Its Sparkle updater (`SUAutomaticallyUpdate = 1`) then replaced
+    the app bundle with 33.0.3 at 19:02:51 to 54 while OBS was still running.
+    The stream connected at 19:04:37.29 and OBS segfaulted on its main thread
+    70 ms later. A fresh 33.0.3 launch streamed without trouble. Automatic
+    updates are now off in both OBS and Sparkle (`docs/hardware.md` §B3). OBS
+    had also moved from 32.2.1 to 33.0.2 on its own on 2026-11-22, and
+    CLAUDE.md now says 33.0.3.
+  - **The key (step 2).** LIVE takes (2,1), under Session, which has been
+    empty since Replay left in checkpoint 144.
+    - **Gestures.** Hold 1 s to go live, and hold 1 s again to stop.
+    - **The face is OBS's own answer.** `GetStreamStatus` is asked on the
+      deck's 2 s poll, only while the deck's own session is on. So the face
+      is right after a daemon restart and when a stream ends on its own.
+    - **Dark when OBS doesn't answer**, which covers OBS starting up and OBS
+      gone: there is nothing to press (layout rule 1).
+    - **Faces.** `GO LIVE`, then red `LIVE` with the minutes on air, then
+      amber `RETRYING` while OBS reconnects. A start that is not on air
+      within 20 s, or that OBS refuses, stays red as `STREAM`/`FAILED`, and
+      the next hold retries. The face says STREAM, not LIVE, so a failed
+      start never reads as on air from across the room.
+    - **A hold does what the face said when the finger came down**, and only
+      if OBS still agrees when it matures. A hold begun to stop a stream that
+      has since died starts nothing.
+    - **The rest was already in place.** Stopping the session, the idle stop
+      included, ends the stream, because `obsws._OUTPUTS` already stopped it
+      before OBS quits. The recording keeps running beside the stream.
+    - **Code.** `deck/live.py` (new), `deck/layout.py`, `deck/daemon.py`,
+      `deck/faces.py` (`BG_LIVE`, `BG_WARN`).
+  - **Tests.**
+    - `test_deck_live.py` is new and drives the stream machine with a fake
+      obs-websocket.
+    - `test_deck_loop.py` covers the holds: start, stop, a tap, a hold to
+      stop on a stream that died meanwhile, and OBS not answering. The file
+      now patches `obsws.request` for every test. Its first run with the key
+      in it reached the real obs-websocket, because `Stream` defaults to it;
+      OBS was off, so nothing happened.
+    - `test_deck.py` covers the layout, visibility and every LIVE face's fit.
+  - **Docs.** `docs/hardware.md` §C2 (button map and grid), §C0, §B3 (stream
+    settings and auto-update); README; CLAUDE.md (OBS version). The music
+    key was dropped (Steven, 2026-11-24): music plays from his phone and
+    viewers hear it through the room mic.
+  - **Not checked.**
+    - The key against the real OBS. It lights in the next session.
+    - What OBS shows on the TV when a stream fails to connect, such as a bad
+      key or YouTube refusing it.
+
 - **2026-11-23 (checkpoint 152: a solid 5 no longer reads as a 13; #79):**
   `session-stats` on session `20261123-180144` (13:01 local, 106 shots, 8
   racks of 9-ball) read 20 numbers back within a rack, over half of the 38
