@@ -25,6 +25,8 @@ def main() -> None:
         bracket_path=Path("config/bracket.json"),
         archive_dir=Path("logs"),
         settings_path=Path("config/settings.json"),
+        youtube_path=Path("config/youtube.json"),
+        still_path=Path("config/stream_still.jpg"),
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

@@ -306,8 +306,65 @@ actually runs — the original plan called them *Table* / *Clock*):
     Stream does the same. With a key, `StartStream` over the WebSocket goes
     live with no dialog. OBS retries a dropped connection every 2 s, up to 25
     times (`Reconnect`, `RetryDelay`, `MaxRetries`).
-  - **Visibility** is **Unlisted**, set in YouTube Studio before the first
-    stream; it carries over to the next. Nothing here changes it.
+  - **The video is cueclock's** (#81, checkpoint 154). Until then YouTube
+    made the video itself when OBS connected, copying the title and visibility
+    of the last stream, and everything else was a trip into YouTube Studio.
+    Now the server creates it just before OBS starts (`server/stream.py`,
+    over the YouTube Data API in `youtube/api.py`), in this order: create the
+    broadcast (title, visibility, not made for kids, auto start, auto stop,
+    no monitor stream), attach it to the stream whose key OBS holds, set its
+    description and the Sports category, upload its thumbnail. Only then does
+    the deck send `StartStream`. If YouTube refuses or does not answer, **OBS
+    is not started**: alone it would have YouTube make a video with the last
+    stream's settings, which might be Public. Measured against the real
+    YouTube on the night of 2026-11-25, on unlisted test videos that never
+    went on air and were deleted: 5.2 to 6.2 s for the whole of it (creating
+    1.8 s, attaching 0.7, description 0.8, thumbnail 2.4).
+    - **Which stream key.** The channel has two (`First` and `Default stream
+      key`); OBS holds `First`'s. The server finds it by reading the key from
+      OBS's profile on disk (`service.json`) and matching it against
+      `liveStreams.list`, so the key never crosses the HTTP API and changing
+      it in OBS needs nothing here.
+    - **A leftover is removed first.** An unstarted auto-start video still
+      attached to OBS's key would go on air with the new one, under its own
+      title and visibility. Only cueclock makes those, so one found at a
+      go-live is deleted before the new one is made. A video OBS never went
+      on air for is deleted when the deck gives up on the start, or after 60 s
+      if the deck never says.
+  - **Visibility** is **Unlisted** unless the control page's Stream section
+    says Public, and it goes back to Unlisted when a stream ends and with
+    every `run`. That switch is the only thing that makes a stream Public; no
+    deck key does. On air, the switch changes the live video.
+  - **Title, description, thumbnail** (`youtube/title.py`,
+    `youtube/thumbnail.py`). The title is the match's
+    (`Sam Okafor (612) vs Jordan Lee (587) | 8-Ball Race to 7`), the event's
+    with a bracket loaded (`Thanksgiving Open | 8-Ball Tournament`), or
+    `Practice | Nov 25, 2026` with no players set; a title typed on the phone
+    replaces any of them until the stream ends. It is set at go-live and then
+    changes only by an edit, because the recording keeps its last title. The
+    thumbnail is 1280×720, drawn at go-live: the words on the left and one
+    fixed picture of the table on the right, **`config/stream_still.jpg`**.
+    Four candidates cut from the 2026-11-25 recording are in
+    `config/stream_stills/` (A to D); to change the picture, copy one over
+    `stream_still.jpg`. With no file the panel is drawn plain.
+  - **Chapters** are written after the session by the archive pass (§C7,
+    `youtube/chapters.py`): one per game with the score going in, or one per
+    match with a bracket loaded, each 10 s before the game's first detected
+    shot. Practice gets none, and neither does a stream with fewer than three
+    games (YouTube's own minimum).
+  - **The YouTube account** is one gitignored file, `config/youtube.json`:
+    `client_id` and `client_secret` of an OAuth client of type *TVs and
+    Limited Input devices*, in a Google Cloud project with the YouTube Data
+    API v3 enabled, and the sign-in the device flow writes beside them
+    (`refresh_token`). The rig's project is in **Personal** mode, which Google
+    describes as having no 7-day sign-in expiry; a refresh that still works
+    after 2026-12-02 confirms it. **Signing in is done from a phone**: with
+    nobody signed in, the control page's Stream section shows a code, and it
+    is typed at google.com/device. The LIVE key says `SIGN IN` / `ON PHONE`
+    until then. Quota is 10,000 units a day and a go-live costs about 105.
+  - **Chat** is on, as YouTube makes it: the API has no field that turns it
+    off (read off the `liveBroadcasts` resource page, 2026-11-25). It can
+    only be turned off in YouTube Studio.
   - **What a viewer hears** is the room mic, Mic/Aux, and nothing else. The
     bar is muted in the mixer with its monitoring on (Part D), so the beeps
     and buzzer reach the stream the way music does: out of the TV and into
@@ -459,7 +516,8 @@ the casual deck is exactly the deck it has always been. `†` = only while the
 **session is off** (#49): RECAL needs the camera `run` holds, so it is lit
 exactly when every other key but Session is dark, and the two never meet.
 `‡` = only while the deck's own session is **on and OBS answers** (#80): the
-face is OBS's stream state, and with no answer there is nothing to press.
+face is OBS's stream state, and with no answer there is nothing to press. Off
+air its second line is the visibility the hold will use (#81).
 
 | Pos | Key | Action | Face | Present in |
 |---|---|---|---|---|
@@ -468,7 +526,7 @@ face is OBS's stream state, and with no answer there is nothing to press.
 | 1,3 | **Start N** | `POST /api/restart` — the clock is wrong and you're about to shoot: fresh countdown, running immediately. **The face states the countdown it will hand you**, off the clock's own `current_base()` — the AFTER BREAK time inside the first-shot window (60 when set), the SHOT time otherwise (30 or 15). Pressed inside a rack with no shot counted yet, it also **counts the break** vision missed, so the 60 doesn't come round again on the next shot (2026-08-05) | `START` over `30`/`60`/`15`, flashes `GO` / `ERROR` | match, run out; CLOCK on |
 | 1,4 | **Push** | `POST /api/push` — push out called: clock restarts at the AFTER BREAK time and the window re-arms for a pass-back | `PUSH`, flashes `PUSH` / `ERROR` | match **and** PUSH on |
 | 1,5 | **Extension** | `POST /api/extension`. Top-right corner so a player under the clock finds it without hunting (2026-08-01). **Pips = extensions left** — but only while the pool is enforced (`settings.ENFORCE_EXTENSION_LIMIT`, **off since 2026-08-13**: the verbal extension can mishear table-side talk, and against an unlimited pool a false grant costs nothing; the snapshot reports the pool as 0, so the face is a bare `EXT` and every press over a live countdown is granted). Flip the flag back on and the pips return | `EXT` (+ pips while enforced), flashes `OK` / `NO EXT` | match, run out; CLOCK on |
-| 2,1 | **Live** | Stream the session to YouTube (#80). **Hold 1 s** to go live, **hold 1 s** again to stop, so a stray tap can neither put the room on the internet nor end a stream mid-match. The face is **OBS's own answer** (`GetStreamStatus`, asked on the deck's 2 s poll, `deck/live.py`), not what the deck last pressed, so it is right after a daemon restart and when a stream ends on its own. A hold does what the face said when the finger came down, and only if OBS still agrees when it matures: a hold begun to stop a stream that has since died starts nothing. **The recording keeps running** beside the stream (the review page cuts its clips from it), and **stopping the session ends the stream**, the idle stop included, because the session stops every OBS output before it quits OBS (§C4). The next start is a new YouTube video with a new link. Visibility stays YouTube's: Unlisted, set in Studio (§B3); no key makes a stream public | `GO LIVE`+`HOLD 1s` → `HOLD…` → `STARTING…` → **`LIVE`/`28 MIN`+`HOLD 1s` on red** (minutes on air) → `STOPPING…`. **Amber `LIVE`/`RETRYING`** while OBS reconnects. A start that is not on air within 20 s, or that OBS refuses, **stays on the key, red and named**: `STREAM`/`FAILED`+`HOLD 1s`, and the hold retries. It says STREAM, not LIVE, so the two reds are never read as each other. Pressed mid-start or mid-stop, it flashes that face | **session on** and OBS answering; every mode |
+| 2,1 | **Live** | Stream the session to YouTube (#80, #81). **Hold 1 s** to go live, **hold 1 s** again to stop, so a stray tap can neither put the room on the internet nor end a stream mid-match. **Going live is two steps** (#81, `deck/live.py`): `POST /api/stream/prepare`, on which the server makes the YouTube video with its title, visibility and thumbnail (§B3, about 6 s), and then, once the server's `stream.phase` reads `ready`, `StartStream` in OBS. **If YouTube refuses or does not answer, OBS is never started**, and the key says so. The face is **OBS's own answer** (`GetStreamStatus`, asked on the deck's 2 s poll, every 0.5 s while a hold is being carried out), not what the deck last pressed, so it is right after a daemon restart and when a stream ends on its own; the deck tells the server what OBS says (`/api/stream/on_air`, `/off_air`). A hold does what the face said when the finger came down, and only if OBS still agrees when it matures: a hold begun to stop a stream that has since died starts nothing. **The recording keeps running** beside the stream (the review page cuts its clips from it), and **stopping the session ends the stream**, the idle stop included, because the session stops every OBS output before it quits OBS (§C4). The next start is a new YouTube video with a new link. **No key chooses the visibility**: the control page's Stream section does, and the key shows the choice | `GO LIVE`/`UNLISTED` or `GO LIVE`/`PUBLIC`, +`HOLD 1s` → `HOLD…` → `STARTING…` → **`LIVE`/`28 MIN`+`HOLD 1s` on red** (minutes on air) → `STOPPING…`. **Amber `LIVE`/`RETRYING`** while OBS reconnects. **Signed out of YouTube: `SIGN IN`+`ON PHONE`**, from the moment the session is up, and a hold does nothing (the phone's Stream section has the code; signing in puts the key back on its own). `NO`/`YOUTUBE`+`SEE PHONE` with no account file on the machine. A failure **stays on the key, red and named**, and the hold retries: `YOUTUBE`/`FAILED`+`HOLD 1s` when the video could not be made (the phone shows YouTube's reason), `STREAM`/`FAILED`+`HOLD 1s` when OBS refused the start or was not on air within 20 s (OBS is then told to stop and the video is deleted). Neither says LIVE, so no red is read as on air. Pressed mid-start or mid-stop, it flashes that face | **session on** and OBS answering; every mode |
 | 2,3 | **Scene** | Swap the TV between the play scene and the bracket (#43). The deck remembers the scene it left rather than naming one, so the play scene can be renamed in OBS without touching code | `BRACKET`+`TO TV` ⇄ `BACK`+`TO PLAY` | **bracket loaded** |
 | 2,5 | **RECAL** | **Hold 2 s** (longer than Session's 1 s, so neither is mistaken for the other): run `cueclock recalibrate`, which records a fresh empty-table reference, refits undistort + calibration, and swaps the three files in only if every check passes (§E2). Takes ~10–20 s, polled, so the deck keeps drawing; a Session press meanwhile is refused. The result **stays on the key** until the next hold or the next session start | `RECAL`+`HOLD 2s` → `HOLD…` → `RECAL…` → `OK 0.8PX`/`DRIFT 2` on green, or the refusal on red (`BALLS`/`ON CLOTH`, `BAD`/`FIT 2.4px`, `CAMERA`/`BUSY`, `NO`/`TABLE`), each over `HOLD 2s` | **session off** only (server down, not mid-start/stop) |
 | 3,1 | **Setup** | Open the SETUP menu (§C2b); on the menu the same cell is **DONE** and closes it. Replaced the Ruleset key, which cycled 8-ball → Final 10 → 9-ball → Freestyle, in checkpoint 145 (#74) | `SETUP` ⇄ `DONE` | match, run out; on both pages |
@@ -867,7 +925,9 @@ OBS → Settings → Audio → Global Audio Devices → **Mic/Auxiliary Audio** 
 `Insta360 Link 2C Pro`, and check its meter moves in the Audio Mixer.
 
 **`cueclock session maintain`** (`archive.py`, `cli.md`) does the rest after
-the session: journal copy, parity check, moments, footage cuts into each
+the session: journal copy, the stream's game chapters onto its YouTube video
+(#81, noted in the session's `chapters.json`; a session that was not streamed
+makes no request), parity check, moments, footage cuts into each
 session directory, then moves the directory to `/Volumes/T7/cueclock_sessions/`
 and prunes footage to a 10 GB budget (the listed recordings). It refuses to do
 anything while a session is live, because a multi-GB T7 copy mid-session is the

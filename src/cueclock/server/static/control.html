@@ -44,7 +44,7 @@
         main { display: flex; flex-direction: column; gap: 16px; }
         [hidden] { display: none !important; }
 
-        header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+        header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
         h1 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: .2px; }
         .conn {
             font-size: 12px; letter-spacing: 1.4px; text-transform: uppercase;
@@ -287,6 +287,50 @@
         .tabbar button .glyph { font-size: 20px; line-height: 1; }
         .tabbar button.active { color: var(--accent); }
 
+        /* ---- Stream (#81) ----
+           The page says "on air", never "live": Live already means a bracket
+           match in progress here. Public is drawn as a red outline, never a
+           filled accent, the same rule as the destructive buttons: it is the
+           one switch on this page that shows the room to strangers. */
+        .hright { display: flex; align-items: center; gap: 12px; }
+        .shead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .pill.onair { display: inline-flex; align-items: center; gap: 6px; }
+        .pill .dot { width: 7px; height: 7px; background: var(--alarm); }
+        textarea {
+            background: var(--field); color: var(--text); border: 1px solid var(--line-strong);
+            border-radius: 9px; padding: 12px 13px; font-size: 16px; line-height: 1.35;
+            font-family: inherit; width: 100%; resize: none;
+        }
+        textarea:focus { outline: none; border-color: var(--accent); }
+        .hintrow { display: flex; justify-content: space-between; gap: 12px; }
+        .hintrow .count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .hint.alarm { color: var(--alarm); }
+        .lead { margin: 0; font-size: 15px; line-height: 1.4; }
+        .seg.vis button { font-size: 14px; padding: 12px 0; border: 1px solid transparent; }
+        .seg.vis button.on.public {
+            background: rgba(255,77,77,.14); color: var(--alarm); border-color: rgba(255,77,77,.45);
+        }
+        a.readout, .codebox {
+            background: var(--field); border: 1px solid var(--line); border-radius: 9px;
+        }
+        a.readout {
+            display: block; padding: 12px 13px; font-size: 16px; color: var(--text);
+            text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .codebox {
+            padding: 14px 13px; display: flex; flex-direction: column; align-items: center; gap: 6px;
+        }
+        .codebox .code {
+            font-size: 28px; font-weight: 700; letter-spacing: 3px; font-variant-numeric: tabular-nums;
+        }
+        button.icon, a.btn { display: flex; align-items: center; justify-content: center; gap: 8px; }
+        a.btn {
+            background: #1A1F29; color: var(--text); border: 1px solid var(--line-strong);
+            border-radius: 9px; padding: 13px 10px; font-size: 15px; font-weight: 600;
+            text-decoration: none; text-align: center;
+        }
+        a.btn:active { background: #2A3140; }
+
         @media (max-width: 460px) {
             .two { grid-template-columns: 1fr; }
         }
@@ -297,7 +341,11 @@
 
     <header>
         <h1>cueclock</h1>
-        <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">Connecting</span></div>
+        <div class="hright">
+            <!-- On both tabs while the stream is on air (#81). -->
+            <span class="pill alarm onair" id="header-onair" hidden><span class="dot"></span>On air</span>
+            <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">Connecting</span></div>
+        </div>
     </header>
 
     <!-- Play: the mid-game surface. Loads first because a page grabbed in a
@@ -540,6 +588,77 @@
                 <button class="ghost" onclick="archiveBracket()">Save &amp; archive</button>
                 <div class="danger-row"><button class="danger" onclick="clearBracket()">Clear bracket</button></div>
                 <p class="hint" id="bracket-error"></p>
+            </section>
+
+            <!-- The stream (#81): its title, who can watch, and its link,
+                 between the players and the clock. There is no Go Live button
+                 here on purpose: the deck's LIVE hold is the only way on air,
+                 and this section is what that hold will use. Hidden on a
+                 server with no YouTube account file (`stream: null`). -->
+            <section id="stream-section" hidden>
+                <div class="shead">
+                    <h2>Stream</h2>
+                    <span class="pill" id="stream-pill">Off air</span>
+                </div>
+
+                <!-- Nobody signed in: only the sign-in shows. Google's flow
+                     for devices with no keyboard: a short code, typed at
+                     google.com/device on any phone. -->
+                <div class="stack" id="stream-signin" hidden>
+                    <p class="lead" id="stream-signin-lead"></p>
+                    <div class="field" id="stream-signin-code">
+                        <label>Sign in from this phone</label>
+                        <div class="codebox">
+                            <span class="sub">Open google.com/device and enter</span>
+                            <span class="code" id="stream-code">&hellip;</span>
+                        </div>
+                        <div class="grid2">
+                            <button class="primary" id="stream-code-copy" onclick="copyCode()">Copy code</button>
+                            <a class="btn" id="stream-code-link" href="https://www.google.com/device"
+                               target="_blank" rel="noopener">google.com/device</a>
+                        </div>
+                    </div>
+                    <p class="hint" id="stream-signin-hint">Once is enough. The title and
+                        visibility controls come back as soon as it goes through.</p>
+                </div>
+
+                <div class="stack" id="stream-controls" hidden>
+                    <div class="field" id="stream-watch" hidden>
+                        <label>Watch link</label>
+                        <a class="readout" id="stream-url" href="#" target="_blank" rel="noopener"></a>
+                        <div class="grid2">
+                            <button class="primary icon" id="stream-share" onclick="shareLink()">
+                                <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"></path></svg>
+                                <span id="stream-share-text">Share link</span>
+                            </button>
+                            <button id="stream-copy" onclick="copyLink()">Copy link</button>
+                        </div>
+                        <p class="hint" id="stream-share-hint" hidden>Touch and hold the link for
+                            the share sheet.</p>
+                    </div>
+                    <div class="field">
+                        <label for="stream-title">Title</label>
+                        <!-- Two lines: one cuts a match title off on a phone. -->
+                        <textarea id="stream-title" rows="2" maxlength="100" enterkeyhint="done"
+                                  autocomplete="off"></textarea>
+                        <div class="hintrow">
+                            <p class="hint" id="stream-title-hint"></p>
+                            <p class="hint count" id="stream-title-count" hidden></p>
+                        </div>
+                        <button class="ghost" id="stream-title-reset" onclick="useMatchTitle()" hidden>Use the match title</button>
+                    </div>
+                    <div class="field">
+                        <label>Visibility</label>
+                        <div class="seg vis">
+                            <button id="vis-unlisted" onclick="setVisibility('unlisted')">Unlisted</button>
+                            <button id="vis-public" class="public" onclick="setVisibility('public')">Public</button>
+                        </div>
+                        <p class="hint" id="stream-vis-hint"></p>
+                    </div>
+                    <p class="hint alarm" id="stream-error" hidden></p>
+                    <p class="hint" id="stream-note" hidden></p>
+                    <p class="hint" id="stream-how"></p>
+                </div>
             </section>
 
             <!-- The clock settings ride below both workflows: they are about
@@ -1297,6 +1416,195 @@
         refreshBracket();
     }
 
+    // ---- Stream (#81) ----
+    // Everything here is drawn from the `stream` object on the broadcast; the
+    // server keeps the title and the visibility, so two phones always agree.
+    // Edits post and the next broadcast repaints.
+    let stream = null;
+    let streamTrouble = '';       // the last edit YouTube refused, in its words
+    let signinAskedAt = 0;
+    const TITLE_HINTS = {
+        live: 'Edits go to the live video.',
+        typed: 'Your title. It stays until this stream ends.',
+        match: 'From the match. Type over it to use your own.',
+        tournament: 'From the tournament. Type over it to use your own.',
+        practice: 'No players set. Type over it to use your own.',
+    };
+
+    function renderStream(st) {
+        document.getElementById('stream-section').hidden = !st;
+        document.getElementById('header-onair').hidden = !(st && st.on_air);
+        stream = st || null;
+        if (!st) return;
+        const signedIn = st.account === 'ok';
+        const starting = st.phase === 'preparing' || st.phase === 'ready';
+        const pill = document.getElementById('stream-pill');
+        pill.classList.toggle('alarm', st.on_air || !signedIn);
+        pill.classList.toggle('onair', st.on_air);
+        pill.replaceChildren();
+        if (st.on_air) {
+            const dot = document.createElement('span');
+            dot.className = 'dot';
+            pill.append(dot, `On air · ${st.minutes ?? 0} min`);
+        } else {
+            pill.append(st.account === 'signed_out' ? 'Signed out'
+                : !signedIn ? 'Not set up' : starting ? 'Starting' : 'Off air');
+        }
+        // Signed out, the section is the sign-in and nothing else. A stream
+        // already on air keeps its controls: OBS is sending whatever happens.
+        const showSignin = !signedIn && !st.on_air;
+        document.getElementById('stream-signin').hidden = !showSignin;
+        document.getElementById('stream-controls').hidden = showSignin;
+        if (showSignin) { renderSignin(st); return; }
+
+        const url = document.getElementById('stream-url');
+        document.getElementById('stream-watch').hidden = !st.url;
+        if (st.url) {
+            url.href = st.url;
+            url.innerText = st.url.replace(/^https?:\/\//, '');
+        }
+        const title = document.getElementById('stream-title');
+        const editing = document.activeElement === title;
+        if (!editing) title.value = st.title;
+        title.disabled = st.on_air && !st.url;  // started outside cueclock: no video to edit
+        document.getElementById('stream-title-hint').innerText =
+            title.disabled ? '' : (TITLE_HINTS[st.source] || '');
+        const count = document.getElementById('stream-title-count');
+        count.hidden = !(editing || st.source === 'typed');
+        count.innerText = `${title.value.length} / 100`;
+        // The way back to the match's own title, whenever the field is not on it.
+        document.getElementById('stream-title-reset').hidden = title.disabled || !(
+            st.source === 'typed' || (st.source === 'live' && st.title !== st.auto_title));
+
+        const isPublic = st.visibility === 'public';
+        document.getElementById('vis-unlisted').classList.toggle('on', !isPublic);
+        document.getElementById('vis-public').classList.toggle('on', isPublic);
+        document.getElementById('vis-unlisted').disabled = title.disabled;
+        document.getElementById('vis-public').disabled = title.disabled;
+        document.getElementById('stream-vis-hint').innerText = isPublic
+            ? 'Anyone can find this stream. Back to Unlisted when it ends.'
+            : 'Only people with the link can watch.'
+              + (st.on_air ? '' : ' Back to Unlisted after every stream.');
+
+        const trouble = streamTrouble
+            || (st.error && !st.on_air ? `Couldn't go live: ${st.error}` : '');
+        const err = document.getElementById('stream-error');
+        err.hidden = !trouble;
+        err.innerText = trouble;
+        const note = document.getElementById('stream-note');
+        note.hidden = !st.note;
+        note.innerText = st.note || '';
+        document.getElementById('stream-how').innerText =
+            st.on_air ? (st.url ? 'Hold LIVE on the deck to stop.'
+                                : 'This stream was started in OBS, not from the deck, so its '
+                                  + 'link and title are not here. Hold LIVE on the deck to stop.')
+            : starting ? 'Going live…'
+            : 'Hold LIVE on the deck to go live.';
+    }
+
+    function renderSignin(st) {
+        const lead = document.getElementById('stream-signin-lead');
+        const unconfigured = st.account !== 'signed_out';
+        document.getElementById('stream-signin-code').hidden = unconfigured;
+        document.getElementById('stream-signin-hint').hidden = unconfigured;
+        if (unconfigured) {
+            lead.innerText = 'YouTube is not set up on this machine, so LIVE on the deck '
+                + "won't start a stream. config/youtube.json needs a client_id and a "
+                + 'client_secret (docs/hardware.md §B3).';
+            return;
+        }
+        lead.innerText = "This table isn't signed in to YouTube, so LIVE on the deck "
+            + "won't start a stream." + (st.error ? ` (${st.error})` : '');
+        document.getElementById('stream-code').innerText = st.signin ? st.signin.code : '…';
+        if (st.signin) document.getElementById('stream-code-link').href = st.signin.url;
+        // A code is asked for only while somebody is looking at this section,
+        // and at most every ten seconds: each one lasts half an hour.
+        const looking = !document.getElementById('view-setup').hidden;
+        if (!st.signin && looking && Date.now() - signinAskedAt > 10000) {
+            signinAskedAt = Date.now();
+            post('/api/stream/signin');
+        }
+    }
+
+    function streamFailed(res) {
+        // Shown under the controls until the next edit goes through.
+        streamTrouble = res.ok ? '' : (res.error || 'YouTube did not answer');
+    }
+    async function submitTitle(value) {
+        streamFailed(await postJson('/api/stream/title', { title: value }));
+    }
+    function useMatchTitle() {
+        document.getElementById('stream-title').blur();
+        submitTitle(null);
+    }
+    async function setVisibility(value) {
+        if (!stream || stream.visibility === value) return;
+        // Off air the deck's LIVE key shows the choice before anything is
+        // sent. On air it takes effect at once, so it asks first.
+        if (value === 'public' && stream.on_air
+            && !confirm('Make this stream Public now? Anyone can find it.')) return;
+        streamFailed(await postJson('/api/stream/visibility/' + value, {}));
+    }
+
+    // The clipboard and share-sheet APIs need HTTPS, and this page is served
+    // over plain HTTP on the LAN, so both have a fallback that works there:
+    // the old select-and-copy for the clipboard, and Messages for sharing.
+    async function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+        }
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;font-size:16px';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) {}
+        ta.remove();
+        return ok;
+    }
+    async function copyWith(button, text, label) {
+        const ok = await copyText(text);
+        button.innerText = ok ? 'Copied' : "Couldn't copy";
+        setTimeout(() => { button.innerText = label; }, 1500);
+    }
+    function copyLink() {
+        if (stream && stream.url) {
+            copyWith(document.getElementById('stream-copy'), stream.url, 'Copy link');
+        }
+    }
+    function copyCode() {
+        if (stream && stream.signin) {
+            copyWith(document.getElementById('stream-code-copy'), stream.signin.code, 'Copy code');
+        }
+    }
+    const CAN_SHARE = typeof navigator.share === 'function';
+    async function shareLink() {
+        if (!stream || !stream.url) return;
+        if (CAN_SHARE) {
+            try { await navigator.share({ title: stream.title, url: stream.url }); } catch (e) {}
+            return;
+        }
+        location.href = 'sms:&body=' + encodeURIComponent(stream.url);
+    }
+    (function wireStream() {
+        const title = document.getElementById('stream-title');
+        // A title is one line: Return finishes the edit instead of adding one.
+        title.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') { ev.preventDefault(); title.blur(); }
+        });
+        title.addEventListener('input', () => {
+            document.getElementById('stream-title-count').innerText = `${title.value.length} / 100`;
+        });
+        title.addEventListener('change', () => submitTitle(title.value));
+        if (!CAN_SHARE) {
+            document.getElementById('stream-share-text').innerText = 'Text link';
+            document.getElementById('stream-share-hint').hidden = false;
+        }
+    })();
+
     // ---- Clock ----
     const ALARM_STATES = ['GRACE', 'EXPIRED'];
     // Rig health (#52). Each reading is marked when it is the reason the
@@ -1326,6 +1634,7 @@
         renderHealth(s.health);
         renderBallStrip(s.ball_strip);
         renderVoice(s.voice);
+        renderStream(s.stream);
         // Clock off (`timed: false`): there is no countdown, so the number
         // and every key about one leave and the pill says why.
         const untimed = s.timed === false;

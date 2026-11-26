@@ -119,8 +119,8 @@ class DeckState:
     # (`deck/recal.py`), passed in like `session_face`.
     session_idle: bool = False
     recal_face: Face = field(default_factory=Face)
-    # The LIVE key's face (#80, `deck/live.py`), or None while it cannot be
-    # pressed: no deck-owned session, or OBS not answering.
+    # The LIVE key's face (#80, #81, `deck/live.py`), or None while it cannot
+    # be pressed: no deck-owned session, or OBS not answering.
     live_face: Face | None = None
 
 
@@ -235,7 +235,11 @@ class LiveToggle:
 
     Both directions are holds, so a stray tap can neither put the room on the
     internet nor end a stream mid-match. The face is OBS's own answer, polled
-    (`deck/live.py`), and the key is dark whenever there is no answer.
+    (`deck/live.py`), and the key is dark whenever there is no answer. Off
+    air it names the visibility the hold will use, `GO LIVE` over `UNLISTED`
+    or `PUBLIC` (#81); the phone's Stream section is the only place that
+    changes it. Signed out of YouTube it reads `SIGN IN` / `ON PHONE`, and a
+    hold does nothing.
     """
 
     hold_s: float = 1.0

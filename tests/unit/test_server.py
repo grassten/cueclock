@@ -61,7 +61,11 @@ def test_state_snapshot_shape() -> None:
             # The ball strip (#54): its switch, and the labels of the latest
             # list with no arm over the table (null until `run` writes one).
             "ball_strip",
+            # The stream (#81): null on a server with no YouTube account file,
+            # which is every server a test makes without naming one.
+            "stream",
         }
+        assert snap["stream"] is None
         assert snap["mode"] == "match"
         assert snap["base"] == 30
         assert snap["vision"] is True

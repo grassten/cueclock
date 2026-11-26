@@ -48,6 +48,9 @@ from cueclock.deck.recal import Recalibrator
 from cueclock.deck.session import SessionManager, SessionState, shot_age_of
 
 POLL_S = 2.0  # server/state poll cadence
+# While a LIVE hold is being carried out the poll is what moves it along (the
+# server's video is ready, OBS is on air), so it runs faster until it lands.
+LIVE_POLL_S = 0.5
 FLASH_S = 1.2  # how long a press outcome stays on the key
 RETRY_S = 3.0  # device reconnect cadence
 CONFIRM_S = 5.0  # a bracket confirm writes a result, loads a match and racks
@@ -308,7 +311,8 @@ def _loop(
 ) -> None:
     """Poll + dispatch forever; raises TransportError on unplug, KeyboardInterrupt on stop."""
     recal = recal if recal is not None else Recalibrator()
-    live = live if live is not None else Stream()
+    if live is None:
+        live = Stream(post=lambda path: client.post(base, path).ok)
     # Each key event with the moment it happened: the loop can be busy for
     # seconds (a session stop), and a press must be judged against what the
     # key said when the finger came down, not when the loop got to it.
@@ -343,15 +347,27 @@ def _loop(
         # the moment the server answers (that is when OBS is launched), and
         # STOPPING becomes OFF when `run` finally exits.
         session_state = session.tick(data is not None)
+        # OBS is asked only while the deck's own session is up: that is the
+        # OBS the deck launched, and the only one it may stream from. The
+        # server's `stream` object rides along (#81): it says who is signed
+        # in, the visibility a hold will use, and when the video is ready.
+        if data is None and session_state is SessionState.ON:
+            # The server missed one poll. Every key is dark for it anyway;
+            # the stream machine is left alone, so a hold it is carrying out
+            # is not forgotten.
+            live_face = None
+        else:
+            live_face = live.poll(
+                data is not None and session_state is SessionState.ON,
+                data.get("stream") if data is not None else None,
+            )
         return build_state(
             data,
             session_state,
             on_bracket=showing is not None,
             menu=menu_until is not None,
             recal_face=recal.face(),
-            # OBS is asked only while the deck's own session is up: that is
-            # the OBS the deck launched, and the only one it may stream from.
-            live_face=live.poll(data is not None and session_state is SessionState.ON),
+            live_face=live_face,
         )
 
     state = poll()
@@ -369,7 +385,7 @@ def _loop(
             if polled != state:
                 state = polled
                 _draw_all(deck, state, skip=frozenset(flashes))
-            next_poll = now + POLL_S
+            next_poll = now + (LIVE_POLL_S if live.busy else POLL_S)
             # A result landed that nobody pressed a key for — a match conceded
             # or a score reported from a phone. The wall does what the confirm
             # key does, because to the room it is the same event: a match
@@ -421,12 +437,15 @@ def _loop(
                 continue
             if kind in ("live_start", "live_stop"):
                 # A LIVE hold. `act` asks OBS again first, so a hold begun to
-                # stop a stream that has since died starts nothing.
+                # stop a stream that has since died starts nothing. A start
+                # only asks the server for the YouTube video (#81); the polls
+                # that follow start OBS once it is there.
                 starting = kind == "live_start"
                 _set_key(deck, index, faces.Face("STARTING…" if starting else "STOPPING…"))
                 live.act("start" if starting else "stop")
                 state = poll()
                 _draw_all(deck, state, skip=frozenset(flashes))
+                next_poll = time.monotonic() + LIVE_POLL_S
                 continue
             if kind == "recal":
                 # Re-checked at the moment it fires: a session may have been
@@ -473,7 +492,7 @@ def _loop(
                 # What the hold will do is fixed by the face the finger came
                 # down on, never by whatever the stream is doing a second later.
                 intent = live.intent()
-                if intent is None:  # STARTING… or STOPPING…: nothing to hold for
+                if intent is None:  # STARTING…, STOPPING… or SIGN IN: nothing to hold for
                     _set_key(deck, index, faces.flash_err(key.face(state).text))
                     flashes[index] = time.monotonic() + FLASH_S
                     continue

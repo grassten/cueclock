@@ -506,6 +506,10 @@ class Hub:
         # Called with each input record (see `hub_input`); `cueclock run`
         # points it at the session log. None records nothing.
         self.on_input: Callable[[dict[str, object]], None] | None = None
+        # The `stream` object of every payload (#81): the app points it at its
+        # stream desk (`server/stream.py`). None, as on a bare server and in
+        # a session replay, reports `stream: null`.
+        self.stream_payload: Callable[[], dict[str, object]] | None = None
         self.settings_path = settings_path
         settings, settings_error = _load_settings(settings_path)
         self.clock = ShotClock(settings, now=now(), mode=get_mode(DEFAULT_MODE))
@@ -681,7 +685,7 @@ class Hub:
 
     def payload(self, snapshot: Snapshot | None = None) -> dict[str, object]:
         """The composed broadcast/state payload: clock + `vision` + `score` +
-        `solo` + `bracket`."""
+        `solo` + `bracket` + `health` + `ball_strip` + `stream`."""
         snap = snapshot if snapshot is not None else self.clock.snapshot()
         return {
             **snap.as_dict(),
@@ -692,6 +696,7 @@ class Hub:
             "bracket": self._bracket_summary(),
             "health": self.health(),
             "ball_strip": {"shown": self.ball_strip_shown, "balls": self._ball_strip},
+            "stream": self.stream_payload() if self.stream_payload is not None else None,
         }
 
     def live_scores(self) -> tuple[int, int]:

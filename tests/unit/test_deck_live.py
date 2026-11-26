@@ -1,7 +1,8 @@
-"""The LIVE key's stream machine (#80), driven by a fake obs-websocket.
+"""The LIVE key's stream machine (#80, #81), driven by a fake obs-websocket
+and a fake server.
 
 The loop's half (holds, presses on a changed face) is in `test_deck_loop.py`;
-this is what OBS's answers turn into, with nothing running.
+this is what OBS's and the server's answers turn into, with nothing running.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from cueclock.deck import faces
-from cueclock.deck.live import START_WAIT_S, STOP_WAIT_S, Stream
+from cueclock.deck.live import PREPARE_WAIT_S, START_WAIT_S, Stream
 
 
 class Obs:
@@ -35,6 +36,34 @@ class Obs:
         return None if self.refuse else {}
 
 
+class Server:
+    """The server's `stream` object (#81), and every post the key makes to it."""
+
+    def __init__(self, **stream: Any) -> None:
+        self.stream: dict[str, Any] = {
+            "account": "ok",
+            "phase": "idle",
+            "on_air": False,
+            "visibility": "unlisted",
+            "error": None,
+            **stream,
+        }
+        self.posts: list[str] = []
+        self.refuse = False
+
+    def __call__(self, path: str) -> bool:
+        self.posts.append(path)
+        if self.refuse:
+            return False
+        if path == "/api/stream/prepare":
+            self.stream["phase"] = "preparing"
+        elif path.startswith("/api/stream/on_air"):
+            self.stream["on_air"] = True
+        elif path == "/api/stream/off_air":
+            self.stream["on_air"] = False
+        return True
+
+
 class Clock:
     def __init__(self) -> None:
         self.t = 0.0
@@ -43,132 +72,255 @@ class Clock:
         return self.t
 
 
-def _stream(obs: Obs) -> tuple[Stream, Clock]:
-    clock = Clock()
-    return Stream(request=obs, now=clock), clock
+class Rig:
+    def __init__(self, obs: Obs | None = None, server: Server | None = None) -> None:
+        self.obs = obs or Obs()
+        self.server = server or Server()
+        self.clock = Clock()
+        self.stream = Stream(request=self.obs, post=self.server, now=self.clock)
+
+    def poll(self) -> faces.Face | None:
+        return self.stream.poll(True, self.server.stream)
+
+    def on_air(self) -> None:
+        """A whole hold, to the stream being on air."""
+        self.poll()
+        self.stream.act("start")
+        self.server.stream["phase"] = "ready"
+        self.poll()
+        self.obs.status["outputActive"] = True
+        self.poll()
+
+
+def _text(face: faces.Face | None) -> str:
+    assert face is not None
+    return face.text
+
+
+# ---------- what the key says ----------
 
 
 def test_off_a_session_the_key_is_dark_and_obs_is_not_asked() -> None:
-    obs = Obs()
-    stream, _ = _stream(obs)
-    assert stream.poll(session_on=False) is None
-    assert obs.sent == []
+    rig = Rig()
+    assert rig.stream.poll(session_on=False) is None
+    assert rig.obs.sent == [] and rig.server.posts == []
 
 
 def test_no_answer_from_obs_is_a_dark_key() -> None:
-    obs = Obs()
-    obs.answering = False
-    stream, _ = _stream(obs)
-    assert stream.poll(session_on=True) is None
-    assert stream.intent() is None
+    rig = Rig()
+    rig.obs.answering = False
+    assert rig.poll() is None
+    assert rig.stream.intent() is None
 
 
-def test_off_air_offers_the_hold() -> None:
-    stream, _ = _stream(Obs())
-    face = stream.poll(session_on=True)
-    assert face is not None and (face.text, face.sub) == ("GO LIVE", "HOLD 1s")
-    assert stream.intent() == "start"
+def test_off_air_says_what_a_hold_will_do_and_to_whom() -> None:
+    rig = Rig()
+    face = rig.poll()
+    assert face is not None and (face.text, face.sub) == ("GO LIVE\nUNLISTED", "HOLD 1s")
+    assert rig.stream.intent() == "start"
+    rig.server.stream["visibility"] = "public"
+    assert _text(rig.poll()) == "GO LIVE\nPUBLIC"
+
+
+def test_signed_out_the_key_says_so_and_a_hold_does_nothing() -> None:
+    rig = Rig(server=Server(account="signed_out"))
+    face = rig.poll()
+    assert face is not None and (face.text, face.sub) == ("SIGN IN", "ON PHONE")
+    assert rig.stream.intent() is None
+    rig.server.stream["account"] = "ok"  # signed in on the phone: back on its own
+    assert _text(rig.poll()) == "GO LIVE\nUNLISTED"
+    assert rig.stream.intent() == "start"
+
+
+def test_with_no_youtube_account_on_the_machine_the_key_names_that() -> None:
+    for server in (Server(account="unconfigured"), None):
+        rig = Rig()
+        face = rig.stream.poll(True, server.stream if server else None)  # None: an older server
+        assert face is not None and (face.text, face.sub) == ("NO\nYOUTUBE", "SEE PHONE")
+        assert rig.stream.intent() is None
 
 
 def test_on_air_is_red_with_the_minutes() -> None:
-    stream, _ = _stream(Obs(outputActive=True, outputDuration=28 * 60_000 + 59_000))
-    face = stream.poll(session_on=True)
+    rig = Rig(Obs(outputActive=True, outputDuration=28 * 60_000 + 59_000), Server(on_air=True))
+    face = rig.poll()
     assert face is not None and face.text == "LIVE\n28 MIN" and face.bg == faces.BG_LIVE
-    assert stream.intent() == "stop"
+    assert rig.stream.intent() == "stop"
 
 
 def test_reconnecting_is_amber_and_still_stoppable() -> None:
-    stream, _ = _stream(Obs(outputActive=True, outputReconnecting=True))
-    face = stream.poll(session_on=True)
+    rig = Rig(Obs(outputActive=True, outputReconnecting=True), Server(on_air=True))
+    face = rig.poll()
     assert face is not None and face.text == "LIVE\nRETRYING" and face.bg == faces.BG_WARN
-    assert stream.intent() == "stop"
+    assert rig.stream.intent() == "stop"
 
 
-def test_a_start_shows_starting_until_obs_is_on_air() -> None:
-    obs = Obs()
-    stream, clock = _stream(obs)
-    stream.poll(session_on=True)
-    stream.act("start")
-    assert obs.sent == ["StartStream"]
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text == "STARTING…"
-    assert stream.intent() is None  # nothing to hold for mid-start
-    obs.status["outputActive"] = True
-    clock.t = 1.0
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text.startswith("LIVE")
+# ---------- going live: the video first, then OBS ----------
 
 
-def test_a_start_that_never_goes_on_air_stays_failed_until_the_next_hold() -> None:
-    obs = Obs()
-    stream, clock = _stream(obs)
-    stream.poll(session_on=True)
-    stream.act("start")
-    clock.t = START_WAIT_S
-    face = stream.poll(session_on=True)
+def test_a_hold_asks_for_the_video_and_starts_obs_only_when_it_is_ready() -> None:
+    rig = Rig()
+    rig.poll()
+    rig.stream.act("start")
+    assert rig.server.posts == ["/api/stream/prepare"]
+    assert rig.obs.sent == []  # YouTube has not answered: OBS must not start
+    assert _text(rig.poll()) == "STARTING…"
+    assert rig.stream.intent() is None and rig.stream.busy
+    assert rig.obs.sent == []
+    rig.server.stream["phase"] = "ready"
+    assert _text(rig.poll()) == "STARTING…"
+    assert rig.obs.sent == ["StartStream"]
+    rig.obs.status["outputActive"] = True
+    rig.clock.t = 1.0
+    assert _text(rig.poll()).startswith("LIVE")
+    assert not rig.stream.busy
+
+
+def test_youtube_refusing_never_starts_obs_and_stays_on_the_key() -> None:
+    rig = Rig()
+    rig.poll()
+    rig.stream.act("start")
+    rig.server.stream.update(phase="failed", error="Creating the stream: YouTube did not answer")
+    face = rig.poll()
+    assert face is not None and face.text == "YOUTUBE\nFAILED" and face.bg == faces.BG_ERR
+    assert face.sub == "HOLD 1s"
+    assert rig.obs.sent == []
+    rig.clock.t += 60.0
+    assert rig.poll() == face  # sticky
+    assert rig.stream.intent() == "start"  # the hold retries
+    rig.stream.act("start")
+    assert rig.server.posts == ["/api/stream/prepare", "/api/stream/prepare"]
+    assert _text(rig.poll()) == "STARTING…"
+
+
+def test_a_server_that_refuses_the_hold_fails_it_at_once() -> None:
+    rig = Rig()
+    rig.server.refuse = True
+    rig.poll()
+    rig.stream.act("start")
+    assert _text(rig.poll()) == "YOUTUBE\nFAILED"
+    assert rig.obs.sent == []
+
+
+def test_a_video_that_never_comes_is_given_up_on_and_cancelled() -> None:
+    rig = Rig()
+    rig.poll()
+    rig.stream.act("start")
+    rig.clock.t = PREPARE_WAIT_S - 1
+    assert _text(rig.poll()) == "STARTING…"
+    rig.clock.t = PREPARE_WAIT_S
+    assert _text(rig.poll()) == "YOUTUBE\nFAILED"
+    assert rig.server.posts[-1] == "/api/stream/cancel"
+    assert rig.obs.sent == []
+
+
+def test_a_start_that_never_goes_on_air_is_stopped_and_its_video_taken_back() -> None:
+    rig = Rig()
+    rig.poll()
+    rig.stream.act("start")
+    rig.server.stream["phase"] = "ready"
+    rig.poll()
+    rig.clock.t = START_WAIT_S
+    face = rig.poll()
     assert face is not None and face.text == "STREAM\nFAILED" and face.bg == faces.BG_ERR
-    clock.t += 60.0
-    assert stream.poll(session_on=True) == face  # sticky
-    assert stream.intent() == "start"  # the hold retries
-    stream.act("start")
-    assert obs.sent == ["StartStream", "StartStream"]
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text == "STARTING…"
+    # OBS is told to stop dialling before the video goes: connecting with no
+    # video behind it would have YouTube make one with the last settings.
+    assert rig.obs.sent == ["StartStream", "StopStream"]
+    assert rig.server.posts[-1] == "/api/stream/cancel"
+    rig.clock.t += 60.0
+    assert rig.poll() == face  # sticky
+    assert rig.stream.intent() == "start"
 
 
-def test_a_start_obs_refuses_is_failed_at_once() -> None:
-    obs = Obs()
-    obs.refuse = True
-    stream, _ = _stream(obs)
-    stream.poll(session_on=True)
-    stream.act("start")
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text == "STREAM\nFAILED"
+def test_a_start_obs_refuses_is_failed_at_once_and_its_video_taken_back() -> None:
+    rig = Rig()
+    rig.obs.refuse = True
+    rig.poll()
+    rig.stream.act("start")
+    rig.server.stream["phase"] = "ready"
+    assert _text(rig.poll()) == "STREAM\nFAILED"
+    assert rig.server.posts[-1] == "/api/stream/cancel"
 
 
 def test_a_failure_does_not_outlive_the_session() -> None:
-    obs = Obs()
-    obs.refuse = True
-    stream, _ = _stream(obs)
-    stream.poll(session_on=True)
-    stream.act("start")
-    stream.poll(session_on=False)
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text == "GO LIVE"
+    rig = Rig()
+    rig.server.refuse = True
+    rig.poll()
+    rig.stream.act("start")
+    rig.stream.poll(session_on=False)
+    assert _text(rig.poll()) == "GO LIVE\nUNLISTED"
+
+
+def test_signing_out_shows_over_an_old_failure() -> None:
+    rig = Rig()
+    rig.poll()
+    rig.stream.act("start")
+    rig.server.stream.update(phase="failed", account="signed_out")
+    assert _text(rig.poll()) == "SIGN IN"  # a hold could not retry anyway
+    assert rig.stream.intent() is None
+
+
+# ---------- telling the server what OBS says ----------
+
+
+def test_the_server_is_told_when_the_stream_goes_on_air_and_comes_off() -> None:
+    rig = Rig()
+    rig.on_air()
+    assert rig.server.posts == ["/api/stream/prepare", "/api/stream/on_air?duration_ms=0"]
+    rig.poll()
+    rig.poll()
+    assert len(rig.server.posts) == 2  # they agree: nothing more is said
+    rig.obs.status["outputActive"] = False  # it ended on its own
+    assert _text(rig.poll()) == "GO LIVE\nUNLISTED"
+    assert rig.server.posts[-1] == "/api/stream/off_air"
+
+
+def test_a_daemon_restarted_mid_stream_tells_the_server_how_long_it_has_run() -> None:
+    rig = Rig(Obs(outputActive=True, outputDuration=754_000), Server())  # the server lost track
+    rig.poll()
+    assert rig.server.posts == ["/api/stream/on_air?duration_ms=754000"]
+
+
+def test_a_server_with_no_stream_desk_is_told_nothing() -> None:
+    rig = Rig(Obs(outputActive=True))
+    rig.stream.poll(True, None)
+    assert rig.server.posts == []
+
+
+# ---------- stopping ----------
 
 
 def test_a_stop_shows_stopping_until_obs_is_off_air() -> None:
-    obs = Obs(outputActive=True)
-    stream, _ = _stream(obs)
-    stream.poll(session_on=True)
-    stream.act("stop")
-    assert obs.sent == ["StopStream"]
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text == "STOPPING…"
-    obs.status["outputActive"] = False
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text == "GO LIVE"
+    rig = Rig()
+    rig.on_air()
+    rig.stream.act("stop")
+    assert rig.obs.sent == ["StartStream", "StopStream"]
+    assert _text(rig.poll()) == "STOPPING…"
+    rig.obs.status["outputActive"] = False
+    assert _text(rig.poll()) == "GO LIVE\nUNLISTED"
+    assert rig.server.posts[-1] == "/api/stream/off_air"
 
 
-def test_a_stop_obs_never_finishes_shows_the_truth_afterwards() -> None:
-    obs = Obs(outputActive=True)
-    stream, clock = _stream(obs)
-    stream.poll(session_on=True)
-    stream.act("stop")
-    clock.t = STOP_WAIT_S
-    face = stream.poll(session_on=True)
-    assert face is not None and face.text.startswith("LIVE")  # still on air, and says so
+def test_a_hold_to_stop_does_nothing_once_the_stream_has_died() -> None:
+    rig = Rig(Obs(outputActive=True), Server(on_air=True))
+    rig.poll()
+    assert rig.stream.intent() == "stop"
+    rig.obs.status["outputActive"] = False  # the stream ends while the key is held
+    rig.stream.act("stop")
+    assert rig.obs.sent == [] and "/api/stream/prepare" not in rig.server.posts
 
 
-def test_a_hold_meant_for_one_direction_never_does_the_other() -> None:
-    # Held to stop, but the stream had already ended: nothing starts.
-    obs = Obs(outputActive=True)
-    stream, _ = _stream(obs)
-    stream.poll(session_on=True)
-    obs.status["outputActive"] = False
-    stream.act("stop")
-    assert obs.sent == []
-    # Held to go live, but something else already had: nothing stops.
-    obs.status["outputActive"] = True
-    stream.act("start")
-    assert obs.sent == []
+def test_a_hold_to_start_does_nothing_once_the_stream_is_up() -> None:
+    rig = Rig()
+    rig.poll()
+    rig.obs.status["outputActive"] = True
+    rig.stream.act("start")
+    assert rig.obs.sent == [] and rig.server.posts == []
+
+
+def test_obs_gone_when_the_hold_matures_does_nothing() -> None:
+    rig = Rig()
+    rig.poll()
+    rig.obs.answering = False
+    rig.stream.act("start")
+    assert rig.obs.sent == [] and rig.server.posts == []
+    assert rig.poll() is None

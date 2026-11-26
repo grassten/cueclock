@@ -670,6 +670,10 @@ def test_recal_face_comes_from_the_recalibration_and_wears_the_system_stripe() -
 
 LIVE_FACES = (
     live.off_air_face(),
+    live.off_air_face("public"),
+    live.sign_in_face(),
+    live.no_youtube_face(),
+    live.youtube_failed_face(),
     live.on_air_face(28 * 60_000),
     live.on_air_face(125 * 60_000),
     live.reconnecting_face(),
@@ -699,6 +703,17 @@ def test_on_air_and_a_failed_start_never_read_as_each_other() -> None:
     assert on_air.text.startswith("LIVE") and not failed.text.startswith("LIVE")
     assert on_air.bg != failed.bg
     assert live.on_air_face(28 * 60_000 + 59_000).text == "LIVE\n28 MIN"
+    # Nor does YouTube refusing (#81): OBS was never started for it.
+    refused = live.youtube_failed_face()
+    assert not refused.text.startswith("LIVE") and refused.bg != on_air.bg
+
+
+def test_off_air_the_key_names_the_visibility_the_hold_will_use() -> None:
+    assert live.off_air_face().text == "GO LIVE\nUNLISTED"
+    assert live.off_air_face("public").text == "GO LIVE\nPUBLIC"
+    assert live.off_air_face().sub == "HOLD 1s"  # the gesture is still named
+    # Signed out there is no hold to name: the next move is on the phone.
+    assert (live.sign_in_face().text, live.sign_in_face().sub) == ("SIGN IN", "ON PHONE")
 
 
 # --- the SETUP menu (#74): the clock's settings, one key each ---

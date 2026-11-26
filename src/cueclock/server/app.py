@@ -17,6 +17,8 @@ from cueclock.clock import MODES, OPTIONS
 from cueclock.server import fargo, lan
 from cueclock.server.bracket import BracketError
 from cueclock.server.hub import Hub
+from cueclock.server.stream import StreamDesk
+from cueclock.youtube.api import Account, YouTubeError
 
 STATIC_DIR = Path(__file__).parent / "static"
 # Spoken cues, synthesized by scripts/make_voice_assets.py and committed —
@@ -43,7 +45,13 @@ def create_app(
     bracket_path: Path | None = None,
     archive_dir: Path | None = None,
     settings_path: Path | None = None,
+    youtube_path: Path | None = None,
+    still_path: Path | None = None,
 ) -> FastAPI:
+    """``youtube_path`` is the YouTube account file (#81, `youtube/api.py`);
+    None means no stream desk: `stream` is null in every payload and the
+    `/api/stream/*` routes answer 404. ``still_path`` is the thumbnail's
+    picture of the table."""
     hub = Hub(  # every path None = in-memory only
         score_path=score_path,
         journal_path=journal_path,
@@ -51,20 +59,28 @@ def create_app(
         archive_dir=archive_dir,
         settings_path=settings_path,
     )
+    desk: StreamDesk | None = None
+    if youtube_path is not None:
+        desk = StreamDesk(hub, Account(youtube_path), still=still_path)
+        hub.stream_payload = desk.payload
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Stashed for `cueclock run`: vision events born on the camera thread
         # are dispatched into this loop via run_coroutine_threadsafe.
         app.state.loop = asyncio.get_running_loop()
-        tick_task = asyncio.create_task(hub.tick_loop())
+        tasks = [asyncio.create_task(hub.tick_loop())]
+        if desk is not None:
+            tasks.append(asyncio.create_task(desk.run()))
         try:
             yield
         finally:
-            tick_task.cancel()
+            for task in tasks:
+                task.cancel()
 
     app = FastAPI(title="cueclock", lifespan=lifespan)
     app.state.hub = hub  # reachable for future vision/audio wiring
+    app.state.stream = desk
 
     @app.get("/")
     async def index() -> JSONResponse:
@@ -433,6 +449,78 @@ def create_app(
         if url is None:
             return JSONResponse({"ok": True, "url": None, "qr": None})
         return JSONResponse({"ok": True, "url": url, "qr": lan.qr_data_uri(url)})
+
+    # ---------- the stream (#81) ----------
+    #
+    # The control page's Stream section and the deck's LIVE key, over the
+    # stream desk (`server/stream.py`). None of these is a hub input: a
+    # session replay must never reach YouTube.
+
+    def _desk() -> StreamDesk:
+        if desk is None:
+            raise HTTPException(status_code=404, detail="this server has no YouTube account file")
+        return desk
+
+    @app.post("/api/stream/prepare")
+    async def api_stream_prepare() -> JSONResponse:
+        """The LIVE key's hold: make the YouTube video, then read `stream.phase`.
+
+        Answers at once. `ready` in `GET /api/state` means the video exists
+        and OBS may start; `failed` means it must not. 409 = refused outright
+        (signed out, or already on air).
+        """
+        refusal = _desk().prepare()
+        if refusal is not None:
+            return JSONResponse({"ok": False, "error": refusal}, status_code=409)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/stream/cancel")
+    async def api_stream_cancel() -> dict[str, bool]:
+        """OBS never went on air: remove the video that was made for it."""
+        _desk().cancel()
+        return {"ok": True}
+
+    @app.post("/api/stream/on_air")
+    async def api_stream_on_air(duration_ms: int = 0) -> dict[str, bool]:
+        """The deck reporting OBS's own answer: streaming, for this long."""
+        _desk().went_on_air(duration_ms)
+        return {"ok": True}
+
+    @app.post("/api/stream/off_air")
+    async def api_stream_off_air() -> dict[str, bool]:
+        """The stream ended: visibility back to Unlisted, the typed title gone."""
+        _desk().went_off_air()
+        return {"ok": True}
+
+    @app.post("/api/stream/title")
+    async def api_stream_title(body: dict[str, object]) -> JSONResponse:
+        """`{title}`: a typed title, or null for the match's own. On air it
+        changes the live video; 502 when YouTube will not take it."""
+        title = body.get("title")
+        try:
+            await _desk().set_title(title if isinstance(title, str) else None)
+        except YouTubeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/stream/visibility/{value}")
+    async def api_stream_visibility(value: str) -> JSONResponse:
+        """`unlisted` or `public`: the next stream's, or the live one's."""
+        try:
+            await _desk().set_visibility(value)
+        except ValueError:
+            return JSONResponse(
+                {"ok": False, "error": f"unknown visibility: {value}"}, status_code=404
+            )
+        except YouTubeError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"ok": True})
+
+    @app.post("/api/stream/signin")
+    async def api_stream_signin() -> dict[str, bool]:
+        """Ask Google for a sign-in code; it arrives as `stream.signin`."""
+        _desk().sign_in()
+        return {"ok": True}
 
     @app.post("/api/ball_strip/on")
     async def api_ball_strip_on() -> dict[str, bool]:

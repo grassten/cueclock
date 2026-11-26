@@ -35,7 +35,7 @@ recorded clips that replay deterministically through the vision core.
 | Voice "extension" (built-in mic, offline Vosk) | live |
 | Ball list: which balls are on a still table, by number, drawn as a test strip on the bar (`docs/design.md` §13) | live, being judged |
 | Session toggle (one key powers the TV on, brings up `run` + OBS + the projector — and takes it all back down) | live |
-| Live streaming: OBS streams the table to YouTube (unlisted) beside the session recording; the deck's LIVE key starts and stops it | live |
+| Live streaming: OBS streams the table to YouTube beside the session recording; the deck's LIVE key starts and stops it, and cueclock sets the video's title, thumbnail, visibility and game chapters over the YouTube Data API | live |
 | Drill tracking | planned — [open issues](https://github.com/grassten/cueclock/issues) |
 
 ## How it works
@@ -84,8 +84,12 @@ uv run python -m cueclock.cli session maintain  # verify, cut, archive to the T7
   hold 1 s to stop (`docs/hardware.md` §C4).
 - To stream the session, hold the **LIVE** key under it for 1 s, and hold it
   again to stop. Stopping the session ends the stream too. OBS streams to
-  YouTube with a stream key kept in its own profile, and the stream's
-  visibility (Unlisted) is set in YouTube Studio (`docs/hardware.md` §B3).
+  YouTube with a stream key kept in its own profile; cueclock creates the
+  video first, so its title, thumbnail and visibility are right from the
+  first second. The control page's **Stream** section (Setup tab) holds the
+  title, the Unlisted / Public switch and, on air, the watch link; chapters
+  for each game are added to the recording afterwards. The YouTube sign-in
+  is `config/youtube.json`, and is done from a phone (`docs/hardware.md` §B3).
 - The empty-table reference is whatever `config/reference.json` names.
   After a camera bump, or when the startup drift check warns that the
   reference has gone stale: clear the cloth, stop the session and **hold the

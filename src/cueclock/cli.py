@@ -557,6 +557,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         bracket_path=Path("config/bracket.json"),
         archive_dir=journal_path.parent,
         settings_path=Path("config/settings.json"),
+        # The stream (#81): the YouTube sign-in, and the thumbnail's picture.
+        youtube_path=Path("config/youtube.json"),
+        still_path=Path("config/stream_still.jpg"),
     )
     hub = cast(Hub, app.state.hub)
 

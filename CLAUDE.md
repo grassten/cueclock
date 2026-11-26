@@ -147,6 +147,14 @@ Key design commitments (rationale + sources in `docs/design.md` — don't reliti
   live in `config/sidecam.json` and the deck re-applies them at session start
   (`cueclock sidecam`). **Never leave Insta360 Link Controller open during play**:
   its live preview cost detection ~45 Hz and OBS 3.6% of its frames (checkpoint 108).
+- **Streaming to YouTube** (#80, #81): OBS sends on a stream key kept in its own
+  profile, and the server makes the YouTube video first (title, visibility,
+  thumbnail) over the YouTube Data API; the archive pass adds game chapters
+  afterwards (`docs/design.md` §24, `docs/hardware.md` §B3). The sign-in is the
+  gitignored `config/youtube.json`, done from a phone through the control page's
+  Stream section. **No test may reach YouTube or OBS**: every test passes a fake
+  wire (`httpx.MockTransport`) or a fake client, and a real check is a dry run on
+  an unlisted video that never goes on air and is deleted.
 - Stream Deck hits the HTTP API; keep the `/api/*` contract from `docs/design.md` §2.1.
   **Never install the Elgato Stream Deck app** — it would claim exclusive HID access
   and starve the `cueclock deck` daemon.

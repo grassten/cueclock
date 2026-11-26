@@ -623,7 +623,7 @@ def test_opening_the_menu_drops_a_hold_in_progress(menu: tuple[FakeDeck, MenuRig
     assert rig.posted == []
 
 
-# --- the LIVE key (#80): both directions are holds, judged on the face pressed ---
+# --- the LIVE key (#80, #81): both directions are holds, judged on the face pressed ---
 
 LIVE_KEY = next(k for k in LAYOUT if isinstance(k.action, LiveToggle))
 LIVE_HOLD_S = LIVE_KEY.action.hold_s if isinstance(LIVE_KEY.action, LiveToggle) else 1.0
@@ -650,48 +650,112 @@ class FakeObs:
             return {}
 
 
+class FakeStreamDesk:
+    """The server's half of a go-live (#81): its `stream` object and the
+    deck's posts. A video asked for is ready at once unless a test says
+    YouTube is failing."""
+
+    def __init__(self) -> None:
+        self.stream: dict[str, object] = {
+            "account": "ok",
+            "phase": "idle",
+            "on_air": False,
+            "visibility": "unlisted",
+            "error": None,
+        }
+        self.posts: list[str] = []
+        self.youtube_fails = False
+
+    def post(self, path: str) -> bool:
+        self.posts.append(path)
+        if path == "/api/stream/prepare":
+            self.stream["phase"] = "failed" if self.youtube_fails else "ready"
+        elif path.startswith("/api/stream/on_air"):
+            self.stream["on_air"] = True
+        elif path == "/api/stream/off_air":
+            self.stream.update(on_air=False, phase="idle")
+        return True
+
+    def state(self) -> dict[str, object]:
+        return {"state": "IDLE", "mode": "match", "stream": dict(self.stream)}
+
+
 @pytest.fixture
-def streaming(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FakeDeck, FakeObs]]:
-    """A `_loop` on a running session whose OBS answers through `FakeObs`."""
+def streaming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[FakeDeck, FakeObs, FakeStreamDesk]]:
+    """A `_loop` on a running session whose OBS answers through `FakeObs`
+    and whose server is signed in to YouTube."""
     _STOP.clear()
-    monkeypatch.setattr(client, "get_json", _stoppable({"state": "IDLE", "mode": "match"}))
+    desk = FakeStreamDesk()
+    monkeypatch.setattr(client, "get_json", _stoppable(desk.state))
     monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
     monkeypatch.setattr(daemon, "POLL_S", 0.05)
+    monkeypatch.setattr(daemon, "LIVE_POLL_S", 0.05)
     obs = FakeObs()
     deck = FakeDeck()
     session = SlowStopSession(stop_s=0.0)  # ON until stopped
-    thread = _start_loop(deck, session, live=Stream(request=obs))  # type: ignore[arg-type]
+    live = Stream(request=obs, post=desk.post)
+    thread = _start_loop(deck, session, live=live)  # type: ignore[arg-type]
     time.sleep(0.2)  # a poll has asked OBS and lit the key
-    yield deck, obs
+    yield deck, obs, desk
     _stop(thread)
 
 
 def test_a_full_hold_goes_live_and_another_stops(
-    streaming: tuple[FakeDeck, FakeObs],
+    streaming: tuple[FakeDeck, FakeObs, FakeStreamDesk],
 ) -> None:
-    deck, obs = streaming
+    deck, obs, desk = streaming
     deck.press(LIVE_KEY.index)
     assert _wait(lambda: obs.sent == ["StartStream"], LIVE_HOLD_S + SETTLE_S)
     deck.release(LIVE_KEY.index)
-    time.sleep(0.2)  # the poll sees it on air
+    # The video was asked for before OBS was started, and the server was told
+    # once OBS said it was on air.
+    assert desk.posts[0] == "/api/stream/prepare"
+    assert _wait(lambda: desk.stream["on_air"] is True)
     deck.press(LIVE_KEY.index)
     assert _wait(lambda: obs.sent == ["StartStream", "StopStream"], LIVE_HOLD_S + SETTLE_S)
     deck.release(LIVE_KEY.index)
+    assert _wait(lambda: desk.posts[-1] == "/api/stream/off_air")
 
 
-def test_a_tap_on_live_does_nothing(streaming: tuple[FakeDeck, FakeObs]) -> None:
-    deck, obs = streaming
+def test_a_hold_with_youtube_failing_never_starts_obs(
+    streaming: tuple[FakeDeck, FakeObs, FakeStreamDesk],
+) -> None:
+    deck, obs, desk = streaming
+    desk.youtube_fails = True
+    deck.press(LIVE_KEY.index)
+    assert _wait(lambda: desk.posts == ["/api/stream/prepare"], LIVE_HOLD_S + SETTLE_S)
+    deck.release(LIVE_KEY.index)
+    time.sleep(0.4)  # several polls on the failed answer
+    assert obs.sent == []
+
+
+def test_a_hold_signed_out_of_youtube_does_nothing(
+    streaming: tuple[FakeDeck, FakeObs, FakeStreamDesk],
+) -> None:
+    deck, obs, desk = streaming
+    desk.stream["account"] = "signed_out"
+    time.sleep(0.2)  # a poll has put SIGN IN on the key
+    deck.press(LIVE_KEY.index)
+    time.sleep(LIVE_HOLD_S + 0.3)
+    deck.release(LIVE_KEY.index)
+    assert obs.sent == [] and desk.posts == []
+
+
+def test_a_tap_on_live_does_nothing(streaming: tuple[FakeDeck, FakeObs, FakeStreamDesk]) -> None:
+    deck, obs, desk = streaming
     deck.press(LIVE_KEY.index)
     time.sleep(LIVE_HOLD_S / 4)
     deck.release(LIVE_KEY.index)
     time.sleep(LIVE_HOLD_S + 0.3)
-    assert obs.sent == []
+    assert obs.sent == [] and desk.posts == []
 
 
 def test_a_hold_to_stop_never_starts_a_stream_that_died_meanwhile(
-    streaming: tuple[FakeDeck, FakeObs],
+    streaming: tuple[FakeDeck, FakeObs, FakeStreamDesk],
 ) -> None:
-    deck, obs = streaming
+    deck, obs, desk = streaming
     obs.active = True  # on air, started elsewhere
     time.sleep(0.2)
     deck.press(LIVE_KEY.index)  # held to stop...
@@ -699,7 +763,50 @@ def test_a_hold_to_stop_never_starts_a_stream_that_died_meanwhile(
         obs.active = False  # ...and the stream ends on its own first
     time.sleep(LIVE_HOLD_S + 0.4)
     deck.release(LIVE_KEY.index)
-    assert obs.sent == []
+    assert obs.sent == [] and "/api/stream/prepare" not in desk.posts
+
+
+def test_one_missed_server_poll_does_not_forget_a_hold_in_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The video is being made when the server misses a poll: the key waits
+    on, and OBS still starts once the video is ready (#81)."""
+    _STOP.clear()
+    desk = FakeStreamDesk()
+    slow = {"youtube": True, "miss": 0}
+
+    def prepare_slowly(path: str) -> bool:
+        ok = desk.post(path)
+        if path == "/api/stream/prepare" and slow["youtube"]:
+            desk.stream["phase"] = "preparing"
+        return ok
+
+    def state() -> dict[str, object] | None:
+        if slow["miss"] > 0:
+            slow["miss"] -= 1
+            return None  # the server did not answer this poll
+        return desk.state()
+
+    monkeypatch.setattr(client, "get_json", _stoppable(state))
+    monkeypatch.setattr(daemon, "_set_key", lambda *a, **k: None)
+    monkeypatch.setattr(daemon, "POLL_S", 0.05)
+    monkeypatch.setattr(daemon, "LIVE_POLL_S", 0.05)
+    obs, deck = FakeObs(), FakeDeck()
+    live = Stream(request=obs, post=prepare_slowly)
+    thread = _start_loop(deck, SlowStopSession(stop_s=0.0), live=live)  # type: ignore[arg-type]
+    try:
+        time.sleep(0.2)
+        deck.press(LIVE_KEY.index)
+        assert _wait(lambda: desk.posts == ["/api/stream/prepare"], LIVE_HOLD_S + SETTLE_S)
+        deck.release(LIVE_KEY.index)
+        slow["miss"] = 2
+        assert _wait(lambda: slow["miss"] == 0)
+        time.sleep(0.15)
+        assert obs.sent == [] and live.busy  # still waiting, not reset
+        desk.stream["phase"] = "ready"
+        assert _wait(lambda: obs.sent == ["StartStream"])
+    finally:
+        _stop(thread)
 
 
 def test_live_is_dark_while_obs_is_not_answering(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -534,6 +534,10 @@ and exits 0, so the agent simply tries again later.
 For each session directory under `sessions.nosync/` (the layout `run` writes):
 
 1. copy `logs/session-<stamp>.jsonl` in as `journal.jsonl` (the original stays in `logs/`);
+   then, if the session was streamed, append its game chapters to the YouTube
+   video's description (#81, `youtube/chapters.py`) and note them in
+   `chapters.json`. With YouTube unreachable the session stays local and the
+   next pass tries again; a session with no stream makes no request;
 2. `cueclock session verify <dir>` → `replay.json`, if that file isn't there yet;
 3. `cueclock review moments <dir>` → `moments.json`, likewise;
 4. cut each moment out of the OBS recording covering it → `cuts/<id>.mp4`

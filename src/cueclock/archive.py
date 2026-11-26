@@ -11,7 +11,9 @@ hour and disposable once the moments worth a look have been cut out of it.
 One pass, for every session directory still on the internal SSD:
 
 1. copy the journal in (`logs/session-<stamp>.jsonl` → `journal.jsonl`; the
-   original stays in `logs/`, where `report` and `session-stats` read it);
+   original stays in `logs/`, where `report` and `session-stats` read it),
+   and, if the session was streamed, write its game chapters onto the YouTube
+   video (`youtube/chapters.py`, #81), noted in `chapters.json`;
 2. `cueclock session verify <dir>` → `replay.json` (the parity check);
 3. `cueclock review moments <dir>` → `moments.json` (what the review page lists);
 4. cut each moment out of the recording that covers it → `cuts/<id>.mp4`,
@@ -369,6 +371,9 @@ class Maintainer:
     say: Callable[[str], None] = field(default=lambda line: print(line, flush=True))
     # Why a session is live right now, or None: a running session review stops for one.
     live: Callable[[], str | None] = field(default=lambda: None)
+    # Writes a session's stream chapters to YouTube (`youtube.chapters.write`,
+    # or a fake); None = the real one.
+    chapters: Callable[..., bool] | None = None
     # Starts a session review run (`findings.launch`, or a fake); None = the real one.
     review_launch: (
         Callable[[Sequence[str], Path, Callable[[], str | None]], tuple[int | None, str]] | None
@@ -587,6 +592,7 @@ class Maintainer:
     def maintain_session(self, session: Path, recordings: Sequence[Recording]) -> bool:
         name = session.name
         ok = self.copy_journal(session)
+        ok &= self.write_chapters(session)
         verify = self.hook(session, "replay.json", _cli("session", "verify", str(session)))
         moments = self.hook(session, "moments.json", _cli("review", "moments", str(session)))
         ok &= verify != "failed" and moments != "failed"
@@ -641,6 +647,23 @@ class Maintainer:
         if kept:
             index.write_text(json.dumps(kept, indent=1) + "\n")
             self.say(f"{session.name}: kept {len(kept)} full recording(s)")
+
+    def write_chapters(self, session: Path) -> bool:
+        """Game chapters onto the YouTube video of each stream in the session (#81).
+
+        Straight after the journal copy, which is what it reads, and before
+        the slow hooks, so a stream's chapters land on the first pass after
+        its session. A session with no stream costs one read of its journal
+        and no request. False = YouTube could not be reached: the session
+        stays local and the next pass tries again.
+        """
+        from cueclock.youtube import chapters  # here: the deck imports this module, not httpx
+
+        try:
+            return (self.chapters or chapters.write)(session, self.say, dry_run=self.dry_run)
+        except OSError as exc:
+            self.say(f"{session.name}: chapters: {exc}")
+            return False
 
     def copy_journal(self, session: Path) -> bool:
         src = self.logs / f"session-{session.name}.jsonl"

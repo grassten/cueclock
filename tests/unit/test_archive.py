@@ -189,6 +189,53 @@ def test_a_pass_verifies_finds_cuts_and_moves_the_session(tmp_path: Path) -> Non
     assert t.recording.is_file()  # 1000 bytes: inside the 10 kB budget
 
 
+def test_a_streamed_sessions_chapters_are_written_before_it_is_moved(tmp_path: Path) -> None:
+    """#81: the step reads the session's own journal copy, so it runs after
+    the copy and while the session is still local."""
+    t = Tree(tmp_path)
+    seen: list[tuple[str, bool, bool]] = []
+
+    def chapters(session: Path, say: object, *, dry_run: bool) -> bool:
+        seen.append((session.name, (session / "journal.jsonl").is_file(), dry_run))
+        (session / "chapters.json").write_text("{}")
+        return True
+
+    t.maintainer.chapters = chapters
+    assert t.maintainer.pass_() == 0
+    assert seen == [(STAMP, True, False)]
+    assert (t.t7 / STAMP / "chapters.json").is_file()  # the note travels with the session
+
+
+def test_chapters_youtube_could_not_take_keep_the_session_local_for_the_next_pass(
+    tmp_path: Path,
+) -> None:
+    t = Tree(tmp_path)
+    answers = [False, True]  # YouTube unreachable, then back
+    t.maintainer.chapters = lambda session, say, *, dry_run: answers.pop(0)
+    assert t.maintainer.pass_() == 1
+    assert t.session.is_dir() and not (t.t7 / STAMP).exists()
+    assert f"{STAMP}: kept local — a step failed, retried next pass" in t.lines
+    assert t.maintainer.pass_() == 0
+    assert (t.t7 / STAMP).is_dir()
+
+
+def test_a_session_that_was_never_streamed_asks_youtube_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real step, on a journal with no stream in it: no account is read
+    and no request is made, so every other test here runs it for real."""
+    from cueclock.youtube import api
+
+    def no_network(*_a: object, **_k: object) -> None:
+        raise AssertionError("YouTube was asked")
+
+    monkeypatch.setattr(api.Account, "call", no_network)
+    monkeypatch.setattr(api.Account, "token", no_network)
+    t = Tree(tmp_path)
+    assert t.maintainer.pass_() == 0
+    assert not (t.t7 / STAMP / "chapters.json").exists()
+
+
 def test_a_second_pass_does_nothing(tmp_path: Path) -> None:
     t = Tree(tmp_path)
     t.maintainer.pass_()

@@ -319,6 +319,101 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-26 (checkpoint 154: the stream's title, visibility, link, thumbnail and chapters, from the phone; #81):**
+  Steven, after the first two streams: "I don't have easy access to a
+  computer, I only have my phone for configuring things like title on the
+  stream output", and "YouTube studio ui on iPhone is pretty cooked". Built
+  as one piece, as the issue asked, for one test stream at the end. That
+  stream has not been run yet: everything below was checked against the real
+  YouTube on unlisted test videos that never went on air.
+  - **cueclock makes the video now.** YouTube used to make it when OBS
+    connected, copying the last stream's title and visibility. The server
+    (`server/stream.py`, the stream desk) now creates it over the YouTube
+    Data API just before OBS starts: the broadcast with its title and
+    visibility, attached to the stream whose key OBS holds, then the
+    description, the Sports category and the thumbnail. A hold on LIVE is
+    therefore two steps: `POST /api/stream/prepare`, and `StartStream` only
+    once the server's `stream.phase` reads `ready`.
+  - **If YouTube refuses or does not answer, OBS is not started.** OBS alone
+    would have YouTube make a video with the last stream's settings, which
+    might be Public. The key says `YOUTUBE`/`FAILED` and the phone shows the
+    reason. A description or thumbnail YouTube refuses is noted on the phone
+    and the stream goes ahead: the title and the visibility are already right.
+  - **Nothing is left that could go on air by accident.** A video OBS never
+    went on air for is deleted (the deck cancels a failed start after first
+    telling OBS to stop dialling; the desk deletes one nobody claimed after
+    60 s), and every go-live first deletes any unstarted auto-start video
+    still attached to OBS's key.
+  - **The Stream section** on the control page's Setup tab, between the
+    players and the clock, as mocked up: the title (filled in from the match;
+    a typed one stays until the stream ends), Unlisted / Public (Public a red
+    outline), and on air the watch link and a red `ON AIR` pill in the header
+    on both tabs. Visibility goes back to Unlisted when a stream ends and
+    with every `run`. On air, edits go to the live video. Making a stream
+    Public while it is on air asks first; that confirm is mine, not in the
+    mockups.
+  - **The LIVE key** reads `GO LIVE` over `UNLISTED` or `PUBLIC`, with the
+    hold named under it. Signed out of YouTube it reads `SIGN IN`/`ON PHONE`
+    from the moment the session is up, and a hold does nothing.
+  - **Titles** (`youtube/title.py`): `Sam Okafor (612) vs Jordan Lee (587) |
+    8-Ball Race to 7`, `Race 7/4` for per-player targets, the event's name
+    with a bracket loaded, `Practice | Nov 25, 2026` with no players set.
+    The description is written from the same facts.
+  - **The thumbnail** (`youtube/thumbnail.py`), 1280×720, drawn at go-live in
+    the mockup's layout. Its picture of the table is
+    `config/stream_still.jpg`; four candidates cut from the 2026-11-25
+    recording are in `config/stream_stills/`, and A (the side angle, racked)
+    is in place until Steven picks.
+  - **Chapters** (`youtube/chapters.py`), written by the archive pass after
+    the session: one per game with the score going in, one per match with a
+    bracket loaded, 10 s before the game's first detected shot; none for
+    practice or under three games. **Their source is not what the issue
+    planned.** It planned to read score presses from `inputs.jsonl` and
+    bracket loads from the journal. A bracket loads a match in three places
+    and journals one of them, and the players' names are only in the bracket
+    file. So the desk journals a `stream_mark` whenever the players, the
+    score or the loaded match change on air, and the chapters are built from
+    those and the journal's shots (`docs/design.md` §24).
+  - **The sign-in from the phone** is Google's device flow: the section
+    shows a code, typed at google.com/device. `config/youtube.json` holds the
+    client and the sign-in (`youtube/api.py`, plain HTTPS through `httpx`).
+  - **Measured, the night of 2026-11-25**, on five unlisted test videos made
+    through this code and deleted without going on air:
+    - a whole go-live took 5.2 to 6.2 s (create 1.8, attach 0.7, description
+      0.8, thumbnail upload 2.4);
+    - Unlisted is kept, not forced private;
+    - the thumbnail can be set before the stream is live;
+    - a title edit took 0.3 s and a visibility request 0.4 s;
+    - OBS's key is the stream named `First`, not `Default stream key`.
+  - **Two things the issue wanted that cannot be had.**
+    - **Chat cannot be turned off from here.** The API has no field for it.
+    - **The iOS share sheet.** The control page is plain HTTP on the LAN, and
+      browsers give the share sheet and the clipboard API to HTTPS pages only.
+      Copy link works through the older select-and-copy. Share link becomes
+      `Text link`, which opens Messages with the link, and the watch link is a
+      real link, so touching and holding it brings up iOS's own Share.
+  - **Tests.** 94 new, in `test_youtube_title.py` (14),
+    `test_youtube_thumbnail.py` (11), `test_youtube_chapters.py` (21),
+    `test_youtube_api.py` (17, on a fake wire) and `test_stream_desk.py`
+    (31, on a fake YouTube). `test_deck_live.py` is rewritten for the two
+    steps (22), and `test_deck_loop.py`, `test_deck.py`, `test_archive.py`
+    and `test_server.py` cover the holds, the new faces, the archive step and
+    the payload. No test reaches YouTube or OBS.
+  - **Docs.** `docs/design.md` §24 and §2.1 (the routes, the `stream` payload
+    object, the control page); `docs/hardware.md` §B3 (the video, the
+    account, the picture, chat), §C2 (the key) and §C7 (the archive step);
+    `docs/cli.md` (`session maintain`); README; CLAUDE.md.
+  - **Not checked. The test stream settles these.**
+    - That OBS connecting puts the prepared video on air, and not a second
+      one YouTube makes itself.
+    - Whether this API project can make a stream Public. What YouTube
+      actually sets is read back and shown.
+    - That chapters land on the breaks.
+    - A WiFi drop mid-stream, with auto stop on.
+    - Share, Copy and the sign-in on the iPhone itself. They were checked in
+      WebKit on the Mac.
+    - Detection rate while streaming, against the 150.7 Hz median.
+
 - **2026-11-25 (checkpoint 153: the LIVE key streams the session to YouTube; #80):**
   Steven wanted to stream play from the same Mac mini over WiFi, tested
   without going public, then a deck key to go live and an indicator on the
