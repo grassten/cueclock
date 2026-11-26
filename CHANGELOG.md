@@ -377,6 +377,15 @@ survive unchanged in `design.md`.
     settings and auto-update); README; CLAUDE.md (OBS version). The music
     key was dropped (Steven, 2026-11-24): music plays from his phone and
     viewers hear it through the room mic.
+  - **Follow-up, the same night: the stream was too quiet.** Steven: "The
+    volume is low on the stream." Tonight's recording carries the same mix,
+    and it measured −25.1 LUFS integrated, with a −72.5 LUFS median 3 s
+    window. The camera's mic is already at its maximum input volume, so
+    Mic/Aux in OBS now has a Gain filter at +25 dB and a Limiter at −1 dB.
+    The level was picked on the 90th-percentile window (−49.7 to about −25
+    LUFS, simulated on the recording). OBS was launched once to confirm the
+    filters load, and they survived its save on quit (`docs/hardware.md`
+    §B3).
   - **Not checked.**
     - The key against the real OBS. It lights in the next session.
     - What OBS shows on the TV when a stream fails to connect, such as a bad

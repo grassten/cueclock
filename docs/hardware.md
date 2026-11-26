@@ -306,8 +306,21 @@ actually runs — the original plan called them *Table* / *Clock*):
     times (`Reconnect`, `RetryDelay`, `MaxRetries`).
   - **Visibility** is **Unlisted**, set in YouTube Studio before the first
     stream; it carries over to the next. Nothing here changes it.
-  - **What a viewer hears** is the room mic plus the bar's buzzer. Music
-    reaches them only through the room mic.
+  - **What a viewer hears** is the room mic, Mic/Aux, and nothing else. The
+    bar's buzzer is monitor-only, so it reaches the stream the way music
+    does: out of the TV and into the room mic.
+  - **The mic is boosted in OBS** (2026-11-25): a **Gain** filter at
+    **+25 dB**, then a **Limiter** at **−1 dB** (60 ms release), on Mic/Aux.
+    The camera's own input volume is already at its maximum (Part D), so OBS
+    is the only place left to raise it. Tonight's recording, as it was
+    captured, measured −25.1 LUFS integrated with a −72.5 LUFS median 3 s
+    window. Its loudness is set by a few loud moments, so the level was picked
+    on the 90th-percentile window, the shots and voices of ordinary play:
+    −49.7 LUFS, which +25 dB brings to about −25. Without the limiter the
+    loud moments would clip (they already peaked at −1.9 dBTP). The recording
+    gets the same boost, and the voice listener does not: it opens the mic
+    itself. To change it, edit the two filters on Mic/Aux in OBS. The backup
+    from before the change is `basic/scenes/Untitled.json.bak-20261125-mic-gain`.
   - **Cost, measured** over a 29-minute session on 2026-11-25 (stream and
     recording are two hardware encodes), against the 2026-11-23 session that
     only recorded:
