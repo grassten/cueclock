@@ -1647,7 +1647,11 @@ builds the helper there. `deck/sidecam.py` runs the helper, and
   again 2026-11-22: 1080p60 is about 5% tighter than 4K30. The spacing between
   two fixed targets was 0.408 of the frame height against 0.388.)
 - **Mic:** silent until Link Controller had run once, then live with the app
-  closed (Part D). Vosk at the rails and "Original" mode are still open.
+  closed (Part D). Vosk at the rails is still open. The audio mode **is set to
+  "Original"** (Steven, 2026-11-25), so the low level §B3 boosts by 25 dB is
+  the mic's own pickup at this distance, not its noise reduction. What is
+  still unmeasured is the vendor's contradiction: whether Original removes
+  all processing.
 - **Coexistence:** OBS captured the camera with Link Controller both running and
   quit. Link Controller installs its own virtual camera system extension; OBS
   doesn't use it.
