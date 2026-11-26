@@ -43,15 +43,16 @@ played, which is most of this page.
 ## How well it works
 
 Every session writes a journal of what the clock saw and did. Over all of them,
-117 sessions from 1 August to 26 November 2026, the clock counted 2,841 shots in
+117 sessions from 1 August to 26 November 2026, the clock counted 2,838 shots in
 214 racks.
 
-**99.5% of those shots were counted with the clock in the right state and no key
+**99.6% of those shots were counted with the clock in the right state and no key
 pressed.** Two things count against that number: the buzzer sounding through a
 shot that was being played (9 times), and a shot counted while the cue ball had
-not moved (5 times). Counting every key press that rescued the clock as well (a
-break started by hand, a frozen countdown restarted), 98.6% of shots needed no
-key at all. The break started the clock by itself in 206 of the 214 racks.
+not moved (2 times). The clock also started three times while the balls were
+being racked; those are left out, because no game was being played. Counting
+every key press that rescued the clock as well (a break started by hand, a
+frozen countdown restarted), 98.6% of shots needed no key at all. The break started the clock by itself in 206 of the 214 racks.
 
 These figures come from the clock's own journals
 ([`.claude/skills/session-stats`](.claude/skills/session-stats/SKILL.md)), not

@@ -85,6 +85,9 @@ class Tiers:
     by_hand: dict[str, int] = field(default_factory=dict)  # hand -> n
     # The cue ball on its spot (design §16, checkpoint 135+; the cue alone from 138).
     still_counted: int = 0  # a shot counted where the list read the cue on its spot
+    # ... where that "shot" was the break: no break was played (every break
+    # moves the cue ball), so the clock started while he racked. Not a shot.
+    racking_starts: int = 0
     still_refused: int = 0  # freezes released because the list read the cue on its spot
 
     def add_report(self, r: SessionReport) -> None:
@@ -162,7 +165,14 @@ class Tiers:
                     on_spot = row == "still" or (
                         isinstance(cue_px, int | float) and cue_px <= OBJECT_MOVED_PX
                     )
-                    self.still_counted += on_spot and bool(r.get("counted"))
+                    if on_spot and r.get("counted"):
+                        if r.get("rack_shots") == 1:
+                            # Racking, not play (Steven, 2026-11-26): out of
+                            # the shots `add_report` already counted.
+                            self.racking_starts += 1
+                            self.shots -= 1
+                        else:
+                            self.still_counted += 1
                     if row == "ball_in_hand":
                         how = str(r.get("hand"))
                         self.placing[how] = self.placing.get(how, 0) + 1
@@ -247,13 +257,22 @@ def mine(paths: list[Path]) -> Tiers:
 def table(label: str, t: Tiers, internals: bool = False) -> str:
     breaks_caught = t.breaks_fired + t.breaks_adjudicated
     hands_on = t.break_presses + t.left_frozen + t.expired_through
+    left_out = [
+        f"{n} {what}"
+        for n, what in (
+            (t.racking_live_settles, "settles while racking with the clock on"),
+            (
+                t.racking_starts,
+                "clock starts while racking (a break with the cue ball on its spot)",
+            ),
+        )
+        if n
+    ]
     rows = [
         (
             "Shots / racks",
             f"{t.shots} / {t.racks}",
-            f"{t.racking_live_settles} settles while racking with the clock on left out"
-            if t.racking_live_settles
-            else "",
+            "; ".join(left_out) + " left out" if left_out else "",
         ),
         (
             "Detection",
