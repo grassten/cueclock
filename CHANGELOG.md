@@ -319,6 +319,38 @@ survive unchanged in `design.md`.
 
 ## Checkpoint log (append-only, newest first)
 
+- **2026-11-26 (checkpoint 155: a stream restarted inside a minute gets its own video; #81):**
+  Steven, after the first real stream through checkpoint 154: "I did a live
+  stream and then stopped it and restarted it shortly after and it looks
+  like both live sessions went under one video, is that expected?" It was
+  not expected, and it was not what the desk believed had happened.
+  - **What happened**, from the journal and from YouTube. The first stream
+    came off air at 16:09:26.9 UTC and the second went on air at 16:10:27.5,
+    60.5 s later. YouTube ends an auto-stop video "around one minute" after
+    OBS stops sending, not when it stops, and it had not ended the first one
+    yet. So the second stream went into the first video (one
+    recording from 15:57:08 to 16:37:44), and the video the desk had made
+    for it never started: YouTube still reads it `ready`.
+    The desk showed that video's link for the whole second stream, and the
+    archive pass wrote the second stream's five chapters onto it and a
+    wrong third chapter onto the first.
+  - **The fix** (`server/stream.py`, `youtube/api.py`). A go-live now lists
+    what YouTube has not ended and ends any video still live on OBS's key
+    before it makes the new one (`liveBroadcasts.transition` to `complete`).
+    One YouTube ended in the meantime is taken as done; any other refusal
+    fails the go-live (`YOUTUBE`/`FAILED`, the reason on the phone), because
+    started anyway the stream would go into the old video again.
+  - **Checked.** 998 unit tests, mypy and ruff. Against the real YouTube:
+    the new listing (0.26 s), and that a request to end the video that had
+    already ended is refused as `redundantTransition` and changes nothing.
+    **Not checked:** ending a video that is still live, which needs a real
+    stream stopped and restarted inside a minute.
+  - **Also settled by this stream** (one of §24's open questions): with no
+    earlier video in the way, OBS connecting put the prepared video on air
+    and not a second one, and Unlisted was kept.
+  - **Not changed.** The 2026-11-26 video itself: YouTube's API cannot trim
+    a video, so cutting the first stream off it is done in YouTube Studio.
+
 - **2026-11-26 (checkpoint 154: the stream's title, visibility, link, thumbnail and chapters, from the phone; #81):**
   Steven, after the first two streams: "I don't have easy access to a
   computer, I only have my phone for configuring things like title on the

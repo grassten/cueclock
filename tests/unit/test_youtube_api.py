@@ -297,6 +297,48 @@ def test_bind_delete_and_the_two_reads_name_their_video(tmp_path: Path) -> None:
     assert seen[4][2]["broadcastStatus"] == "upcoming" and "mine" not in seen[4][2]
 
 
+def test_the_live_list_asks_for_what_youtube_has_not_ended(tmp_path: Path) -> None:
+    wire = Wire(lambda _r: httpx.Response(200, json={"items": [{"id": "vid"}]}))
+    assert YouTube(_signed_in(tmp_path, wire)).live() == [{"id": "vid"}]
+    request = wire.requests[0]
+    assert (request.method, request.url.path) == ("GET", "/youtube/v3/liveBroadcasts")
+    # `broadcastStatus` is a filter of its own: YouTube refuses it with `mine`.
+    assert request.url.params["broadcastStatus"] == "active" and "mine" not in request.url.params
+    assert request.url.params["broadcastType"] == "all"
+
+
+def test_ending_a_video_is_a_transition_to_complete_with_no_body(tmp_path: Path) -> None:
+    wire = Wire()
+    YouTube(_signed_in(tmp_path, wire)).end_broadcast("vid")
+    request = wire.requests[0]
+    assert (request.method, request.url.path) == ("POST", "/youtube/v3/liveBroadcasts/transition")
+    assert dict(request.url.params) == {
+        "broadcastStatus": "complete",
+        "id": "vid",
+        "part": "id,status",
+    }
+    assert request.content == b""
+
+
+def _refusal(reason: str) -> Wire:
+    return Wire(
+        lambda _r: httpx.Response(
+            403, json={"error": {"message": reason, "errors": [{"reason": reason}]}}
+        )
+    )
+
+
+def test_a_video_youtube_already_ended_is_not_an_error(tmp_path: Path) -> None:
+    """Auto stop can land between the listing and the request."""
+    YouTube(_signed_in(tmp_path, _refusal("redundantTransition"))).end_broadcast("vid")
+
+
+def test_any_other_refusal_to_end_a_video_is_raised(tmp_path: Path) -> None:
+    with pytest.raises(YouTubeError) as caught:
+        YouTube(_signed_in(tmp_path, _refusal("invalidTransition"))).end_broadcast("vid")
+    assert caught.value.reason == "invalidTransition"
+
+
 def test_a_video_that_is_gone_reads_as_none(tmp_path: Path) -> None:
     yt = YouTube(_signed_in(tmp_path, Wire(lambda _r: httpx.Response(200, json={"items": []}))))
     assert yt.broadcast("vid") is None and yt.video("vid") is None

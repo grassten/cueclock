@@ -1,6 +1,6 @@
 """YouTube over plain HTTPS: the sign-in, and the few calls a stream needs (#81).
 
-No Google client library. A stream is seven kinds of request against two
+No Google client library. A stream is a few kinds of request against two
 hosts, and `httpx` is already here for the Fargo search.
 
 **The account** is one gitignored file, `config/youtube.json`:
@@ -152,7 +152,7 @@ class Account:
     # ---------- the wire ----------
 
     def _send(self, what: str, request: Callable[[httpx.Client], httpx.Response]) -> httpx.Response:
-        # One client for the account's life, so a go-live's seven requests
+        # One client for the account's life, so a go-live's eight requests
         # share a connection instead of each paying for its own handshake.
         if self._client is None:
             self._client = httpx.Client(transport=self.transport, timeout=TIMEOUT)
@@ -364,19 +364,46 @@ class YouTube:
 
     def upcoming(self) -> list[dict[str, Any]]:
         """Broadcasts created and not yet started, whoever created them."""
+        return self._broadcasts("upcoming", "Listing upcoming streams")
+
+    def live(self) -> list[dict[str, Any]]:
+        """Broadcasts YouTube has not ended: on air, or waiting out the minute
+        it gives a stream that stopped (`end_broadcast`)."""
+        return self._broadcasts("active", "Listing live streams")
+
+    def _broadcasts(self, status: str, what: str) -> list[dict[str, Any]]:
         data = self.account.call(
             "GET",
             f"{API}/liveBroadcasts",
-            "Listing upcoming streams",
+            what,
             params={
                 "part": "id,snippet,status,contentDetails",
-                "broadcastStatus": "upcoming",
+                "broadcastStatus": status,
                 "broadcastType": "all",
                 "maxResults": "50",
             },
         )
         items = data.get("items", [])
         return items if isinstance(items, list) else []
+
+    def end_broadcast(self, broadcast_id: str) -> None:
+        """End a live video now, without waiting for auto stop.
+
+        Auto stop ends a video "around one minute" after OBS stops sending
+        (YouTube's `liveBroadcasts` reference), and for that minute the video
+        is still live and takes whatever arrives on its key. One YouTube has
+        ended in the meantime is not an error: that is what was asked for.
+        """
+        try:
+            self.account.call(
+                "POST",
+                f"{API}/liveBroadcasts/transition",
+                "Ending the last stream",
+                params={"broadcastStatus": "complete", "id": broadcast_id, "part": "id,status"},
+            )
+        except YouTubeError as exc:
+            if exc.reason != "redundantTransition":
+                raise
 
     def broadcast(self, broadcast_id: str) -> dict[str, Any] | None:
         """One broadcast, or None if YouTube has none by that id."""

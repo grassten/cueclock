@@ -331,6 +331,13 @@ actually runs — the original plan called them *Table* / *Clock*):
       go-live is deleted before the new one is made. A video OBS never went
       on air for is deleted when the deck gives up on the start, or after 60 s
       if the deck never says.
+    - **A video still live is ended first.** YouTube ends a video about a
+      minute after OBS stops, not when it stops, and until then a new stream
+      on the same key goes into it: on 2026-11-26 a restart a minute after a
+      stop made one 40-minute video of two streams and left the new video
+      unstarted. So a go-live ends any video still live on OBS's key before
+      it makes the next one (checkpoint 155, `docs/design.md` §24), and
+      refuses to go live if YouTube will not end it.
   - **Visibility** is **Unlisted** unless the control page's Stream section
     says Public, and it goes back to Unlisted when a stream ends and with
     every `run`. That switch is the only thing that makes a stream Public; no

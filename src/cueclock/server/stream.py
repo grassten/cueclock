@@ -276,6 +276,19 @@ class StreamDesk:
         """The YouTube half of a go-live, in order. Runs on a worker thread."""
         yt = self.youtube
         stream_id = self._find_stream()
+        # A video still live on OBS's key takes the new stream, and this one
+        # never starts. YouTube ends a video about a minute after OBS stops,
+        # not when it stops: on 2026-11-26 a go-live 60.5 s after a stop went
+        # into the first video and left the second unstarted (`docs/design.md`
+        # §24). So it is ended here, and a refusal fails the go-live: started
+        # anyway, the stream would land in a video this desk does not hold.
+        for old in yt.live():
+            details, status = old.get("contentDetails", {}), old.get("status", {})
+            if (
+                details.get("boundStreamId") == stream_id
+                and status.get("lifeCycleStatus") == "live"
+            ):
+                yt.end_broadcast(str(old["id"]))
         # An unstarted auto-start video on OBS's key would go on air with this
         # one, under its own title and visibility. Only this desk makes them,
         # so one found here is left over from a go-live that never finished.

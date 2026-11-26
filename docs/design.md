@@ -1967,3 +1967,36 @@ refused); that OBS connecting puts the prepared video on air and not a
 second one; that chapters land on the breaks, which is `actualStartTime`
 being the recording's 0:00; what a WiFi drop does with auto stop on; and the
 detection rate against the 150.7 Hz median measured while streaming.
+
+**A restart inside a minute went into the first video (the first real stream,
+2026-11-26).** Steven stopped a stream and started the next one a minute
+later: the journal has `stream_off_air` at 16:09:26.9 UTC and the next
+`stream_on_air` at 16:10:27.5, 60.5 s apart. The first video was still live.
+Auto stop ends a video "around one minute" after OBS stops sending (YouTube's
+`liveBroadcasts` reference), not when it stops, and for that minute the video
+takes whatever arrives on its key. So the second stream went into the first
+video (one recording, 15:57:08 to 16:37:44), the video made for it never
+started (`lifeCycleStatus` still `ready` afterwards), and the desk held the
+link, and the archive pass the chapters, of a video with nothing in it.
+
+Since checkpoint 155 a go-live first lists what YouTube has not ended
+(`liveBroadcasts.list`, `broadcastStatus=active`) and ends any video still
+live on OBS's key (`liveBroadcasts.transition` to `complete`) before it makes
+the new one. A video YouTube ended in the meantime answers
+`redundantTransition`, which is taken as done. Any other refusal fails the
+go-live like every YouTube failure before the video exists: started anyway,
+OBS would send into the old video. The desk does not end the video when OBS
+stops, because the go-live is the one place that covers every way of getting
+here (a stop, OBS quitting, a `run` restarted in between), and auto stop
+already ends a video nobody restarts.
+
+Checked against the real YouTube on 2026-11-26: the listing answers in
+0.26 s, and a request to end the video that had already ended was refused
+with `redundantTransition` and left it unchanged. Ending a video that is
+still live has only been run against the fake wire; the next restart inside
+a minute is its first real one.
+
+The same stream settled one of the questions above. With no earlier video in
+the way, OBS connecting put the prepared video on air and not a second one,
+and Unlisted was kept: prepared at 15:57:02, OBS on air at 15:57:03,
+YouTube's `actualStartTime` 15:57:08.

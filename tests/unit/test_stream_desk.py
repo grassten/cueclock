@@ -30,6 +30,7 @@ class FakeYouTube:
         self.fail: dict[str, Exception] = {}
         self.keys = [{"id": "s1", "title": "First", "key": "obs-key"}]
         self.waiting: list[dict[str, Any]] = []
+        self.on_air: list[dict[str, Any]] = []  # what YouTube has not ended yet
         self.privacy: str | None = None  # what YouTube sets, when not what was asked
         self.hold: threading.Event | None = None  # create_broadcast waits on it
 
@@ -48,6 +49,13 @@ class FakeYouTube:
     def upcoming(self) -> list[dict[str, Any]]:
         self._did("upcoming")
         return self.waiting
+
+    def live(self) -> list[dict[str, Any]]:
+        self._did("live")
+        return self.on_air
+
+    def end_broadcast(self, video_id: str) -> None:
+        self._did("end", video_id)
 
     def create_broadcast(self, title: str, privacy: str, start: datetime) -> dict[str, Any]:
         self._did("create", title, privacy)
@@ -128,12 +136,20 @@ def test_a_hold_makes_the_video_in_order_and_then_reads_ready(tmp_path: Path) ->
 
     async def scenario() -> None:
         await rig.go()
-        assert rig.yt.names() == ["streams", "upcoming", "create", "bind", "describe", "thumbnail"]
-        assert rig.yt.calls[2] == ("create", MATCH_TITLE, "unlisted")
-        assert rig.yt.calls[3] == ("bind", "vid1", "s1")
-        assert rig.yt.calls[4][1:3] == ("vid1", MATCH_TITLE)
-        assert rig.yt.calls[4][3].startswith("Sam Okafor (612) vs Jordan Lee\n8-Ball, race to 7.")
-        assert rig.yt.calls[5] == ("thumbnail", "vid1", b"\xff\xd8")  # a JPEG
+        assert rig.yt.names() == [
+            "streams",
+            "live",
+            "upcoming",
+            "create",
+            "bind",
+            "describe",
+            "thumbnail",
+        ]
+        assert rig.yt.calls[3] == ("create", MATCH_TITLE, "unlisted")
+        assert rig.yt.calls[4] == ("bind", "vid1", "s1")
+        assert rig.yt.calls[5][1:3] == ("vid1", MATCH_TITLE)
+        assert rig.yt.calls[5][3].startswith("Sam Okafor (612) vs Jordan Lee\n8-Ball, race to 7.")
+        assert rig.yt.calls[6] == ("thumbnail", "vid1", b"\xff\xd8")  # a JPEG
         payload = rig.desk.payload()
         assert (payload["phase"], payload["error"], payload["note"]) == ("ready", None, None)
         # Not on air yet, so no link yet: OBS has not been started.
@@ -156,7 +172,7 @@ def test_the_stream_key_is_looked_up_once_a_run(tmp_path: Path) -> None:
     _run(scenario)
 
 
-@pytest.mark.parametrize("step", ["streams", "upcoming", "create"])
+@pytest.mark.parametrize("step", ["streams", "live", "upcoming", "create"])
 def test_a_refusal_before_the_video_exists_fails_and_leaves_nothing(
     tmp_path: Path, step: str
 ) -> None:
@@ -250,6 +266,50 @@ def test_an_unstarted_video_left_on_obs_key_is_removed_first(tmp_path: Path) -> 
         await rig.go()
         assert [c for c in rig.yt.calls if c[0] == "delete"] == [("delete", "leftover")]
         assert rig.yt.names().index("delete") < rig.yt.names().index("create")
+
+    _run(scenario)
+
+
+def _on_air(vid: str, stream: str, life: str = "live") -> dict[str, Any]:
+    return {
+        "id": vid,
+        "status": {"lifeCycleStatus": life},
+        "contentDetails": {"boundStreamId": stream},
+    }
+
+
+def test_a_video_still_live_on_obs_key_is_ended_first(tmp_path: Path) -> None:
+    """2026-11-26: a go-live 60.5 s after a stop went into the first video,
+    which YouTube had not ended yet, and the new one never started."""
+    rig = Rig(tmp_path)
+    rig.yt.on_air = [
+        _on_air("stopped-a-moment-ago", "s1"),
+        _on_air("other-key", "s2"),  # somebody else's stream, on another key
+        _on_air("not-live-yet", "s1", "liveStarting"),
+    ]
+
+    async def scenario() -> None:
+        await rig.go()
+        assert [c for c in rig.yt.calls if c[0] == "end"] == [("end", "stopped-a-moment-ago")]
+        assert rig.yt.names().index("end") < rig.yt.names().index("create")
+        assert rig.desk.phase == "ready"
+
+    _run(scenario)
+
+
+def test_a_last_video_that_cannot_be_ended_refuses_the_go_live(tmp_path: Path) -> None:
+    """Started anyway, OBS would send into the old video and the desk would
+    hold the link of one that never starts."""
+    rig = Rig(tmp_path)
+    rig.yt.on_air = [_on_air("stopped-a-moment-ago", "s1")]
+    rig.yt.fail["end"] = YouTubeError("Ending the last stream: backend error", status=503)
+
+    async def scenario() -> None:
+        await rig.go()
+        payload = rig.desk.payload()
+        assert payload["phase"] == "failed"
+        assert payload["error"] == "Ending the last stream: backend error"
+        assert "create" not in rig.yt.names()
 
     _run(scenario)
 
@@ -479,7 +539,7 @@ def test_a_typed_title_is_kept_until_it_is_given_up(tmp_path: Path) -> None:
         assert (payload["title"], payload["source"]) == ("Friday night money game", "typed")
         assert payload["auto_title"] == MATCH_TITLE
         await rig.go()
-        assert rig.yt.calls[2] == ("create", "Friday night money game", "unlisted")
+        assert rig.yt.calls[3] == ("create", "Friday night money game", "unlisted")
         rig.desk.cancel()
         await rig.desk.set_title(None)  # Use the match title
         assert rig.desk.payload()["source"] == "match"
@@ -495,7 +555,7 @@ def test_an_edit_on_air_goes_to_the_live_video(tmp_path: Path) -> None:
     async def scenario() -> None:
         await rig.go()
         rig.desk.went_on_air()
-        description = rig.yt.calls[4][3]
+        description = rig.yt.calls[5][3]
         await rig.desk.set_title("Hill-hill decider")
         assert rig.yt.calls[-1] == ("describe", "vid1", "Hill-hill decider", description)
         assert rig.desk.payload()["title"] == "Hill-hill decider"
